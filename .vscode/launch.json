@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "debug loader",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/loader/loader-multiboot.dbg",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/debug/loader/",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "miDebuggerServerAddress": "127.0.0.1:1234",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+            ],
+            "externalConsole": false,
+        },
+        {
+            "name": "debug kernel",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/debug/system/kernel.dbg",
+            "args": [],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}/build/debug/system/",
+            "environment": [],
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/bin/gdb",
+            "miDebuggerServerAddress": "127.0.0.1:1234",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+            ],
+            "externalConsole": false,
+        }
+    ]
+}

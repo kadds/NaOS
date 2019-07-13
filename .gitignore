@@ -135,3 +135,5 @@ target/
 # Debug files
 *.dSYM/
 
+run/image/*.img
+build/
