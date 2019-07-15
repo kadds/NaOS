@@ -21,3 +21,4 @@ def run_shell_input(shell_params, input=None):
     
 def set_self_dir():
     os.chdir(os.path.abspath(os.path.dirname(sys.argv[0])))
+    print('set working dir: %s' % os.path.abspath(os.path.dirname(sys.argv[0])))
