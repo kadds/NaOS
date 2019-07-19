@@ -1,5 +1,8 @@
 #pragma once
 #include "common.hpp"
+
+namespace paging
+{
 struct pte
 {
     enum class flag
@@ -81,11 +84,8 @@ struct pml4e
     pml4e(void *baseAddr, u32 flags) { data = (void *)((((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | flags); }
     pml4e() { data = 0; }
 };
-class paging
-{
-  private:
-    static pml4e *page_addr;
 
-  public:
-    static void init();
-};
+extern pml4e *page_addr;
+
+void init();
+} // namespace paging

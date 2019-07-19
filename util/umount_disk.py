@@ -1,5 +1,6 @@
-from make_disk import umount 
-import sys, os
+from make_disk import umount
+import sys
+import os
 from mod import set_self_dir
 if __name__ == "__main__":
     dev = ''

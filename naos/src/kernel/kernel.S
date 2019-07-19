@@ -15,6 +15,18 @@ loop:
 _load_gdt:
     lgdt (%rdi)
     ret
+    
+.globl _load_idt
+_load_idt:
+    lidt (%rdi)
+    ret
+
+.globl _load_tss_descriptor
+_load_tss_descriptor:
+    mov %rdi, %rax
+    ltr %ax
+    ret
+
 .globl _load_page
 _load_page:
     movq %rdi, %cr3
@@ -35,3 +47,12 @@ reload_seg_x:
     movq %rsi, %gs
     movq %rsi, %ss
     ret
+.globl _cli
+_cli:
+    cli
+    ret
+.globl _sti
+_sti:
+    sti
+    ret
+

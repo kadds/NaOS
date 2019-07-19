@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-import sys, os
+import sys
+import os
 from mod import run_shell, set_self_dir
-
 
 
 if __name__ == "__main__":

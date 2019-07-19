@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 from make_disk import mount
 from mod import set_self_dir
-import sys, os
+import sys
+import os
 
 if __name__ == "__main__":
     if len(sys.argv) <= 1:

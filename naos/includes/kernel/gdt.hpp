@@ -1,7 +1,10 @@
 #pragma once
 #include "common.hpp"
+#include "tss.hpp"
+namespace gdt
+{
 
-struct gdt_entry
+struct descriptor
 {
     u32 _0;
     u8 _1;
@@ -14,19 +17,17 @@ struct gdt_entry
     u8 L : 1;
     u8 DB : 1;
     u8 _3;
-    gdt_entry(u64 gdte) { *((u64 *)this) = gdte; }
+    descriptor(u64 gdte) { *((u64 *)this) = gdte; }
 } PackStruct;
-
-struct gdt_ptr
+struct ptr_t
 {
     u16 limit;
     u64 addr;
 } PackStruct;
 
-class gdt
-{
-  private:
-  public:
-    static void init_before_paging();
-    static void init_after_paging();
-};
+void init_before_paging();
+void init_after_paging();
+descriptor &get_gdt_descriptor(int index);
+::tss::descriptor &get_tss_descriptor(int index);
+int get_offset_of_tss();
+} // namespace gdt

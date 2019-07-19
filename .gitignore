@@ -139,3 +139,7 @@ run/image/*.img
 build/
 .vscode/setting.json
 bochsout.txt
+/run/image/mnt/boot
+/run/image/mnt/disk
+!/run/image/mnt/boot/.gitkeep
+!/run/image/mnt/disk/.gitkeep

@@ -1,9 +1,14 @@
 #include "kernel/paging.hpp"
 #include "kernel/memory.hpp"
+
+namespace paging
+{
+
 ExportC void _load_page(void *);
 ExportC void _reload_segment(u64 cs, u64 ss);
-pml4e *paging::page_addr;
-void paging::init()
+pml4e *page_addr;
+
+void init()
 {
     page_addr = (pml4e *)memory::alloc(sizeof(pml4e) * 512, 0x1000);
 
@@ -37,3 +42,4 @@ void paging::init()
     }
     _load_page(page_addr);
 }
+} // namespace paging

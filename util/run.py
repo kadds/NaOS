@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import sys, os
+import sys
+import os
 from mod import set_self_dir, run_shell, run_shell_input
 qemu = 'qemu-system-x86_64 -hda ../run/image/disk.img -m 1024 -s &'
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
@@ -22,8 +23,7 @@ if __name__ == "__main__":
             print('run VBox')
             run_shell(vbox)
         else:
-            print('error lauch type "%s" must be b(bochs), q(qemu) or v(virtual box)' % (tp))
+            print(
+                'error lauch type "%s" must be b(bochs), q(qemu) or v(virtual box)' % (tp))
     else:
         print('null lauch type')
-
-    

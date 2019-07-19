@@ -1,12 +1,21 @@
 #pragma once
 #include "common.hpp"
-struct idt_entry
+
+namespace idt
+{
+
+struct ptr_t
+{
+    u16 limit;
+    u64 addr;
+} PackStruct;
+struct entry
 {
     u16 offset0;
     u16 selector;
-    u8 lst : 2;
+    u8 ist : 3;
     u8 : 0;
-    u8 type : 3;
+    u8 type : 4;
     u8 _0 : 1;
     u8 DPL : 2;
     u8 P : 1;
@@ -20,17 +29,22 @@ struct idt_entry
         offset1 = offset >> 16;
         offset0 = offset;
     }
+    void set_type(u8 type) { this->type = type; }
+    void set_dpl(u8 dpl) { this->DPL = dpl; }
+    void set_valid(bool p) { this->P = p; }
+    void set_ist(u8 ist) { this->ist = ist; }
+    void set_selector(u16 selector) { this->selector = selector; }
+    entry()
+    {
+        *(u64 *)this = 0;
+        *((u64 *)this + 1) = 0;
+    }
 };
-struct idt_ptr
-{
-    u16 limit;
-    u64 addr;
-} PackStruct;
-
-class idt
-{
-  private:
-  public:
-    static void init_before_paging();
-    static void init_after_paging();
-};
+void enable();
+void disable();
+void init_before_paging();
+void init_after_paging();
+void set_entry(int id, void *func, u16 selector, u8 dpl, u8 present, u8 type, u8 ist);
+void set_exception_entry(int id, void *function, u16 selector, u8 dpl, u8 ist);
+void set_interrupt_entry(int id, void *function, u16 selector, u8 dpl, u8 ist);
+} // namespace idt
