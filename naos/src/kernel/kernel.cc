@@ -26,11 +26,7 @@ ExportC void _start_kernel(kernel_start_args *args)
     ScreenPrinter printer(80, 25);
     gPrinter = &printer;
     printer.cls();
-    printer.printf("hello kernel! ");
-    int a = args->data_size;
-    int b = 0;
-    int c = a / b;
-    printer.printf("%d", c);
+    printer.printf("hello kernel! \n");
 
     kmain();
 }

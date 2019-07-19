@@ -3,6 +3,8 @@
 #include "kernel/idt.hpp"
 namespace exception
 {
+ExportC u64 _get_cr2();
+
 ExportC void _divide_error_warpper();
 ExportC void _debug_warpper();
 ExportC void _nmi_warpper();
@@ -24,124 +26,150 @@ ExportC void _alignment_check_warpper();
 ExportC void _machine_check_warpper();
 ExportC void _SIMD_exception_warpper();
 ExportC void _virtualization_exception_warpper();
+void print_dst(idt::regs *regs)
+{
+    gPrinter->printf("exception at: 0x%x%x, error code: %u!\n", (u32)(regs->rip >> 32), (u32)(regs->rip),
+                     regs->error_code);
+}
+ExportC void entry_divide_error(idt::regs *regs)
+{
+    gPrinter->printf("divide error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_debug(idt::regs *regs)
+{
+    gPrinter->printf("debug trap. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_nmi(idt::regs *regs)
+{
+    gPrinter->printf("nmi error! ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_int3(idt::regs *regs)
+{
+    gPrinter->printf("int3 trap. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_overflow(idt::regs *regs)
+{
+    gPrinter->printf("overflow trap. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_bounds(idt::regs *regs)
+{
+    gPrinter->printf("out of bounds error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_undefined_opcode(idt::regs *regs)
+{
+    gPrinter->printf("undefined opcode error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_dev_not_available(idt::regs *regs)
+{
+    gPrinter->printf("dev not available error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_double_fault(idt::regs *regs)
+{
+    gPrinter->printf("double abort. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_coprocessor_segment_overrun(idt::regs *regs)
+{
+    gPrinter->printf("coprocessor segment overrun error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_invalid_TSS(idt::regs *regs)
+{
+    gPrinter->printf("invalid tss error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_segment_not_present(idt::regs *regs)
+{
+    gPrinter->printf("segment not present error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_stack_segment_fault(idt::regs *regs)
+{
+    gPrinter->printf("stack segment fault. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_general_protection(idt::regs *regs)
+{
+    gPrinter->printf("general protection error. ");
+    print_dst(regs);
+    while (1)
+        ;
+}
+ExportC void entry_page_fault(idt::regs *regs)
+{
+    gPrinter->printf("page fault. ");
+    print_dst(regs);
+    u64 cr2 = _get_cr2();
 
-ExportC void entry_divide_error()
-{
-    gPrinter->printf("divide error!\n");
     while (1)
         ;
 }
-ExportC void entry_debug()
+ExportC void entry_x87_FPU_error(idt::regs *regs)
 {
-    gPrinter->printf("debug trap/error!\n");
+    gPrinter->printf("X87 fpu error. ");
+    print_dst(regs);
     while (1)
         ;
 }
-ExportC void entry_nmi()
+ExportC void entry_alignment_check(idt::regs *regs)
 {
-    gPrinter->printf("nmi error!\n");
+    gPrinter->printf("alignment error. ");
+    print_dst(regs);
     while (1)
         ;
 }
-ExportC void entry_int3()
+ExportC void entry_machine_check(idt::regs *regs)
 {
-    gPrinter->printf("int3 trap!\n");
+    gPrinter->printf("machine error. ");
+    print_dst(regs);
     while (1)
         ;
 }
-ExportC void entry_overflow()
+ExportC void entry_SIMD_exception(idt::regs *regs)
 {
-    gPrinter->printf("overflow trap!\n");
+    gPrinter->printf("SIMD error. ");
+    print_dst(regs);
     while (1)
         ;
 }
-ExportC void entry_bounds()
+ExportC void entry_virtualization_exception(idt::regs *regs)
 {
-    gPrinter->printf("out of bounds error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_undefined_opcode()
-{
-    gPrinter->printf("undefined opcode error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_dev_not_available()
-{
-    gPrinter->printf("dev not available error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_double_fault()
-{
-    gPrinter->printf("double abort!\n");
-    while (1)
-        ;
-}
-ExportC void entry_coprocessor_segment_overrun()
-{
-    gPrinter->printf("coprocessor segment overrun error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_invalid_TSS()
-{
-    gPrinter->printf("invalid tss error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_segment_not_present()
-{
-    gPrinter->printf("segment not present error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_stack_segment_fault()
-{
-    gPrinter->printf("stack segment fault!\n");
-    while (1)
-        ;
-}
-ExportC void entry_general_protection()
-{
-    gPrinter->printf("general protection error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_page_fault()
-{
-    gPrinter->printf("page fault!\n");
-    while (1)
-        ;
-}
-ExportC void entry_x87_FPU_error()
-{
-    gPrinter->printf("X87 fpu error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_alignment_check()
-{
-    gPrinter->printf("alignment error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_machine_check()
-{
-    gPrinter->printf("machine error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_SIMD_exception()
-{
-    gPrinter->printf("SIMD error!\n");
-    while (1)
-        ;
-}
-ExportC void entry_virtualization_exception()
-{
-    gPrinter->printf("virtualization error!\n");
+    gPrinter->printf("virtualization error. ");
+    print_dst(regs);
     while (1)
         ;
 }

@@ -11,8 +11,7 @@
             "cwd": "${workspaceFolder}/build/debug/loader/",
             "environment": [],
             "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb",
-            "miDebuggerServerAddress": "192.168.1.166:1234",
+            "miDebuggerServerAddress": "192.168.0.166:1234",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
@@ -32,8 +31,7 @@
             "cwd": "${workspaceFolder}/build/debug/system/",
             "environment": [],
             "MIMode": "gdb",
-            "miDebuggerPath": "/usr/bin/gdb",
-            "miDebuggerServerAddress": "192.168.1.166:1234",
+            "miDebuggerServerAddress": "192.168.0.166:1234",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",
