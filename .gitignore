@@ -137,7 +137,7 @@ target/
 
 run/image/*.img
 build/
-.vscode/setting.json
+.vscode/settings.json
 bochsout.txt
 /run/image/mnt/boot
 /run/image/mnt/disk

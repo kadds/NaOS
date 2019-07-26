@@ -18,6 +18,7 @@ struct descriptor
     u8 DB : 1;
     u8 _3;
     descriptor(u64 gdte) { *((u64 *)this) = gdte; }
+    descriptor() {}
 } PackStruct;
 struct ptr_t
 {

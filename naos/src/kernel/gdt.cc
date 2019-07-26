@@ -1,21 +1,24 @@
 #include "kernel/gdt.hpp"
-
+#include "kernel/kernel.hpp"
+#include "kernel/klib.hpp"
 namespace gdt
 {
-ExportC void _reload_segment(u64 cs, u64 ss);
-ExportC void _load_gdt(void *gdt_ptr);
 
-descriptor gdt_before_init[] = {0x0, 0x0020980000000000, 0x0000920000000000};
-ptr_t gdt_before_ptr = {sizeof(gdt_before_init) - 1, (u64)gdt_before_init};
+Unpaged_Data_Section descriptor temp_gdt_init[3];
+Unpaged_Data_Section ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
 
 descriptor gdt_after_init[] = {0x0, 0x0020980000000000, 0x0000920000000000, 0x0020f80000000000, 0x0000f20000000000, 0,
                                0};
 ptr_t gdt_after_ptr = {sizeof(gdt_after_init) - 1, (u64)gdt_after_init};
 
-void init_before_paging()
+Unpaged_Text_Section void init_before_paging()
 {
-    _load_gdt(&gdt_before_ptr);
-    _reload_segment(0x08, 0x10);
+    auto *temp_gdt = (u64 *)temp_gdt_init;
+    temp_gdt[0] = 0;
+    temp_gdt[1] = 0x0020980000000000;
+    temp_gdt[2] = 0x0000920000000000;
+    _unpaged_load_gdt(&gdt_before_ptr);
+    _unpaged_reload_segment(0x08, 0x10);
 }
 void init_after_paging()
 {

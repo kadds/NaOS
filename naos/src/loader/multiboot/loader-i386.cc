@@ -85,19 +85,8 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
 
     memcopy((void *)base_kernel_ptr, raw_kernel, size);
     kernel_file_head_t *kernel = (kernel_file_head_t *)base_kernel_ptr;
-    u32 bss_len = kernel->bss_end_addr - size;
-    printer.printf("kernel size: %u, bss_len: %u\n", size, bss_len);
-    // clear bss
-    if (bss_len < 2048)
-    {
-        memzero((void *)(base_data_ptr), bss_len);
-        base_data_ptr += bss_len;
-    }
-    else
-    {
-        printer.printf("Kernel file has invalid bss info.\n");
-        return;
-    }
+    printer.printf("kernel size: %u\n", size);
+
     base_data_ptr = ((base_data_ptr + 16 - 1) & ~(16 - 1));
     current_data_ptr = base_data_ptr;
 
@@ -105,7 +94,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
         (kernel_start_args *)alloc_data(current_data_ptr, sizeof(kernel_start_args), alignof(kernel_start_args));
     args->kernel_base = base_kernel_ptr;
     args->kernel_size = size;
-    args->stack_base = 0x7e00;
+    args->stack_base = 0x7000;
     args->stack_size = 0x1000;
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
@@ -129,24 +118,24 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
             target.size = ptr.size;
             switch (ptr.type)
             {
-            case MULTIBOOT_MEMORY_AVAILABLE:
-                target.map_type = map_type_t::available;
-                break;
-            case MULTIBOOT_MEMORY_RESERVED:
-                target.map_type = map_type_t::reserved;
-                break;
-            case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
-                target.map_type = map_type_t::acpi;
-                break;
-            case MULTIBOOT_MEMORY_NVS:
-                target.map_type = map_type_t::nvs;
-                break;
-            case MULTIBOOT_MEMORY_BADRAM:
-                target.map_type = map_type_t::badram;
-                break;
-            default:
-                printer.printf("Unknown memory map type %d.\n", ptr.type);
-                return;
+                case MULTIBOOT_MEMORY_AVAILABLE:
+                    target.map_type = map_type_t::available;
+                    break;
+                case MULTIBOOT_MEMORY_RESERVED:
+                    target.map_type = map_type_t::reserved;
+                    break;
+                case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
+                    target.map_type = map_type_t::acpi;
+                    break;
+                case MULTIBOOT_MEMORY_NVS:
+                    target.map_type = map_type_t::nvs;
+                    break;
+                case MULTIBOOT_MEMORY_BADRAM:
+                    target.map_type = map_type_t::badram;
+                    break;
+                default:
+                    printer.printf("Unknown memory map type %d.\n", ptr.type);
+                    return;
             }
         }
     }

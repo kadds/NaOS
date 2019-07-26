@@ -12,6 +12,7 @@
 
 #define PackStruct __attribute__((packed))
 #define Aligned(v) __attribute__((aligned(v)))
+#define Section(v) __attribute__((section(v)))
 typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;
@@ -74,3 +75,4 @@ inline void static_init()
         (*pFunc)();
     }
 }
+

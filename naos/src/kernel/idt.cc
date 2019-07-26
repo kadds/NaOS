@@ -1,11 +1,12 @@
 #include "kernel/idt.hpp"
 #include "kernel/exception.hpp"
 #include "kernel/interrupt.hpp"
+#include "kernel/kernel.hpp"
 #include "kernel/memory.hpp"
 namespace idt
 {
 
-ptr_t idt_before_ptr = {0, 0};
+Unpaged_Data_Section ptr_t idt_before_ptr = {0, 0};
 ptr_t idt_after_ptr = {0, 0};
 ExportC void _load_idt(void *idt_addr);
 ExportC void _cli();
@@ -13,15 +14,12 @@ ExportC void _sti();
 const u8 interrupt_type = 0b1110;
 const u8 exception_type = 0b1111;
 
-void init_before_paging() {}
+Unpaged_Text_Section void init_before_paging() {}
 void init_after_paging()
 {
     idt_after_ptr.limit = 255;
-    idt_after_ptr.addr = (u64)memory::alloc(sizeof(entry) * (idt_after_ptr.limit + 1), 8);
-    for (u64 i = 0; i < idt_after_ptr.limit; i++)
-    {
-        *(((entry *)idt_after_ptr.addr) + i) = entry();
-    }
+    idt_after_ptr.addr = (u64)memory::alloc(sizeof(entry) * 256, 8);
+
     exception::init();
     interrupt::init();
 
