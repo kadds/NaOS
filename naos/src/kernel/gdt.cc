@@ -4,7 +4,7 @@
 namespace gdt
 {
 
-Unpaged_Data_Section descriptor temp_gdt_init[3];
+Unpaged_Data_Section Aligned(8) descriptor temp_gdt_init[3];
 Unpaged_Data_Section ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
 
 descriptor gdt_after_init[] = {0x0, 0x0020980000000000, 0x0000920000000000, 0x0020f80000000000, 0x0000f20000000000, 0,

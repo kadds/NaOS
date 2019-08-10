@@ -9,7 +9,7 @@
 #if defined __GNUC__ || defined __clang__
 #define ExportC extern "C"
 #endif
-
+#define NoReturn __attribute__((noreturn))
 #define PackStruct __attribute__((packed))
 #define Aligned(v) __attribute__((aligned(v)))
 #define Section(v) __attribute__((section(v)))
@@ -23,7 +23,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 
-enum class map_type_t
+enum class map_type_t : u64
 {
     available = 0,
     reserved,
@@ -33,7 +33,6 @@ enum class map_type_t
 };
 struct kernel_memory_map_item
 {
-    u32 size;
     u64 addr;
     u64 len;
     map_type_t map_type;
@@ -54,13 +53,13 @@ struct kernel_start_args
   public:
     u32 mmap_count;
     void set_mmap_ptr(kernel_memory_map_item *item_ptr) { mmap = (u64)item_ptr; }
-    kernel_memory_map_item *get_mmap_ptr() { return (kernel_memory_map_item *)mmap; }
+    kernel_memory_map_item *get_mmap_ptr() const { return (kernel_memory_map_item *)mmap; }
 } PackStruct;
 
 struct kernel_file_head_t
 {
     u64 start_addr;
-    u64 bss_end_addr;
+    u64 reserved_space_size;
 } PackStruct;
 
 typedef void (*InitFunc)(void);
@@ -75,4 +74,3 @@ inline void static_init()
         (*pFunc)();
     }
 }
-

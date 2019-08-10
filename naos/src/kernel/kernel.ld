@@ -41,13 +41,14 @@ SECTIONS
         KEEP (*(.init_array*))
         __init_array_end = .;
     }
+    _end_of_init_array = .;
     . = ALIGN(4);
     .bss : AT(ADDR(.bss) - kernel_offset)
     {
-        _bss_start_addr = .;
+        _bss_start_addr = . - kernel_offset;
         *(.bss COMMON)
-        _bss_end_addr = .;
-
+        _bss_end_addr = . - kernel_offset;
     }
+    _bss_len = _bss_end_addr - _end_of_init_array;
     _end = .;
 }

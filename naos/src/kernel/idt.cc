@@ -2,7 +2,7 @@
 #include "kernel/exception.hpp"
 #include "kernel/interrupt.hpp"
 #include "kernel/kernel.hpp"
-#include "kernel/memory.hpp"
+#include "kernel/mm/memory.hpp"
 namespace idt
 {
 
@@ -18,7 +18,8 @@ Unpaged_Text_Section void init_before_paging() {}
 void init_after_paging()
 {
     idt_after_ptr.limit = 255;
-    idt_after_ptr.addr = (u64)memory::alloc(sizeof(entry) * 256, 8);
+    idt_after_ptr.addr =
+        (u64)memory::kernel_virtaddr_to_phyaddr(memory::NewArray<entry>(memory::VirtBootAllocatorV, 256));
 
     exception::init();
     interrupt::init();
@@ -31,7 +32,7 @@ void enable() { _sti(); }
 void disable() { _cli(); }
 void set_entry(int id, void *func, u16 selector, u8 dpl, u8 present, u8 type, u8 ist)
 {
-    entry *idte = (entry *)idt_after_ptr.addr + id;
+    entry *idte = (entry *)memory::kernel_phyaddr_to_virtaddr(idt_after_ptr.addr) + id;
     idte->set_offset((u64)func);
     idte->set_selector(selector);
     idte->set_type(type);

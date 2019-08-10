@@ -84,5 +84,5 @@ static inline void reverse_endian(u32 *dt)
     reverse_endian(((u16 *)dt) + 1);
 }
 
-ExportC void run_kernel(void *start_addr, kernel_start_args *);
+ExportC NoReturn void run_kernel(void *start_addr, kernel_start_args *);
 ExportC bool _is_support_x64();

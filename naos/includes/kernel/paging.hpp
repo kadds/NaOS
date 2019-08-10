@@ -135,4 +135,9 @@ void init();
 void temp_init();
 static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
               "sizeof paging struct is not 4KB.");
+struct page
+{
+    u64 attr;
+};
+
 } // namespace paging

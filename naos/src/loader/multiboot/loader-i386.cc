@@ -86,6 +86,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
     memcopy((void *)base_kernel_ptr, raw_kernel, size);
     kernel_file_head_t *kernel = (kernel_file_head_t *)base_kernel_ptr;
     printer.printf("kernel size: %u\n", size);
+    base_data_ptr += kernel->reserved_space_size;
 
     base_data_ptr = ((base_data_ptr + 16 - 1) & ~(16 - 1));
     current_data_ptr = base_data_ptr;
@@ -115,7 +116,6 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
             auto &target = args->get_mmap_ptr()[i];
             target.addr = ptr.addr;
             target.len = ptr.len;
-            target.size = ptr.size;
             switch (ptr.type)
             {
                 case MULTIBOOT_MEMORY_AVAILABLE:

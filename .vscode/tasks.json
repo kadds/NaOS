@@ -11,6 +11,27 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "cppcheck",
+            "type": "shell",
+            "command": "cppcheck --template=gcc --std=c++11 --enable=warning,performance,style --force naos/",
+            "problemMatcher": {
+                "fileLocation": "relative",
+                "severity": "warning",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "location": 2,
+                    "severity": 3,
+                    "message": 4
+                }
+            }
+        },
+        {
+            "label": "cloc",
+            "type": "shell",
+            "command": "cloc -exclude-dir=\"build,run\" ./"
         }
     ]
 }

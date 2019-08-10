@@ -8,10 +8,8 @@
 // 1MB
 #define STACK_SIZE 0x7fff
 
-.globl _start
+
 .section .boot
-.align  4
-.section .header_multiboot
 _header_multiboot_start:
 // magic
 .long MULTIBOOT_HEADER_MAGIC
@@ -36,8 +34,9 @@ _header_multiboot_start:
 .long 0
 .long 32
 
-.align  4
-.section .boot
+
+.globl _start
+
 _start:
     movl $(STACK_SIZE + _bss_end_addr), %esp
     pushl   %ebx
@@ -70,6 +69,7 @@ _gdt_ptr:
 
 .globl _is_support_x64
 _is_support_x64:
+    push %ebx
     mov $0x80000000, %eax
     cpuid
     cmp $0x80000001, %eax
@@ -79,6 +79,7 @@ _is_support_x64:
     test $0x20000000, %edx
     jz no_long_mode
     movl $1, %eax
+    pop %ebx
     ret
 no_long_mode:
     movl $0, %eax

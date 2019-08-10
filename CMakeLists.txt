@@ -9,11 +9,17 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pedantic -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -mno-sse -mno-sse2 -g")
-set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -g -fno-plt")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pedantic -fno-rtti -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -mno-sse -mno-sse2")
+set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
 
-set(LINKER_X86 "-Wl,-n -Wl,-melf_i386")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -Og")
+set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
+
+set(CMAKE_CXX_FLAGS_RELEASE "-O2")
+set(CMAKE_ASM_FLAGS_RELEASE "-O2")
+
+set(LINKER_X86 "-Wl,-n -Wl,-melf_i386 -Wl,--no-relax -Wl,--gc-sections -Wl,--build-id=none")
 set(ASM_X86 "-Wa,--32")
 set(CXX_X86 "-m32")
 
@@ -21,6 +27,7 @@ set(CXX_X86 "-m32")
 set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64 -Wl,--no-relax -Wl,--gc-sections -Wl,--build-id=none")
 set(ASM_X64 "-mcmodel=large -Wa,--64")
 set(CXX_X64 "-mcmodel=large -m64")
+
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
 

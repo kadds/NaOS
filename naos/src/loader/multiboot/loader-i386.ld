@@ -6,11 +6,14 @@ SECTIONS
     . = 0x1000000;
     .text :
     {
-        *(.header_multiboot)
-        *(.text*)
         *(.boot)
+        *(.text*)
     }
-
+    . = ALIGN(4);
+    .data : 
+    {
+        *(.data .rodata*)
+    }
     . = ALIGN(4);
     .init_array :
     {
@@ -21,7 +24,7 @@ SECTIONS
 
     .bss :
     {
-        *(.bss)
+        *(.bss COMMON)
         _bss_end_addr = .;
     }
 }

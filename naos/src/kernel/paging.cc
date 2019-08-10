@@ -1,14 +1,26 @@
 #include "kernel/paging.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/klib.hpp"
-#include "kernel/memory.hpp"
+#include "kernel/mm/buddy.hpp"
+#include "kernel/mm/memory.hpp"
 namespace paging
 {
-
+bool inited = false;
 pml4t *base_page_addr;
-
-template <typename _T> _T *new_page_table() { return memory::New<_T, 0x1000>(); }
-void delete_page_table(void *addr) {}
+memory::BuddyAllocator *allocator;
+template <typename _T> _T *new_page_table()
+{
+    if (!inited)
+        return memory::New<_T, 0x1000>(memory::VirtBootAllocatorV);
+    return memory::New<_T, 0x1000>(allocator);
+}
+template <typename _T> void delete_page_table(_T *addr)
+{
+    if (!inited)
+        memory::Delete<_T>(memory::VirtBootAllocatorV, addr);
+    else
+        memory::Delete<_T>(allocator, addr);
+}
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & (1 << bit_count); }
 
@@ -43,12 +55,14 @@ Unpaged_Text_Section void temp_init()
 }
 void init()
 {
+    allocator = memory::New<memory::BuddyAllocator>(memory::VirtBootAllocatorV, memory::zone_t::prop::present);
     base_page_addr = new_page_table<pml4t>();
 
     // map 0xffff800000000000-0xffff800000ffffff->0x000000-0xffffff
     map((void *)0xffff800000000000, (void *)0x0, frame_size_type::size_2_mb, 8, flags::writable);
 
-    _load_page(base_page_addr);
+    _load_page(memory::kernel_virtaddr_to_phyaddr(base_page_addr));
+    inited = true;
 }
 
 void check_pdpt(pml4t *base_addr, int pml4_index)
@@ -56,7 +70,7 @@ void check_pdpt(pml4t *base_addr, int pml4_index)
     auto &pml4e = (*base_addr)[pml4_index];
     if (!pml4e.is_present())
     {
-        pml4e.set_addr(new_page_table<pdpt>());
+        pml4e.set_addr(memory::kernel_virtaddr_to_phyaddr(new_page_table<pdpt>()));
         pml4e.set_present();
     }
 }
@@ -66,7 +80,7 @@ void check_pdt(pml4t *base_addr, int pml4_index, int pdpt_index)
     auto &pdpte = (*base_addr)[pml4_index].next()[pdpt_index];
     if (!pdpte.is_present())
     {
-        pdpte.set_addr(new_page_table<pdt>());
+        pdpte.set_addr(memory::kernel_virtaddr_to_phyaddr(new_page_table<pdt>()));
         pdpte.set_present();
     }
 }
@@ -76,7 +90,7 @@ void check_pt(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index)
     auto &pdt = (*base_addr)[pml4_index].next()[pdpt_index].next()[pt_index];
     if (!pdt.is_present())
     {
-        pdt.set_addr(new_page_table<pt>());
+        pdt.set_addr(memory::kernel_virtaddr_to_phyaddr(new_page_table<pt>()));
         pdt.set_present();
     }
 }
