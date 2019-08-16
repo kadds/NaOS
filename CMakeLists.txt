@@ -2,6 +2,10 @@ cmake_minimum_required (VERSION 3.3)
 
 project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
+
+option(USE_CLANG "build kernel with clang" OFF)
+
+# dirs
 set(CMAKE_BINARY_DIR ${PROJECT_SOURCE_DIR}/build)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -30,6 +34,14 @@ set(CXX_X64 "-mcmodel=large -m64")
 
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
-
-
+if (USE_CLANG)
+    SET (CMAKE_C_COMPILER        "/usr/bin/clang")
+    SET (CMAKE_CXX_COMPILER      "/usr/bin/clang++")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-unused-const-variable")
+    SET (CMAKE_LINKER  "/usr/bin/llvm-link")
+else()
+    SET (CMAKE_C_COMPILER        "/usr/bin/gcc")
+    SET (CMAKE_CXX_COMPILER      "/usr/bin/g++")
+    SET (CMAKE_LINKER  "/usr/bin/ld")
+endif(USE_CLANG)
 add_subdirectory(naos)

@@ -8,7 +8,6 @@
 namespace memory
 {
 
-extern u64 limit;
 void init(const kernel_start_args *args, u64 fix_memory_limit);
 
 template <typename T, int align = alignof(T), typename... Args> T *New(IAllocator *allocator, Args &&... args)
@@ -106,10 +105,7 @@ class PhyBootAllocator : public IAllocator
     {
         char *start = (char *)(((u64)current_ptr + align - 1) & ~(align - 1));
         current_ptr = start + size;
-        if ((u64)((char *)current_ptr - (char *)base_ptr) >= limit)
-        {
-            // TODO:: Add page mapping
-        }
+
         return start;
     }
     void deallocate(void *) override {}

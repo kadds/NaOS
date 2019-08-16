@@ -1,7 +1,7 @@
 #pragma once
-#include "mm/buddy.hpp"
-#include "mm/memory.hpp"
-#include "trace.hpp"
+#include "../trace.hpp"
+#include "buddy.hpp"
+#include "memory.hpp"
 template <typename List> class list_node_cache
 {
   public:
@@ -45,7 +45,7 @@ template <typename List> class list_node_cache
         }
         return list;
     }
-    void free_page(KList *list) { memory::Delete<KList>(memory::BuddyAllocator(), list); }
+    void free_page(KList *list) { memory::Delete<KList>(allocator, list); }
     Node *align_of(Node *node)
     {
         auto align = alignof(Node);

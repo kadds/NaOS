@@ -1,25 +1,21 @@
-#include "kernel/paging.hpp"
+#include "kernel/arch/paging.hpp"
+#include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
-#include "kernel/klib.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 namespace paging
 {
-bool inited = false;
 pml4t *base_page_addr;
-memory::BuddyAllocator *allocator;
+
 template <typename _T> _T *new_page_table()
 {
-    if (!inited)
-        return memory::New<_T, 0x1000>(memory::VirtBootAllocatorV);
-    return memory::New<_T, 0x1000>(allocator);
+    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
+    return memory::New<_T, 0x1000>(&allocator);
 }
 template <typename _T> void delete_page_table(_T *addr)
 {
-    if (!inited)
-        memory::Delete<_T>(memory::VirtBootAllocatorV, addr);
-    else
-        memory::Delete<_T>(allocator, addr);
+    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
+    memory::Delete<_T>(&allocator, addr);
 }
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & (1 << bit_count); }
@@ -55,14 +51,12 @@ Unpaged_Text_Section void temp_init()
 }
 void init()
 {
-    allocator = memory::New<memory::BuddyAllocator>(memory::VirtBootAllocatorV, memory::zone_t::prop::present);
     base_page_addr = new_page_table<pml4t>();
 
     // map 0xffff800000000000-0xffff800000ffffff->0x000000-0xffffff
     map((void *)0xffff800000000000, (void *)0x0, frame_size_type::size_2_mb, 8, flags::writable);
 
     _load_page(memory::kernel_virtaddr_to_phyaddr(base_page_addr));
-    inited = true;
 }
 
 void check_pdpt(pml4t *base_addr, int pml4_index)

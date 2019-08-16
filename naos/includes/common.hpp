@@ -3,16 +3,19 @@
 #include <cstdint>
 
 #ifdef _MSC_VER
-#define ExportC extern "C" __declspec(dllexport)
+#error Not support msvc.
 #endif
 
 #if defined __GNUC__ || defined __clang__
 #define ExportC extern "C"
 #endif
+
 #define NoReturn __attribute__((noreturn))
 #define PackStruct __attribute__((packed))
 #define Aligned(v) __attribute__((aligned(v)))
 #define Section(v) __attribute__((section(v)))
+
+// type defs
 typedef int8_t i8;
 typedef int16_t i16;
 typedef int32_t i32;

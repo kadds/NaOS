@@ -15,7 +15,7 @@ void slab_group::new_memory_node()
 }
 void slab_group::delete_memory_node(slab *s)
 {
-    kassert(s->rest == node_pre_slab);
+    kassert(s->rest == node_pre_slab, "slab error");
     all_obj_count -= node_pre_slab;
     s->~slab();
     memory::BuddyAllocator allocator(memory::zone_t::prop::present);

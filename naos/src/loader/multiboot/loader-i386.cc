@@ -32,7 +32,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
         return;
     }
     printer.printf("Load from multiboot.\n");
-
+    printer.printf("Framebuffer width: %d, height: %d.\n", addr->framebuffer_width, addr->framebuffer_height);
     ATADiskReader *disk_reader = ATADiskReader::get_available_disk();
     if (disk_reader == nullptr)
     {
@@ -55,7 +55,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
             {
                 auto cur_partition = gpt->get_partition(i);
                 Fat *fat = New<Fat>(disk_reader);
-                if (cur_partition.is_vaild())
+                if (cur_partition.is_valid())
                 {
                     printer.printf("Partition %d is vaild. start_lba at: %u%u, end_lba at %u%u.\n", i,
                                    (u32)(cur_partition.lba_start >> 32), (u32)cur_partition.lba_start,

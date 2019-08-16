@@ -1,5 +1,8 @@
 #pragma once
-#include "memory.hpp"
+#include "../mm/memory.hpp"
+#include "../trace.hpp"
+#include "../util/memory.hpp"
+
 namespace util
 {
 template <typename BaseType, int BitPreElement> class bit_set

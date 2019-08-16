@@ -41,7 +41,6 @@ void tag_zone_buddy_memory(char *start_addr, char *end_addr)
 }
 void init(const kernel_start_args *args, u64 fix_memory_limit)
 {
-    limit = fix_memory_limit;
     PhyBootAllocator::init((void *)(args->data_base + args->data_size));
     VirtBootAllocator vb;
     VirtBootAllocatorV = New<VirtBootAllocator>(&vb);

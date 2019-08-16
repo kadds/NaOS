@@ -10,7 +10,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/loader)
 
 
 add_executable(loader-multiboot ${DIR_ALL})
-set_target_properties(loader-multiboot PROPERTIES LINK_FLAGS "${LINKER_X86} -T ${CMAKE_CURRENT_SOURCE_DIR}/loader-i386.ld")
+set_target_properties(loader-multiboot PROPERTIES LINK_FLAGS "${LINKER_X86} -Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/loader-i386.ld")
 target_link_libraries(loader-multiboot PUBLIC loader-common)
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/loader-multiboot)

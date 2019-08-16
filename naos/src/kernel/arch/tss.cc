@@ -1,5 +1,6 @@
-#include "kernel/tss.hpp"
-#include "kernel/gdt.hpp"
+#include "kernel/arch/tss.hpp"
+#include "kernel/arch/gdt.hpp"
+#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 namespace tss
 {
@@ -9,7 +10,8 @@ ExportC void _load_tss_descriptor(int tss_index);
 tss *tss_ptr;
 void init(void *baseAddr, void *ist)
 {
-    tss_ptr = memory::New<tss, 8>(memory::VirtBootAllocatorV);
+    memory::BuddyAllocator alloc(memory::zone_t::prop::present);
+    tss_ptr = memory::New<tss, 8>(&alloc);
     descriptor &tss_descriptor = gdt::get_tss_descriptor(0);
 
     tss_descriptor.set_offset(memory::kernel_virtaddr_to_phyaddr((u64)tss_ptr));

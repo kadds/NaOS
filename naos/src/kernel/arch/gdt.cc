@@ -1,16 +1,16 @@
-#include "kernel/gdt.hpp"
+#include "kernel/arch/gdt.hpp"
+#include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
-#include "kernel/klib.hpp"
 namespace gdt
 {
 
 Unpaged_Data_Section Aligned(8) descriptor temp_gdt_init[3];
 Unpaged_Data_Section ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
 
-descriptor gdt_after_init[] = {0x0, 0x0020980000000000, 0x0000920000000000, 0x0020f80000000000, 0x0000f20000000000, 0,
-                               0};
-ptr_t gdt_after_ptr = {sizeof(gdt_after_init) - 1, (u64)gdt_after_init};
+Aligned(8) descriptor gdt_after_init[] = {
+    0x0, 0x0020980000000000, 0x0000920000000000, 0x0020f80000000000, 0x0000f20000000000, 0, 0};
 
+ptr_t gdt_after_ptr = {sizeof(gdt_after_init) - 1, (u64)gdt_after_init};
 Unpaged_Text_Section void init_before_paging()
 {
     auto *temp_gdt = (u64 *)temp_gdt_init;
@@ -23,7 +23,7 @@ Unpaged_Text_Section void init_before_paging()
 void init_after_paging()
 {
     _load_gdt(&gdt_after_ptr);
-    _reload_segment(0x08, 0x10);
+    _reload_segment(gen_selector(selector_type::kernel_code, 0), gen_selector(selector_type::kernel_data, 0));
 }
 descriptor &get_gdt_descriptor(int index) { return gdt_after_init[index]; }
 

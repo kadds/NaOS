@@ -27,9 +27,13 @@ struct partition
 {
     u64 lba_end;
     u64 lba_start;
-    bool is_vaild() { return lba_end > lba_start && lba_start > 0; }
+    bool is_valid() { return lba_end > lba_start && lba_start > 0; }
 
-    partition(u64 lba_start = 0, u64 lba_end = 0) : lba_end(lba_end), lba_start(lba_start) {}
+    partition(u64 lba_start = 0, u64 lba_end = 0)
+        : lba_end(lba_end)
+        , lba_start(lba_start)
+    {
+    }
 };
 
 #pragma pack(pop)
