@@ -14,8 +14,7 @@ class buddy
 {
   private:
     const int size;
-    // From element 0 to elment last is the reslut of binary tree traversal. Element 0 is root.
-    // Each element represent from 4 bits. So max level is 2 ^ 4 = 16
+    // The 0th to last element comes from the output of the binary tree traversal. Element 0 is root.
     // Using impl for avoid cyclic dependence
     void *bits_impl;
     u64 fit_size(u64 size);

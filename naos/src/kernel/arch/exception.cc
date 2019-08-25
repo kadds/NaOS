@@ -129,7 +129,7 @@ ExportC void entry_page_fault(regs_t *regs)
 {
     trace::debug("page fault. ");
     u64 cr2 = _get_cr2();
-    trace::debug("page at: 0x%x%x, ", cr2 >> 32, cr2);
+    trace::debug("page at: ", (void *)cr2);
     print_dst(regs);
     while (1)
         ;

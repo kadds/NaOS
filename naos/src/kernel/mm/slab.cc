@@ -29,8 +29,8 @@ slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name
     , list_empty(allocator)
     , list_partial(allocator)
     , list_full(allocator)
-    , align(align)
     , flags(flags)
+    , align(align)
     , all_obj_count(0)
     , all_obj_used(0)
 {
@@ -207,7 +207,7 @@ void slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 alig
     slab_group group(&slab_node_list_node_allocator, size, name, align, flags);
     slab_groups.push_back(group);
 }
-void slab_cache_pool::remove_slabe_group(const char *name)
+void slab_cache_pool::remove_slab_group(const char *name)
 {
     auto group_node = find_slab_group_node(name);
     if (group_node)

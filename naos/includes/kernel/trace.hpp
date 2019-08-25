@@ -37,7 +37,7 @@ template <typename... Args> void assert_runtime(const char *exp, const char *fil
 #define kassert(exp, ...)                                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
-        if (!(exp))                                                                                                    \
+        if (unlikely(!(exp)))                                                                                          \
         {                                                                                                              \
             (trace::assert_runtime(#exp, __FILE__, __LINE__, __VA_ARGS__));                                            \
         }                                                                                                              \

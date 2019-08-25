@@ -40,7 +40,6 @@ struct partition
 class MBR
 {
     mbr_header header;
-    ATADiskReader *reader;
     bool has_err;
 
   public:

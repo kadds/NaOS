@@ -5,6 +5,8 @@
 #include "buddy.hpp"
 #include "common.hpp"
 #include "list_node_cache.hpp"
+#define NewSlabGroup(domain, struct, align, flags) domain->create_new_slab_group(sizeof(struct), #struct, align, flags);
+
 struct slab
 {
     using bitmap_t = util::bit_set_fixed<u64, 1, 512>;
@@ -76,7 +78,7 @@ struct slab_cache_pool
     slab_group_list *get_slab_groups() { return &slab_groups; }
     void create_new_slab_group(u64 size, const char *name, u64 align, u64 flags);
 
-    void remove_slabe_group(const char *name);
+    void remove_slab_group(const char *name);
     slab_cache_pool();
 };
 

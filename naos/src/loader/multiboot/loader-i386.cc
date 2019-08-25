@@ -75,7 +75,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
         else
             return;
     }
-    if (size == 0)
+    if (size <= 0)
     {
         printer.printf("Can not load any kernel file!\n");
         return;
@@ -85,20 +85,35 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
 
     memcopy((void *)base_kernel_ptr, raw_kernel, size);
     kernel_file_head_t *kernel = (kernel_file_head_t *)base_kernel_ptr;
-    printer.printf("kernel size: %u\n", size);
+    if (!kernel->is_valid())
+    {
+        printer.printf("Kernel is not valid.\n");
+        return;
+    }
+    printer.printf("kernel size: %u, reserved space size:. %u\n", size, (u32)kernel->reserved_space_size);
+    if (kernel->reserved_space_size > 0x1000)
+    {
+        printer.printf("To much memory kernel want to reserved.\n");
+        return;
+    }
     base_data_ptr += kernel->reserved_space_size;
-
     base_data_ptr = ((base_data_ptr + 16 - 1) & ~(16 - 1));
     current_data_ptr = base_data_ptr;
 
-    kernel_start_args *args =
-        (kernel_start_args *)alloc_data(current_data_ptr, sizeof(kernel_start_args), alignof(kernel_start_args));
+    kernel_start_args *args = (kernel_start_args *)alloc_data(current_data_ptr, sizeof(kernel_start_args), 8);
+
+    args->size_of_struct = sizeof(kernel_start_args);
     args->kernel_base = base_kernel_ptr;
     args->kernel_size = size;
-    args->stack_base = 0x7000;
-    args->stack_size = 0x1000;
+    // 32 kb
+    args->stack_base = 0x8000;
+    args->stack_size = 0x8000;
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
+    const char flags[] = "trace.debug=true;";
+
+    args->set_kernel_flags_ptr((char *)alloc_data(current_data_ptr, sizeof(flags), 1));
+    memcopy(args->get_kernel_flags_ptr(), flags, sizeof(flags));
 
     if (CHECK_FLAG(addr->flags, 6))
     {
@@ -108,8 +123,8 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
             printer.printf("To many memory map items.\n");
             return;
         }
-        args->set_mmap_ptr((kernel_memory_map_item *)alloc_data(
-            current_data_ptr, sizeof(kernel_memory_map_item) * args->mmap_count, alignof(kernel_memory_map_item)));
+        args->set_mmap_ptr((kernel_memory_map_item *)alloc_data(current_data_ptr,
+                                                                sizeof(kernel_memory_map_item) * args->mmap_count, 8));
         for (u32 i = 0; i < args->mmap_count; i++)
         {
             auto &ptr = *(((multiboot_memory_map_t *)addr->mmap_addr) + i);
@@ -141,14 +156,14 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
     }
     else
     {
-        printer.printf("Can not load memory map info.\n");
+        printer.printf("Can't load memory map infomation.\n");
     }
     if (!_is_support_x64())
     {
-        printer.printf("Unsupport x64 mode\n");
+        printer.printf("Unsupported long mode.\n");
         return;
     }
-    printer.printf("Enter ia-32e & Start kernel...\n");
+    printer.printf("Enter long mode & Start kernel...\n");
     args->data_size = current_data_ptr - base_data_ptr;
     run_kernel((void *)(kernel->start_addr + base_kernel_ptr), args);
 }

@@ -9,6 +9,7 @@ PhyBootAllocator *PhyBootAllocatorV;
 KernelCommonAllocator *KernelCommonAllocatorV;
 void *PhyBootAllocator::base_ptr;
 void *PhyBootAllocator::current_ptr;
+u64 max_memory_available;
 u64 limit;
 zones_t global_zones;
 
@@ -45,9 +46,11 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     VirtBootAllocator vb;
     VirtBootAllocatorV = New<VirtBootAllocator>(&vb);
     PhyBootAllocatorV = New<PhyBootAllocator>(&vb);
-
+    if (args->mmap_count == 0)
+        trace::panic("mmap info size shouldn't 0");
     global_zones.count = 0;
     kernel_memory_map_item *mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
+    max_memory_available = 0;
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
@@ -57,6 +60,8 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
             u64 end = ((u64)mm_item->addr + mm_item->len - 1) & ~(page_size - 1);
             if (start < end)
                 global_zones.count++;
+            if (mm_item->addr + mm_item->len > max_memory_available)
+                max_memory_available = mm_item->addr + mm_item->len;
         }
     }
     mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
@@ -85,7 +90,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         else
             buddys->count = count;
 
-        if (buddys->count > 0)
+        if (likely(buddys->count > 0))
         {
             buddys->buddys = NewArray<buddy>(VirtBootAllocatorV, buddys->count, buddy_max_page);
             item.props = zone_t::prop::present;
@@ -108,14 +113,17 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     // tell buddy system kernel used
     tag_zone_buddy_memory(start_kernel, end_kernel);
     // auto r = ((buddy_contanier *)global_zones.zones[1].buddy_impl)->buddys->gen_tree();
-
     global_kmalloc_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_dma_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_object_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
+
     for (auto i : kmalloc_fixed_slab_size)
     {
         global_kmalloc_slab_cache_pool->create_new_slab_group(i.size, i.name, 8, 0);
     }
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 }
+u64 get_max_available_memory() { return max_memory_available; }
 void *kmalloc(u64 size, u64 align)
 {
     if (align > 8)

@@ -59,11 +59,30 @@ struct base_entry
     void set_global() { data |= flags::global; }
     void clear_global() { data &= ~flags::global; }
 
-    void *get_addr() const { return (void *)((u64)data & 0x1FFFFFFFFFF000UL); }
+    void *get_addr() const;
     base_entry(void *baseAddr, u32 flags) { data = ((((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | flags); }
     base_entry() { data = 0; }
-    void set_addr(void *ptr) { data = ((u64)ptr) & 0x1FFFFFFFFFF000UL; }
+    void set_addr(void *ptr);
     void add_attributes(u16 attr) { data &= (attr & 0x0FFF); }
+    // can only save 14 bits data
+    void set_common_data(u16 dt)
+    {
+        dt &= 0x3FFF;
+        data |= (((u64)dt & 0x3FFC) << 50) & ((dt & 0x3000) >> 3);
+    }
+    u16 get_common_data()
+    {
+        u16 rt;
+        rt = (((data) >> 9) & 0x2) | ((((data) >> 52) & 0xFFF) << 2);
+        return rt;
+    }
+    // can only save 62 bits data, notice: will clean common data
+    void set_unpresent_data(u64 dt)
+    {
+        dt <<= 2;
+        data |= dt;
+    }
+    u64 get_unpresent_data() { return (data & 0x7FFFFFFFFFFFFFFEUL) >> 1; }
 };
 
 struct pt_entry : base_entry
@@ -82,7 +101,7 @@ struct pd_entry : public base_entry
     static inline u64 big_page_size = 1 << 21;
     using base_entry::base_entry;
 
-    pt &next() const { return *(pt *)((u64)data & 0x1FFFFFFFFFF000UL); }
+    pt &next() const { return *(pt *)get_addr(); }
 };
 struct pdt
 {
@@ -93,7 +112,7 @@ struct pdt
 struct pdpt_entry : public base_entry
 {
     static inline u64 big_page_size = 1 << 30;
-    pdt &next() const { return *(pdt *)((u64)data & 0x1FFFFFFFFFF000UL); }
+    pdt &next() const { return *(pdt *)get_addr(); }
     using base_entry::base_entry;
 
   private:
@@ -111,7 +130,7 @@ struct pdpt
 
 struct pml4_entry : public base_entry
 {
-    pdpt &next() const { return *(pdpt *)((u64)data & 0x1FFFFFFFFFF000UL); }
+    pdpt &next() const { return *(pdpt *)get_addr(); }
     using base_entry::base_entry;
 };
 
@@ -120,16 +139,22 @@ struct pml4t
     pml4_entry entries[512];
     pml4_entry &operator[](size_t index) { return entries[index]; }
 };
-
-enum class frame_size_type : u64
+namespace frame_size
 {
-    size_4_kb = 0x1000,
-    size_2_mb = 0x200000,
-    size_1_gb = 0x80000000
+enum frame_size : u64
+{
+    size_4kb = 0x1000,
+    size_2mb = 0x200000,
+    size_1gb = 0x80000000
 };
+} // namespace frame_size
 
-extern pml4t *base_page_addr;
-bool map(void *virt_start_addr, void *phy_start_addr, frame_size_type frame_size, u32 map_count, u32 page_ext_flags);
+extern pml4t *base_kernel_page_addr;
+bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
+         u32 page_ext_flags);
+bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
+
+void load(pml4t *base_paging_addr);
 
 void init();
 void temp_init();

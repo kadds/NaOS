@@ -47,8 +47,9 @@ SECTIONS
     {
         _bss_start_addr = . - kernel_offset;
         *(.bss COMMON)
+        . = ALIGN(4);
         _bss_end_addr = . - kernel_offset;
     }
-    _bss_len = _bss_end_addr - _end_of_init_array;
+    _bss_len = _bss_end_addr - (_end_of_init_array - kernel_offset);
     _end = .;
 }

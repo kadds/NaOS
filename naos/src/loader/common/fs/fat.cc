@@ -132,7 +132,7 @@ int Fat::read_file(const char *url, void *&buf)
     char **urls = split_url(url, url_len);
     bool searched = false;
     u32 cluster = 2;
-    u32 file_size;
+    u32 file_size = 0;
     for (int i = 0; i < url_len; i++)
     {
         char *current_name = urls[i];
@@ -141,7 +141,7 @@ int Fat::read_file(const char *url, void *&buf)
         reader->read_data_lba48(file_entries, root_start,
                                 (cluster - 2) * header.selector_per_cluster * header.bytes_per_selector,
                                 header.bytes_per_selector);
-        for (int j = 0; j < header.bytes_per_selector / sizeof(file_entry); j++)
+        for (u16 j = 0; j < header.bytes_per_selector / sizeof(file_entry); j++)
         {
             u32 cluster_node = 0;
             file_entry &current_file = file_entries[j];

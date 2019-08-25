@@ -10,3 +10,4 @@ extern volatile char _bss_unpaged_end_addr[];
 extern volatile char _bss_unpaged_start_addr[];
 extern volatile char base_phy_addr[];
 static_assert(sizeof(void *) == 8, "Just 64-bit code generation is supported.");
+const u64 max_memory_support = 0x100000000000ul;

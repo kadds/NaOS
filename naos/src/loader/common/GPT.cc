@@ -2,7 +2,7 @@
 #include "loader/ATADiskReader.hpp"
 #include "loader/ScreenPrinter.hpp"
 #include "loader/loader.hpp"
-GPT::GPT(ATADiskReader *disk_reader) : reader(disk_reader)
+GPT::GPT(ATADiskReader *disk_reader)
 {
     has_err = false;
     if (disk_reader->read_data_lba48(&header, 1, 0, sizeof(gpt_header)) == -1)

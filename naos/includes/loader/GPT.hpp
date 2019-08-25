@@ -37,7 +37,6 @@ class GPT
 {
   private:
     bool has_err;
-    ATADiskReader *reader;
     gpt_header header;
     gpt_table *tables;
 

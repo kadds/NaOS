@@ -1,4 +1,5 @@
 #include "kernel/arch/arch.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/paging.hpp"
@@ -14,8 +15,10 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
 }
 void init(const kernel_start_args *args)
 {
+    cpu::init();
     memory::init(args, 0x0);
     device::vbe::init();
+    cpu::trace_debug_info();
     paging::init();
 
     gdt::init_after_paging();
