@@ -10,4 +10,6 @@ void disable_all();
 void enable_with(u8 ports);
 // Set which bit you want irq to enable. bit 1 is disable a irq
 void disable_with(u8 ports);
+
+void send_EOI(int irq_number);
 } // namespace device::chip8259A

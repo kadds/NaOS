@@ -20,13 +20,6 @@ task_list_t *task_list;
 memory::ListNodeCacheAllocator<task_list_cache_t> *task_list_node_cache_allocator;
 memory::BuddyAllocator *buddy_allocator;
 
-inline task_t *current()
-{
-    task_t *current = nullptr;
-    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(current) : "0"(~(stack_size - 1)));
-    return current;
-}
-
 void *new_stack()
 {
     memory::BuddyAllocator buddy_allocator(memory::zone_t::prop::present);

@@ -5,6 +5,8 @@
 
 namespace task
 {
+extern u64 stack_size;
+
 typedef void kernel_thread_start_func(u64 args);
 // 32 kb
 const int kernel_stack_page_count = 8;
@@ -55,5 +57,10 @@ int kernel_thread(kernel_thread_start_func *function, u64 arg);
 
 void create(void *rip, void *ss);
 void switch_task(task_t *old, task_t *new_task);
-
+inline task_t *current()
+{
+    task_t *current = nullptr;
+    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(current) : "0"(~(stack_size - 1)));
+    return current;
+}
 } // namespace task

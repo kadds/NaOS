@@ -66,5 +66,14 @@ void disable_with(u8 ports)
     p = p | ports;
     io_out8(slave_ocw1_port, p);
 }
-
+void send_EOI(int irq_number)
+{
+    if (unlikely(irq_number > 16))
+        return;
+    io_out8(master_ocw2_port, 0x20);
+    if (irq_number > 8)
+    {
+        io_out8(slave_ocw2_port, 0x20);
+    }
+}
 } // namespace device::chip8259A

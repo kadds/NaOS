@@ -3,6 +3,8 @@
 #include "kernel/trace.hpp"
 namespace exception
 {
+using idt::regs_t;
+
 ExportC u64 _get_cr2();
 
 ExportC void _divide_error_wrapper();
