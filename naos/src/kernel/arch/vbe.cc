@@ -1,7 +1,7 @@
 #include "kernel/arch/vbe.hpp"
 #include "kernel/mm/memory.hpp"
 #include <stdarg.h>
-namespace device::vbe
+namespace arch::device::vbe
 {
 
 volatile unsigned char *video = (unsigned char *)0xB8000;
@@ -15,9 +15,9 @@ void init()
     height = 25;
     penx = 0;
     peny = 0;
-    video = memory::kernel_phyaddr_to_virtaddr(video);
     cls();
 }
+void mm_addr() { video = memory::kernel_phyaddr_to_virtaddr(video); }
 void cls()
 {
     for (u32 i = 0; i < width * height * 2; i++)
@@ -62,4 +62,4 @@ void putstring(const char *str)
     }
 }
 
-} // namespace device::vbe
+} // namespace arch::device::vbe

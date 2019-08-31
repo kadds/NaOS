@@ -2,9 +2,11 @@
 #include "../util/formatter.hpp"
 #include "common.hpp"
 #include <type_traits>
-namespace device::vbe
+namespace arch::device::vbe
 {
 void init();
+void mm_addr();
+
 void set_size(u32 width, u32 height);
 void putchar(char ch);
 void putstring(const char *str);
@@ -55,4 +57,4 @@ template <typename Head, typename... Args> void print_fmt(const Head &head, cons
 }
 template <typename... Args> void print(const Args &... args) { print_fmt(args...); }
 
-} // namespace device::vbe
+} // namespace arch::device::vbe

@@ -1,7 +1,7 @@
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
-namespace gdt
+namespace arch::gdt
 {
 
 Unpaged_Data_Section Aligned(8) descriptor temp_gdt_init[3];
@@ -28,9 +28,9 @@ void init_after_paging()
 descriptor &get_gdt_descriptor(int index) { return gdt_after_init[index]; }
 
 int get_start_index_of_tss() { return 5; }
-::tss::descriptor &get_tss_descriptor(int index)
+::arch::tss::descriptor &get_tss_descriptor(int index)
 {
-    return *(::tss::descriptor *)&gdt_after_init[index + get_start_index_of_tss()];
+    return *(::arch::tss::descriptor *)&gdt_after_init[index + get_start_index_of_tss()];
 }
 int get_offset_of_tss() { return get_start_index_of_tss() * sizeof(descriptor); }
-} // namespace gdt
+} // namespace arch::gdt

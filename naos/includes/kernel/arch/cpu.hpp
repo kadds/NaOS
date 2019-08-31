@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-namespace cpu
+namespace arch::cpu
 {
 enum class future
 {
@@ -18,4 +18,4 @@ void trace_debug_info();
 bool has_future(future f);
 u64 get_future(future f);
 const char *get_cpu_manufacturer();
-} // namespace cpu
+} // namespace arch::cpu

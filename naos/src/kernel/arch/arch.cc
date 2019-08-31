@@ -15,14 +15,29 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
 }
 void init(const kernel_start_args *args)
 {
-    cpu::init();
-    memory::init(args, 0x0);
     device::vbe::init();
-    cpu::trace_debug_info();
-    paging::init();
+    if (sizeof(kernel_start_args) != args->size_of_struct)
+    {
+        trace::panic("kernel args is invalid.");
+    }
 
+    trace::debug("Kernel starting...");
+    cpu::init();
+
+    trace::debug("Memory init...");
+    memory::init(args, 0x0);
+
+    trace::debug("Paging init...");
+    paging::init();
+    device::vbe::mm_addr();
+
+    trace::debug("GDT init...");
     gdt::init_after_paging();
+
+    trace::debug("TSS init...");
     tss::init((void *)0x9fff, (void *)0x6000);
+
+    trace::debug("IDT init...");
     idt::init_after_paging();
 }
 

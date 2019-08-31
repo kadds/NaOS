@@ -1,7 +1,9 @@
 #pragma once
 #include "common.hpp"
-namespace task
+namespace arch::task
 {
+extern u64 stack_size;
+
 struct register_info_t
 {
     u64 rsp0; // base rsp
@@ -38,4 +40,35 @@ struct regs_t
     u64 rsp;
     u64 ss;
 };
-} // namespace task
+struct thread_info_t
+{
+    u64 magic_wall;
+    void *task;
+    u64 magic_end_wall;
+    bool is_valid() { return magic_wall == 0xFFCCFFCCCCFFCCFF && magic_end_wall == 0x0AEEAAEEEEAAEE0A; }
+    thread_info_t()
+        : magic_wall(0xFFCCFFCCCCFFCCFF)
+        , magic_end_wall(0x0AEEAAEEEEAAEE0A)
+    {
+    }
+};
+
+// 32 kb
+const int kernel_stack_page_count = 8;
+inline void *current_stack()
+{
+    void *stack = nullptr;
+    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack) : "0"(~(stack_size - 1)));
+    return stack;
+}
+
+inline void *current_task()
+{
+    thread_info_t *current = (thread_info_t *)current_stack();
+    return current->task;
+}
+
+void init(void *task, register_info_t *first_task_reg_info);
+
+u64 do_fork(void *task, void *stack_addr, regs_t &regs, register_info_t &register_info, void *function, u64 arg);
+} // namespace arch::task

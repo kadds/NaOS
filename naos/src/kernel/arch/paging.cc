@@ -5,7 +5,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 
-namespace paging
+namespace arch::paging
 {
 pml4t *base_kernel_page_addr;
 
@@ -390,4 +390,4 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 }
 void load(pml4t *base_paging_addr) { _load_page(memory::kernel_virtaddr_to_phyaddr(base_paging_addr)); }
 
-} // namespace paging
+} // namespace arch::paging

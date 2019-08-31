@@ -1,7 +1,7 @@
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/trace.hpp"
-namespace exception
+namespace arch::exception
 {
 using idt::regs_t;
 
@@ -197,4 +197,4 @@ void init()
     set_trap_system_gate(19, (void *)_SIMD_exception_wrapper);
     set_trap_system_gate(20, (void *)_virtualization_exception_wrapper);
 }
-} // namespace exception
+} // namespace arch::exception

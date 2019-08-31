@@ -2,5 +2,5 @@
 #include "kernel/trace.hpp"
 namespace task::builtin::init
 {
-void main() { trace::info("init task running."); }
+void main(u64 args) { trace::info("init task running."); }
 } // namespace task::builtin::init

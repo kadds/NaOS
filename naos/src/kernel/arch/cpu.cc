@@ -10,7 +10,7 @@
         return (reg & 1ul << bit);                                                                                     \
     } while (0)
 #define bits(number, start, end) ((number) >> (start) & ((1 << (end - start + 1)) - 1))
-namespace cpu
+namespace arch::cpu
 {
 char cpu_name[13];
 u32 max_basic_number;
@@ -22,16 +22,17 @@ void init()
     *(u32 *)cpu_name = b;
     *((u32 *)cpu_name + 1) = d;
     *((u32 *)cpu_name + 2) = c;
-    cpu_name[12] = '0';
+    cpu_name[12] = '\0';
     max_basic_number = a;
 
     cpu_id(0x80000000, &a, &b, &c, &d);
     max_extend_number = a;
+    trace_debug_info();
 }
 void trace_debug_info()
 {
-    trace::debug("Cpu family: ", cpu_name, ". Maximum basic functional number: ", max_basic_number,
-                 ".  Maximum extend functional number: ", max_extend_number, ".");
+    trace::debug("Cpu family: ", cpu_name, ". Maximum basic functional number: ", (void *)max_basic_number,
+                 ".  Maximum extend functional number: ", (void *)max_extend_number);
 }
 bool has_future(future f)
 {
@@ -67,4 +68,4 @@ u64 get_future(future f)
 }
 const char *get_cpu_manufacturer() { return cpu_name; }
 
-} // namespace cpu
+} // namespace arch::cpu

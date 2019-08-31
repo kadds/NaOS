@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-namespace tss
+namespace arch::tss
 {
 
 struct descriptor
@@ -41,7 +41,7 @@ struct descriptor
     void set_dpl(u8 dpl) { this->DPL = dpl; }
     void set_valid(bool p) { this->P = p; }
 } PackStruct;
-struct tss
+struct tss_t
 {
     u32 _0;
     u64 rsp0;
@@ -61,4 +61,10 @@ struct tss
 } PackStruct;
 
 void init(void *baseAddr, void *ist);
-} // namespace tss
+
+void set_ist(int index, void *ist);
+void *get_ist(int index);
+
+void set_rsp(int index, void *rsp0);
+void *get_rsp(int index);
+} // namespace arch::tss

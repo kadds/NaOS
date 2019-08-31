@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-namespace device::chip8259A
+namespace arch::device::chip8259A
 {
 
 void init();
@@ -12,4 +12,4 @@ void enable_with(u8 ports);
 void disable_with(u8 ports);
 
 void send_EOI(int irq_number);
-} // namespace device::chip8259A
+} // namespace arch::device::chip8259A

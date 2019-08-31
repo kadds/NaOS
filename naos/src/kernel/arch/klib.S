@@ -57,12 +57,12 @@ _flush_tlb:
 _cpu_id:
     pushq %rbx
     movl %edi, %eax
+    movq %rcx, %r9
     movq %rdi, %rcx
     shr  $32, %rcx
     clc
     
     movq %rdx, %rdi
-    movq %rcx, %r9
     cpuid
     mov %eax, (%rsi)
     mov %ebx, (%rdi)
@@ -73,11 +73,11 @@ _cpu_id:
 .globl _switch_task
 _switch_task:
     pushq %rax
-    movq %rsp, 0x10(%rdi)
-    movq 0x10(%rsi), %rsp
-    leaq end_task(%rip), %rax
-    movq %rax, 0x8(%rdi)
-    pushq 0x8(%rsi)
+    movq %rsp, 0x10(%rdi) # save rsp
+    movq 0x10(%rsi), %rsp # new rsp
+    leaq end_task(%rip), %rax 
+    movq %rax, 0x8(%rdi) # prev rip
+    pushq 0x8(%rsi) # push new rip
     jmp switch_task
 end_task:
     popq %rax

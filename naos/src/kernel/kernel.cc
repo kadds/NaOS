@@ -26,30 +26,20 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
     }
 }
 
-ExportC NoReturn void kmain()
-{
-    trace::info("kernel main");
-    task::start_task_zero();
-    trace::panic("Should not be running at here.");
-}
-
 ExportC void _kstart(const kernel_start_args *args);
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 {
-    if (sizeof(kernel_start_args) != args->size_of_struct)
-    {
-        while (1)
-            ;
-    }
     bss_init((void *)_bss_unpaged_start_addr, (void *)_bss_unpaged_end_addr);
     bss_init((void *)_bss_start_addr, (void *)_bss_end_addr);
     arch::temp_init(args);
     return (u64)&_kstart;
 }
-ExportC void _kstart(const kernel_start_args *args)
+ExportC NoReturn void _kstart(const kernel_start_args *args)
 {
     static_init();
     arch::init(args);
-    task::init(memory::kernel_phyaddr_to_virtaddr((void *)args->stack_base));
-    kmain();
+    task::init();
+    trace::info("kernel main");
+    task::start_task_idle();
+    trace::panic("Should not be running at here.");
 }

@@ -2,7 +2,7 @@
 #include "common.hpp"
 #include <type_traits>
 
-namespace paging
+namespace arch::paging
 {
 struct flags
 {
@@ -165,4 +165,4 @@ struct page
     u64 attr;
 };
 
-} // namespace paging
+} // namespace arch::paging

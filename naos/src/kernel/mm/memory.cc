@@ -40,6 +40,24 @@ void tag_zone_buddy_memory(char *start_addr, char *end_addr)
         }
     }
 }
+const char *get_type_str(map_type_t type)
+{
+    switch (type)
+    {
+        case map_type_t::available:
+            return "available";
+        case map_type_t::reserved:
+            return "reserved";
+        case map_type_t::acpi:
+            return "acpi";
+        case map_type_t::nvs:
+            return "nvs";
+        case map_type_t::badram:
+            return "unknown";
+        default:
+            return "unknown";
+    }
+}
 void init(const kernel_start_args *args, u64 fix_memory_limit)
 {
     PhyBootAllocator::init((void *)(args->data_base + args->data_size));
@@ -54,6 +72,8 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
+        trace::debug("mm info ", i, ": type:", get_type_str(mm_item->map_type), ", start:", (void *)mm_item->addr,
+                     ", length:", mm_item->len, ", end:", (void *)((char *)mm_item->addr + mm_item->len));
         if (mm_item->map_type == map_type_t::available)
         {
             u64 start = ((u64)mm_item->addr + page_size - 1) & ~(page_size - 1);
@@ -85,11 +105,11 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         item.buddy_impl = buddys;
         auto count = item.page_count / buddy_max_page;
         auto rest = item.page_count % buddy_max_page;
-        if (rest > 0)
+        if (likely(rest > 0))
             buddys->count = count + 1;
         else
             buddys->count = count;
-
+        trace::debug("zone ", cid, " page count:", item.page_count, ", buddy count:", buddys->count);
         if (likely(buddys->count > 0))
         {
             buddys->buddys = NewArray<buddy>(VirtBootAllocatorV, buddys->count, buddy_max_page);
@@ -112,6 +132,8 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     tag_zone_buddy_memory(0x0, (char *)0x100000);
     // tell buddy system kernel used
     tag_zone_buddy_memory(start_kernel, end_kernel);
+    trace::debug("kernel used address:", (void *)start_kernel, "-", (void *)end_kernel,
+                 ", length:", (end_kernel - start_kernel));
     // auto r = ((buddy_contanier *)global_zones.zones[1].buddy_impl)->buddys->gen_tree();
     global_kmalloc_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
     global_dma_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);

@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "tss.hpp"
-namespace gdt
+namespace arch::gdt
 {
 
 struct descriptor
@@ -43,6 +43,6 @@ u16 constexpr gen_selector(selector_type index, int dpl) { return (u16)index << 
 void init_before_paging();
 void init_after_paging();
 descriptor &get_gdt_descriptor(int index);
-::tss::descriptor &get_tss_descriptor(int index);
+::arch::tss::descriptor &get_tss_descriptor(int index);
 int get_offset_of_tss();
-} // namespace gdt
+} // namespace arch::gdt

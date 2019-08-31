@@ -2,7 +2,7 @@
 #include "kernel/arch/io.hpp"
 #include "kernel/trace.hpp"
 
-namespace device::chip8259A
+namespace arch::device::chip8259A
 {
 const int master_icw1_port = 0x20;
 const int master_icw2_port = 0x21;
@@ -76,4 +76,4 @@ void send_EOI(int irq_number)
         io_out8(slave_ocw2_port, 0x20);
     }
 }
-} // namespace device::chip8259A
+} // namespace arch::device::chip8259A

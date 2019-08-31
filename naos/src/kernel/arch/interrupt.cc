@@ -10,7 +10,7 @@
 ExportC char _interrupt_wrapper_32[];
 ExportC char _interrupt_wrapper_33[];
 
-namespace interrupt
+namespace arch::interrupt
 {
 using idt::regs_t;
 typedef util::linked_list<request_func_data> request_list_t;
@@ -33,4 +33,4 @@ ExportC void do_irq(const regs_t *regs)
     device::chip8259A::send_EOI(regs->vector - 32);
 }
 
-} // namespace interrupt
+} // namespace arch::interrupt

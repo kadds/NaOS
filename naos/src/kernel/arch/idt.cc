@@ -6,7 +6,7 @@
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
-namespace idt
+namespace arch::idt
 {
 
 Unpaged_Data_Section ptr_t idt_before_ptr = {0, 0};
@@ -63,4 +63,4 @@ void set_interrupt_gate(int index, void *func)
 {
     idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, 0);
 }
-} // namespace idt
+} // namespace arch::idt

@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 
-namespace idt
+namespace arch::idt
 {
 
 struct regs_t
@@ -90,4 +90,4 @@ void set_interrupt_gate(int index, void *func);
 
 void enable();
 void disable();
-} // namespace idt
+} // namespace arch::idt
