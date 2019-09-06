@@ -29,10 +29,10 @@ _header_multiboot_start:
 .long _start
 
 // video info
-.long 1
-.long 80
-.long 25
 .long 0
+.long 0
+.long 0
+.long 32
 
 
 .globl _start

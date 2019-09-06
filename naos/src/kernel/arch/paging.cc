@@ -27,12 +27,12 @@ void *base_entry::get_addr() const
 }
 void base_entry::set_addr(void *ptr) { data |= ((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL; }
 
-u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & (1 << bit_count); }
+u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
 Unpaged_Text_Section void temp_init()
 {
-    // map 0x000000-0xffffff->0x000000-0xffffff,0-16MB->0-16MB
-    // map 0xffff800000000000-0xffff800000ffffff->0x000000-0xffffff
+    // map 0x000000-0xffffffff->0x000000-0xffffffff,0-4GB->0-4GB
+    // map 0xffff800000000000-0xffff8000ffffffff->0x000000-0xffffffff
     const u64 addr = 0x80000;
 
     void *temp_pml4_addr = (void *)addr;
@@ -45,12 +45,15 @@ Unpaged_Text_Section void temp_init()
     for (int i = 0; i < 512; i++)
         page_temp_addr[i] = 0;
     page_temp_addr[0] = addr + 0x2003;
+    page_temp_addr[1] = addr + 0x3003;
+    page_temp_addr[2] = addr + 0x4003;
+    page_temp_addr[3] = addr + 0x5003;
 
     page_temp_addr = (u64 *)(addr + 0x2000);
-    for (int i = 0; i < 512; i++)
-        page_temp_addr[i] = 0;
+
     u64 v = 0x83;
-    for (int i = 0; i < 8; i++)
+    // map 4GB
+    for (int i = 0; i < 512 * 4; i++)
     {
         *page_temp_addr++ = v;
         v += 0x200000; // 2MB
@@ -62,21 +65,22 @@ Unpaged_Text_Section void temp_init()
 void init()
 {
     base_kernel_page_addr = new_page_table<pml4t>();
-    u64 max_available_memory = memory::get_max_available_memory();
-    if (max_available_memory > max_memory_support)
-        trace::panic("Not support such a large memory. Current memory detected ", max_available_memory,
+    u64 max_maped_memory = memory::get_max_maped_memory();
+    if (max_maped_memory > max_memory_support)
+        trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
                      ". Maximum memory supported ", max_memory_support, ".");
     // map all phy address
     if (cpu::has_future(cpu::future::huge_page_1gb))
     {
-        trace::debug("using 1gb huge page");
+        trace::debug("Paging at 1GB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_1gb,
-            (max_available_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable);
+            (max_maped_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable);
     }
     else
     {
+        trace::debug("Paging at 2MB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_2mb,
-            (max_available_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
+            (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
     }
 
     load(base_kernel_page_addr);
@@ -159,9 +163,9 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
             check_pml4e(&top_page, pml4e_index);
             for (u32 i = 0; i < frame_count; i++, pdpe_index++, phy_addr += (u32)frame_size)
             {
-                if (pdpe_index > 512)
+                if (pdpe_index >= 512)
                 {
-                    if (++pml4e_index > 512)
+                    if (++pml4e_index >= 512)
                         error_map();
                     check_pml4e(&top_page, pml4e_index);
                     pdpe_index = 0;
@@ -179,11 +183,11 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
             check_pdpe(&top_page, pml4e_index, pdpe_index, true);
             for (u32 i = 0; i < frame_count; i++, pde_index++, phy_addr += (u32)frame_size)
             {
-                if (pde_index > 512)
+                if (pde_index >= 512)
                 {
-                    if (++pdpe_index > 512)
+                    if (++pdpe_index >= 512)
                     {
-                        if (++pml4e_index > 512)
+                        if (++pml4e_index >= 512)
                             error_map();
                         check_pml4e(&top_page, pml4e_index);
                         pdpe_index = 0;
@@ -205,13 +209,13 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
             check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true);
             for (u32 i = 0; i < frame_count; i++, pte_index++, phy_addr += (u32)frame_size)
             {
-                if (pte_index > 512)
+                if (pte_index >= 512)
                 {
-                    if (++pde_index > 512)
+                    if (++pde_index >= 512)
                     {
-                        if (++pdpe_index > 512)
+                        if (++pdpe_index >= 512)
                         {
-                            if (++pml4e_index > 512)
+                            if (++pml4e_index >= 512)
                                 error_map();
                             check_pml4e(&top_page, pml4e_index);
                             pdpe_index = 0;
@@ -290,10 +294,10 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 
             for (u32 i = 0; i < frame_count; i++, pdpe_index++)
             {
-                if (pdpe_index > 512)
+                if (pdpe_index >= 512)
                 {
                     clean_null_page_pml4e(top_page, pml4e_index);
-                    if (++pml4e_index > 512)
+                    if (++pml4e_index >= 512)
                         error_unmap();
                     if (!top_page[pml4e_index].is_present())
                         error_unmap();
@@ -315,13 +319,13 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 
             for (u32 i = 0; i < frame_count; i++, pde_index++)
             {
-                if (pde_index > 512)
+                if (pde_index >= 512)
                 {
                     clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-                    if (++pdpe_index > 512)
+                    if (++pdpe_index >= 512)
                     {
                         clean_null_page_pml4e(top_page, pml4e_index);
-                        if (++pml4e_index > 512)
+                        if (++pml4e_index >= 512)
                             error_unmap();
                         if (!top_page[pml4e_index].is_present())
                             error_unmap();
@@ -351,16 +355,16 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 
             for (u32 i = 0; i < frame_count; i++, pte_index++)
             {
-                if (pte_index > 512)
+                if (pte_index >= 512)
                 {
                     clean_null_page_pde(top_page, pml4e_index, pdpe_index, pde_index);
-                    if (++pde_index > 512)
+                    if (++pde_index >= 512)
                     {
                         clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-                        if (++pdpe_index > 512)
+                        if (++pdpe_index >= 512)
                         {
                             clean_null_page_pml4e(top_page, pml4e_index);
-                            if (++pml4e_index > 512)
+                            if (++pml4e_index >= 512)
                                 error_unmap();
                             if (!top_page[pml4e_index].is_present())
                                 error_unmap();

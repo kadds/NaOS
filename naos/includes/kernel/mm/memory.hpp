@@ -10,6 +10,7 @@ namespace memory
 
 void init(const kernel_start_args *args, u64 fix_memory_limit);
 u64 get_max_available_memory();
+u64 get_max_maped_memory();
 
 template <typename T, int align = alignof(T), typename... Args> T *New(IAllocator *allocator, Args &&... args)
 {

@@ -1,5 +1,4 @@
 #include "kernel/trace.hpp"
-#include "kernel/arch/vbe.hpp"
 #include <stdarg.h>
 namespace trace
 {

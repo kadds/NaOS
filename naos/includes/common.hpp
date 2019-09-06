@@ -56,6 +56,13 @@ struct kernel_start_args
     u64 stack_size;
     u64 data_base;
     u64 data_size;
+    u64 fb_addr;
+    u32 fb_pitch;
+    u32 fb_width;
+    u32 fb_height;
+    u32 fb_bbp;
+    // 2: text mode, 1: graphics mode, 0: indzex mode
+    u32 fb_type;
 
   private:
     u64 mmap;

@@ -31,8 +31,10 @@ void init()
 }
 void trace_debug_info()
 {
-    trace::debug("Cpu family: ", cpu_name, ". Maximum basic functional number: ", (void *)max_basic_number,
-                 ".  Maximum extend functional number: ", (void *)max_extend_number);
+    trace::debug("Cpu family: ", cpu_name, ".\nMaximum basic functional number: ", (void *)(u64)max_basic_number,
+                 ".\nMaximum extend functional number: ", (void *)(u64)max_extend_number,
+                 ".\nMaximum virtual address bits ", get_future(future::max_virt_addr),
+                 ".\nMaximum physical address bits ", get_future(future::max_phy_addr));
 }
 bool has_future(future f)
 {

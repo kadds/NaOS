@@ -1,7 +1,13 @@
 #pragma once
 #include "common.hpp"
 #include <type_traits>
-
+/*
+kernel map
+0xFFFF,8000,0000,0000 - 0xFFFF,8A00,0000,0000: 32TB  : kernel fixed memory map
+0xFFFF,FFFF,0000,0000 - 0xFFFF,FFFF,F000,FFFF: 256MB : pre cpu kernel data
+0xFFFF,E000,F000,0000 - 0xFFFF,E000,FFFF,FFFF: video map
+0xFFFF,D000,0000,0000 - 0xFFFF,DFFF,FFFF,FFFF:
+*/
 namespace arch::paging
 {
 struct flags

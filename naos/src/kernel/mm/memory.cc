@@ -10,6 +10,7 @@ KernelCommonAllocator *KernelCommonAllocatorV;
 void *PhyBootAllocator::base_ptr;
 void *PhyBootAllocator::current_ptr;
 u64 max_memory_available;
+u64 max_memory_maped;
 u64 limit;
 zones_t global_zones;
 
@@ -69,6 +70,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     global_zones.count = 0;
     kernel_memory_map_item *mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
     max_memory_available = 0;
+    max_memory_maped = 0;
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
@@ -80,10 +82,15 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
             u64 end = ((u64)mm_item->addr + mm_item->len - 1) & ~(page_size - 1);
             if (start < end)
                 global_zones.count++;
-            if (mm_item->addr + mm_item->len > max_memory_available)
-                max_memory_available = mm_item->addr + mm_item->len;
+            if (mm_item->addr + mm_item->len > max_memory_maped)
+                max_memory_maped = mm_item->addr + mm_item->len;
+
+            max_memory_available += mm_item->len;
         }
     }
+    trace::info("memory available ", max_memory_available, " -> ", max_memory_available >> 10, "KB -> ",
+                max_memory_available >> 20, "MB -> ", max_memory_available >> 30, "GB");
+
     mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
 
     global_zones.zones = NewArray<zone_t>(VirtBootAllocatorV, global_zones.count);
@@ -146,6 +153,8 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 }
 u64 get_max_available_memory() { return max_memory_available; }
+u64 get_max_maped_memory() { return max_memory_maped; }
+
 void *kmalloc(u64 size, u64 align)
 {
     if (align > 8)

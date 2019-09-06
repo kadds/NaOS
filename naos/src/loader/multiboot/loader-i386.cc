@@ -163,6 +163,13 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
         printer.printf("Unsupported long mode.\n");
         return;
     }
+    args->fb_addr = addr->framebuffer_addr;
+    args->fb_width = addr->framebuffer_width;
+    args->fb_height = addr->framebuffer_height;
+    args->fb_bbp = addr->framebuffer_bpp;
+    args->fb_type = addr->framebuffer_type;
+    args->fb_pitch = addr->framebuffer_pitch;
+
     printer.printf("Enter long mode & Start kernel...\n");
     args->data_size = current_data_ptr - base_data_ptr;
     run_kernel((void *)(kernel->start_addr + base_kernel_ptr), args);
