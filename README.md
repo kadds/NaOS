@@ -6,7 +6,7 @@ NaOS targets Intel / AMD modern processors.
 
 ![build passing](https://img.shields.io/badge/build-passing-green) ![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
 
-***
+
 ## Features  
 * - [x] Four-level Paging
 * - [x] VGA display
@@ -23,7 +23,7 @@ NaOS targets Intel / AMD modern processors.
 * - [ ] POSIX layer
 * - [ ] ELF env
   
-***
+
 ## Quick Start  
 
 ### **Requirement**  
@@ -101,7 +101,7 @@ Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.
 ```
 , start QEMU and press F5.
 
----
+
 ## Repo Tree
 ```
 NaOS
@@ -128,18 +128,17 @@ NaOS
 │       └── disk.img # make_disk.py created
 └── util
 ```
----
+
 ## Maintainers 
 [@Kadds](https://github.com/Kadds).
 
----
+
 ## Reference 
 * [OSDev](https://forum.osdev.org/)
 * [Linux](https://www.kernel.org/)
 * [Intel SDM](https://software.intel.com/en-us/articles/intel-sdm)
 
 
----
 ## License
 [BSD-3-Clause](./LICENSE) © Kadds
 
