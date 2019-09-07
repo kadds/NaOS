@@ -11,8 +11,11 @@ template <typename BaseType, int BitPreElement> class bit_set
     using raw_type = BaseType;
     constexpr static u64 SizePreElement = (BitPreElement + 8 - 1) / 8;
     memory::IAllocator *allocator;
+
+    // data pointer
     raw_type *data;
     int element_count;
+
     static_assert((BitPreElement & (BitPreElement - 1)) == 0, "BitPreElement can only be a power of 2.");
     static_assert(BitPreElement <= sizeof(raw_type) * 8, "BitPreElement is bigger than BaseType.");
 
@@ -27,14 +30,17 @@ template <typename BaseType, int BitPreElement> class bit_set
         bytes = (bytes + sizeof(raw_type) - 1) & ~(sizeof(raw_type) - 1);
         data = memory::NewArray<raw_type>(allocator, bytes / sizeof(raw_type));
     }
+
     bit_set(const bit_set &v) {}
+
     ~bit_set()
     {
         int bytes = (element_count * BitPreElement + 7) / 8;
         bytes = (bytes + sizeof(raw_type) - 1) & ~(sizeof(raw_type) - 1);
         memory::DeleteArray<raw_type>(allocator, data, bytes / sizeof(raw_type));
     }
-    BaseType get(int index)
+
+    BaseType get(int index) const
     {
         kassert(index < element_count, "out of range");
 
@@ -46,6 +52,7 @@ template <typename BaseType, int BitPreElement> class bit_set
         v &= ((1 << BitPreElement) - 1);
         return v;
     }
+
     void set(int index, BaseType value)
     {
         kassert(index < element_count, "out of range");
@@ -58,14 +65,16 @@ template <typename BaseType, int BitPreElement> class bit_set
         int offset = i8 % sizeof(raw_type) * 8 + rest;
 
         u64 x = ((1lu << offset) - 1);
-        if (offset + BitPreElement < 64)
+        if (unlikely(offset + BitPreElement < 64))
         {
             x |= ~((1lu << (offset + BitPreElement)) - 1);
         }
 
         v = (v & x) | (value << offset);
     }
+
     void clean(int index) { set(index, 0); }
+
     void clean_all()
     {
         int bytes = element_count * SizePreElement / 8;
@@ -74,6 +83,7 @@ template <typename BaseType, int BitPreElement> class bit_set
 
     int count() const { return element_count; }
 };
+
 template <typename BaseType, int BitPreElement, int ElementCount> class bit_set_fixed
 {
     using raw_type = BaseType;
@@ -83,7 +93,8 @@ template <typename BaseType, int BitPreElement, int ElementCount> class bit_set_
     bit_set_fixed() {}
 
     ~bit_set_fixed() {}
-    BaseType get(int index)
+
+    BaseType get(int index) const
     {
         kassert(index < ElementCount, "out of range");
 
@@ -95,6 +106,7 @@ template <typename BaseType, int BitPreElement, int ElementCount> class bit_set_
         v &= ((1 << BitPreElement) - 1);
         return v;
     }
+
     void set(int index, BaseType value)
     {
         kassert(index < ElementCount, "out of range");
@@ -107,19 +119,22 @@ template <typename BaseType, int BitPreElement, int ElementCount> class bit_set_
         int offset = i8 % sizeof(raw_type) * 8 + rest;
 
         u64 x = ((1lu << offset) - 1);
-        if (offset + BitPreElement < 64)
+        if (unlikely(offset + BitPreElement < 64))
         {
             x |= ~((1lu << (offset + BitPreElement)) - 1);
         }
 
         v = (v & x) | (value << offset);
     }
+
     void clean(int index) { set(index, 0); }
+
     void clean_all()
     {
         int bytes = ElementCount * BitPreElement / 8;
         util::memzero(data, bytes);
     }
+
     int count() const { return ElementCount; }
 };
 } // namespace util

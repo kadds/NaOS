@@ -1,8 +1,10 @@
 #pragma once
 #include "arch/video/vga/vga.hpp"
 #include "common.hpp"
+
 namespace trace
 {
+
 extern bool output_debug;
 template <typename... Args> NoReturn void panic(const Args &... args)
 {
@@ -13,6 +15,7 @@ template <typename... Args> NoReturn void panic(const Args &... args)
     while (1)
         ;
 }
+
 template <typename... Args> void info(const Args &... args)
 {
     using namespace arch::device::vga;

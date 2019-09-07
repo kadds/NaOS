@@ -28,7 +28,9 @@ ExportC void _alignment_check_wrapper();
 ExportC void _machine_check_wrapper();
 ExportC void _SIMD_exception_wrapper();
 ExportC void _virtualization_exception_wrapper();
+
 void print_dst(regs_t *regs) { trace::debug("exception at: ", (void *)regs->rip, ", error code: ", regs->error_code); }
+
 ExportC void entry_divide_error(regs_t *regs)
 {
     trace::debug("divide error. ");
@@ -36,6 +38,7 @@ ExportC void entry_divide_error(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_debug(regs_t *regs)
 {
     trace::debug("debug trap. ");
@@ -43,6 +46,7 @@ ExportC void entry_debug(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_nmi(regs_t *regs)
 {
     trace::debug("nmi error! ");
@@ -50,6 +54,7 @@ ExportC void entry_nmi(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_int3(regs_t *regs)
 {
     trace::debug("int3 trap. ");
@@ -57,6 +62,7 @@ ExportC void entry_int3(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_overflow(regs_t *regs)
 {
     trace::debug("overflow trap. ");
@@ -64,6 +70,7 @@ ExportC void entry_overflow(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_bounds(regs_t *regs)
 {
     trace::debug("out of bounds error. ");
@@ -71,6 +78,7 @@ ExportC void entry_bounds(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_undefined_opcode(regs_t *regs)
 {
     trace::debug("undefined opcode error. ");
@@ -78,6 +86,7 @@ ExportC void entry_undefined_opcode(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_dev_not_available(regs_t *regs)
 {
     trace::debug("dev not available error. ");
@@ -85,6 +94,7 @@ ExportC void entry_dev_not_available(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_double_fault(regs_t *regs)
 {
     trace::debug("double abort. ");
@@ -92,6 +102,7 @@ ExportC void entry_double_fault(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_coprocessor_segment_overrun(regs_t *regs)
 {
     trace::debug("coprocessor segment overrun error. ");
@@ -99,6 +110,7 @@ ExportC void entry_coprocessor_segment_overrun(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_invalid_TSS(regs_t *regs)
 {
     trace::debug("invalid tss error. ");
@@ -106,6 +118,7 @@ ExportC void entry_invalid_TSS(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_segment_not_present(regs_t *regs)
 {
     trace::debug("segment not present error. ");
@@ -113,6 +126,7 @@ ExportC void entry_segment_not_present(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_stack_segment_fault(regs_t *regs)
 {
     trace::debug("stack segment fault. ");
@@ -120,6 +134,7 @@ ExportC void entry_stack_segment_fault(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_general_protection(regs_t *regs)
 {
     trace::debug("general protection error. ");
@@ -127,6 +142,7 @@ ExportC void entry_general_protection(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_page_fault(regs_t *regs)
 {
     trace::debug("page fault. ");
@@ -136,6 +152,7 @@ ExportC void entry_page_fault(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_x87_FPU_error(regs_t *regs)
 {
     trace::debug("X87 fpu error. ");
@@ -143,6 +160,7 @@ ExportC void entry_x87_FPU_error(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_alignment_check(regs_t *regs)
 {
     trace::debug("alignment error. ");
@@ -150,6 +168,7 @@ ExportC void entry_alignment_check(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_machine_check(regs_t *regs)
 {
     trace::debug("machine error. ");
@@ -157,6 +176,7 @@ ExportC void entry_machine_check(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_SIMD_exception(regs_t *regs)
 {
     trace::debug("SIMD error. ");
@@ -164,6 +184,7 @@ ExportC void entry_SIMD_exception(regs_t *regs)
     while (1)
         ;
 }
+
 ExportC void entry_virtualization_exception(regs_t *regs)
 {
     trace::debug("virtualization error. ");

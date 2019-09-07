@@ -24,6 +24,7 @@ const struct
     {8, "kmalloc-8"},       {16, "kmalloc-16"},     {24, "kmalloc-24"},     {32, "kmalloc-32"},    {48, "kmalloc-48"},
     {64, "kmalloc-64"},     {96, "kmalloc-96"},     {128, "kmalloc-128"},   {256, "kmalloc-256"},  {512, "kmalloc-512"},
     {1024, "kmalloc-1024"}, {2048, "kmalloc-2048"}, {4096, "kmalloc-4096"}, {8192, "kmalloc-8192"}};
+
 void tag_zone_buddy_memory(char *start_addr, char *end_addr)
 {
     for (int i = 0; i < global_zones.count; i++)
@@ -41,6 +42,7 @@ void tag_zone_buddy_memory(char *start_addr, char *end_addr)
         }
     }
 }
+
 const char *get_type_str(map_type_t type)
 {
     switch (type)
@@ -59,6 +61,7 @@ const char *get_type_str(map_type_t type)
             return "unknown";
     }
 }
+
 void init(const kernel_start_args *args, u64 fix_memory_limit)
 {
     PhyBootAllocator::init((void *)(args->data_base + args->data_size));
@@ -152,7 +155,9 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     }
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 }
+
 u64 get_max_available_memory() { return max_memory_available; }
+
 u64 get_max_maped_memory() { return max_memory_maped; }
 
 void *kmalloc(u64 size, u64 align)
@@ -168,11 +173,13 @@ void *kmalloc(u64 size, u64 align)
     SlabSizeAllocator allocator(global_kmalloc_slab_cache_pool);
     return allocator.allocate(size, align);
 }
+
 void kfree(void *addr)
 {
     SlabSizeAllocator allocator(global_kmalloc_slab_cache_pool);
     allocator.deallocate(addr);
 }
+
 void zone_t::tag_used(u64 offset_start, u64 offset_end)
 {
     auto buddys = (buddy_contanier *)buddy_impl;

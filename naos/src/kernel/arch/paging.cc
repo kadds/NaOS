@@ -15,16 +15,19 @@ template <typename _T> _T *new_page_table()
     memory::BuddyAllocator allocator(memory::zone_t::prop::present);
     return memory::New<_T, 0x1000>(&allocator);
 }
+
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
     memory::BuddyAllocator allocator(memory::zone_t::prop::present);
     memory::Delete<_T>(&allocator, addr);
 }
+
 void *base_entry::get_addr() const
 {
     return memory::kernel_phyaddr_to_virtaddr((void *)((u64)data & 0xFFFFFFFFFF000UL));
 }
+
 void base_entry::set_addr(void *ptr) { data |= ((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL; }
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
@@ -96,6 +99,7 @@ void check_pml4e(pml4t *base_addr, int pml4_index)
         pml4e.set_common_data(0);
     }
 }
+
 void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_next_table)
 {
     check_pml4e(base_addr, pml4_index);
@@ -113,6 +117,7 @@ void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_ne
         pml4e.set_common_data(pml4e.get_common_data() + 1);
     }
 }
+
 void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, bool create_next_table)
 {
     check_pdpe(base_addr, pml4_index, pdpt_index, true);
@@ -130,16 +135,19 @@ void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, b
         pdpt.set_common_data(pdpt.get_common_data() + 1);
     }
 }
+
 NoReturn void error_map()
 {
     trace::panic("Unsupported operation at virtual address map. A virtual address has been mapped, out of range or "
                  "not aligned.");
 }
+
 NoReturn void error_unmap()
 {
     trace::panic("Unsupported operation at virtual address unmap. A virtual address hasn't been mapped, out of range "
                  "or not aligned.");
 }
+
 bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags)
 {
@@ -392,6 +400,9 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
     }
     return true;
 }
+
 void load(pml4t *base_paging_addr) { _load_page(memory::kernel_virtaddr_to_phyaddr(base_paging_addr)); }
+
+void reload() { _flush_tlb(); }
 
 } // namespace arch::paging

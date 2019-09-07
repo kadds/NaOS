@@ -161,6 +161,7 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
 bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
 
 void load(pml4t *base_paging_addr);
+void reload();
 
 void init();
 void temp_init();

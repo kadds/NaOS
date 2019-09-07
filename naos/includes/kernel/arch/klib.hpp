@@ -4,7 +4,7 @@
 #include "task.hpp"
 ExportC void _load_gdt(void *gdt);
 ExportC void _load_idt(void *idt);
-ExportC void _load_tss_descriptor(void *tss);
+ExportC void _load_tss_descriptor(int index);
 ExportC void _load_page(void *page_addr);
 ExportC void _reload_segment(u64 cs, u64 ss);
 ExportC void _cli();

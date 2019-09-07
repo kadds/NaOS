@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+
 namespace memory
 {
 class mmu_paging

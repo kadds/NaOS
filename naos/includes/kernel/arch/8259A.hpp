@@ -1,8 +1,8 @@
 #pragma once
 #include "common.hpp"
+
 namespace arch::device::chip8259A
 {
-
 void init();
 void enable_all();
 void disable_all();

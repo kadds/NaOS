@@ -1,6 +1,7 @@
 #include "kernel/mm/slab.hpp"
 
 slab_cache_pool *global_kmalloc_slab_cache_pool, *global_dma_slab_cache_pool, *global_object_slab_cache_pool;
+
 void slab_group::new_memory_node()
 {
     memory::BuddyAllocator allocator(memory::zone_t::prop::present);
@@ -13,6 +14,7 @@ void slab_group::new_memory_node()
     list_empty.push_back(s);
     all_obj_count += node_pre_slab;
 }
+
 void slab_group::delete_memory_node(slab *s)
 {
     kassert(s->rest == node_pre_slab, "slab error");
@@ -73,6 +75,7 @@ slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name
         node_pre_slab = restsize / obj_align_size;
     }
 }
+
 void *slab_group::alloc()
 {
     if (list_partial.empty())
@@ -101,6 +104,7 @@ void *slab_group::alloc()
     }
     trace::panic("Slab group should not panic here!");
 }
+
 void slab_group::free(void *ptr)
 {
     char *page_addr = (char *)((u64)ptr & ~(memory::page_size - 1));
@@ -140,6 +144,7 @@ void slab_group::free(void *ptr)
         }
     }
 }
+
 bool slab_group::include_address(void *ptr)
 {
     char *page_addr = (char *)((u64)ptr & ~(memory::page_size - 1));
@@ -160,7 +165,6 @@ bool slab_group::include_address(void *ptr)
     }
     return false;
 }
-// slab pool
 
 slab_group_list::list_node *slab_cache_pool::find_slab_group_node(const char *name)
 {
@@ -189,6 +193,7 @@ slab_group *slab_cache_pool::find_slab_group(const char *name)
     }
     return nullptr;
 }
+
 slab_group *slab_cache_pool::find_slab_group(u64 size)
 {
     auto group = slab_groups.begin();
@@ -202,11 +207,13 @@ slab_group *slab_cache_pool::find_slab_group(u64 size)
     }
     return nullptr;
 }
+
 void slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 align, u64 flags)
 {
     slab_group group(&slab_node_list_node_allocator, size, name, align, flags);
     slab_groups.push_back(group);
 }
+
 void slab_cache_pool::remove_slab_group(const char *name)
 {
     auto group_node = find_slab_group_node(name);
@@ -215,6 +222,7 @@ void slab_cache_pool::remove_slab_group(const char *name)
         slab_groups.remove(group_node);
     }
 }
+
 slab_cache_pool::slab_cache_pool()
     : buddyAllocator(memory::zone_t::prop::present)
     , slab_node_list_node_allocator(&slab_list_node_cache)

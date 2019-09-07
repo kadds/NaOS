@@ -34,6 +34,7 @@ T *NewArray(IAllocator *allocator, u64 count, Args &&... args)
     }
     return ptr;
 }
+
 template <typename T> void DeleteArray(IAllocator *allocator, T *t, u64 count)
 {
     T *addr = t;
@@ -44,6 +45,7 @@ template <typename T> void DeleteArray(IAllocator *allocator, T *t, u64 count)
     }
     allocator->deallocate(t);
 }
+
 struct zone_t
 {
     void *start;
@@ -61,6 +63,7 @@ struct zone_t
         };
     };
 };
+
 struct zones_t
 {
     zone_t *zones;
@@ -75,6 +78,7 @@ template <typename Tptr> inline Tptr kernel_virtaddr_to_phyaddr(Tptr virt_addr)
 {
     return (Tptr)((char *)virt_addr - linear_addr_offset);
 }
+
 template <typename Tptr> inline Tptr kernel_phyaddr_to_virtaddr(Tptr phy_addr)
 {
     return (Tptr)((char *)phy_addr + linear_addr_offset);
@@ -84,6 +88,7 @@ template <typename Tptr> inline Unpaged_Text_Section Tptr unpaged_kernel_virtadd
 {
     return (Tptr)((char *)virt_addr - linear_addr_offset);
 }
+
 template <typename Tptr> inline Unpaged_Text_Section Tptr unpaged_kernel_phyaddr_to_virtaddr(Tptr phy_addr)
 {
     return (Tptr)((char *)phy_addr + linear_addr_offset);
@@ -127,9 +132,11 @@ class VirtBootAllocator : public PhyBootAllocator
     void deallocate(void *) override {}
     static void *current_ptr_address() { return kernel_phyaddr_to_virtaddr(PhyBootAllocator::current_ptr_address()); }
 };
+
 void *kmalloc(u64 size, u64 align);
 void kfree(void *addr);
-// This Allocator use kmalloc and kfree
+
+// It uses kmalloc and kfree
 class KernelCommonAllocator : public IAllocator
 {
   private:

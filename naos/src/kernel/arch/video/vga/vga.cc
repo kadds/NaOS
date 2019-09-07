@@ -7,23 +7,20 @@
 namespace arch::device::vga
 {
 output *current_output;
-void *back_buffer;
-void *frame_buffer;
-u64 frame_size;
 
-u64 bitwidth;
-u64 bitheight;
+void *frame_buffer;
 
 Aligned(8) char reserved_space[sizeof(output_text) > sizeof(output_graphics) ? sizeof(output_text)
                                                                              : sizeof(output_graphics)];
 
 void init(const kernel_start_args *args)
 {
-    frame_buffer = memory::kernel_phyaddr_to_virtaddr((void *)args->fb_addr);
+    frame_buffer = (void *)args->fb_addr;
     bool is_text_mode = args->fb_type == 2;
+    u32 frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
 
-    frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
-
+    void *back_buffer = nullptr;
+    // Find a frame size memory as backbuffer
     kernel_memory_map_item *mm_item = memory::kernel_phyaddr_to_virtaddr(args->get_mmap_ptr()) + args->mmap_count - 1;
     const u64 align = 0x1000;
     for (i64 i = args->mmap_count - 1; i >= 0; i--, mm_item--)
@@ -41,32 +38,32 @@ void init(const kernel_start_args *args)
             }
         }
     }
+    if (unlikely(back_buffer == nullptr))
+        return;
+
     if (likely(!is_text_mode))
     {
-        bitwidth = args->fb_width * sizeof(u32);
-        bitheight = args->fb_height;
         current_output = new (&reserved_space)
             output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
         current_output->cls();
         print(Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X", args->fb_height, ". bit ",
-              args->fb_bbp, ".\n");
+              args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
     }
     else
     {
-        bitwidth = args->fb_width;
-        bitheight = args->fb_height;
         current_output = new (&reserved_space)
             output_text(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
         current_output->cls();
         print(Foreground<Color::LightGreen>(), "VGA text mode. ", args->fb_width, "X", args->fb_height, ". bit ",
-              args->fb_bbp, ".\n");
+              args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
     }
 
     test();
     trace::debug("Video address ", (void *)frame_buffer);
 }
+
 void test()
 {
     print(Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin\n");
@@ -89,13 +86,11 @@ void test()
     print(Foreground<Color::White>(), "White \n");
     print(Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End\n");
 }
-void *get_video_addr() { return memory::kernel_virtaddr_to_phyaddr(frame_buffer); }
-void set_video_addr(void *addr)
-{
-    // back_buffer = addr;
-    // current_output->set_addr(addr);
-    frame_buffer = addr;
-}
+
+void *get_video_addr() { return frame_buffer; }
+
+void set_video_addr(void *addr) { frame_buffer = addr; }
+
 void flush() { current_output->flush(frame_buffer); }
 
 void putstring(const char *str, font_attribute &attribute)

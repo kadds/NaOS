@@ -1,11 +1,10 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/util/memory.hpp"
-
 #include <new>
+
 namespace arch::device::vga
 {
-
 void output_graphics::init()
 {
     cur_font = new (&reserved_space) font::font_16X8();
@@ -14,12 +13,15 @@ void output_graphics::init()
     text_count_per_line = width / font_width;
     text_count_vertical = height / font_height;
 }
+
 void output_graphics::cls()
 {
     for (u32 i = 0; i < width * height; i++)
         *((u32 *)video_addr + i) = 0;
 }
+
 void output_graphics::set_bit(u32 x, u32 y, u32 color) { *((u32 *)video_addr + x + y * width) = color; }
+
 void output_graphics::scroll(i32 n)
 {
     const u64 bits = height * width;
@@ -55,6 +57,7 @@ void output_graphics::scroll(i32 n)
 
     py -= n;
 }
+
 void output_graphics::move_pen(i32 x, i32 y, u32 newline_alignment)
 {
     py += y;
@@ -97,6 +100,7 @@ void output_graphics::putchar(char ch, font_attribute &attribute)
         move_pen(-px, 1, attribute.get_newline_alignment());
     }
 }
+
 void output_graphics::flush(void *vraw)
 {
     u32 left = dirty_rectangle.left;

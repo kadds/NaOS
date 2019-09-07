@@ -2,6 +2,7 @@
 #include "../trace.hpp"
 #include "buddy.hpp"
 #include "memory.hpp"
+
 template <typename List> class list_node_cache
 {
   public:
@@ -88,6 +89,7 @@ template <typename List> class list_node_cache
         }
     }
 };
+
 namespace memory
 {
 template <typename Cache> class ListNodeCacheAllocator : public IAllocator

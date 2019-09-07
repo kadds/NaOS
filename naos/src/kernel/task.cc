@@ -20,7 +20,9 @@ memory::ListNodeCacheAllocator<task_list_cache_t> *task_list_node_cache_allocato
 memory::BuddyAllocator *buddy_allocator;
 
 void *new_stack() { return buddy_allocator->allocate(arch::task::stack_size, 0); }
+
 void free_stack(void *p) { buddy_allocator->deallocate(p); }
+
 void init()
 {
     buddy_allocator =
@@ -80,6 +82,7 @@ u64 do_fork(kernel_thread_start_func *func, u64 args, u64 flags)
 }
 
 void start_task_idle() { task::builtin::idle::main(0); }
+
 task_t *find_pid(u64 pid)
 {
     for (auto it = task_list->begin(); it != task_list->end(); it = task_list->next(it))
@@ -89,6 +92,7 @@ task_t *find_pid(u64 pid)
     }
     return nullptr;
 }
+
 void switch_task(task_t *old, task_t *new_task) { _switch_task(old->register_info, new_task->register_info); }
 
 } // namespace task

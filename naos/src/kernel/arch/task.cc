@@ -32,12 +32,14 @@ ExportC void switch_task(register_info_t *prev, register_info_t *next)
     trace::debug("prev task rip: ", (void *)prev->rip, ", next task rip: ", (void *)next->rip, ".");
     tss::set_rsp(0, (void *)next->rsp0);
 }
+
 ExportC void task_do_exit(u64 exit_code)
 {
     trace::debug("thread exit!");
     while (1)
         ;
 }
+
 u64 do_fork(void *task, void *stack_addr, regs_t &regs, register_info_t &register_info, void *function, u64 arg)
 {
     util::memset(&regs, 0, sizeof(regs));

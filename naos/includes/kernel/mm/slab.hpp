@@ -86,6 +86,7 @@ extern slab_cache_pool *global_kmalloc_slab_cache_pool, *global_dma_slab_cache_p
 
 namespace memory
 {
+// A object allocator,
 struct SlabObjectAllocator : IAllocator
 {
   private:
@@ -109,6 +110,8 @@ struct SlabObjectAllocator : IAllocator
         group->free(ptr);
     };
 };
+
+// A allocator get memory for slab
 struct SlabSizeAllocator : IAllocator
 {
   private:

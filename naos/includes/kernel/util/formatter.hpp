@@ -1,6 +1,9 @@
 #pragma once
 #include "common.hpp"
 #include <type_traits>
+
+// Format system type to string
+
 namespace util::formatter
 {
 void int2str(i64 in, char *buffer, int buffer_len);
@@ -14,11 +17,13 @@ template <typename In> struct format
     // FIXME: default operation
     const char *operator()(const In &in, char *buffer, int buffer_len) { return in; }
 };
+
 template <> struct format<const char *>
 {
     using In = const char *;
     const char *operator()(const In &in, char *buffer, int buffer_len) { return in; }
 };
+
 template <> struct format<char *>
 {
     using In = char *;
@@ -33,6 +38,7 @@ template <> struct format<i64>
         return buffer;
     }
 };
+
 template <> struct format<i32>
 {
     const char *operator()(const i32 &in, char *buffer, int buffer_len)
@@ -41,6 +47,7 @@ template <> struct format<i32>
         return buffer;
     }
 };
+
 template <> struct format<i16>
 {
     const char *operator()(const i16 &in, char *buffer, int buffer_len)
@@ -49,6 +56,7 @@ template <> struct format<i16>
         return buffer;
     }
 };
+
 template <> struct format<i8>
 {
     const char *operator()(const i8 &in, char *buffer, int buffer_len)
@@ -66,6 +74,7 @@ template <> struct format<u64>
         return buffer;
     }
 };
+
 template <> struct format<u32>
 {
     const char *operator()(const u32 &in, char *buffer, int buffer_len)
@@ -74,6 +83,7 @@ template <> struct format<u32>
         return buffer;
     }
 };
+
 template <> struct format<u16>
 {
     const char *operator()(const u16 &in, char *buffer, int buffer_len)
@@ -82,6 +92,7 @@ template <> struct format<u16>
         return buffer;
     }
 };
+
 template <> struct format<u8>
 {
     const char *operator()(const u8 &in, char *buffer, int buffer_len)

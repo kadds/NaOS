@@ -8,6 +8,7 @@ struct buddy_tree
     buddy_tree *right;
     u64 val;
 };
+
 extern const int buddy_max_page;
 
 class buddy
@@ -36,6 +37,7 @@ struct buddy_contanier
     int count;
     buddy *buddys;
 };
+
 namespace memory
 {
 

@@ -5,6 +5,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
+
 ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 {
     char *s = (char *)start;
@@ -27,6 +28,7 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 }
 
 ExportC void _kstart(const kernel_start_args *args);
+
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 {
     bss_init((void *)_bss_unpaged_start_addr, (void *)_bss_unpaged_end_addr);
@@ -34,6 +36,7 @@ ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
     arch::temp_init(args);
     return (u64)&_kstart;
 }
+
 ExportC NoReturn void _kstart(const kernel_start_args *args)
 {
     static_init();

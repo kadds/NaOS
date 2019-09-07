@@ -10,11 +10,15 @@
         return (reg & 1ul << bit);                                                                                     \
     } while (0)
 #define bits(number, start, end) ((number) >> (start) & ((1 << (end - start + 1)) - 1))
+
 namespace arch::cpu
 {
 char cpu_name[13];
 u32 max_basic_number;
 u32 max_extend_number;
+
+void trace_debug_info();
+
 void init()
 {
     u32 a, b, c, d;
@@ -29,6 +33,7 @@ void init()
     max_extend_number = a;
     trace_debug_info();
 }
+
 void trace_debug_info()
 {
     trace::debug("Cpu family: ", cpu_name, ".\nMaximum basic functional number: ", (void *)(u64)max_basic_number,
@@ -36,6 +41,7 @@ void trace_debug_info()
                  ".\nMaximum virtual address bits ", get_future(future::max_virt_addr),
                  ".\nMaximum physical address bits ", get_future(future::max_phy_addr));
 }
+
 bool has_future(future f)
 {
     u32 eax, ebx, ecx, edx;
@@ -53,6 +59,7 @@ bool has_future(future f)
             trace::panic("Unknown future");
     }
 }
+
 u64 get_future(future f)
 {
     u32 eax, ebx, ecx, edx;
@@ -68,6 +75,7 @@ u64 get_future(future f)
             trace::panic("Unknown future");
     }
 }
+
 const char *get_cpu_manufacturer() { return cpu_name; }
 
 } // namespace arch::cpu

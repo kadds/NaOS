@@ -19,11 +19,13 @@ struct mm_info_t
     void *app_head_base_addr;
     void *app_stack_base_addr;
 };
-enum class task_state
+enum class task_state : u32
 {
     running,
     wait,
+    // more...
 };
+
 struct task_t
 {
     volatile task_state state;

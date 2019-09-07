@@ -12,12 +12,15 @@ output_text::output_text(u32 width, u32 height, void *video, u32 bbp, u32 pitch)
     // height must less than 32 * 8
     bitmap.clean_all();
 }
+
 void output_text::init() {}
+
 void output_text::cls()
 {
     for (u64 i = 0; i < width * height; i++)
         *((u16 *)video_addr + i) = 0;
 }
+
 void output_text::scroll(i32 n)
 {
     if (likely(n > 0))
@@ -50,6 +53,7 @@ void output_text::scroll(i32 n)
 
     py -= n;
 }
+
 void output_text::move_pen(i32 x, i32 y, u32 newline_alignment)
 {
     py += y;
@@ -64,6 +68,7 @@ void output_text::move_pen(i32 x, i32 y, u32 newline_alignment)
     if (py >= height)
         scroll(py - height + 1);
 }
+
 u8 similar_color_index(u32 color)
 {
     static u32 color_table[] = {0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
@@ -73,8 +78,10 @@ u8 similar_color_index(u32 color)
         if (color == color_table[i])
             return i;
     }
+    // Can not find in color table. Return 0xFFFFFF
     return 15;
 }
+
 void output_text::putchar(char ch, font_attribute &attribute)
 {
     if (ch != '\t' && ch != '\n')
@@ -92,6 +99,7 @@ void output_text::putchar(char ch, font_attribute &attribute)
         move_pen(-px, 1, attribute.get_newline_alignment());
     }
 }
+
 void output_text::flush(void *vraw)
 {
     if (likely(!has_write))

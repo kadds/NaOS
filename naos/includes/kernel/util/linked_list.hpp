@@ -1,6 +1,7 @@
 #pragma once
 #include "../mm/memory.hpp"
 #include "common.hpp"
+
 namespace util
 {
 template <typename E> class linked_list

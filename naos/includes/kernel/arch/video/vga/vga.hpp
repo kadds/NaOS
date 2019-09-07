@@ -2,15 +2,17 @@
 #include "common.hpp"
 #include "kernel/util/formatter.hpp"
 #include <type_traits>
+
 namespace arch::device::vga
 {
-
+//---------------start color definition------------------
 namespace Color
 {
 struct Black
 {
     static const u32 color = 0x000000;
 };
+
 struct Blue
 {
     static const u32 color = 0x0000AA;
@@ -25,54 +27,67 @@ struct Cyan
 {
     static const u32 color = 0x00AAAA;
 };
+
 struct Red
 {
     static const u32 color = 0xAA0000;
 };
+
 struct Magenta
 {
     static const u32 color = 0xAA00AA;
 };
+
 struct Brown
 {
     static const u32 color = 0xAA5500;
 };
+
 struct LightGray
 {
     static const u32 color = 0xAAAAAA;
 };
+
 struct DarkGray
 {
     static const u32 color = 0x555555;
 };
+
 struct LightBlue
 {
     static const u32 color = 0x5555FF;
 };
+
 struct LightGreen
 {
     static const u32 color = 0x55FF55;
 };
+
 struct LightCyan
 {
     static const u32 color = 0x55FFFF;
 };
+
 struct LightRed
 {
     static const u32 color = 0xFF5555;
 };
+
 struct Pink
 {
     static const u32 color = 0xFF55FF;
 };
+
 struct Yellow
 {
     static const u32 color = 0xFFFF55;
 };
+
 struct White
 {
     static const u32 color = 0xFFFFFF;
 };
+
 struct ColorValue
 {
     u32 color;
@@ -80,6 +95,7 @@ struct ColorValue
         : color(color){};
 };
 } // namespace Color
+//---------------end of color definition-------------
 
 template <typename Color> struct Background
 {
@@ -90,6 +106,7 @@ template <typename Color> struct Background
     {
     }
 };
+
 template <typename Color> struct Foreground
 {
     Color value;
@@ -123,6 +140,7 @@ struct font_attribute
     u32 get_foreground() { return this->color & 0xFFFFFF; }
     u32 get_background() { return (this->color >> 32) & 0xFFFFFF; }
 };
+
 class output
 {
   protected:
@@ -159,55 +177,17 @@ class output
     };
 };
 
-struct rectangle
-{
-    u32 left;
-    u32 top;
-    u32 right;
-    u32 bottom;
-    rectangle(){};
-    rectangle(u32 left, u32 top, u32 right, u32 bottom)
-        : left(left)
-        , top(top)
-        , right(right)
-        , bottom(bottom){};
-    rectangle &operator+=(const rectangle &rc)
-    {
-        if (left == right || top == bottom)
-            *this = rc;
-
-        if (left > rc.left)
-            left = rc.left;
-        if (top > rc.top)
-            top = rc.top;
-
-        if (right < rc.right)
-            right = rc.right;
-        if (bottom < rc.bottom)
-            bottom = rc.bottom;
-
-        return *this;
-    }
-    void clean()
-    {
-        left = 0;
-        top = 0;
-        right = 0;
-        bottom = 0;
-    }
-};
-
 void init(const kernel_start_args *args);
 void *get_video_addr();
 void set_video_addr(void *addr);
 
+// show color test info
 void test();
+
 void putstring(const char *str, font_attribute &attribute);
 void flush();
 
-void set_foreground(u32 color);
-void set_background(u32 color);
-
+// -------------------- help function------------------
 template <typename T> struct remove_extent
 {
     using type = T;
@@ -232,6 +212,7 @@ template <typename T, std::size_t N> struct remove_extent<const T[N]>
 {
     using type = const T *;
 };
+// ---------------------end of help function-------------
 
 template <typename TColor> void set_font_attr(font_attribute &attribute, const Foreground<TColor> &cv)
 {
@@ -255,6 +236,7 @@ template <typename Head> void print_fmt_text(font_attribute &attribute, const He
     util::formatter::format<RealType> fmt;
     putstring(fmt(head, buf, 128), attribute);
 }
+
 struct dispatcher
 {
     template <typename Head, std::enable_if_t<!std::is_same_v<Head, AlignmentValue>> * = nullptr>

@@ -32,6 +32,7 @@ struct regs_t
     u64 rsp;
     u64 ss;
 };
+
 typedef void request_func(const idt::regs_t *regs, u64 user_data);
 
 struct request_func_data
@@ -45,6 +46,7 @@ struct ptr_t
     u16 limit;
     u64 addr;
 } PackStruct;
+
 struct entry
 {
     u16 offset0;
@@ -76,7 +78,9 @@ struct entry
         *((u64 *)this + 1) = 0;
     }
 };
+
 static_assert(sizeof(entry) == 16);
+
 void init_before_paging();
 void init_after_paging();
 void set_entry(int id, void *func, u16 selector, u8 dpl, u8 present, u8 type, u8 ist);

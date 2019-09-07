@@ -1,9 +1,12 @@
 #pragma once
 #include "common.hpp"
+
 namespace arch::task
 {
+// kernel stack size in task
 extern u64 stack_size;
 
+// register info in task
 struct register_info_t
 {
     u64 rsp0; // base rsp
@@ -15,6 +18,8 @@ struct register_info_t
     u64 trap_vector;
     u64 error_code;
 };
+
+// registers in stack
 struct regs_t
 {
     u64 r15;
@@ -40,11 +45,13 @@ struct regs_t
     u64 rsp;
     u64 ss;
 };
+
 struct thread_info_t
 {
     u64 magic_wall;
     void *task;
     u64 magic_end_wall;
+    // check for kernel stack overflow
     bool is_valid() { return magic_wall == 0xFFCCFFCCCCFFCCFF && magic_end_wall == 0x0AEEAAEEEEAAEE0A; }
     thread_info_t()
         : magic_wall(0xFFCCFFCCCCFFCCFF)
@@ -53,8 +60,9 @@ struct thread_info_t
     }
 };
 
-// 32 kb
+// 32 kb stack size in X86_64 arch
 const int kernel_stack_page_count = 8;
+
 inline void *current_stack()
 {
     void *stack = nullptr;

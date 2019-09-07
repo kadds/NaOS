@@ -1,10 +1,13 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/util/bit_set.hpp"
-const int buddy_max_page = 1 << 8;
 
 typedef util::bit_set<u64, 16> bits_t;
+
+const int buddy_max_page = 1 << 8;
+
 bits_t &get(void *impl) { return *(bits_t *)impl; }
+
 u64 buddy::fit_size(u64 size)
 {
     size |= size >> 1;
@@ -14,6 +17,7 @@ u64 buddy::fit_size(u64 size)
     size |= size >> 16;
     return size + 1;
 }
+
 int buddy::alloc(u64 pages)
 {
     auto &bitset = get(bits_impl);
@@ -55,6 +59,7 @@ int buddy::alloc(u64 pages)
     }
     return (i + 1) * target_page - (size + 1) / 2;
 }
+
 void buddy::free(int offset)
 {
     auto &bitset = get(bits_impl);
@@ -82,6 +87,7 @@ void buddy::free(int offset)
             bitset.set(index, left > right ? left : right);
     }
 }
+
 buddy::buddy(int page_count)
     : size(page_count * 2 - 1)
     , bits_impl(memory::New<bits_t>(memory::VirtBootAllocatorV, memory::VirtBootAllocatorV, size))
@@ -100,6 +106,7 @@ buddy::buddy(int page_count)
         bitset.set(i, node_size);
     }
 }
+
 /*
 Tag memory used by kernel.
 */
@@ -176,7 +183,9 @@ BuddyAllocator::BuddyAllocator(u64 flags)
     : flags(flags)
 {
 }
+
 BuddyAllocator::~BuddyAllocator() {}
+
 void *BuddyAllocator::allocate(u64 size, u64 align)
 {
     auto page = (size + 0x1000 - 1) / 0x1000;
@@ -198,6 +207,7 @@ void *BuddyAllocator::allocate(u64 size, u64 align)
     }
     return nullptr;
 }
+
 void BuddyAllocator::deallocate(void *ptr)
 {
     ptr = memory::kernel_virtaddr_to_phyaddr(ptr);

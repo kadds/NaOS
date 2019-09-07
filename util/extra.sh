@@ -13,4 +13,4 @@ if [ "$Debug"x == "Debug"x ]; then
 else
     objcopy -O binary -R .note -R .comment -g -S ${DBGTarget} ${Target}
 fi
-objdump -D -m${Type} ${DBGTarget} > ${STarget}
+objdump -d --section=.text -C -l -m${Type} ${DBGTarget} > ${STarget}

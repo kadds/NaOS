@@ -17,8 +17,10 @@ typedef util::linked_list<request_func_data> request_list_t;
 typedef list_node_cache<request_list_t> request_list_cache_t;
 
 void build(int index, void *func) { idt::set_interrupt_system_gate(index, func); }
+
 void init()
 {
+    // Each interrupt entry code has the same size
     int len = (char *)_interrupt_wrapper_33 - (char *)_interrupt_wrapper_32;
     for (int i = 0; i < 16; i++)
     {
