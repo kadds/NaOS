@@ -1,7 +1,17 @@
 #include "kernel/arch/video/vga/output_text.hpp"
+#include "kernel/util/memory.hpp"
 
 namespace arch::device::vga
 {
+output_text::output_text(u32 width, u32 height, void *video, u32 bbp, u32 pitch)
+    : output(width, height, video, bbp, pitch)
+    , allocator(reserved_space)
+    , bitmap(&allocator, height)
+    , has_write(false)
+{
+    // height must less than 32 * 8
+    bitmap.clean_all();
+}
 void output_text::init() {}
 void output_text::cls()
 {
@@ -20,6 +30,8 @@ void output_text::scroll(i32 n)
 
         for (u64 i = height * width - disp; i < height * width; i++, fb++)
             *fb = 0; // clean 0
+        for (u64 i = 0; i < height; i++)
+            bitmap.set(i, 1);
     }
     else if (n < 0)
     {
@@ -50,7 +62,6 @@ void output_text::move_pen(i32 x, i32 y, u32 newline_alignment)
         py++;
     }
     if (py >= height)
-
         scroll(py - height + 1);
 }
 u8 similar_color_index(u32 color)
@@ -72,11 +83,29 @@ void output_text::putchar(char ch, font_attribute &attribute)
         u8 bg = similar_color_index(attribute.get_background());
         *((u8 *)video_addr + (px + py * width) * 2) = ch;
         *((u8 *)video_addr + (px + py * width) * 2 + 1) = fg | (bg << 4);
+        bitmap.set(py, 1);
+        has_write = true;
         move_pen(1, 0, attribute.get_newline_alignment());
     }
     else
     {
         move_pen(-px, 1, attribute.get_newline_alignment());
     }
+}
+void output_text::flush(void *vraw)
+{
+    if (likely(!has_write))
+        return;
+    u32 line_bytes = width * sizeof(u16);
+
+    for (u32 y = 0; y < height; y++)
+    {
+        if (bitmap.get(y) != 0)
+        {
+            util::memcopy((char *)vraw + y * line_bytes, (char *)video_addr + y * line_bytes, line_bytes);
+        }
+    }
+    bitmap.clean_all();
+    has_write = false;
 }
 } // namespace arch::device::vga

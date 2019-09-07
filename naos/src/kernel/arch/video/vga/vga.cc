@@ -2,7 +2,6 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/arch/video/vga/output_text.hpp"
 #include "kernel/mm/memory.hpp"
-#include "kernel/util/memory.hpp"
 #include <stdarg.h>
 #include <type_traits>
 namespace arch::device::vga
@@ -11,6 +10,10 @@ output *current_output;
 void *back_buffer;
 void *frame_buffer;
 u64 frame_size;
+
+u64 bitwidth;
+u64 bitheight;
+
 Aligned(8) char reserved_space[sizeof(output_text) > sizeof(output_graphics) ? sizeof(output_text)
                                                                              : sizeof(output_graphics)];
 
@@ -40,6 +43,8 @@ void init(const kernel_start_args *args)
     }
     if (likely(!is_text_mode))
     {
+        bitwidth = args->fb_width * sizeof(u32);
+        bitheight = args->fb_height;
         current_output = new (&reserved_space)
             output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
@@ -49,6 +54,8 @@ void init(const kernel_start_args *args)
     }
     else
     {
+        bitwidth = args->fb_width;
+        bitheight = args->fb_height;
         current_output = new (&reserved_space)
             output_text(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
@@ -89,7 +96,7 @@ void set_video_addr(void *addr)
     // current_output->set_addr(addr);
     frame_buffer = addr;
 }
-void flush() { util::memcopy(frame_buffer, back_buffer, frame_size); }
+void flush() { current_output->flush(frame_buffer); }
 
 void putstring(const char *str, font_attribute &attribute)
 {
@@ -97,6 +104,7 @@ void putstring(const char *str, font_attribute &attribute)
     {
         current_output->putchar(*str++, attribute);
     }
+    flush();
 }
 
 } // namespace arch::device::vga

@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "kernel/common/font/font.hpp"
 #include "vga.hpp"
+
 namespace arch::device::vga
 {
 class output_graphics : public output
@@ -12,7 +13,7 @@ class output_graphics : public output
     u32 font_height;
     u32 text_count_per_line;
     u32 text_count_vertical;
-
+    rectangle dirty_rectangle;
     font::font *cur_font;
     void move_pen(i32 x, i32 y, u32 newline_alignment);
     void scroll(i32 n);
@@ -23,5 +24,6 @@ class output_graphics : public output
     virtual void init() override;
     virtual void cls() override;
     virtual void putchar(char ch, font_attribute &attribute) override;
+    virtual void flush(void *vraw) override;
 };
 } // namespace arch::device::vga

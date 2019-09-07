@@ -129,7 +129,7 @@ class output
     u32 width;
     u32 height;
     u32 pitch;
-    volatile void *video_addr;
+    void *video_addr;
 
     u32 bbp;
 
@@ -150,11 +150,51 @@ class output
     virtual void putchar(char ch, font_attribute &attribute) = 0;
     void *get_addr() { return (void *)video_addr; }
     void set_addr(void *video) { video_addr = video; }
+    virtual void flush(void *vraw) = 0;
+
     void set_pen(u32 x, u32 y)
     {
         px = x;
         py = y;
     };
+};
+
+struct rectangle
+{
+    u32 left;
+    u32 top;
+    u32 right;
+    u32 bottom;
+    rectangle(){};
+    rectangle(u32 left, u32 top, u32 right, u32 bottom)
+        : left(left)
+        , top(top)
+        , right(right)
+        , bottom(bottom){};
+    rectangle &operator+=(const rectangle &rc)
+    {
+        if (left == right || top == bottom)
+            *this = rc;
+
+        if (left > rc.left)
+            left = rc.left;
+        if (top > rc.top)
+            top = rc.top;
+
+        if (right < rc.right)
+            right = rc.right;
+        if (bottom < rc.bottom)
+            bottom = rc.bottom;
+
+        return *this;
+    }
+    void clean()
+    {
+        left = 0;
+        top = 0;
+        right = 0;
+        bottom = 0;
+    }
 };
 
 void init(const kernel_start_args *args);

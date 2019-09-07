@@ -1,5 +1,7 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/common/font/font_16X8.hpp"
+#include "kernel/util/memory.hpp"
+
 #include <new>
 namespace arch::device::vga
 {
@@ -33,6 +35,7 @@ void output_graphics::scroll(i32 n)
 
         for (u64 i = bits - disp; i < bits; i++, fb++)
             *fb = 0; // clean 0
+        dirty_rectangle += rectangle(0, 0, width, height);
     }
     else if (n < 0)
     {
@@ -43,6 +46,7 @@ void output_graphics::scroll(i32 n)
 
         for (u64 i = 0; i < disp; i++)
             *((u32 *)video_addr + i) = 0; // clean 0
+        dirty_rectangle += rectangle(0, 0, width, height);
     }
     else // n == 0
     {
@@ -84,7 +88,8 @@ void output_graphics::putchar(char ch, font_attribute &attribute)
                 *(v_start + x + y * (u64)width) = cur_font->hit(font_data, x, y) ? fg : bg;
             }
         }
-
+        dirty_rectangle +=
+            rectangle(px * font_width, py * font_height, px * font_width + font_width, py * font_height + font_height);
         move_pen(1, 0, attribute.get_newline_alignment());
     }
     else
@@ -92,4 +97,34 @@ void output_graphics::putchar(char ch, font_attribute &attribute)
         move_pen(-px, 1, attribute.get_newline_alignment());
     }
 }
+void output_graphics::flush(void *vraw)
+{
+    u32 left = dirty_rectangle.left;
+    u32 right = dirty_rectangle.right;
+    if (unlikely(right > width))
+        right = width;
+    if (unlikely(right <= left))
+        return;
+
+    u32 top = dirty_rectangle.top;
+    u32 bottom = dirty_rectangle.bottom;
+    if (unlikely(bottom > height))
+        bottom = height;
+    if (unlikely(bottom <= top))
+        return;
+    if (unlikely(left == 0 && top == 0 && right == width && bottom == height))
+        util::memcopy(vraw, (void *)video_addr, width * height * sizeof(u32));
+    else
+    {
+        u32 bytes = (right - left) * sizeof(u32);
+        u32 l = left * sizeof(u32);
+        u32 pre_line_bytes = width * sizeof(u32);
+        for (u32 y = top; y < bottom; y++)
+        {
+            util::memcopy((char *)vraw + y * pre_line_bytes + l, (char *)video_addr + y * pre_line_bytes + l, bytes);
+        }
+    }
+    dirty_rectangle.clean();
+}
+
 } // namespace arch::device::vga
