@@ -6,31 +6,40 @@
         {
             "label": "Build",
             "type": "shell",
-            "command": "cd build && make clean && make",
+            "command": "cd build && make",
             "group": {
                 "kind": "build",
                 "isDefault": true
             }
         },
         {
+            "label": "Rebuild",
+            "type": "shell",
+            "command": "cd build && make clean && make",
+            "group": "build"
+        },
+        {
             "label": "cppcheck",
             "type": "shell",
-            "command": "cppcheck --template=gcc --std=c++11 --enable=warning,performance,style --force naos/",
+            "command": "cppcheck --template=gcc --std=c++14 --enable=warning,performance,style --force naos/",
+            "group": "none",
             "problemMatcher": {
                 "fileLocation": "relative",
                 "severity": "warning",
                 "pattern": {
-                    "regexp": "^(.*):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|note):\\s+(.*)$",
                     "file": 1,
-                    "location": 2,
-                    "severity": 3,
-                    "message": 4
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
                 }
             }
         },
         {
             "label": "cloc",
             "type": "shell",
+            "group": "none",
             "command": "cloc -exclude-dir=\"build,run\" ./"
         }
     ]
