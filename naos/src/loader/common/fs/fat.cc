@@ -88,7 +88,7 @@ char **split_url(const char *url, int &count)
     temp_url = url;
     url_componments = (char **)alloc(sizeof(char *) * count, alignof(char *));
 
-    for (int i = 0; i < count; i++)
+    for (i = 0; i < count; i++)
     {
         url_componments[i] = (char *)alloc(sizeof(char) * count_componments[i] + 1, alignof(char));
         for (int j = 0; j < count_componments[i]; j++)
@@ -130,13 +130,12 @@ int Fat::read_file(const char *url, void *&buf)
     file_entry *file_entries = (file_entry *)alloc(512, alignof(file_entry));
     int url_len;
     char **urls = split_url(url, url_len);
-    bool searched = false;
     u32 cluster = 2;
     u32 file_size = 0;
     for (int i = 0; i < url_len; i++)
     {
         char *current_name = urls[i];
-        searched = false;
+        bool searched = false;
 
         reader->read_data_lba48(file_entries, root_start,
                                 (cluster - 2) * header.selector_per_cluster * header.bytes_per_selector,

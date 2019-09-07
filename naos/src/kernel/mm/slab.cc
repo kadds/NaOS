@@ -6,7 +6,7 @@ void slab_group::new_memory_node()
 {
     memory::BuddyAllocator allocator(memory::zone_t::prop::present);
     slab *s = (slab *)allocator.allocate(page_pre_slab * memory::page_size, 8);
-    s = new (s) slab(node_pre_slab, 0);
+    new (s) slab(node_pre_slab, 0);
 
     s->data_ptr = (char *)s + sizeof(slab);
     s->data_ptr = (char *)(((u64)s->data_ptr + align - 1) & ~(align - 1));

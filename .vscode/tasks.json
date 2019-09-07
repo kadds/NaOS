@@ -22,8 +22,9 @@
             "label": "cppcheck",
             "type": "shell",
             "command": "cppcheck --template=gcc --std=c++14 --enable=warning,performance,style --force naos/",
-            "group": "none",
+            "group": "build",
             "problemMatcher": {
+                "owner": "cpp",
                 "fileLocation": "relative",
                 "severity": "warning",
                 "pattern": {
