@@ -7,7 +7,7 @@ _text_start_addr:
     .quad 0xAA5555AAAA0000AA # magic number
 .globl _start
 _start: 
-    movl 0x10(%edi), %esp
+    movl 0x18(%edi), %esp
     push %rdi
     call _init_unpaged
     pop %rdi

@@ -33,13 +33,7 @@ struct regs_t
     u64 ss;
 };
 
-typedef void request_func(const idt::regs_t *regs, u64 user_data);
-
-struct request_func_data
-{
-    request_func *func;
-    u64 user_data;
-};
+typedef void (*call_func)(const regs_t *regs, u64 extra_param);
 
 struct ptr_t
 {
@@ -87,10 +81,10 @@ void set_entry(int id, void *func, u16 selector, u8 dpl, u8 present, u8 type, u8
 void set_exception_entry(int id, void *function, u16 selector, u8 dpl, u8 ist);
 void set_interrupt_entry(int id, void *function, u16 selector, u8 dpl, u8 ist);
 
-void set_trap_system_gate(int index, void *func);
-void set_trap_gate(int index, void *func);
-void set_interrupt_system_gate(int index, void *func);
-void set_interrupt_gate(int index, void *func);
+void set_trap_system_gate(int index, void *func, u8 ist);
+void set_trap_gate(int index, void *func, u8 ist);
+void set_interrupt_system_gate(int index, void *func, u8 ist);
+void set_interrupt_gate(int index, void *func, u8 ist);
 
 void enable();
 void disable();

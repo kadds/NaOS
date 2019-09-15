@@ -1,4 +1,5 @@
 #include "kernel/arch/gdt.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 namespace arch::gdt
@@ -7,8 +8,23 @@ namespace arch::gdt
 Unpaged_Data_Section Aligned(8) descriptor temp_gdt_init[3];
 Unpaged_Data_Section ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
 
-Aligned(8) descriptor gdt_after_init[] = {
-    0x0, 0x0020980000000000, 0x0000920000000000, 0x0020f80000000000, 0x0000f20000000000, 0, 0};
+Aligned(8) descriptor gdt_after_init[cpu::max_cpu_support + 15] = {
+    0,                  // null
+    0,                  // null
+    0x0000920000000000, // kernel stack
+    0x0020980000000000, // kernel code
+    0x0000920000000000, // kernel stack,
+    0,
+    0x0000f20000000000, // user stack
+    0x0020f80000000000, // user code
+    0x0000f20000000000, // user stack
+    0,
+    0, // not used
+    0, // not used
+    0, // not used
+    0, // not used
+    0, // not used
+};
 
 ptr_t gdt_after_ptr = {sizeof(gdt_after_init) - 1, (u64)gdt_after_init};
 
@@ -33,7 +49,7 @@ void init_after_paging()
 
 descriptor &get_gdt_descriptor(int index) { return gdt_after_init[index]; }
 
-int get_start_index_of_tss() { return 5; }
+int get_start_index_of_tss() { return 10; }
 
 ::arch::tss::descriptor &get_tss_descriptor(int index)
 {

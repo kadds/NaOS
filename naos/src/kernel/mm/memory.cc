@@ -9,6 +9,8 @@ PhyBootAllocator *PhyBootAllocatorV;
 KernelCommonAllocator *KernelCommonAllocatorV;
 void *PhyBootAllocator::base_ptr;
 void *PhyBootAllocator::current_ptr;
+bool PhyBootAllocator::available;
+
 u64 max_memory_available;
 u64 max_memory_maped;
 u64 limit;
@@ -30,8 +32,7 @@ void tag_zone_buddy_memory(char *start_addr, char *end_addr)
     for (int i = 0; i < global_zones.count; i++)
     {
         auto &zone = global_zones.zones[i];
-        if ((zone.props & zone_t::prop::present) != zone_t::prop::present)
-            continue;
+
         u64 start = start_addr > (char *)zone.start ? (u64)start_addr : (u64)zone.start;
         u64 end = end_addr < (char *)zone.end ? (u64)end_addr : (u64)zone.end;
         if (start < end)
@@ -123,13 +124,11 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         if (likely(buddys->count > 0))
         {
             buddys->buddys = NewArray<buddy>(VirtBootAllocatorV, buddys->count, buddy_max_page);
-            item.props = zone_t::prop::present;
             if (rest > 0)
                 buddys->buddys[buddys->count - 1].tag_alloc(rest, buddy_max_page - rest);
         }
         else
         {
-            item.props = 0;
         }
         cid++;
     }
@@ -154,6 +153,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         global_kmalloc_slab_cache_pool->create_new_slab_group(i.size, i.name, 8, 0);
     }
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
+    KernelBuddyAllocatorV = New<BuddyAllocator>(VirtBootAllocatorV);
 }
 
 u64 get_max_available_memory() { return max_memory_available; }

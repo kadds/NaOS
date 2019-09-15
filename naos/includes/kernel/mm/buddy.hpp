@@ -43,14 +43,12 @@ namespace memory
 
 class BuddyAllocator : public IAllocator
 {
-  private:
-    // only the same flags in the zone can be assigned
-    u64 flags;
-
   public:
-    BuddyAllocator(u64 flags);
+    BuddyAllocator();
     ~BuddyAllocator();
     void *allocate(u64 size, u64 align) override;
     void deallocate(void *ptr) override;
 };
+extern BuddyAllocator *KernelBuddyAllocatorV;
+
 } // namespace memory

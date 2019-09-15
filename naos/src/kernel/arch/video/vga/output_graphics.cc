@@ -25,7 +25,7 @@ void output_graphics::set_bit(u32 x, u32 y, u32 color) { *((u32 *)video_addr + x
 void output_graphics::scroll(i32 n)
 {
     const u64 bits = height * width;
-    volatile u32 *fb = (u32 *)video_addr;
+    u32 *fb = (u32 *)video_addr;
 
     if (likely(n > 0))
     {

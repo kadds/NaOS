@@ -29,14 +29,17 @@ struct ptr_t
 
 enum class selector_type
 {
-    kernel_code = 0x1,
-    kernel_data = 0x2,
-    user_code = 0x3,
-    user_data = 0x4
+    kernel_data2 = 0x2,
+    kernel_code = 0x3,
+    kernel_data = 0x4,
+
+    user_data2 = 0x6,
+    user_code = 0x7,
+    user_data = 0x8
 };
 
 // generate a GDT selector
-u16 constexpr gen_selector(selector_type index, int dpl) { return (u16)index << 3 | (dpl & 0x2); }
+u16 constexpr gen_selector(selector_type index, int dpl) { return (u16)index << 3 | (dpl & 0x3); }
 
 void init_before_paging();
 void init_after_paging();

@@ -39,6 +39,11 @@ template <typename... Args> void assert_runtime(const char *exp, const char *fil
           "runtime assert failed: at: ", file, ':', line, "\n    assert expr: ", exp, '\n');
     panic("from assert failed. ", args...);
 }
+template <typename... Args> void print(const Args &... args)
+{
+    using namespace arch::device;
+    vga::print(args...);
+}
 
 } // namespace trace
 

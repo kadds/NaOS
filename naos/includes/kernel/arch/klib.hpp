@@ -25,3 +25,23 @@ ExportC void _unpaged_load_idt(void *idt);
 ExportC void _unpaged_load_page(void *page_addr);
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
 ExportC void _unpaged_reload_kernel_virtual_address(u64 offset);
+
+inline void _wrmsr(u64 address, u64 value)
+{
+    __asm__ __volatile__("wrmsr  \n\t"
+                         :
+                         : "d"((u32)(value >> 32)), "a"((u32)(value & 0xFFFFFFFF)), "c"(address)
+                         : "memory");
+}
+inline u64 _rdmsr(u64 address)
+{
+    u32 v0 = 0;
+    u32 v1 = 0;
+    __asm__ __volatile__("rdmsr	\n\t" : "=d"(v0), "=a"(v1) : "c"(address) : "memory");
+    return ((u64)v0) << 32 | v1;
+}
+
+ExportC volatile char _sys_call;
+ExportC volatile char _sys_ret;
+
+ExportC NoReturn void _call_sys_ret(arch::task::regs_t *regs);

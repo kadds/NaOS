@@ -4,8 +4,7 @@ slab_cache_pool *global_kmalloc_slab_cache_pool, *global_dma_slab_cache_pool, *g
 
 void slab_group::new_memory_node()
 {
-    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
-    slab *s = (slab *)allocator.allocate(page_pre_slab * memory::page_size, 8);
+    slab *s = (slab *)memory::KernelBuddyAllocatorV->allocate(page_pre_slab * memory::page_size, 8);
     new (s) slab(node_pre_slab, 0);
 
     s->data_ptr = (char *)s + sizeof(slab);
@@ -20,8 +19,7 @@ void slab_group::delete_memory_node(slab *s)
     kassert(s->rest == node_pre_slab, "slab error");
     all_obj_count -= node_pre_slab;
     s->~slab();
-    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
-    allocator.deallocate(s);
+    memory::KernelBuddyAllocatorV->deallocate(s);
 }
 
 slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name, u64 align, u64 flags)
@@ -224,8 +222,7 @@ void slab_cache_pool::remove_slab_group(const char *name)
 }
 
 slab_cache_pool::slab_cache_pool()
-    : buddyAllocator(memory::zone_t::prop::present)
-    , slab_node_list_node_allocator(&slab_list_node_cache)
+    : slab_node_list_node_allocator(&slab_list_node_cache)
     , slab_group_list_node_allocator(&slab_group_list_node_cache)
     , slab_list_node_cache(&buddyAllocator)
     , slab_group_list_node_cache(&buddyAllocator)

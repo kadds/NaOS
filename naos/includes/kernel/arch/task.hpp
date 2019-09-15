@@ -3,8 +3,25 @@
 
 namespace arch::task
 {
+/* User space memory zone
+0x0000,0000,0000,0000 - 0x0000,0000,003F,FFFF: resevered (256MB)
+0x0000,0000,0040,0000 - 0x0000,0000,XXXX,XXXX: text
+0x0000,0000,XXXX,XXXX - 0x0000,000X,XXXX,XXXX: head
+0x0000,000X,XXXX,XXXX - 0x0000,7FFF,EFFF,FFFF: mmap zone
+0x0000,7FFF,F000,0000 - 0x0000,8000,0000,0000: stack (256MB)
+*/
+
+const u64 user_stack_start_address = 0x0000800000000000;
+// stack size: 4MB
+const u64 user_stack_end_address = user_stack_start_address - 0x400000;
+// maximum stack size: 256MB
+const u64 user_stack_maximum_end_address = user_stack_start_address - 0x10000000;
+
+const u64 user_mmap_start_address = user_stack_maximum_end_address;
+const u64 user_code_start_address = 0x400000;
+
 // kernel stack size in task
-extern u64 stack_size;
+extern u64 kernel_stack_size;
 
 // register info in task
 struct register_info_t
@@ -66,17 +83,26 @@ const int kernel_stack_page_count = 8;
 inline void *current_stack()
 {
     void *stack = nullptr;
-    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack) : "0"(~(stack_size - 1)));
+    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack) : "0"(~(kernel_stack_size - 1)));
     return stack;
 }
 
 inline void *current_task()
 {
     thread_info_t *current = (thread_info_t *)current_stack();
-    return current->task;
+    if (likely(current->is_valid()))
+        return current->task;
+    return nullptr;
 }
-
+inline void *get_task(void *stack)
+{
+    thread_info_t *current = (thread_info_t *)((u64)stack & (~(kernel_stack_size - 1)));
+    if (likely(current->is_valid()))
+        return current->task;
+    return nullptr;
+}
 void init(void *task, register_info_t *first_task_reg_info);
 
 u64 do_fork(void *task, void *stack_addr, regs_t &regs, register_info_t &register_info, void *function, u64 arg);
+u64 do_exec(void *func, void *stack_addr, void *kernel_stack);
 } // namespace arch::task

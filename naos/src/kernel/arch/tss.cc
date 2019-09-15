@@ -12,11 +12,10 @@ tss_t *tss;
 
 void init(void *baseAddr, void *ist)
 {
-    memory::BuddyAllocator alloc(memory::zone_t::prop::present);
-    tss = memory::New<tss_t, 8>(&alloc);
+    tss = memory::New<tss_t, 8>(memory::KernelBuddyAllocatorV);
     descriptor &tss_descriptor = gdt::get_tss_descriptor(0);
 
-    tss_descriptor.set_offset(memory::kernel_virtaddr_to_phyaddr((u64)tss));
+    tss_descriptor.set_offset((u64)tss);
     tss_descriptor.set_limit(sizeof(tss_t) - 1);
     tss_descriptor.set_type(tss_type);
     tss_descriptor.set_valid(true);
@@ -24,17 +23,17 @@ void init(void *baseAddr, void *ist)
 
     _load_tss_descriptor(gdt::get_offset_of_tss());
 
-    tss->rsp0 = (u64)baseAddr;
-    tss->rsp1 = tss->rsp0;
-    tss->rsp2 = tss->rsp0;
+    set_rsp(0, baseAddr);
+    set_rsp(1, baseAddr);
+    set_rsp(2, baseAddr);
+    set_ist(1, ist);
+    set_ist(2, ist);
+    set_ist(3, ist);
+    set_ist(4, ist);
+    set_ist(5, ist);
+    set_ist(6, ist);
+    set_ist(7, ist);
 
-    tss->ist1 = (u64)ist;
-    tss->ist2 = tss->ist1;
-    tss->ist3 = tss->ist1;
-    tss->ist4 = tss->ist1;
-    tss->ist5 = tss->ist1;
-    tss->ist6 = tss->ist1;
-    tss->ist7 = tss->ist1;
     tss->io_address = 0;
 }
 #pragma GCC diagnostic push
@@ -42,25 +41,40 @@ void init(void *baseAddr, void *ist)
 void set_ist(int index, void *ist)
 {
     kassert(index >= 1 && index <= 7, "Index of IST must >= 1 and <= 7.");
-    *((&tss->ist1) + index - 1) = (u64)ist;
+    index--;
+
+    u32 high = (u64)ist >> 32;
+    u32 low = (u64)ist;
+
+    *((&tss->ist1_low) + index * 2) = low;
+    *((&tss->ist1_low) + index * 2 + 1) = high;
 }
 
 void *get_ist(int index)
 {
     kassert(index >= 1 && index <= 7, "Index of IST must >= 1 and <= 7.");
-    return (void *)*((&tss->ist1) + index - 1);
+    index--;
+    u32 low = *((&tss->ist1_low) + index * 2);
+    u32 high = *((&tss->ist1_low) + index * 2 + 1);
+    return (void *)((((u64)high) << 32) | low);
 }
 
 void set_rsp(int index, void *rsp0)
 {
     kassert(index >= 0 && index <= 2, "Index of RSP must >= 0 and <= 2.");
-    *(&tss->rsp0 + index) = (u64)rsp0;
+    u32 high = (u64)rsp0 >> 32;
+    u32 low = (u64)rsp0;
+
+    *((&tss->rsp0_low) + index * 2) = low;
+    *((&tss->rsp0_low) + index * 2 + 1) = high;
 }
 
 void *get_rsp(int index)
 {
     kassert(index >= 0 && index <= 2, "Index of RSP must >= 0 and <= 2.");
-    return (void *)*(&tss->rsp0 + index);
+    u32 low = *((&tss->rsp0_low) + index * 2);
+    u32 high = *((&tss->rsp0_low) + index * 2 + 1);
+    return (void *)((((u64)high) << 32) | low);
 }
 #pragma GCC diagnostic pop
 

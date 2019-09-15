@@ -1,5 +1,5 @@
 #include "loader/util.hpp"
-void memcopy(void *dst, const void *source, u32 len)
+void memcpy(void *dst, const void *source, u32 len)
 {
     char *d = (char *)dst;
     const char *s = (const char *)source;

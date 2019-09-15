@@ -4,10 +4,10 @@
 #include "kernel/trace.hpp"
 namespace task::builtin::idle
 {
-void main(u64 args)
+void main(const kernel_start_args *args)
 {
     trace::info("idle task running.");
-    task::do_fork(&task::builtin::init::main, 0, 0);
+    task::do_fork(&task::builtin::init::main, (u64)(args->get_rfs_ptr()), 0);
     task::switch_task(current(), task::find_pid(1));
     while (1)
         ;

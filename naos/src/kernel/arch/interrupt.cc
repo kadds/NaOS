@@ -13,10 +13,11 @@ ExportC char _interrupt_wrapper_33[];
 namespace arch::interrupt
 {
 using idt::regs_t;
-typedef util::linked_list<request_func_data> request_list_t;
-typedef list_node_cache<request_list_t> request_list_cache_t;
+arch::idt::call_func global_call_func;
 
-void build(int index, void *func) { idt::set_interrupt_system_gate(index, func); }
+void build(int index, void *func, u8 ist) { idt::set_interrupt_system_gate(index, func, ist); }
+
+void set_callback(arch::idt::call_func func) { global_call_func = func; }
 
 void init()
 {
@@ -24,14 +25,14 @@ void init()
     int len = (char *)_interrupt_wrapper_33 - (char *)_interrupt_wrapper_32;
     for (int i = 0; i < 16; i++)
     {
-        build(i + 32, (char *)_interrupt_wrapper_32 + len * i);
+        build(i + 32, (char *)_interrupt_wrapper_32 + len * i, 0);
     }
     device::chip8259A::init();
 }
 
 ExportC void do_irq(const regs_t *regs)
 {
-    // trace::debug("interrupt vector: ", regs->vector);
+    global_call_func(regs, 0);
     device::chip8259A::send_EOI(regs->vector - 32);
 }
 

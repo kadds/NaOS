@@ -1,5 +1,5 @@
 #include "kernel/arch/paging.hpp"
-#include "kernel/arch/cpu.hpp"
+#include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
@@ -12,15 +12,13 @@ pml4t *base_kernel_page_addr;
 template <typename _T> _T *new_page_table()
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
-    return memory::New<_T, 0x1000>(&allocator);
+    return memory::New<_T, 0x1000>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    memory::BuddyAllocator allocator(memory::zone_t::prop::present);
-    memory::Delete<_T>(&allocator, addr);
+    memory::Delete<_T>(memory::KernelBuddyAllocatorV, addr);
 }
 
 void *base_entry::get_addr() const
@@ -28,7 +26,10 @@ void *base_entry::get_addr() const
     return memory::kernel_phyaddr_to_virtaddr((void *)((u64)data & 0xFFFFFFFFFF000UL));
 }
 
-void base_entry::set_addr(void *ptr) { data |= ((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL; }
+void base_entry::set_addr(void *ptr)
+{
+    data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL);
+}
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
@@ -73,7 +74,7 @@ void init()
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
                      ". Maximum memory supported ", max_memory_support, ".");
     // map all phy address
-    if (cpu::has_future(cpu::future::huge_page_1gb))
+    if (cpu_info::has_future(cpu_info::future::huge_page_1gb))
     {
         trace::debug("Paging at 1GB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_1gb,
@@ -85,7 +86,10 @@ void init()
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_2mb,
             (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
     }
+    trace::debug("Map ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
+                 (void *)(0xffff800000000000 + max_maped_memory));
 
+    trace::debug("Reload page table");
     load(base_kernel_page_addr);
 }
 
@@ -95,6 +99,9 @@ void check_pml4e(pml4t *base_addr, int pml4_index)
     if (!pml4e.is_present())
     {
         pml4e.set_present();
+        pml4e.set_user_mode();
+        pml4e.set_writable();
+
         pml4e.set_addr(new_page_table<pdpt>());
         pml4e.set_common_data(0);
     }
@@ -108,6 +115,9 @@ void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_ne
     if (!pdpte.is_present())
     {
         pdpte.set_present();
+        pdpte.set_user_mode();
+        pdpte.set_writable();
+
         if (create_next_table)
             pdpte.set_addr(new_page_table<pdt>());
         else
@@ -126,6 +136,9 @@ void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, b
     if (!pdt.is_present())
     {
         pdt.set_present();
+        pdt.set_user_mode();
+        pdt.set_writable();
+
         if (create_next_table)
             pdt.set_addr(new_page_table<pt>());
         else
@@ -404,5 +417,53 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 void load(pml4t *base_paging_addr) { _load_page(memory::kernel_virtaddr_to_phyaddr(base_paging_addr)); }
 
 void reload() { _flush_tlb(); }
+
+void copy_page_table(pml4t *to, pml4t *source)
+{
+    for (int i = 0; i < 512; i++)
+    {
+        auto &pml4e_source = source->entries[i];
+        if (pml4e_source.is_present())
+        {
+            auto &pmle4_to = to->entries[i];
+            pmle4_to = pml4e_source;
+            pmle4_to.set_addr(new_page_table<pdpt>());
+
+            for (int j = 0; j < 512; j++)
+            {
+                auto &pdpe_source = pml4e_source.next()[j];
+                if (pdpe_source.is_present())
+                {
+                    auto &pdpe_to = pmle4_to.next()[j];
+                    pdpe_to = pdpe_source;
+                    if (pdpe_to.is_big_page())
+                        continue;
+                    pdpe_to.set_addr(new_page_table<pdt>());
+                    for (int k = 0; k < 512; k++)
+                    {
+                        auto &pde_source = pdpe_source.next()[k];
+                        if (pde_source.is_present())
+                        {
+                            auto &pde_to = pdpe_to.next()[k];
+                            pde_to = pde_source;
+                            if (pde_to.is_big_page())
+                                continue;
+                            pde_to.set_addr(new_page_table<pt>());
+                            for (int m = 0; m < 512; m++)
+                            {
+                                auto &pe_source = pde_source.next()[m];
+                                if (pe_source.is_present())
+                                {
+                                    auto &pe_to = pde_to.next()[m];
+                                    pe_to = pe_source;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 } // namespace arch::paging

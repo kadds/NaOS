@@ -29,13 +29,14 @@ template <typename E> class linked_list
     list_info_node *head, *tail;
 
   public:
-    void push_back(const E &e)
+    list_node *push_back(const E &e)
     {
         list_node *node = memory::New<list_node>(allocator, e);
         node->next = (list_node *)tail;
         tail->prev->next = node;
         node->prev = tail->prev;
         tail->prev = node;
+        return node;
     }
     E pop_back()
     {
@@ -52,14 +53,19 @@ template <typename E> class linked_list
     E back() const { return tail->prev->element; }
     E front() const { return head->next->element; }
     list_node *next(list_node *node) { return node->next; }
-    void insert(list_node *prev, E e)
+
+    // insert node before after
+    list_node *insert(list_node *after, E e)
     {
         list_node *node = memory::New<list_node>(allocator, e);
+        auto last = after->prev;
 
-        prev->next->prev = node;
-        node->next = prev->next->prev;
-        node->prev = prev;
-        prev->next = node;
+        last->next = node;
+        node->next = after;
+        node->prev = last;
+        after->prev = node;
+
+        return node;
     }
     void remove(list_node *node)
     {

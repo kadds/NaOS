@@ -6,6 +6,8 @@ typedef util::bit_set<u64, 16> bits_t;
 
 const int buddy_max_page = 1 << 8;
 
+memory::BuddyAllocator *memory::KernelBuddyAllocatorV;
+
 bits_t &get(void *impl) { return *(bits_t *)impl; }
 
 u64 buddy::fit_size(u64 size)
@@ -179,10 +181,7 @@ buddy_tree *buddy::gen_tree()
 namespace memory
 {
 
-BuddyAllocator::BuddyAllocator(u64 flags)
-    : flags(flags)
-{
-}
+BuddyAllocator::BuddyAllocator() {}
 
 BuddyAllocator::~BuddyAllocator() {}
 
@@ -192,8 +191,7 @@ void *BuddyAllocator::allocate(u64 size, u64 align)
     for (int i = 0; i < global_zones.count; i++)
     {
         zone_t &zone = global_zones.zones[i];
-        if ((zone.props & flags) != flags)
-            continue;
+
         auto buddys = (buddy_contanier *)zone.buddy_impl;
         for (int j = 0; j < buddys->count; j++)
         {
@@ -214,8 +212,7 @@ void BuddyAllocator::deallocate(void *ptr)
     for (int i = 0; i < global_zones.count; i++)
     {
         zone_t &zone = global_zones.zones[i];
-        if ((zone.props & flags) != flags)
-            continue;
+
         if ((char *)ptr >= zone.start && (char *)ptr < zone.end)
         {
             auto buddys = (buddy_contanier *)zone.buddy_impl;

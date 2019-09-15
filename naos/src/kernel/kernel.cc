@@ -2,6 +2,7 @@
 #include "kernel/kernel.hpp"
 #include "common.hpp"
 #include "kernel/arch/arch.hpp"
+#include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
@@ -41,8 +42,11 @@ ExportC NoReturn void _kstart(const kernel_start_args *args)
 {
     static_init();
     arch::init(args);
+    irq::init();
+    memory::vm::init();
+
     task::init();
     trace::info("kernel main");
-    task::start_task_idle();
+    task::start_task_idle(args);
     trace::panic("Should not be running at here.");
 }

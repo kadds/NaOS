@@ -43,8 +43,9 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
     MBR *mbr = New<MBR>(disk_reader);
     if (!mbr->available())
         return;
-    void *raw_kernel;
-    int size = 0;
+    void *raw_kernel, *vmrfs;
+    int kernel_size = 0, rfs_size = 0;
+
     if (mbr->isGPT())
     {
         GPT *gpt = New<GPT>(disk_reader);
@@ -63,10 +64,14 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
                     if (fat->try_open_partition(cur_partition) >= 0)
                     {
                         printer.printf("Partition %d is fat file system. Try loading kernel ...\n", i);
-                        size = fat->read_file("/SYSTEM/KERNEL", raw_kernel);
-                        if (size > 0)
+                        kernel_size = fat->read_file("/SYSTEM/KERNEL", raw_kernel);
+                        if (kernel_size > 0)
                         {
-                            break;
+                            rfs_size = fat->read_file("/SYSTEM/INIT", vmrfs);
+                            if (rfs_size > 0)
+                            {
+                                goto finded;
+                            }
                         }
                     }
                 }
@@ -75,45 +80,60 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
         else
             return;
     }
-    if (size <= 0)
-    {
+    if (kernel_size == 0)
         printer.printf("Can not load any kernel file!\n");
-        return;
-    }
-    const u64 base_kernel_ptr = 0x100000;
-    u64 base_data_ptr = base_kernel_ptr + size, current_data_ptr;
+    else
+        printer.printf("Can not load any root file system image!\n");
 
-    memcopy((void *)base_kernel_ptr, raw_kernel, size);
+    return;
+
+finded:
+    const u64 base_kernel_ptr = 0x100000;
+    u64 base_data_ptr = base_kernel_ptr + kernel_size, current_data_ptr;
+
+    memcpy((void *)base_kernel_ptr, raw_kernel, kernel_size);
     kernel_file_head_t *kernel = (kernel_file_head_t *)base_kernel_ptr;
     if (!kernel->is_valid())
     {
         printer.printf("Kernel is not valid.\n");
         return;
     }
-    printer.printf("kernel size: %u, reserved space size:. %u\n", size, (u32)kernel->reserved_space_size);
+    printer.printf("kernel size: %u, reserved space size:. %u, RFS size: %u\n", kernel_size,
+                   (u32)kernel->reserved_space_size, rfs_size);
+
     if (kernel->reserved_space_size > 0x1000)
     {
         printer.printf("To much memory kernel want to reserved.\n");
         return;
     }
+    u32 size_page = 0x1000;
+
     base_data_ptr += kernel->reserved_space_size;
-    base_data_ptr = ((base_data_ptr + 16 - 1) & ~(16 - 1));
+    base_data_ptr = ((base_data_ptr + size_page - 1) & ~(size_page - 1));
+    // root fs must align 4kb
+    memcpy((void *)base_data_ptr, vmrfs, rfs_size);
+    vmrfs = (void *)base_data_ptr;
+    base_data_ptr += rfs_size;
+    base_data_ptr = ((base_data_ptr + size_page - 1) & ~(size_page - 1));
+
     current_data_ptr = base_data_ptr;
 
     kernel_start_args *args = (kernel_start_args *)alloc_data(current_data_ptr, sizeof(kernel_start_args), 8);
 
     args->size_of_struct = sizeof(kernel_start_args);
     args->kernel_base = base_kernel_ptr;
-    args->kernel_size = size;
+    args->kernel_size = kernel_size;
     // 32 kb
     args->stack_base = 0x8000;
     args->stack_size = 0x8000;
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
+    args->set_rfs_ptr(vmrfs);
+
     const char flags[] = "trace.debug=true;";
 
     args->set_kernel_flags_ptr((char *)alloc_data(current_data_ptr, sizeof(flags), 1));
-    memcopy(args->get_kernel_flags_ptr(), flags, sizeof(flags));
+    memcpy(args->get_kernel_flags_ptr(), flags, sizeof(flags));
 
     if (CHECK_FLAG(addr->flags, 6))
     {

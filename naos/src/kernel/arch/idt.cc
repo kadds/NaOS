@@ -19,10 +19,9 @@ Unpaged_Text_Section void init_before_paging() {}
 
 void init_after_paging()
 {
-    memory::BuddyAllocator alloc(memory::zone_t::prop::present);
 
     idt_after_ptr.limit = sizeof(entry) * 128 - 1;
-    idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(&alloc, 128);
+    idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 128);
     exception::init();
     interrupt::init();
     _load_idt(&idt_after_ptr);
@@ -54,23 +53,23 @@ void set_interrupt_entry(int id, void *function, u16 selector, u8 dpl, u8 ist)
     set_entry(id, function, selector, dpl, true, interrupt_type, ist);
 }
 
-void set_trap_system_gate(int index, void *func)
+void set_trap_system_gate(int index, void *func, u8 ist)
 {
-    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 0), 0, 0);
+    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 0), 0, ist);
 }
 
-void set_trap_gate(int index, void *func)
+void set_trap_gate(int index, void *func, u8 ist)
 {
-    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, 0);
+    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, ist);
 }
 
-void set_interrupt_system_gate(int index, void *func)
+void set_interrupt_system_gate(int index, void *func, u8 ist)
 {
-    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 0), 0, 0);
+    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 0), 0, ist);
 }
 
-void set_interrupt_gate(int index, void *func)
+void set_interrupt_gate(int index, void *func, u8 ist)
 {
-    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, 0);
+    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, ist);
 }
 } // namespace arch::idt

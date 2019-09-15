@@ -1,3 +1,4 @@
+
 .section .text
 
 .globl _load_gdt
@@ -78,6 +79,12 @@ _switch_task:
     leaq end_task(%rip), %rax 
     movq %rax, 0x8(%rdi) # prev rip
     pushq 0x8(%rsi) # push new rip
+
+    # movq 0x18(%rsi), %rax
+    # movq %rax, %fs
+    # movq 0x20(%rsi), %rax
+    # movq %rax, %gs
+
     jmp switch_task
 end_task:
     popq %rax
@@ -109,7 +116,85 @@ _kernel_thread:
     callq *%rbx
     movq %rax, %rdi
     callq task_do_exit
+    ret
 
+// args -> rdi, rsi, r12, r13, r8, r9
+// r10: rsp
+// r11: return address
+.globl _sys_call
+_sys_call:
+    cld
+    pushq %rax
+    swapgs
+    movq %gs:0x0, %rax
+    movq %rax, %rsp
+    movq -0x8(%r10), %rax
+    pushq %rax
+
+	movq %es,	%rax
+	pushq %rax
+	movq %ds,	%rax
+	pushq %rax
+	pushq %rbp
+	pushq %rdi
+	pushq %rsi
+	pushq %rdx
+	pushq %rcx
+	pushq %rbx
+	pushq %r8
+	pushq %r9
+	pushq %r10
+	pushq %r11
+	pushq %r12
+	pushq %r13
+	pushq %r14
+	pushq %r15
+
+	movq 0x80(%rsp), %rax
+    cmp $128, %rax
+    ja sys_call_setlabel
+    jmp sys_call_label
+sys_call_setlabel:
+    movq $0, %rax
+sys_call_label:
+	leaq system_call_table(%rip), %rbx
+	callq *(%rbx,%rax,8)
+
+    movq %rax, 0x80(%rsp) # return value
+    swapgs
+.globl _sys_ret
+_sys_ret:
+    popq %r15
+	popq %r14
+	popq %r13
+	popq %r12
+	popq %r11
+	popq %r10
+	popq %r9
+	popq %r8
+	popq %rbx
+	popq %rcx
+	popq %rdx
+	popq %rsi
+    popq %rdi
+	popq %rbp
+	popq %rax
+	movq %rax, %ds	
+	popq %rax
+	movq %rax, %es
+	popq %rax
+
+    movq %r10, %rsp
+
+    sysretq
+
+
+// rdi: reg pointer
+.globl _call_sys_ret
+_call_sys_ret:
+    movq %rdi, %rsp
+    jmp _sys_ret
+    
 # ======================================================
 .section .unpaged.text
 

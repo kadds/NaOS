@@ -46,21 +46,33 @@ struct descriptor
 struct tss_t
 {
     u32 _0;
-    u64 rsp0;
-    u64 rsp1;
-    u64 rsp2;
+    u32 rsp0_low;
+    u32 rsp0_high;
+    u32 rsp1_low;
+    u32 rsp1_high;
+    u32 rsp2_low;
+    u32 rsp2_high;
     u64 _1;
-    u64 ist1;
-    u64 ist2;
-    u64 ist3;
-    u64 ist4;
-    u64 ist5;
-    u64 ist6;
-    u64 ist7;
+    u32 ist1_low;
+    u32 ist1_high;
+    u32 ist2_low;
+    u32 ist2_high;
+    u32 ist3_low;
+    u32 ist3_high;
+    u32 ist4_low;
+    u32 ist4_high;
+    u32 ist5_low;
+    u32 ist5_high;
+    u32 ist6_low;
+    u32 ist6_high;
+    u32 ist7_low;
+    u32 ist7_high;
     u64 _2;
     u16 _3;
     u16 io_address;
 } PackStruct;
+
+static_assert(sizeof(tss_t) == 104, "sizeof(tss_t) must == 104");
 
 void init(void *baseAddr, void *ist);
 

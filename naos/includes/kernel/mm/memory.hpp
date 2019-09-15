@@ -7,6 +7,7 @@
 #include <utility>
 namespace memory
 {
+void tag_zone_buddy_memory(char *start_addr, char *end_addr);
 
 void init(const kernel_start_args *args, u64 fix_memory_limit);
 u64 get_max_available_memory();
@@ -50,18 +51,9 @@ struct zone_t
 {
     void *start;
     void *end;
-    u64 props;
     u64 page_count;
     void *buddy_impl;
     void tag_used(u64 offset_start, u64 offset_end);
-    struct prop
-    {
-        enum
-        {
-            present = 1,
-            fixed = 2,
-        };
-    };
 };
 
 struct zones_t
@@ -99,37 +91,47 @@ class PhyBootAllocator : public IAllocator
   private:
     static void *base_ptr;
     static void *current_ptr;
+    static bool available;
 
   public:
     static void init(void *base_ptr)
     {
         PhyBootAllocator::base_ptr = base_ptr;
         current_ptr = base_ptr;
+        available = true;
     }
-    PhyBootAllocator(){};
-    ~PhyBootAllocator(){};
+
+    static void discard() { available = false; }
+
     void *allocate(u64 size, u64 align) override
     {
+        if (unlikely(!available))
+            return nullptr;
+
         char *start = (char *)(((u64)current_ptr + align - 1) & ~(align - 1));
         current_ptr = start + size;
 
         return start;
     }
-    void deallocate(void *) override {}
+    void deallocate(void *) override
+    {
+        // Do not deallocate
+    }
     static void *current_ptr_address() { return current_ptr; }
 };
 
 class VirtBootAllocator : public PhyBootAllocator
 {
-  private:
   public:
-    VirtBootAllocator(){};
-    ~VirtBootAllocator(){};
     void *allocate(u64 size, u64 align) override
     {
         return kernel_phyaddr_to_virtaddr(PhyBootAllocator::allocate(size, align));
     }
-    void deallocate(void *) override {}
+    void deallocate(void *) override
+    {
+        // Same as PhyBootAllocator
+    }
+
     static void *current_ptr_address() { return kernel_phyaddr_to_virtaddr(PhyBootAllocator::current_ptr_address()); }
 };
 

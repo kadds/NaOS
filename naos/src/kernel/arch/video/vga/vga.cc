@@ -7,7 +7,7 @@
 namespace arch::device::vga
 {
 output *current_output;
-
+u64 frame_size;
 void *frame_buffer;
 
 Aligned(8) char reserved_space[sizeof(output_text) > sizeof(output_graphics) ? sizeof(output_text)
@@ -17,7 +17,7 @@ void init(const kernel_start_args *args)
 {
     frame_buffer = (void *)args->fb_addr;
     bool is_text_mode = args->fb_type == 2;
-    u32 frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
+    frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
 
     void *back_buffer = nullptr;
     // Find a frame size memory as backbuffer
@@ -28,7 +28,7 @@ void init(const kernel_start_args *args)
         if (mm_item->map_type == map_type_t::available)
         {
             u64 start = ((u64)mm_item->addr + align - 1) & ~(align - 1);
-            u64 end = ((u64)mm_item->addr + mm_item->len - 1) & ~(align - 1);
+            u64 end = ((u64)mm_item->addr + mm_item->len + align - 1) & ~(align - 1);
             if (start > end)
                 break;
             if (end - start >= frame_size)
@@ -62,6 +62,7 @@ void init(const kernel_start_args *args)
 
     test();
     trace::debug("Video address ", (void *)frame_buffer);
+    trace::debug("Video backbuffer ", (void *)back_buffer, "-", (void *)((char *)back_buffer + frame_size));
 }
 
 void test()
@@ -89,7 +90,11 @@ void test()
 
 void *get_video_addr() { return frame_buffer; }
 
-void set_video_addr(void *addr) { frame_buffer = addr; }
+void set_video_addr(void *addr)
+{
+    frame_buffer = addr;
+    print("VGA frame buffer mapped at ", addr, "\n");
+}
 
 void flush() { current_output->flush(frame_buffer); }
 
@@ -100,6 +105,12 @@ void putstring(const char *str, font_attribute &attribute)
         current_output->putchar(*str++, attribute);
     }
     flush();
+}
+void tag_memory()
+{
+    memory::tag_zone_buddy_memory(
+        memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr()),
+        (memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr() + frame_size)));
 }
 
 } // namespace arch::device::vga

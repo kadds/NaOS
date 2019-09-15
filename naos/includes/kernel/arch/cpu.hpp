@@ -3,23 +3,15 @@
 
 namespace arch::cpu
 {
-enum class future
+constexpr u32 max_cpu_support = 32;
+
+struct cpu_data
 {
-    system_call_ret,
-    pcid,
-    fpu,
-    huge_page_1gb,
-    max_phy_addr,
-    max_virt_addr,
-};
+    void *kernel_rsp;
+}; // storeage in gs
+extern cpu_data pre_cpu_data[max_cpu_support];
 
-void init();
-// check if has the future
-bool has_future(future f);
-
-// get the future value
-u64 get_future(future f);
-
-const char *get_cpu_manufacturer();
+void init(u64 cpuid);
+void set_pre_cpu_rsp(u64 cpuid, void *rsp);
 
 } // namespace arch::cpu

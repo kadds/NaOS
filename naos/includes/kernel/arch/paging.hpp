@@ -66,10 +66,10 @@ struct base_entry
     void clear_global() { data &= ~flags::global; }
 
     void *get_addr() const;
-    base_entry(void *baseAddr, u32 flags) { data = ((((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | flags); }
+    base_entry(void *baseAddr, u32 flags) { data = (((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | (flags & 0x1FF); }
     base_entry() { data = 0; }
     void set_addr(void *ptr);
-    void add_attributes(u16 attr) { data &= (attr & 0x0FFF); }
+    void add_attributes(u16 attr) { data &= (attr & 0x1FF); }
     // can only save 14 bits data
     void set_common_data(u16 dt)
     {
@@ -156,6 +156,7 @@ enum frame_size : u64
 } // namespace frame_size
 
 extern pml4t *base_kernel_page_addr;
+
 bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags);
 bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
@@ -165,6 +166,9 @@ void reload();
 
 void init();
 void temp_init();
+
+void copy_page_table(pml4t *to, pml4t *source);
+
 static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
               "sizeof paging struct is not 4KB.");
 struct page

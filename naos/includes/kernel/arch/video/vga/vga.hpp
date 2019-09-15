@@ -186,6 +186,7 @@ void test();
 
 void putstring(const char *str, font_attribute &attribute);
 void flush();
+void tag_memory();
 
 // -------------------- help function------------------
 template <typename T> struct remove_extent
