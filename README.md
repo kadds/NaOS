@@ -16,31 +16,30 @@ NaOS targets Intel / AMD modern processors.
 * - [ ] Thread support
 * - [ ] VFS
 * - [ ] APIC
-* - [ ] Multicore support
+* - [ ] Multicore support (SMP)
 * - [ ] Kernel module
 * - [ ] Disk driver
-* - [ ] Native display drive
+* - [ ] Native display driver
 * - [ ] POSIX layer
-* - [ ] ELF env
+* - [ ] ELF part support
   
 
 ## Quick Start  
 
 ### **Requirement**  
-* A **Linux** environment
-* **GNU Binutils** *(objcopy, objdump)*
+* A **\*nix** system
+* **GNU Binutils** *(objcopy, objdump, version 2.32 tested)*
 * **GCC** or **Clang** supports *C++17* version  *(GCC 9.1.0 & Clang 8.0.1 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
 * **CMake 3.3** or later
-* **Python 3** *(for running utility)*
-* An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(for running OS)*
+* **Python 3** *(For running utility)*
+* An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
 * **Grub**, **gdisk** *(Often exist, for making runnable raw disk file)*
-* Development environment. [**VSCode**](https://code.visualstudio.com/) is recommended
-
  
 Other recommended tools
 
-* **clang-format** code formatter 
-* **cpp-check** code static analyser 
+* **clang-format**: Code formatter 
+* **cpp-check**: Code static analyzer 
+* [**VSCode**](https://code.visualstudio.com/): Development environment.
 
 ### 1. Download code
 Clone this repo ```git clone https://url/path/to/repo``` 
@@ -94,7 +93,7 @@ sudo python util/run.py q
 ### 5. Debug
 Use command ```python util/gen_debug_asm.py kernel``` to generate kernel disassembly if needed. (e.g. Debug in Bochs)
 
-Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *./vscode/.launch.json*
+Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.vscode/launch.json*
 ```Json
 "MIMode": "gdb", # your debugger: gdb or lldb
 "miDebuggerServerAddress": "localhost:1234", # your host:port
@@ -117,7 +116,7 @@ NaOS
 │       │   ├── mm # memory system
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter
 │       └── loader
-│           ├── common # common loader liberies as disk reader, ScreenPrinter
+│           ├── common # common loader liberies such as disk reader, ScreenPrinter
 │           └── multiboot # loader that conforms to the multiboot spec.
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
@@ -126,18 +125,17 @@ NaOS
 │       │   ├── boot # mount_disk.py mount first partition. grub partition
 │       │   └── disk # mount_disk.py mount second partition. system partition
 │       └── disk.img # make_disk.py created
-└── util
+└── util # Python tools
 ```
 
 ## Maintainers 
 [@Kadds](https://github.com/Kadds).
 
-
 ## Reference 
 * [OSDev](https://forum.osdev.org/)
 * [Linux](https://www.kernel.org/)
 * [Intel SDM](https://software.intel.com/en-us/articles/intel-sdm)
-
+* [Minix3](http://www.minix3.org/)
 
 ## License
 [BSD-3-Clause](./LICENSE) © Kadds
