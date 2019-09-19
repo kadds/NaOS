@@ -11,10 +11,11 @@ NaOS targets Intel / AMD modern processors.
 * - [x] Four-level Paging
 * - [x] VGA display
 * - [x] Buddy and Slab system
-* - [ ] Task switch
+* - [x] Task switch
 * - [ ] Process scheduling
 * - [ ] Thread support
-* - [ ] VFS
+* - [x] VFS
+* - [x] API calling
 * - [ ] APIC
 * - [ ] Multicore support (SMP)
 * - [ ] Kernel module

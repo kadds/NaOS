@@ -41,7 +41,8 @@
             "label": "cloc",
             "type": "shell",
             "group": "none",
-            "command": "cloc -exclude-dir=\"build,run\" ./"
+            "command": "cloc -exclude-dir=\"build,run\" ./",
+            "problemMatcher": []
         }
     ]
 }
