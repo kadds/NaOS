@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "kernel/kernel.hpp"
 
 namespace arch::device::chip8259A
 {
@@ -11,5 +12,5 @@ void enable_with(u8 ports);
 // Set which bit you want irq to enable. bit 1 is disable a irq
 void disable_with(u8 ports);
 
-void send_EOI(int irq_number);
+void _ctx_interrupt_ send_EOI(int irq_number);
 } // namespace arch::device::chip8259A

@@ -6,7 +6,7 @@
 #include "kernel/task.hpp"
 namespace memory::vm
 {
-void page_fault_func(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
+void _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
 {
     if (regs->rsp <= arch::task::user_stack_start_address && regs->rsp >= arch::task::user_stack_maximum_end_address)
     {
@@ -63,6 +63,9 @@ void mmu_paging::load_paging() { arch::paging::load((arch::paging::pml4t *)base_
 const vm_t *mmu_paging::add_vm_area(void *start, void *end, u64 flags)
 {
     kassert((char *)start < (char *)end, "parameter start must < parameter end");
+    kassert((u64)start == ((u64)start & ~(memory::page_size - 1)), "parameter start must aligned");
+    kassert((u64)end == ((u64)end & ~(memory::page_size - 1)), "parameter end must < parameter end");
+
     if (list.begin() == list.end())
     {
         return &list.push_back(vm_t(start, end, flags, nullptr))->element;

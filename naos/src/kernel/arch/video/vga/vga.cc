@@ -2,6 +2,7 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/arch/video/vga/output_text.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/ucontext.hpp"
 #include <stdarg.h>
 #include <type_traits>
 namespace arch::device::vga
@@ -100,6 +101,7 @@ void flush() { current_output->flush(frame_buffer); }
 
 void putstring(const char *str, font_attribute &attribute)
 {
+    uctx::UnInterruptableContext uic;
     while (*str != '\0')
     {
         current_output->putchar(*str++, attribute);

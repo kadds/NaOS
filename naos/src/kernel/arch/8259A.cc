@@ -66,7 +66,8 @@ void disable_with(u8 ports)
     p = p | ports;
     io_out8(slave_ocw1_port, p);
 }
-void send_EOI(int irq_number)
+
+void _ctx_interrupt_ send_EOI(int irq_number)
 {
     if (unlikely(irq_number > 16))
         return;

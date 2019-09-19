@@ -13,7 +13,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pedantic -fno-rtti -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -mno-sse -mno-sse2")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pedantic -fno-rtti -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -mno-sse -mno-sse2 -Wno-attributes")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
 

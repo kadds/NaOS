@@ -88,4 +88,6 @@ void set_interrupt_gate(int index, void *func, u8 ist);
 
 void enable();
 void disable();
+
+bool is_enable();
 } // namespace arch::idt

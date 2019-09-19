@@ -21,7 +21,7 @@ void init(const kernel_start_args *args)
     {
         trace::panic("kernel args is invalid.");
     }
-
+    trace::debug("Arch init start...");
     trace::debug("Kernel starting...");
     cpu_info::init();
     if (!cpu_info::has_future(cpu_info::future::system_call_ret))
@@ -57,6 +57,7 @@ void init(const kernel_start_args *args)
 
     trace::debug("IDT init...");
     idt::init_after_paging();
+    trace::debug("Arch init end");
 }
 
 } // namespace arch

@@ -97,6 +97,8 @@ u64 do_exec(exec_segment code_segment, char *args, char *env)
     task->mm_info->app_stack_start = (void *)user_stack_start_address;
     task->mm_info->app_current_stack = (void *)user_stack_end_address;
 
+    code_segment.length = (code_segment.length + memory::page_size - 1) & ~(memory::page_size - 1);
+
     void *code_end = (void *)(user_code_start_address + code_segment.length);
     // code mapping
     auto code_vm = task->mm_info->mmu_paging.add_vm_area((void *)user_code_start_address, code_end,

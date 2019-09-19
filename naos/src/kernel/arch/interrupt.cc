@@ -13,7 +13,7 @@ ExportC char _interrupt_wrapper_33[];
 namespace arch::interrupt
 {
 using idt::regs_t;
-arch::idt::call_func global_call_func;
+arch::idt::call_func global_call_func = 0;
 
 void build(int index, void *func, u8 ist) { idt::set_interrupt_system_gate(index, func, ist); }
 
@@ -30,9 +30,11 @@ void init()
     device::chip8259A::init();
 }
 
-ExportC void do_irq(const regs_t *regs)
+ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
 {
-    global_call_func(regs, 0);
+    if (likely(global_call_func))
+        global_call_func(regs, 0);
+
     device::chip8259A::send_EOI(regs->vector - 32);
 }
 

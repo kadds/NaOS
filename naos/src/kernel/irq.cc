@@ -1,8 +1,10 @@
 #include "kernel/irq.hpp"
 #include "kernel/arch/exception.hpp"
+#include "kernel/arch/idt.hpp"
 #include "kernel/arch/interrupt.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/ucontext.hpp"
 #include "kernel/util/linked_list.hpp"
 
 namespace irq
@@ -16,7 +18,7 @@ list_node_cache_allocator_t *list_node_cache_allocator;
 list_node_cache_t *list_node_cache;
 request_list_t *irq_list[256];
 
-void do_irq(const arch::idt::regs_t *regs, u64 extra_data)
+void _ctx_interrupt_ do_irq(const arch::idt::regs_t *regs, u64 extra_data)
 {
     request_list_t *list = irq_list[regs->vector];
     for (auto it = list->begin(); it != list->end(); it = list->next(it))
@@ -27,6 +29,7 @@ void do_irq(const arch::idt::regs_t *regs, u64 extra_data)
 
 void init()
 {
+    uctx::UnInterruptableContext uic;
     list_node_cache = memory::New<list_node_cache_t>(memory::KernelCommonAllocatorV, memory::KernelBuddyAllocatorV);
     list_node_cache_allocator =
         memory::New<list_node_cache_allocator_t>(memory::KernelCommonAllocatorV, list_node_cache);
@@ -41,11 +44,13 @@ void init()
 
 void insert_request_func(u32 vector, request_func func, u64 user_data)
 {
+    uctx::UnInterruptableContext uic;
     irq_list[vector]->push_back(request_func_data(func, user_data));
 }
 
 void remove_request_func(u32 vector, request_func func)
 {
+    uctx::UnInterruptableContext uic;
     request_list_t *list = irq_list[vector];
     for (auto it = list->begin(); it != list->end(); it = list->next(it))
     {

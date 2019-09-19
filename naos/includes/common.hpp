@@ -10,7 +10,7 @@
 #define ExportC extern "C"
 #endif
 
-#define NoReturn __attribute__((noreturn))
+#define NoReturn [[noreturn]]
 #define PackStruct __attribute__((packed))
 #define Aligned(v) __attribute__((aligned(v)))
 #define Section(v) __attribute__((section(v)))
@@ -31,6 +31,9 @@ typedef uint64_t u64;
 #ifndef unlikely
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #endif
+
+typedef std::byte byte;
+typedef u64 flag_t;
 
 enum class map_type_t : u64
 {
@@ -63,6 +66,7 @@ struct kernel_start_args
     u32 fb_bbp;
     // 2: text mode, 1: graphics mode, 0: indzex mode
     u32 fb_type;
+    u64 rfs_size;
 
   private:
     u64 mmap;

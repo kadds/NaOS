@@ -11,3 +11,4 @@ if __name__ == "__main__":
     os.mkdir(base + "debug/")
     os.mkdir(base + "debug/loader/")
     os.mkdir(base + "debug/system/")
+    os.mkdir(base + "debug/rfsimage/")

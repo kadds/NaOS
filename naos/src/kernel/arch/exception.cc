@@ -1,10 +1,12 @@
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
+#include "kernel/kernel.hpp"
 #include "kernel/trace.hpp"
+
 namespace arch::exception
 {
 using idt::regs_t;
-arch::idt::call_func global_call_func;
+arch::idt::call_func global_call_func = 0;
 
 ExportC u64 _get_cr2();
 
@@ -32,9 +34,13 @@ ExportC void _virtualization_exception_wrapper();
 
 void print_dst(regs_t *regs) { trace::debug("exception at: ", (void *)regs->rip, ", error code: ", regs->error_code); }
 
-void dispatch_exception(regs_t *regs, u64 extra_data = 0) { global_call_func(regs, extra_data); }
+void _ctx_interrupt_ dispatch_exception(regs_t *regs, u64 extra_data = 0)
+{
+    if (likely(global_call_func))
+        global_call_func(regs, extra_data);
+}
 
-ExportC void entry_divide_error(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_divide_error(regs_t *regs)
 {
     trace::debug("divide error. ");
     print_dst(regs);
@@ -43,7 +49,7 @@ ExportC void entry_divide_error(regs_t *regs)
         ;
 }
 
-ExportC void entry_debug(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_debug(regs_t *regs)
 {
     trace::debug("debug trap. ");
     print_dst(regs);
@@ -52,7 +58,7 @@ ExportC void entry_debug(regs_t *regs)
         ;
 }
 
-ExportC void entry_nmi(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs)
 {
     trace::debug("nmi error! ");
     print_dst(regs);
@@ -61,7 +67,7 @@ ExportC void entry_nmi(regs_t *regs)
         ;
 }
 
-ExportC void entry_int3(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_int3(regs_t *regs)
 {
     trace::debug("int3 trap. ");
     print_dst(regs);
@@ -70,7 +76,7 @@ ExportC void entry_int3(regs_t *regs)
         ;
 }
 
-ExportC void entry_overflow(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_overflow(regs_t *regs)
 {
     trace::debug("overflow trap. ");
     print_dst(regs);
@@ -79,7 +85,7 @@ ExportC void entry_overflow(regs_t *regs)
         ;
 }
 
-ExportC void entry_bounds(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_bounds(regs_t *regs)
 {
     trace::debug("out of bounds error. ");
     print_dst(regs);
@@ -88,7 +94,7 @@ ExportC void entry_bounds(regs_t *regs)
         ;
 }
 
-ExportC void entry_undefined_opcode(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_undefined_opcode(regs_t *regs)
 {
     trace::debug("undefined opcode error. ");
     print_dst(regs);
@@ -97,7 +103,7 @@ ExportC void entry_undefined_opcode(regs_t *regs)
         ;
 }
 
-ExportC void entry_dev_not_available(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_dev_not_available(regs_t *regs)
 {
     trace::debug("dev not available error. ");
     print_dst(regs);
@@ -106,7 +112,7 @@ ExportC void entry_dev_not_available(regs_t *regs)
         ;
 }
 
-ExportC void entry_double_fault(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_double_fault(regs_t *regs)
 {
     trace::debug("double abort. ");
     print_dst(regs);
@@ -115,7 +121,7 @@ ExportC void entry_double_fault(regs_t *regs)
         ;
 }
 
-ExportC void entry_coprocessor_segment_overrun(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_coprocessor_segment_overrun(regs_t *regs)
 {
     trace::debug("coprocessor segment overrun error. ");
     print_dst(regs);
@@ -124,7 +130,7 @@ ExportC void entry_coprocessor_segment_overrun(regs_t *regs)
         ;
 }
 
-ExportC void entry_invalid_TSS(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_invalid_TSS(regs_t *regs)
 {
     trace::debug("invalid tss error. ");
     print_dst(regs);
@@ -133,7 +139,7 @@ ExportC void entry_invalid_TSS(regs_t *regs)
         ;
 }
 
-ExportC void entry_segment_not_present(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_segment_not_present(regs_t *regs)
 {
     trace::debug("segment not present error. ");
     print_dst(regs);
@@ -142,7 +148,7 @@ ExportC void entry_segment_not_present(regs_t *regs)
         ;
 }
 
-ExportC void entry_stack_segment_fault(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_stack_segment_fault(regs_t *regs)
 {
     trace::debug("stack segment fault. ");
     print_dst(regs);
@@ -151,7 +157,7 @@ ExportC void entry_stack_segment_fault(regs_t *regs)
         ;
 }
 
-ExportC void entry_general_protection(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_general_protection(regs_t *regs)
 {
     trace::debug("general protection error. ");
     print_dst(regs);
@@ -160,7 +166,7 @@ ExportC void entry_general_protection(regs_t *regs)
         ;
 }
 
-ExportC void entry_page_fault(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
 {
     trace::debug("page fault. ");
     u64 cr2 = _get_cr2();
@@ -170,7 +176,7 @@ ExportC void entry_page_fault(regs_t *regs)
     dispatch_exception(regs, cr2);
 }
 
-ExportC void entry_x87_FPU_error(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs)
 {
     trace::debug("X87 fpu error. ");
     print_dst(regs);
@@ -179,7 +185,7 @@ ExportC void entry_x87_FPU_error(regs_t *regs)
         ;
 }
 
-ExportC void entry_alignment_check(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_alignment_check(regs_t *regs)
 {
     trace::debug("alignment error. ");
     print_dst(regs);
@@ -188,7 +194,7 @@ ExportC void entry_alignment_check(regs_t *regs)
         ;
 }
 
-ExportC void entry_machine_check(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_machine_check(regs_t *regs)
 {
     trace::debug("machine error. ");
     print_dst(regs);
@@ -197,7 +203,7 @@ ExportC void entry_machine_check(regs_t *regs)
         ;
 }
 
-ExportC void entry_SIMD_exception(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_SIMD_exception(regs_t *regs)
 {
     trace::debug("SIMD error. ");
     print_dst(regs);
@@ -206,7 +212,7 @@ ExportC void entry_SIMD_exception(regs_t *regs)
         ;
 }
 
-ExportC void entry_virtualization_exception(regs_t *regs)
+ExportC _ctx_interrupt_ void entry_virtualization_exception(regs_t *regs)
 {
     trace::debug("virtualization error. ");
     print_dst(regs);

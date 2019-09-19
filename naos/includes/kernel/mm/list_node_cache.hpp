@@ -36,7 +36,7 @@ template <typename List> class list_node_cache
         while (1)
         {
             Node *next = align_of(start + 1);
-            if ((char *)next - (char *)list > 0x1000)
+            if ((u64)((char *)next - (char *)list) >= memory::page_size)
             {
                 start->next = nullptr;
                 break;

@@ -11,3 +11,5 @@ extern volatile char _bss_unpaged_start_addr[];
 extern volatile char base_phy_addr[];
 static_assert(sizeof(void *) == 8, "Just 64-bit code generation is supported.");
 const u64 max_memory_support = 0x100000000000ul;
+
+#define _ctx_interrupt_ [[interrupt_context]]

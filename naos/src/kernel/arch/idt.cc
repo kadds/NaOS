@@ -32,6 +32,17 @@ void enable() { _sti(); }
 
 void disable() { _cli(); }
 
+bool is_enable()
+{
+    unsigned int IF = 0;
+    __asm__ __volatile__("pushf	\n\t"
+                         "pop %%rax \n\t"
+                         : "=a"(IF)
+                         :
+                         : "memory");
+    return IF & 0x200;
+}
+
 void set_entry(int id, void *func, u16 selector, u8 dpl, u8 present, u8 type, u8 ist)
 {
     entry *idte = (entry *)idt_after_ptr.addr + id;

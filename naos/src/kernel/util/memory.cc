@@ -35,7 +35,7 @@ void memset(void *dst, u64 val, u64 size)
 
 void memzero(void *dst, u64 size) { memset(dst, 0, size); }
 
-void memcopy(void *dst, void *src, u64 size)
+void memcopy(void *dst, const void *src, u64 size)
 {
     u64 *d = (u64 *)dst;
     u64 *s = (u64 *)src;

@@ -67,7 +67,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
                         kernel_size = fat->read_file("/SYSTEM/KERNEL", raw_kernel);
                         if (kernel_size > 0)
                         {
-                            rfs_size = fat->read_file("/SYSTEM/INIT", vmrfs);
+                            rfs_size = fat->read_file("/SYSTEM/RFSIMG", vmrfs);
                             if (rfs_size > 0)
                             {
                                 goto finded;
@@ -129,6 +129,7 @@ finded:
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
     args->set_rfs_ptr(vmrfs);
+    args->rfs_size = rfs_size;
 
     const char flags[] = "trace.debug=true;";
 

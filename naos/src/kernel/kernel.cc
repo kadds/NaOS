@@ -2,6 +2,8 @@
 #include "kernel/kernel.hpp"
 #include "common.hpp"
 #include "kernel/arch/arch.hpp"
+#include "kernel/fs/rootfs/rootfs.hpp"
+#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
@@ -28,7 +30,7 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
     }
 }
 
-ExportC void _kstart(const kernel_start_args *args);
+ExportC NoReturn void _kstart(const kernel_start_args *args);
 
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 {
@@ -44,6 +46,11 @@ ExportC NoReturn void _kstart(const kernel_start_args *args)
     arch::init(args);
     irq::init();
     memory::vm::init();
+    trace::debug("VFS init...");
+
+    fs::vfs::init();
+    trace::debug("Root file system init...");
+    fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->get_rfs_ptr()), args->rfs_size);
 
     task::init();
     trace::info("kernel main");

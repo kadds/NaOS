@@ -15,4 +15,11 @@ int strcmp(const char *str1, const char *str2)
     }
     return 0;
 }
+int strlen(const char *str)
+{
+    int i = 0;
+    while (*str++ != 0)
+        i++;
+    return i++;
+}
 } // namespace util
