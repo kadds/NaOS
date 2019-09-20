@@ -24,13 +24,13 @@ void init_after_paging()
     idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 128);
     exception::init();
     interrupt::init();
-    _load_idt(&idt_after_ptr);
+    __asm__ __volatile__("lidt (%0)	\n\t" : : "r"(&idt_after_ptr) : "memory");
     enable();
 }
 
-void enable() { _sti(); }
+void enable() { __asm__ __volatile__("sti	\n\t" : : : "memory"); }
 
-void disable() { _cli(); }
+void disable() { __asm__ __volatile__("cli	\n\t" : : : "memory"); }
 
 bool is_enable()
 {

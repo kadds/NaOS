@@ -1,27 +1,6 @@
 
 .section .text
 
-.globl _load_gdt
-_load_gdt:
-    lgdt (%rdi)
-    ret
-    
-.globl _load_idt
-_load_idt:
-    lidt (%rdi)
-    ret
-
-.globl _load_tss_descriptor
-_load_tss_descriptor:
-    mov %rdi, %rax
-    ltr %ax
-    ret
-
-.globl _load_page
-_load_page:
-    movq %rdi, %cr3
-    ret
-
 .globl _reload_segment
 _reload_segment:
     movq reload_seg_ptr_x(%rip), %rax
@@ -37,23 +16,7 @@ reload_seg_x:
     movq %rsi, %gs
     movq %rsi, %ss
     ret
-.globl _cli
-_cli:
-    cli
-    ret
-.globl _sti
-_sti:
-    sti
-    ret
-.globl _get_cr2
-_get_cr2:
-    movq %cr2, %rax
-    ret
-.globl _flush_tlb
-_flush_tlb:
-    movq %cr3, %rax
-    movq %rax, %cr3
-    ret
+
 .globl _cpu_id
 _cpu_id:
     pushq %rbx
@@ -197,21 +160,6 @@ _call_sys_ret:
     
 # ======================================================
 .section .unpaged.text
-
-.globl _unpaged_load_gdt
-_unpaged_load_gdt:
-    lgdt (%rdi)
-    ret
-    
-.globl _unpaged_load_idt
-_unpaged_load_idt:
-    lidt (%rdi)
-    ret
-
-.globl _unpaged_load_page
-_unpaged_load_page:
-    movq %rdi, %cr3
-    ret
 
 .globl _unpaged_reload_segment
 _unpaged_reload_segment:

@@ -21,7 +21,7 @@ void init(void *baseAddr, void *ist)
     tss_descriptor.set_valid(true);
     tss_descriptor.set_dpl(0);
 
-    _load_tss_descriptor(gdt::get_offset_of_tss());
+    __asm__ __volatile__("ltr %0	\n\t" : : "r"((u16)gdt::get_offset_of_tss()) : "memory");
 
     set_rsp(0, baseAddr);
     set_rsp(1, baseAddr);

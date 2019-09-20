@@ -62,8 +62,7 @@ Unpaged_Text_Section void temp_init()
         *page_temp_addr++ = v;
         v += 0x200000; // 2MB
     }
-
-    _unpaged_load_page(temp_pml4_addr);
+    __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
 }
 
 void init()
@@ -414,9 +413,23 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
     return true;
 }
 
-void load(pml4t *base_paging_addr) { _load_page(memory::kernel_virtaddr_to_phyaddr(base_paging_addr)); }
+void load(pml4t *base_paging_addr)
+{
+    __asm__ __volatile__("movq %0, %%cr3	\n\t"
+                         :
+                         : "r"(memory::kernel_virtaddr_to_phyaddr(base_paging_addr))
+                         : "memory");
+}
 
-void reload() { _flush_tlb(); }
+void reload()
+{
+    u64 c = 0;
+    __asm__ __volatile__("movq %%cr3, %0	\n\t"
+                         "movq %0, %%cr3	\n\t"
+                         : "+g"(c)
+                         :
+                         : "memory");
+}
 
 void copy_page_table(pml4t *to, pml4t *source)
 {

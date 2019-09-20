@@ -169,7 +169,9 @@ ExportC _ctx_interrupt_ void entry_general_protection(regs_t *regs)
 ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
 {
     trace::debug("page fault. ");
-    u64 cr2 = _get_cr2();
+    u64 cr2;
+    __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : : "memory");
+
     trace::debug("page at: ", (void *)cr2);
 
     print_dst(regs);

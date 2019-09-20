@@ -36,14 +36,14 @@ Unpaged_Text_Section void init_before_paging()
     temp_gdt[0] = 0;
     temp_gdt[1] = 0x0020980000000000;
     temp_gdt[2] = 0x0000920000000000;
-    _unpaged_load_gdt(&gdt_before_ptr);
+    __asm__ __volatile__("lgdt	(%0)\n\t" : : "r"(&gdt_before_ptr) : "memory");
     _unpaged_reload_segment(0x08, 0x10);
 }
 #pragma GCC diagnostic pop
 
 void init_after_paging()
 {
-    _load_gdt(&gdt_after_ptr);
+    __asm__ __volatile__("lgdt	(%0)\n\t" : : "r"(&gdt_after_ptr) : "memory");
     _reload_segment(gen_selector(selector_type::kernel_code, 0), gen_selector(selector_type::kernel_data, 0));
 }
 
