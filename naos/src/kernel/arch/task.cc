@@ -53,8 +53,9 @@ ExportC void task_do_exit(u64 exit_code)
         ;
 }
 
-u64 do_fork(void *task, void *stack_low, regs_t &regs, register_info_t &register_info, void *function, u64 arg)
+u64 do_fork(void *task, void *stack_low, register_info_t &register_info, void *function, u64 arg)
 {
+    regs_t regs;
     util::memset(&regs, 0, sizeof(regs));
 
     regs.rbx = (u64)function;
@@ -75,6 +76,8 @@ u64 do_fork(void *task, void *stack_low, regs_t &regs, register_info_t &register
 
     thread_info_t *thread_info = new (stack_low) thread_info_t();
     thread_info->task = task;
+
+    util::memcopy((void *)((u64)stack_low + kernel_stack_size - sizeof(regs)), &regs, sizeof(arch::task::regs_t));
 
     return 0;
 }

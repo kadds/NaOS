@@ -1,6 +1,6 @@
 #include "kernel/mm/slab.hpp"
 
-slab_cache_pool *global_kmalloc_slab_cache_pool, *global_dma_slab_cache_pool, *global_object_slab_cache_pool;
+slab_cache_pool *global_kmalloc_slab_domain, *global_dma_slab_domain, *global_object_slab_domain;
 
 void slab_group::new_memory_node()
 {
@@ -206,18 +206,23 @@ slab_group *slab_cache_pool::find_slab_group(u64 size)
     return nullptr;
 }
 
-void slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 align, u64 flags)
+slab_group *slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 align, u64 flags)
 {
     slab_group group(&slab_node_list_node_allocator, size, name, align, flags);
-    slab_groups.push_back(group);
+    return &slab_groups.push_back(group)->element;
 }
 
-void slab_cache_pool::remove_slab_group(const char *name)
+void slab_cache_pool::remove_slab_group(slab_group *slab_obj)
 {
-    auto group_node = find_slab_group_node(name);
-    if (group_node)
+    auto group = slab_groups.begin();
+    while (group != slab_groups.end())
     {
-        slab_groups.remove(group_node);
+        if (&group->element == slab_obj)
+        {
+            slab_groups.remove(group);
+            return;
+        }
+        group = group->next;
     }
 }
 

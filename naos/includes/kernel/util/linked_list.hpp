@@ -27,6 +27,19 @@ template <typename E> class linked_list
     memory::IAllocator *allocator;
 
     list_info_node *head, *tail;
+    u64 node_count;
+
+    u64 calc_size() const
+    {
+        u64 i = 0;
+        list_node *node = begin();
+        while (node != end())
+        {
+            i++;
+            node = next(node);
+        }
+        return i;
+    }
 
   public:
     list_node *push_back(const E &e)
@@ -36,6 +49,7 @@ template <typename E> class linked_list
         tail->prev->next = node;
         node->prev = tail->prev;
         tail->prev = node;
+        node_count++;
         return node;
     }
 
@@ -46,8 +60,39 @@ template <typename E> class linked_list
         node->prev->next = (list_node *)tail;
         tail->prev = node->prev;
         memory::Delete<>(allocator, node);
+        node_count--;
         return e;
     };
+
+    E pop_front()
+    {
+        E e = head->next->element;
+        list_node *node = head->next;
+        node->next->prev = (list_node *)head;
+        tail->next = node->prev;
+        memory::Delete<>(allocator, node);
+        node_count--;
+        return e;
+    };
+
+    E move_back()
+    {
+        E e = head->next->element;
+        list_node *node = head->next;
+        head->next->prev = (list_node *)head;
+        head->next = head->next->next;
+
+        tail->prev->next = node;
+        node->prev = tail->prev;
+        node->next = (list_node *)tail;
+        return e;
+    };
+
+    u64 size() const
+    {
+        kassert(node_count == calc_size(), "node count != ", node_count);
+        return node_count;
+    }
 
     list_node *begin() const { return head->next; }
 
@@ -74,10 +119,10 @@ template <typename E> class linked_list
         }
         return end();
     }
-    // insert node before after
+    // insert node before parameter after
     list_node *insert(list_node *after, E e)
     {
-        if (unlikely(after == end()))
+        if (unlikely(after == begin()->prev))
             return end();
 
         list_node *node = memory::New<list_node>(allocator, e);
@@ -87,7 +132,7 @@ template <typename E> class linked_list
         node->next = after;
         node->prev = last;
         after->prev = node;
-
+        node_count++;
         return node;
     }
 
@@ -98,6 +143,7 @@ template <typename E> class linked_list
 
         node->prev->next = node->next;
         node->next->prev = node->prev;
+        node_count--;
         memory::Delete<>(allocator, node);
     }
 

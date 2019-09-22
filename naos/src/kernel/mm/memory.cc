@@ -22,10 +22,11 @@ const struct
 {
     u64 size;
     const char *name;
-} kmalloc_fixed_slab_size[] = {
-    {8, "kmalloc-8"},       {16, "kmalloc-16"},     {24, "kmalloc-24"},     {32, "kmalloc-32"},    {48, "kmalloc-48"},
-    {64, "kmalloc-64"},     {96, "kmalloc-96"},     {128, "kmalloc-128"},   {256, "kmalloc-256"},  {512, "kmalloc-512"},
-    {1024, "kmalloc-1024"}, {2048, "kmalloc-2048"}, {4096, "kmalloc-4096"}, {8192, "kmalloc-8192"}};
+} kmalloc_fixed_slab_size[] = {{8, "kmalloc-8"},       {16, "kmalloc-16"},     {24, "kmalloc-24"},
+                               {32, "kmalloc-32"},     {48, "kmalloc-48"},     {64, "kmalloc-64"},
+                               {96, "kmalloc-96"},     {128, "kmalloc-128"},   {192, "kmalloc-192"},
+                               {256, "kmalloc-256"},   {512, "kmalloc-512"},   {1024, "kmalloc-1024"},
+                               {2048, "kmalloc-2048"}, {4096, "kmalloc-4096"}, {8192, "kmalloc-8192"}};
 
 void tag_zone_buddy_memory(char *start_addr, char *end_addr)
 {
@@ -144,13 +145,13 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     trace::debug("kernel used address:", (void *)start_kernel, "-", (void *)end_kernel,
                  ", length:", (end_kernel - start_kernel));
     // auto r = ((buddy_contanier *)global_zones.zones[1].buddy_impl)->buddys->gen_tree();
-    global_kmalloc_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
-    global_dma_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
-    global_object_slab_cache_pool = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_kmalloc_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
 
     for (auto i : kmalloc_fixed_slab_size)
     {
-        global_kmalloc_slab_cache_pool->create_new_slab_group(i.size, i.name, 8, 0);
+        global_kmalloc_slab_domain->create_new_slab_group(i.size, i.name, 8, 0);
     }
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
     KernelBuddyAllocatorV = New<BuddyAllocator>(VirtBootAllocatorV);
@@ -162,21 +163,22 @@ u64 get_max_maped_memory() { return max_memory_maped; }
 
 void *kmalloc(u64 size, u64 align)
 {
-    if (align > 8)
+    if (unlikely(align > size))
     {
-        size *= 2;
+        trace::panic("align is larger than size");
     }
+
     if (size > kmalloc_fixed_slab_size[sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]) - 1].size)
     {
         return nullptr;
     }
-    SlabSizeAllocator allocator(global_kmalloc_slab_cache_pool);
+    SlabSizeAllocator allocator(global_kmalloc_slab_domain);
     return allocator.allocate(size, align);
 }
 
 void kfree(void *addr)
 {
-    SlabSizeAllocator allocator(global_kmalloc_slab_cache_pool);
+    SlabSizeAllocator allocator(global_kmalloc_slab_domain);
     allocator.deallocate(addr);
 }
 

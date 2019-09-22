@@ -5,7 +5,7 @@
 #include "buddy.hpp"
 #include "common.hpp"
 #include "list_node_cache.hpp"
-#define NewSlabGroup(domain, struct, align, flags) domain->create_new_slab_group(sizeof(struct), #struct, align, flags);
+#define NewSlabGroup(domain, struct, align, flags) domain->create_new_slab_group(sizeof(struct), #struct, align, flags)
 
 struct slab
 {
@@ -75,14 +75,16 @@ struct slab_cache_pool
   public:
     slab_group *find_slab_group(const char *name);
     slab_group *find_slab_group(u64 size);
-    slab_group_list *get_slab_groups() { return &slab_groups; }
-    void create_new_slab_group(u64 size, const char *name, u64 align, u64 flags);
 
-    void remove_slab_group(const char *name);
+    slab_group_list *get_slab_groups() { return &slab_groups; }
+
+    slab_group *create_new_slab_group(u64 size, const char *name, u64 align, u64 flags);
+    void remove_slab_group(slab_group *group);
+
     slab_cache_pool();
 };
 
-extern slab_cache_pool *global_kmalloc_slab_cache_pool, *global_dma_slab_cache_pool, *global_object_slab_cache_pool;
+extern slab_cache_pool *global_kmalloc_slab_domain, *global_dma_slab_domain, *global_object_slab_domain;
 
 namespace memory
 {
@@ -90,25 +92,21 @@ namespace memory
 struct SlabObjectAllocator : IAllocator
 {
   private:
-    slab_cache_pool *pool;
-    const char *name;
+    slab_group *slab_obj;
 
   public:
-    SlabObjectAllocator(slab_cache_pool *pool, const char *name)
-        : pool(pool)
-        , name(name){};
+    SlabObjectAllocator(slab_group *obj)
+        : slab_obj(obj){};
+
     void *allocate(u64 size, u64 align) override
     {
-        auto group = pool->find_slab_group(name);
-        if (size > group->get_size())
+        if (unlikely(size > slab_obj->get_size()))
             trace::panic("slab allocator can not alloc a larger size");
-        return group->alloc();
+
+        return slab_obj->alloc();
     };
-    void deallocate(void *ptr) override
-    {
-        auto group = pool->find_slab_group(name);
-        group->free(ptr);
-    };
+
+    void deallocate(void *ptr) override { slab_obj->free(ptr); };
 };
 
 // A allocator get memory for slab

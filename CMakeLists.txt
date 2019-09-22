@@ -34,6 +34,8 @@ set(CXX_X64 "-mcmodel=large -m64")
 
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
+set(UTIL_MKIMG ${UTILDIR}/make_rfs_image.py)
+
 if (USE_CLANG)
     SET (CMAKE_C_COMPILER        "/usr/bin/clang")
     SET (CMAKE_CXX_COMPILER      "/usr/bin/clang++")

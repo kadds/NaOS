@@ -1,5 +1,6 @@
 #include "kernel/idle_task.hpp"
 #include "kernel/init_task.hpp"
+#include "kernel/scheduler.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 namespace task::builtin::idle
@@ -7,9 +8,10 @@ namespace task::builtin::idle
 void main(const kernel_start_args *args)
 {
     trace::info("idle task running.");
-    task::do_fork(&task::builtin::init::main, (u64)(args->get_rfs_ptr()), 0);
-    task::switch_task(current(), task::find_pid(1));
+    task::do_fork(&task::builtin::init::main, 0, 0);
+    task::scheduler::schedule();
+
     while (1)
-        ;
+        __asm__ __volatile__("hlt\n\t" : : : "memory");
 }
 } // namespace task::builtin::idle

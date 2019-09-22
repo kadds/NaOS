@@ -10,14 +10,14 @@ void _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *regs, u64 extra_da
 {
     if (regs->rsp <= arch::task::user_stack_start_address && regs->rsp >= arch::task::user_stack_maximum_end_address)
     {
-        auto *task = task::current();
-        if (task == nullptr)
+        auto *thread = task::current();
+        if (thread == nullptr)
         {
             // TODO: Stack overflow
         }
         else
         {
-            auto &mmu_paging = task->mm_info->mmu_paging;
+            auto &mmu_paging = thread->process->mm_info->mmu_paging;
             auto vm = mmu_paging.get_vm_area((void *)extra_data);
             if (vm != nullptr)
             {

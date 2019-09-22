@@ -103,6 +103,6 @@ inline void *get_task(void *stack)
 }
 void init(void *task, register_info_t *first_task_reg_info);
 
-u64 do_fork(void *task, void *stack_addr, regs_t &regs, register_info_t &register_info, void *function, u64 arg);
+u64 do_fork(void *task, void *stack_addr, register_info_t &register_info, void *function, u64 arg);
 u64 do_exec(void *func, void *stack_addr, void *kernel_stack);
 } // namespace arch::task
