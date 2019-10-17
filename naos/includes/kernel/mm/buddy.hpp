@@ -1,7 +1,11 @@
 #pragma once
 #include "common.hpp"
 #include "memory.hpp"
-// for debug
+
+namespace memory
+{
+
+///< For debugging
 struct buddy_tree
 {
     buddy_tree *left;
@@ -37,9 +41,6 @@ struct buddy_contanier
     int count;
     buddy *buddys;
 };
-
-namespace memory
-{
 
 class BuddyAllocator : public IAllocator
 {

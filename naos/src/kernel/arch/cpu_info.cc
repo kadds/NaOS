@@ -55,6 +55,14 @@ bool has_future(future f)
             ret_cpu_future(0x1, edx, 0);
         case future::huge_page_1gb:
             ret_cpu_future(0x80000001, edx, 26);
+        case future::apic:
+            ret_cpu_future(0x1, edx, 9);
+        case future::xapic:
+            ret_cpu_future(0x1, edx, 9);
+        case future::x2apic:
+            ret_cpu_future(0x1, ecx, 21);
+        case future::msr:
+            ret_cpu_future(0x1, edx, 5);
         default:
             trace::panic("Unknown future");
     }

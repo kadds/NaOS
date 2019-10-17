@@ -51,6 +51,7 @@ _switch_task:
     jmp switch_task
 end_task:
     popq %rax
+    retq
 
 .globl _kernel_thread
 _kernel_thread:
@@ -76,6 +77,7 @@ _kernel_thread:
     addq $0x28, %rsp
 
     movq %rdx, %rdi
+    sti
     callq *%rbx
     movq %rax, %rdi
     callq task_do_exit
@@ -89,7 +91,7 @@ _sys_call:
     cld
     pushq %rax
     swapgs
-    movq %gs:0x0, %rax
+    movq %gs:0x8, %rax
     movq %rax, %rsp
     movq -0x8(%r10), %rax
     pushq %rax
@@ -124,7 +126,10 @@ sys_call_label:
 	callq *(%rbx,%rax,8)
 
     movq %rax, 0x80(%rsp) # return value
-    swapgs
+    
+    movabs $schedule, %rdx
+	callq *%rdx
+
 .globl _sys_ret
 _sys_ret:
     popq %r15
@@ -145,10 +150,9 @@ _sys_ret:
 	movq %rax, %ds	
 	popq %rax
 	movq %rax, %es
+    swapgs
 	popq %rax
-
     movq %r10, %rsp
-
     sysretq
 
 
@@ -157,7 +161,22 @@ _sys_ret:
 _call_sys_ret:
     movq %rdi, %rsp
     jmp _sys_ret
-    
+
+/// rdi param1
+/// rsi param2
+/// rdx param3
+/// rcx param4
+/// r8 func
+/// r9 new_stack
+.globl _switch_stack
+_switch_stack:
+    pushq %r15
+    movq %rsp, %r15
+    movq %r9, %rsp
+    call *%r8
+    movq %r15, %rsp 
+    popq %r15
+    retq
 # ======================================================
 .section .unpaged.text
 

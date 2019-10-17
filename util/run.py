@@ -2,7 +2,8 @@
 import sys
 import os
 from mod import set_self_dir, run_shell, run_shell_input
-qemu = 'qemu-system-x86_64 -hda ../run/image/disk.img -m 1024 -s &'
+# -monitor stdio
+qemu = 'qemu-system-x86_64 -hda ../run/image/disk.img -m 128 -s -smp 2,sockets=1,cores=2 -serial file:kernel_out.log'
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
 vbox_image = 'VBoxManage internalcommands createrawvmdk -filename ../run/image/disk.vmdk -rawdisk /dev/loop0'
 vbox = 'VBoxManage startvm boot'

@@ -2,7 +2,7 @@
 #include "arch/task.hpp"
 #include "common.hpp"
 #include "mm/vm.hpp"
-
+#include <atomic>
 namespace task
 {
 
@@ -16,23 +16,20 @@ struct mm_info_t
 {
     memory::vm::mmu_paging mmu_paging;
 
-    // high
-    void *app_stack_start;
-    void *app_current_stack;
     void *app_code_start;
-    void *app_code_entry;
-
     void *app_head_start;
     void *app_current_head;
+    void *map_start;
+    void *map_end;
 };
 
 enum class thread_state : u8
 {
-    ready = 0,       // schedule
-    running,         // running at a CPU
-    interruptable,   // sleep
-    uninterruptable, // uninterrupt sleep
-    stop,
+    ready = 0,       ///< Can schedule
+    running,         ///< Running at a CPU
+    interruptable,   ///< Sleep
+    uninterruptable, ///< Uninterruptable sleep
+    stop,            ///< Can't reschedule
     destroy,
 };
 
@@ -40,26 +37,55 @@ struct handle_table_t
 {
 };
 
+/// The process struct
 struct process_t
 {
     process_id pid;
-    u64 parent_pid;
-    mm_info_t *mm_info;
-    handle_table_t res_table;
-    void *thread_list;
+    u64 parent_pid;           ///< The parent process id
+    mm_info_t *mm_info;       ///< Memory map infomation
+    handle_table_t res_table; ///< Resource table
+    void *thread_list;        ///< The threads belong to process
     void *schedule_data;
 };
+namespace thread_attributes
+{
+enum attributes
+{
+    need_schedule = 1,
 
+};
+} // namespace thread_attributes
+struct preempt_t
+{
+    u16 preempt_counter;
+};
+
+/// The thread struct
 struct thread_t
 {
     volatile thread_state state;
     volatile u32 attributes;
     thread_id tid;
     process_t *process;
-    i64 priority;
     void *schedule_data;
     ::arch::task::register_info_t *register_info;
-    void *kernel_stack_high;
+    /// The kernel context RSP value
+    void *kernel_stack_top;
+    void *user_stack_top;
+    void *user_stack_bottom;
+    void *running_code_entry_address;
+
+    /// from 0 - 255, 0 is the highest priority, 100 - 139 to user thread, default is 125
+    i8 static_priority;
+
+    /// dynamic priority
+    ///
+    /// -128 - 128, miniumu value means this is a CPU bound thread, maximum value means is a IO
+    /// bound thread, the default value is 0.
+    i8 dynamic_priority;
+    u16 cpuid;
+    u64 sleep_time;
+    preempt_t preempt_data;
 };
 
 struct exec_segment
@@ -80,6 +106,7 @@ enum exec_flags : flag_t
     immediately = 1,
 };
 } // namespace exec_flags
+u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flag);
 
 u64 do_exec(exec_segment code_segment, const char *args, const char *env, flag_t flag);
 u64 do_exec(const char *filename, const char *args, const char *env, flag_t flag);
@@ -92,7 +119,8 @@ enum fork_flags : flag_t
 };
 } // namespace fork_flags
 
-u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flag);
+void do_sleep(u64 milliseconds);
+
 NoReturn void do_exit(u64 value);
 
 void destroy_thread(thread_t *thread);
@@ -110,13 +138,5 @@ inline thread_t *current() { return (thread_t *)arch::task::current_task(); }
 inline thread_t *current(void *stack) { return (thread_t *)arch::task::get_task(stack); }
 inline process_t *current_process() { return current()->process; }
 inline process_t *current_process(void *stack) { return current(stack)->process; }
-
-typedef util::linked_list<thread_t *> thread_list_t;
-typedef list_node_cache<thread_list_t> thread_list_cache_t;
-typedef memory::ListNodeCacheAllocator<thread_list_cache_t> thread_list_node_cache_allocator_t;
-
-typedef util::linked_list<process_t *> process_list_t;
-typedef list_node_cache<process_list_t> process_list_cache_t;
-typedef memory::ListNodeCacheAllocator<process_list_cache_t> process_list_node_cache_allocator_t;
 
 } // namespace task

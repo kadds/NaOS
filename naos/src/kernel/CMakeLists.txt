@@ -20,3 +20,4 @@ add_custom_command(TARGET kernel
     POST_BUILD
     COMMAND ${UTIL_EXTRA} ${Target} ${To} i386:x86-64
 )
+add_custom_target(make-kernel-symbol ALL COMMAND python ${UTIL_MKSYMBOL} DEPENDS kernel)

@@ -8,8 +8,8 @@ namespace fs::vfs
 {
 dentry::dentry()
     : loaded_child(false)
-    , child_dir_list(dentry_list_node_allocator)
-    , child_file_list(dentry_list_node_allocator)
+    , child_dir_list(memory::KernelCommonAllocatorV)
+    , child_file_list(memory::KernelCommonAllocatorV)
 
 {
 }
@@ -18,11 +18,11 @@ u64 dentry::hash() const { return 0; }
 
 dentry *dentry::find_child_dir(const char *name) const
 {
-    for (auto it = child_dir_list.begin(); it != child_dir_list.end(); it = child_dir_list.next(it))
+    for (auto &d : child_dir_list)
     {
-        if (util::strcmp(name, it->element->name) == 0)
+        if (util::strcmp(name, d->name) == 0)
         {
-            return it->element;
+            return d;
         }
     }
     return nullptr;
@@ -30,11 +30,11 @@ dentry *dentry::find_child_dir(const char *name) const
 
 dentry *dentry::find_child_file(const char *name) const
 {
-    for (auto it = child_file_list.begin(); it != child_file_list.end(); it = child_file_list.next(it))
+    for (auto &d : child_file_list)
     {
-        if (util::strcmp(name, it->element->name) == 0)
+        if (util::strcmp(name, d->name) == 0)
         {
-            return it->element;
+            return d;
         }
     }
     return nullptr;

@@ -16,61 +16,45 @@
 namespace fs::vfs
 {
 
-fs_list_t *fs_list;
-fs_list_node_cache_t *node_cache;
-fs_list_node_allocator_t *allocator;
-
-dentry_list_node_cache_t *dentry_list_node_cache;
-dentry_list_node_allocator_t *dentry_list_node_allocator;
 dentry *global_root = nullptr;
+using mount_list_t = util::linked_list<mount_t>;
 
-typedef util::linked_list<mount_t> mount_list_t;
-typedef list_node_cache<mount_list_t> mount_list_node_cache_t;
-typedef memory::ListNodeCacheAllocator<mount_list_node_cache_t> mount_list_cache_allocator_t;
-
-mount_list_t *mount_list;
-mount_list_node_cache_t *mount_list_node_cache;
-mount_list_cache_allocator_t *mount_list_cache_allocator;
-
-void init()
+struct data_t
 {
-    node_cache = memory::New<fs_list_node_cache_t>(memory::KernelCommonAllocatorV, memory::KernelBuddyAllocatorV);
-    allocator = memory::New<fs_list_node_allocator_t>(memory::KernelCommonAllocatorV, node_cache);
-    fs_list = memory::New<fs_list_t>(memory::KernelCommonAllocatorV, allocator);
+    file_system_list_t fs_list;
+    mount_list_t mount_list;
+    data_t()
+        : fs_list(memory::KernelCommonAllocatorV)
+        , mount_list(memory::KernelCommonAllocatorV)
+    {
+    }
+};
 
-    dentry_list_node_cache =
-        memory::New<dentry_list_node_cache_t>(memory::KernelCommonAllocatorV, memory::KernelBuddyAllocatorV);
-    dentry_list_node_allocator =
-        memory::New<dentry_list_node_allocator_t>(memory::KernelCommonAllocatorV, dentry_list_node_cache);
+data_t *data;
 
-    mount_list_node_cache =
-        memory::New<mount_list_node_cache_t>(memory::KernelCommonAllocatorV, memory::KernelBuddyAllocatorV);
-    mount_list_cache_allocator =
-        memory::New<mount_list_cache_allocator_t>(memory::KernelCommonAllocatorV, mount_list_node_cache);
-    mount_list = memory::New<mount_list_t>(memory::KernelCommonAllocatorV, mount_list_cache_allocator);
-}
+void init() { data = memory::New<data_t>(memory::KernelCommonAllocatorV); }
 
 int register_fs(file_system *fs)
 {
-    for (auto it = fs_list->begin(); it != fs_list->end(); it = fs_list->next(it))
+    for (auto &lfs : data->fs_list)
     {
-        if (util::strcmp(fs->get_name(), it->element->get_name()) == 0)
+        if (util::strcmp(fs->get_name(), lfs->get_name()) == 0)
         {
             return -1;
         }
     }
 
-    fs_list->push_back(fs);
+    data->fs_list.push_back(fs);
     return 0;
 }
 
 int unregister_fs(file_system *fs)
 {
-    for (auto it = fs_list->begin(); it != fs_list->end(); it = fs_list->next(it))
+    for (auto it = data->fs_list.begin(); it != data->fs_list.end(); ++it)
     {
-        if (util::strcmp(fs->get_name(), it->element->get_name()) == 0)
+        if (util::strcmp(fs->get_name(), (*it)->get_name()) == 0)
         {
-            fs_list->remove(it);
+            data->fs_list.remove(it);
             return 0;
         }
     }
@@ -79,11 +63,11 @@ int unregister_fs(file_system *fs)
 
 file_system *get_file_system(const char *name)
 {
-    for (auto it = fs_list->begin(); it != fs_list->end(); it = fs_list->next(it))
+    for (auto &lfs : data->fs_list)
     {
-        if (util::strcmp(name, it->element->get_name()) == 0)
+        if (util::strcmp(name, lfs->get_name()) == 0)
         {
-            return it->element;
+            return lfs;
         }
     }
     return nullptr;
@@ -235,7 +219,7 @@ bool mount(file_system *fs, const char *path)
     {
         // mount global root
         global_root = fs->get_super_block()->get_root();
-        mount_list->push_back(mount_t("/", nullptr));
+        data->mount_list.push_back(mount_t("/", nullptr));
     }
     else
     {
@@ -249,7 +233,7 @@ bool mount(file_system *fs, const char *path)
             trace::info("Mount point doesn't exist.");
             return false;
         }
-        mount_list->push_back(mount_t(path, dir));
+        data->mount_list.push_back(mount_t(path, dir));
 
         auto new_root = fs->get_super_block()->get_root();
         new_root->set_parent(dir->get_parent());
@@ -260,19 +244,19 @@ bool mount(file_system *fs, const char *path)
 
 bool umount(file_system *fs)
 {
-    for (auto it = mount_list->begin(); it != mount_list->end(); it = mount_list->next(it))
+    for (auto &mnt : data->mount_list)
     {
-        if (it->element.su_block == fs->get_super_block())
+        if (mnt.su_block == fs->get_super_block())
         {
-            dentry *now = path_walk(it->element.mount_point, global_root, 0);
+            dentry *now = path_walk(mnt.mount_point, global_root, 0);
 
-            if (it->element.root == nullptr)
+            if (mnt.root == nullptr)
             {
-                global_root = it->element.root;
+                global_root = mnt.root;
             }
             else
             {
-                now = it->element.root;
+                now = mnt.root;
             }
 
             return true;

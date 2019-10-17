@@ -3,6 +3,7 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/trace.hpp"
 namespace arch::tss
 {
 const u8 tss_type = 0b1001;

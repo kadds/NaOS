@@ -185,7 +185,7 @@ display_library: x
 #  2.2.6 2.6Ghz Intel Core 2 Duo with WinXP/g++ 3.4       21 to 25 Mips
 #  2.2.6 2.1Ghz Athlon XP with Linux 2.6/g++ 3.4          12 to 15 Mips
 #=======================================================================
-cpu: model=corei7_haswell_4770, count=1, ips=50000000, reset_on_triple_fault=1, ignore_bad_msrs=0, msrs="msrs.def"
+cpu: model=bx_generic, count=2, ips=20000000, reset_on_triple_fault=1, ignore_bad_msrs=0, msrs="msrs.def"
 cpu: cpuid_limit_winnt=0
 
 #=======================================================================
@@ -330,7 +330,7 @@ cpu: cpuid_limit_winnt=0
 #  STEPPING:
 #    Set stepping information returned by CPUID. Default stepping value is 3.
 #=======================================================================
-cpuid: x86_64=1, mmx=1, sep=1, simd=sse4_2, apic=xapic, aes=1, movbe=1, xsave=1
+cpuid: x86_64=1, mmx=1, sep=1, simd=sse4_2, apic=x2apic, aes=0, movbe=1, xsave=1, 1g_pages=1
 #cpuid: family=6, model=0x1a, stepping=5
 
 #=======================================================================
@@ -350,7 +350,7 @@ cpuid: x86_64=1, mmx=1, sep=1, simd=sse4_2, apic=xapic, aes=1, movbe=1, xsave=1
 # used all allocated host memory and wants more.
 #
 #=======================================================================
-memory: guest=512, host=256
+memory: guest=128, host=64
 
 #=======================================================================
 # ROMIMAGE:
@@ -809,7 +809,8 @@ log: bochsout.txt
 panic: action=ask
 error: action=report
 info: action=report
-debug: action=ignore, pci=report # report BX_DEBUG from module 'pci'
+# http://bochs.sourceforge.net/doc/docbook/user/howto.html#LOGOPTS-BY-DEVICE
+debug: action=ignore #,cpu0=report # report BX_DEBUG from module 'pci'
 
 #=======================================================================
 # DEBUGGER_LOG:
@@ -857,7 +858,7 @@ debugger_log: -
 #   com4: enabled=1, mode=pipe-client, dev=\\.\pipe\mypipe
 #   com4: enabled=1, mode=pipe-server, dev=\\.\pipe\mypipe
 #=======================================================================
-#com1: enabled=1, mode=term, dev=/dev/ttyp9
+com1: enabled=1, mode=file, dev=kernel_out.log
 
 
 #=======================================================================

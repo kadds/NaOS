@@ -1,5 +1,5 @@
 #pragma once
-#include "../mm/memory.hpp"
+#include "../mm/allocator.hpp"
 #include "common.hpp"
 
 namespace util
@@ -11,8 +11,12 @@ template <typename E> class linked_list
     {
         E element;
         list_node *prev, *next;
-        list_node(E element)
+        explicit list_node(E element)
             : element(element){};
+
+        template <typename... Args>
+        list_node(Args &&... args)
+            : element(std::forward<Args>(args)...){};
     };
     struct list_info_node
     {
@@ -20,8 +24,43 @@ template <typename E> class linked_list
         list_node *prev, *next;
         list_info_node(){};
     };
+    using ElementType = E;
 
     static_assert(sizeof(list_node) == sizeof(list_info_node));
+
+    struct iterator
+    {
+        friend class linked_list;
+
+      private:
+        list_node *node;
+
+        iterator(list_node *node)
+            : node(node){};
+
+      public:
+        E &operator*() { return node->element; }
+        E *operator&() { return &node->element; }
+        E *operator->() { return &node->element; }
+
+        iterator &operator++()
+        {
+            node = node->next;
+            return *this;
+        }
+        iterator operator++(int) { return iterator(node->next); }
+
+        iterator &operator--()
+        {
+            node = node->prev;
+            return *this;
+        }
+
+        iterator operator--(int) { return iterator(node->prev); }
+
+        bool operator==(const iterator &it) { return it.node == node; }
+        bool operator!=(const iterator &it) { return !operator==(it); }
+    };
 
   private:
     memory::IAllocator *allocator;
@@ -32,17 +71,17 @@ template <typename E> class linked_list
     u64 calc_size() const
     {
         u64 i = 0;
-        list_node *node = begin();
-        while (node != end())
+        auto iter = begin();
+        while (iter != end())
         {
             i++;
-            node = next(node);
+            ++iter;
         }
         return i;
     }
 
   public:
-    list_node *push_back(const E &e)
+    iterator push_back(const E &e)
     {
         list_node *node = memory::New<list_node>(allocator, e);
         node->next = (list_node *)tail;
@@ -50,7 +89,30 @@ template <typename E> class linked_list
         node->prev = tail->prev;
         tail->prev = node;
         node_count++;
-        return node;
+        return iterator(node);
+    }
+
+    template <typename... Args> iterator emplace_back(Args &&... arg)
+    {
+        list_node *node = memory::New<list_node>(allocator, std::forward<Args>(arg)...);
+        node->next = (list_node *)tail;
+        tail->prev->next = node;
+        node->prev = tail->prev;
+        tail->prev = node;
+        node_count++;
+        return iterator(node);
+    }
+
+    iterator push_front(const E &e)
+    {
+        list_node *node = memory::New<list_node>(allocator, e);
+        list_node *next = ((list_node *)head)->next;
+        ((list_node *)head)->next = node;
+        node->next = next;
+        node->prev = ((list_node *)head);
+        next->prev = node;
+        node_count++;
+        return iterator(node);
     }
 
     E pop_back()
@@ -75,83 +137,88 @@ template <typename E> class linked_list
         return e;
     };
 
-    E move_back()
-    {
-        E e = head->next->element;
-        list_node *node = head->next;
-        head->next->prev = (list_node *)head;
-        head->next = head->next->next;
-
-        tail->prev->next = node;
-        node->prev = tail->prev;
-        node->next = (list_node *)tail;
-        return e;
-    };
-
     u64 size() const
     {
-        kassert(node_count == calc_size(), "node count != ", node_count);
+        // kassert(node_count == calc_size(), "node count != ", node_count);
         return node_count;
     }
 
-    list_node *begin() const { return head->next; }
+    iterator begin() const { return iterator(head->next); }
 
-    list_node *end() const { return (list_node *)tail; }
+    iterator end() const { return iterator((list_node *)tail); }
+
+    iterator rbegin() const { return iterator(((list_node *)tail)->prev); }
+
+    iterator rend() const { return iterator((list_node *)head); }
 
     bool empty() const { return head->next == (list_node *)tail; }
 
-    E back() const { return tail->prev->element; }
+    const E &back() const { return tail->prev->element; }
 
-    E front() const { return head->next->element; }
+    const E &front() const { return head->next->element; }
 
-    list_node *next(list_node *node) const { return node->next; }
-    // return node if element finded else return end()
-    list_node *find(const E &e)
+    E &back() { return tail->prev->element; }
+
+    E &front() { return head->next->element; }
+
+    /// return node if element finded else return end()
+    iterator find(const E &e)
     {
-        list_node *node = begin();
-        while (node != end())
+        auto it = begin();
+        auto last = end();
+        while (it != last)
         {
-            if (node->element == e)
+            if (*it == e)
             {
-                return node;
+                return it;
             }
-            node = next(node);
+            ++it;
         }
-        return end();
+        return last;
     }
-    // insert node before parameter after
-    list_node *insert(list_node *after, E e)
+    /// insert node before parameter iter
+    iterator insert(iterator iter, const E &e)
     {
-        if (unlikely(after == begin()->prev))
-            return end();
-
+        list_node *after_node = iter.node;
         list_node *node = memory::New<list_node>(allocator, e);
-        auto last = after->prev;
+        auto last = after_node->prev;
 
         last->next = node;
-        node->next = after;
+        node->next = after_node;
         node->prev = last;
-        after->prev = node;
+        after_node->prev = node;
         node_count++;
-        return node;
+        return iterator(node);
     }
 
-    void remove(list_node *node)
+    iterator remove(iterator iter)
     {
-        if (unlikely(node == end() || node == begin()))
-            return;
-
+        if (unlikely(iter == end() || iter == --begin()))
+            return end();
+        list_node *node = iter.node;
+        list_node *next = node->next;
         node->prev->next = node->next;
         node->next->prev = node->prev;
         node_count--;
         memory::Delete<>(allocator, node);
+        return iterator(next);
+    }
+
+    void clean()
+    {
+        auto it = begin();
+        while (it != end())
+        {
+            auto cur = it++;
+            memory::Delete<>(allocator, *cur);
+        }
     }
 
     linked_list(memory::IAllocator *allocator)
         : allocator(allocator)
         , head(memory::New<list_info_node>(allocator))
         , tail(memory::New<list_info_node>(allocator))
-
+        , node_count(0)
     {
         head->next = (list_node *)tail;
         head->prev = nullptr;
@@ -161,8 +228,63 @@ template <typename E> class linked_list
 
     ~linked_list()
     {
-        memory::Delete<>(allocator, head);
-        memory::Delete<>(allocator, tail);
+        list_node *node = (list_node *)head;
+        while (node != nullptr)
+        {
+            list_node *node2 = node->next;
+            memory::Delete<>(allocator, node);
+            node = node2;
+        }
+    }
+
+    linked_list(const linked_list &l)
+        : allocator(l.allocator)
+        , head(memory::New<list_info_node>(allocator))
+        , tail(memory::New<list_info_node>(allocator))
+    {
+        head->next = (list_node *)tail;
+        head->prev = nullptr;
+        tail->prev = (list_node *)head;
+        tail->next = nullptr;
+        auto iter = l.begin();
+        while (iter != l.end())
+        {
+            push_back(*iter);
+            iter++;
+        }
+    }
+
+    linked_list &operator=(const linked_list &l)
+    {
+        if (&l == this)
+            return *this;
+        // clean previous data
+        list_node *node = (list_node *)head;
+        while (node != nullptr)
+        {
+            list_node *node2 = node->next;
+            memory::Delete<>(allocator, node);
+            node = node2;
+        }
+
+        // gen new data
+        allocator = l.allocator;
+        head = memory::New<list_info_node>(allocator);
+        tail = memory::New<list_info_node>(allocator);
+
+        head->next = (list_node *)tail;
+        head->prev = nullptr;
+        tail->prev = (list_node *)head;
+        tail->next = nullptr;
+
+        auto iter = l.begin();
+        while (iter != l.end())
+        {
+            push_back(*iter);
+            iter++;
+        }
+
+        return *this;
     }
 };
 } // namespace util

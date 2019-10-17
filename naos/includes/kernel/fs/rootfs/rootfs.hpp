@@ -21,7 +21,7 @@ class super_block : public ramfs::super_block
 {
   public:
     super_block()
-        : ramfs::super_block(4096 * 8){};
+        : ramfs::super_block(0xFFFFFF){};
 
     file *alloc_file() override;
     void dealloc_file(vfs::file *f) override;

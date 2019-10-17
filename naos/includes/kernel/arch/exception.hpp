@@ -6,6 +6,7 @@ namespace arch::exception
 {
 void init();
 void set_callback(arch::idt::call_func func);
+void set_exit_callback(arch::idt::call_func func);
 
 namespace vector
 {

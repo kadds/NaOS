@@ -11,7 +11,9 @@ u64 none()
     return 1;
 }
 
-void print(const char *str) { trace::print(str); }
+void print(const char *str)
+{ // trace::print(str);
+}
 
 void exit(u64 ret_value) { task::do_exit(ret_value); }
 
@@ -21,6 +23,8 @@ u64 fork(u64 flags, u64 args) { return task::do_fork(fork_subtask, args, flags);
 
 void exec(const char *filename, const char *args, u64 flags) { task::do_exec(filename, 0, 0, flags); }
 
-void *system_call_table[] = {SYSCALL(none) SYSCALL(print) SYSCALL(exit) SYSCALL(fork) SYSCALL(exec)};
+void sleep(u64 milliseconds) { task::do_sleep(milliseconds); }
+
+void *system_call_table[] = {SYSCALL(none) SYSCALL(print) SYSCALL(exit) SYSCALL(fork) SYSCALL(exec) SYSCALL(sleep)};
 
 } // namespace syscall

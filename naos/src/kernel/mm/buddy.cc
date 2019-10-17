@@ -1,12 +1,17 @@
 #include "kernel/mm/buddy.hpp"
+#include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/ucontext.hpp"
 #include "kernel/util/bit_set.hpp"
+namespace memory
+{
 
 typedef util::bit_set<u64, 16> bits_t;
 
 const int buddy_max_page = 1 << 8;
 
-memory::BuddyAllocator *memory::KernelBuddyAllocatorV;
+BuddyAllocator *KernelBuddyAllocatorV;
+lock::spinlock_t buddy_lock;
 
 bits_t &get(void *impl) { return *(bits_t *)impl; }
 
@@ -177,16 +182,14 @@ buddy_tree *buddy::gen_tree()
     return tree;
 }
 
-// buddy allocator
-namespace memory
-{
-
 BuddyAllocator::BuddyAllocator() {}
 
 BuddyAllocator::~BuddyAllocator() {}
 
 void *BuddyAllocator::allocate(u64 size, u64 align)
 {
+    uctx::SpinLockUnInterruptableContext ctx(buddy_lock);
+
     auto page = (size + 0x1000 - 1) / 0x1000;
     for (int i = 0; i < global_zones.count; i++)
     {
@@ -209,6 +212,9 @@ void *BuddyAllocator::allocate(u64 size, u64 align)
 void BuddyAllocator::deallocate(void *ptr)
 {
     ptr = memory::kernel_virtaddr_to_phyaddr(ptr);
+
+    uctx::SpinLockUnInterruptableContext ctx(buddy_lock);
+
     for (int i = 0; i < global_zones.count; i++)
     {
         zone_t &zone = global_zones.zones[i];

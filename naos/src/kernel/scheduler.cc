@@ -16,8 +16,15 @@ void set_scheduler(scheduler *scher)
 void add(thread_t *thread) { global_scheduler->add(thread); }
 
 void remove(thread_t *thread) { global_scheduler->remove(thread); }
+void update(thread_t *thread) { global_scheduler->update(thread); }
 
-void schedule() { global_scheduler->schedule(); }
+void schedule()
+{
+    if (likely(global_scheduler != nullptr))
+        global_scheduler->schedule();
+}
+
+void schedule_tick() { global_scheduler->schedule_tick(); }
 
 void set_attribute(const char *attr_name, thread_t *target, u64 value)
 {

@@ -1,4 +1,5 @@
 #include "kernel/arch/video/vga/output_text.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
 
 namespace arch::device::vga
@@ -54,15 +55,13 @@ void output_text::scroll(i32 n)
     py -= n;
 }
 
-void output_text::move_pen(i32 x, i32 y, u32 newline_alignment)
+void output_text::move_pen(i32 x, i32 y)
 {
     py += y;
     px += x;
-    if (y != 0)
-        px += newline_alignment;
     if (px >= width)
     {
-        px = newline_alignment;
+        px = 0;
         py++;
     }
     if (py >= height)
@@ -82,7 +81,7 @@ u8 similar_color_index(u32 color)
     return 15;
 }
 
-void output_text::putchar(char ch, font_attribute &attribute)
+void output_text::putchar(char ch, trace::console_attribute &attribute)
 {
     if (ch != '\t' && ch != '\n')
     {
@@ -92,11 +91,11 @@ void output_text::putchar(char ch, font_attribute &attribute)
         *((u8 *)video_addr + (px + py * width) * 2 + 1) = fg | (bg << 4);
         bitmap.set(py, 1);
         has_write = true;
-        move_pen(1, 0, attribute.get_newline_alignment());
+        move_pen(1, 0);
     }
     else
     {
-        move_pen(-px, 1, attribute.get_newline_alignment());
+        move_pen(-px, 1);
     }
 }
 

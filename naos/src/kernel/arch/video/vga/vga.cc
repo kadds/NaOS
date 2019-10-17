@@ -2,20 +2,25 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/arch/video/vga/output_text.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/timer.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include <stdarg.h>
 #include <type_traits>
+
 namespace arch::device::vga
 {
 output *current_output;
 u64 frame_size;
 void *frame_buffer;
+bool is_auto_flush = false;
 
 Aligned(8) char reserved_space[sizeof(output_text) > sizeof(output_graphics) ? sizeof(output_text)
                                                                              : sizeof(output_graphics)];
 
 void init(const kernel_start_args *args)
 {
+    using namespace trace;
     frame_buffer = (void *)args->fb_addr;
     bool is_text_mode = args->fb_type == 2;
     frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
@@ -48,8 +53,8 @@ void init(const kernel_start_args *args)
             output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
         current_output->cls();
-        print(Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X", args->fb_height, ". bit ",
-              args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
+        print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X",
+              args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
     }
     else
     {
@@ -57,8 +62,8 @@ void init(const kernel_start_args *args)
             output_text(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
         current_output->init();
         current_output->cls();
-        print(Foreground<Color::LightGreen>(), "VGA text mode. ", args->fb_width, "X", args->fb_height, ". bit ",
-              args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
+        print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA text mode. ", args->fb_width, "X",
+              args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
     }
 
     test();
@@ -68,25 +73,28 @@ void init(const kernel_start_args *args)
 
 void test()
 {
-    print(Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin\n");
-    print(Background<Color::ColorValue>(0x9f9f9f), Foreground<Color::Black>(), "NaOS\n");
-    print(Foreground<Color::Black>(), "Black ");
-    print(Foreground<Color::Blue>(), "Blue ");
-    print(Foreground<Color::Green>(), "Green ");
-    print(Foreground<Color::Cyan>(), "Cyan ");
-    print(Foreground<Color::Red>(), "Red ");
-    print(Foreground<Color::Magenta>(), "Magenta ");
-    print(Foreground<Color::Brown>(), "Brown ");
-    print(Foreground<Color::LightGray>(), "LightGray ");
-    print(Foreground<Color::DarkGray>(), "DarkGray ");
-    print(Foreground<Color::LightBlue>(), "LightBlue ");
-    print(Foreground<Color::LightGreen>(), "LightGreen ");
-    print(Foreground<Color::LightCyan>(), "LightCyan ");
-    print(Foreground<Color::LightRed>(), "LightRed ");
-    print(Foreground<Color::Pink>(), "Pink ");
-    print(Foreground<Color::Yellow>(), "Yellow ");
-    print(Foreground<Color::White>(), "White \n");
-    print(Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End\n");
+    using namespace trace;
+    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin\n");
+    print(kernel_console_attribute, Foreground<Color::ColorValue>(0xA0c000), Background<Color::Black>(), "NaOS\n",
+          PrintAttr::Reset());
+    print(kernel_console_attribute, Foreground<Color::Black>(), "Black ");
+    print(kernel_console_attribute, Foreground<Color::Blue>(), "Blue ");
+    print(kernel_console_attribute, Foreground<Color::Green>(), "Green ");
+    print(kernel_console_attribute, Foreground<Color::Cyan>(), "Cyan ");
+    print(kernel_console_attribute, Foreground<Color::Red>(), "Red ");
+    print(kernel_console_attribute, Foreground<Color::Magenta>(), "Magenta ");
+    print(kernel_console_attribute, Foreground<Color::Brown>(), "Brown ");
+    print(kernel_console_attribute, Foreground<Color::LightGray>(), "LightGray ");
+    print(kernel_console_attribute, Foreground<Color::DarkGray>(), "DarkGray ");
+    print(kernel_console_attribute, Foreground<Color::LightBlue>(), "LightBlue ");
+    print(kernel_console_attribute, Foreground<Color::LightGreen>(), "LightGreen ");
+    print(kernel_console_attribute, Foreground<Color::LightCyan>(), "LightCyan ");
+    print(kernel_console_attribute, Foreground<Color::LightRed>(), "LightRed ");
+    print(kernel_console_attribute, Foreground<Color::Pink>(), "Pink ");
+    print(kernel_console_attribute, Foreground<Color::Yellow>(), "Yellow ");
+    print(kernel_console_attribute, Foreground<Color::White>(), "White \n");
+    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End\n",
+          PrintAttr::Reset());
 }
 
 void *get_video_addr() { return frame_buffer; }
@@ -94,19 +102,44 @@ void *get_video_addr() { return frame_buffer; }
 void set_video_addr(void *addr)
 {
     frame_buffer = addr;
-    print("VGA frame buffer mapped at ", addr, "\n");
+    trace::print(trace::kernel_console_attribute, "VGA frame buffer mapped at ", addr, "\n");
 }
 
 void flush() { current_output->flush(frame_buffer); }
+bool auto_flush(u64 dt, u64 ud)
+{
+    uctx::UnInterruptableContext icu;
+    trace::print(trace::kernel_console_attribute, ".");
+    flush();
+    return true;
+}
 
-void putstring(const char *str, font_attribute &attribute)
+void set_auto_flush()
+{
+    is_auto_flush = true;
+    // 60HZ
+    timer::add_watcher(1000000 / 60, auto_flush, 0);
+}
+
+void putstring(const char *str, trace::console_attribute &attribute)
 {
     uctx::UnInterruptableContext uic;
     while (*str != '\0')
     {
+        if (*str == '\e')
+        {
+            do
+            {
+                str++;
+                if (*str == '\0')
+                    return;
+            } while (*str != 'm');
+        }
         current_output->putchar(*str++, attribute);
     }
-    flush();
+
+    if (unlikely(!is_auto_flush))
+        flush();
 }
 void tag_memory()
 {

@@ -1,6 +1,5 @@
 #include "kernel/arch/8259A.hpp"
 #include "kernel/arch/io.hpp"
-#include "kernel/trace.hpp"
 
 namespace arch::device::chip8259A
 {
@@ -36,34 +35,38 @@ void init()
     io_out8(slave_icw3_port, 0x02);
     io_out8(slave_icw4_port, 0x01);
 
-    enable_all();
+    disable_all();
 }
+
 void enable_all()
 {
     io_out8(master_ocw1_port, 0x00);
     io_out8(slave_ocw1_port, 0x00);
 }
+
 void disable_all()
 {
     io_out8(master_ocw1_port, 0xFF);
     io_out8(slave_ocw1_port, 0xFF);
 }
+
 void enable_with(u8 ports)
 {
     u8 p = io_in8(master_ocw1_port);
-    p = p & ~ports;
+    p = p & ~(1 << ports);
     io_out8(master_ocw1_port, p);
     p = io_in8(slave_ocw1_port);
-    p = p & ~ports;
+    p = p & ~(1 << ports);
     io_out8(slave_ocw1_port, p);
 }
+
 void disable_with(u8 ports)
 {
     u8 p = io_in8(master_ocw1_port);
-    p = p | ports;
+    p = p | (1 << ports);
     io_out8(master_ocw1_port, p);
     p = io_in8(slave_ocw1_port);
-    p = p | ports;
+    p = p | (1 << ports);
     io_out8(slave_ocw1_port, p);
 }
 

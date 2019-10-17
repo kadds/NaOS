@@ -3,8 +3,8 @@
 #include "kernel/fs/vfs/file_system.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/util/str.hpp"
-
 namespace fs::rootfs
 {
 file_system *global_root_file_system;

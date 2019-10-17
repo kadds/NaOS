@@ -11,18 +11,19 @@ NaOS targets Intel / AMD modern processors.
 * - [x] Four-level Paging
 * - [x] VGA display
 * - [x] Buddy and Slab system
-* - [x] Task switch
-* - [ ] Process scheduling
-* - [ ] Thread support
-* - [x] VFS
-* - [x] API calling
-* - [ ] APIC
+* - [ ] Process scheduling (Time span, CFS)
+* - [ ] MultiThread
+* - [x] Soft IRQ
+* - [ ] VFS
+* - [x] System call
+* - [ ] APIC (Local/APIC, IO/APIC)
 * - [ ] Multicore support (SMP)
 * - [ ] Kernel module
 * - [ ] Disk driver
 * - [ ] Native display driver
 * - [ ] POSIX layer
 * - [ ] ELF part support
+* - [ ] UEFI boot
   
 
 ## Quick Start  
@@ -30,13 +31,13 @@ NaOS targets Intel / AMD modern processors.
 ### **Requirement**  
 * A **\*nix** system
 * **GNU Binutils** *(objcopy, objdump, version 2.32 tested)*
-* **GCC** or **Clang** supports *C++17* version  *(GCC 9.1.0 & Clang 8.0.1 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
+* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
 * An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
 * **Grub**, **gdisk** *(Often exist, for making runnable raw disk file)*
  
-Other recommended tools
+### **Recommend**  
 
 * **clang-format**: Code formatter 
 * **cpp-check**: Code static analyzer 
@@ -69,19 +70,17 @@ cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
 make
 ```
 ### 4. Run
-After make success, your will get these files
+After ```make``` success, you will get these files
 ```
 build
 ├── bin # Binary executable files without debug info
 │   ├── loader
 │   │   └── loader-multiboot
+│   ├── rfsimage # root file system image files (root folder)
 │   └── system
+│       ├── rfsimg # root file system image
 │       └── kernel # kernel file
-└── debug # Binary executable files with debug info which can be used by debugger gdb/lldb
-    ├── loader
-    │   └── loader-multiboot.dbg
-    └── system
-        └── kernel.dbg
+└── debug # Binary executable files with debug info which can be used by debugger gdb/lldb ...
 ```
 
 **make sure you mount disk by ``` sudo python util/mount_disk.py ``` before run emulator**. then
@@ -114,10 +113,11 @@ NaOS
 │       ├── kernel
 │       │   ├── arch # arch x86_64 specification source code
 │       │   ├── common # kernel data
-│       │   ├── mm # memory system
-│       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter
+│       │   ├── fs # file system 
+│       │   ├── mm # memory subsystem
+│       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── loader
-│           ├── common # common loader liberies such as disk reader, ScreenPrinter
+│           ├── common # common loader libraries such as disk reader, ScreenPrinter
 │           └── multiboot # loader that conforms to the multiboot spec.
 ├── run
 │   ├── cfg # include emulator config file: bochsrc

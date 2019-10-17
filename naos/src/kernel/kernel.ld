@@ -25,10 +25,13 @@ SECTIONS
         _bss_unpaged_end_addr = .;
     }
     . += kernel_offset;
+    _kernel_text_start = .;
     .text : AT(ADDR(.text) - kernel_offset)
     {
         *(.text*)
-    }
+    }    
+    _kernel_text_end = .;
+
     . = ALIGN(4);
     .data : AT(ADDR(.data) - kernel_offset)
     {

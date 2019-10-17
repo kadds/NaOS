@@ -6,8 +6,9 @@ import os
 import signal
 
 
-def run_shell(shell_params, input=None):
-    print("run shell: %s" % (shell_params))
+def run_shell(shell_params, input=None, print_command=True):
+    if print_command:
+        print("run shell: %s" % (shell_params))
     r = subprocess.Popen(shell_params, text=True, shell=True, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, stdin=subprocess.PIPE).communicate(input=input)
     if r[0] != "":
@@ -22,8 +23,9 @@ def run_shell(shell_params, input=None):
             return ""
 
 
-def run_shell_input(shell_params, input=None):
-    print("run shell: %s" % (shell_params))
+def run_shell_input(shell_params, input=None, print_command=False):
+    if print_command:
+        print("run shell: %s" % (shell_params))
     r = subprocess.Popen(shell_params, text=True, shell=True,
                          stdout=sys.stdout, stderr=sys.stderr, stdin=sys.stdin)
 

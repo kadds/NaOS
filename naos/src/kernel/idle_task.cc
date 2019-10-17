@@ -9,7 +9,9 @@ void main(const kernel_start_args *args)
 {
     trace::info("idle task running.");
     task::do_fork(&task::builtin::init::main, 0, 0);
-    task::scheduler::schedule();
+    scheduler::schedule();
+    trace::debug("init task has forked.");
+    trace::debug("idle hlt.");
 
     while (1)
         __asm__ __volatile__("hlt\n\t" : : : "memory");

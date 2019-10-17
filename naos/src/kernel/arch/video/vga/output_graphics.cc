@@ -1,5 +1,6 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/common/font/font_16X8.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
 #include <new>
 
@@ -58,29 +59,40 @@ void output_graphics::scroll(i32 n)
     py -= n;
 }
 
-void output_graphics::move_pen(i32 x, i32 y, u32 newline_alignment)
+void output_graphics::move_pen(i32 x, i32 y)
 {
     py += y;
     px += x;
-    if (y != 0)
-        px += newline_alignment;
     if (px >= text_count_per_line)
     {
-        px = newline_alignment;
+        px = 0;
         py++;
     }
     if (py >= text_count_vertical)
         scroll(py - text_count_vertical + 1);
 }
 
-void output_graphics::putchar(char ch, font_attribute &attribute)
+void output_graphics::putchar(char ch, trace::console_attribute &attribute)
 {
+    static u32 color_table[] = {0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
+                                0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF};
+
     if (ch != '\t' && ch != '\n')
     {
         void *font_data = cur_font->get_unicode(ch);
 
-        u32 fg = attribute.get_foreground();
-        u32 bg = attribute.get_background();
+        u32 fg;
+        u32 bg;
+
+        if (attribute.is_fore_full_color())
+            fg = attribute.get_foreground();
+        else
+            fg = color_table[attribute.get_foreground()];
+
+        if (attribute.is_back_full_color())
+            bg = attribute.get_background();
+        else
+            bg = color_table[attribute.get_background()];
 
         u32 *v_start = (u32 *)video_addr + py * (u64)width * (u64)font_height + px * (u64)font_width;
 
@@ -93,11 +105,11 @@ void output_graphics::putchar(char ch, font_attribute &attribute)
         }
         dirty_rectangle +=
             rectangle(px * font_width, py * font_height, px * font_width + font_width, py * font_height + font_height);
-        move_pen(1, 0, attribute.get_newline_alignment());
+        move_pen(1, 0);
     }
     else
     {
-        move_pen(-px, 1, attribute.get_newline_alignment());
+        move_pen(-px, 1);
     }
 }
 

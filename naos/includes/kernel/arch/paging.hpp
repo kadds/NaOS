@@ -151,29 +151,24 @@ enum frame_size : u64
 {
     size_4kb = 0x1000,
     size_2mb = 0x200000,
-    size_1gb = 0x80000000
+    size_1gb = 0x40000000
 };
 } // namespace frame_size
+using base_paging_t = pml4t;
 
-extern pml4t *base_kernel_page_addr;
-
-bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
+bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags);
-bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
+bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
 
-void load(pml4t *base_paging_addr);
+void load(base_paging_t *base_paging_addr);
 void reload();
 
 void init();
 void temp_init();
 
-void copy_page_table(pml4t *to, pml4t *source);
+void copy_page_table(base_paging_t *to, base_paging_t *source);
 
-static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
-              "sizeof paging struct is not 4KB.");
-struct page
-{
-    u64 attr;
-};
+base_paging_t *get_kernel_paging();
+base_paging_t *current();
 
 } // namespace arch::paging

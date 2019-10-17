@@ -33,7 +33,7 @@ struct regs_t
     u64 ss;
 };
 
-typedef void (*call_func)(const regs_t *regs, u64 extra_param);
+typedef bool (*call_func)(const regs_t *regs, u64 extra_param);
 
 struct ptr_t
 {
@@ -88,6 +88,7 @@ void set_interrupt_gate(int index, void *func, u8 ist);
 
 void enable();
 void disable();
+bool save_and_disable();
 
 bool is_enable();
 } // namespace arch::idt

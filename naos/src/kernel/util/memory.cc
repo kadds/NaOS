@@ -29,7 +29,7 @@ void memset(void *dst, u64 val, u64 size)
         do
         {
             *dc++ = val;
-        } while (rest-- != 0);
+        } while (--rest != 0);
     }
 }
 
@@ -52,7 +52,7 @@ void memcopy(void *dst, const void *src, u64 size)
         do
         {
             *dc++ = *sc++;
-        } while (rest-- != 0);
+        } while (--rest != 0);
     }
 }
 } // namespace util

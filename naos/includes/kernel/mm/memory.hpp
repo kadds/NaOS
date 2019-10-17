@@ -1,12 +1,12 @@
 #pragma once
 #include "../kernel.hpp"
-#include "../trace.hpp"
 #include "allocator.hpp"
 #include "common.hpp"
 #include <new>
 #include <utility>
 namespace memory
 {
+
 void tag_zone_buddy_memory(char *start_addr, char *end_addr);
 
 void init(const kernel_start_args *args, u64 fix_memory_limit);
@@ -105,6 +105,7 @@ class PhyBootAllocator : public IAllocator
 
     void *allocate(u64 size, u64 align) override
     {
+
         if (unlikely(!available))
             return nullptr;
 
@@ -138,7 +139,12 @@ class VirtBootAllocator : public PhyBootAllocator
 void *kmalloc(u64 size, u64 align);
 void kfree(void *addr);
 
-// It uses kmalloc and kfree
+void *vmalloc(u64 size, u64 align);
+void vfree(void *addr);
+
+void listen_page_fault();
+
+/// kmalloc and kfree
 class KernelCommonAllocator : public IAllocator
 {
   private:
@@ -147,7 +153,17 @@ class KernelCommonAllocator : public IAllocator
     ~KernelCommonAllocator(){};
     void *allocate(u64 size, u64 align) override { return kmalloc(size, align); }
     void deallocate(void *p) override { kfree(p); }
-    static void *current_ptr_address() { return kernel_phyaddr_to_virtaddr(PhyBootAllocator::current_ptr_address()); }
+};
+
+/// vmalloc and vfree
+class KernelVirtualAllocator : public IAllocator
+{
+  private:
+  public:
+    KernelVirtualAllocator(){};
+    ~KernelVirtualAllocator(){};
+    void *allocate(u64 size, u64 align) override { return vmalloc(size, align); }
+    void deallocate(void *p) override { vfree(p); }
 };
 
 class FixMemoryAllocator : public IAllocator
@@ -162,8 +178,10 @@ class FixMemoryAllocator : public IAllocator
     void *allocate(u64 size, u64 align) override { return ptr; }
     void deallocate(void *p) override {}
 };
+
 extern VirtBootAllocator *VirtBootAllocatorV;
 extern PhyBootAllocator *PhyBootAllocatorV;
 extern KernelCommonAllocator *KernelCommonAllocatorV;
+extern KernelVirtualAllocator *KernelVirtualAllocatorV;
 
 } // namespace memory

@@ -1,4 +1,5 @@
 #include "kernel/arch/idt.hpp"
+#include "kernel/arch/8259A.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/interrupt.hpp"
@@ -6,6 +7,7 @@
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/trace.hpp"
 namespace arch::idt
 {
 
@@ -19,12 +21,14 @@ Unpaged_Text_Section void init_before_paging() {}
 
 void init_after_paging()
 {
-
-    idt_after_ptr.limit = sizeof(entry) * 128 - 1;
-    idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 128);
+    idt_after_ptr.limit = sizeof(entry) * 256 - 1;
+    idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 256);
     exception::init();
     interrupt::init();
+    device::chip8259A::init();
     __asm__ __volatile__("lidt (%0)	\n\t" : : "r"(&idt_after_ptr) : "memory");
+    _mfence();
+    trace::debug("enable idt");
     enable();
 }
 
@@ -37,6 +41,18 @@ bool is_enable()
     unsigned int IF = 0;
     __asm__ __volatile__("pushf	\n\t"
                          "pop %%rax \n\t"
+                         : "=a"(IF)
+                         :
+                         : "memory");
+    return IF & 0x200;
+}
+
+bool save_and_disable()
+{
+    unsigned int IF = 0;
+    __asm__ __volatile__("pushf	\n\t"
+                         "pop %%rax \n\t"
+                         "cli \n\t"
                          : "=a"(IF)
                          :
                          : "memory");
@@ -71,7 +87,7 @@ void set_trap_system_gate(int index, void *func, u8 ist)
 
 void set_trap_gate(int index, void *func, u8 ist)
 {
-    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, ist);
+    idt::set_exception_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 3), 3, ist);
 }
 
 void set_interrupt_system_gate(int index, void *func, u8 ist)
@@ -81,6 +97,6 @@ void set_interrupt_system_gate(int index, void *func, u8 ist)
 
 void set_interrupt_gate(int index, void *func, u8 ist)
 {
-    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::user_code, 3), 3, ist);
+    idt::set_interrupt_entry(index, func, gdt::gen_selector(gdt::selector_type::kernel_code, 3), 3, ist);
 }
 } // namespace arch::idt

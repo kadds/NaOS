@@ -4,9 +4,15 @@
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/mm.hpp"
+#include "kernel/trace.hpp"
 
 namespace arch::paging
 {
+
+static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
+              "sizeof paging struct is not 4KB.");
+
 pml4t *base_kernel_page_addr;
 
 template <typename _T> _T *new_page_table()
@@ -69,9 +75,9 @@ void init()
 {
     base_kernel_page_addr = new_page_table<pml4t>();
     u64 max_maped_memory = memory::get_max_maped_memory();
-    if (max_maped_memory > max_memory_support)
+    if (max_maped_memory > memory::max_memory_support)
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
-                     ". Maximum memory supported ", max_memory_support, ".");
+                     ". Maximum memory supported ", memory::max_memory_support, ".");
     // map all phy address
     if (cpu_info::has_future(cpu_info::future::huge_page_1gb))
     {
@@ -160,14 +166,14 @@ NoReturn void error_unmap()
                  "or not aligned.");
 }
 
-bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
+bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags)
 {
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_map();
 
-    auto &top_page = *base_paging_addr;
+    auto &top_page = *(pml4t *)base_paging_addr;
     u64 v = (u64)virt_start_addr;
     u64 pml4e_index = get_bits(v, 39, 8);
     u64 pdpe_index = get_bits(v, 30, 8);
@@ -178,8 +184,7 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
 
     switch (frame_size)
     {
-        case frame_size::size_1gb:
-        {
+        case frame_size::size_1gb: {
             check_pml4e(&top_page, pml4e_index);
             for (u32 i = 0; i < frame_count; i++, pdpe_index++, phy_addr += (u32)frame_size)
             {
@@ -198,8 +203,7 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
             }
         }
         break;
-        case frame_size::size_2mb:
-        {
+        case frame_size::size_2mb: {
             check_pdpe(&top_page, pml4e_index, pdpe_index, true);
             for (u32 i = 0; i < frame_count; i++, pde_index++, phy_addr += (u32)frame_size)
             {
@@ -224,8 +228,7 @@ bool map(pml4t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u
             }
         }
         break;
-        case frame_size::size_4kb:
-        {
+        case frame_size::size_4kb: {
             check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true);
             for (u32 i = 0; i < frame_count; i++, pte_index++, phy_addr += (u32)frame_size)
             {
@@ -292,13 +295,13 @@ void clean_null_page_pde(pml4t &base_page, u64 pml4e_index, u64 pdpe_index, u64 
     }
 }
 
-bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count)
+bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count)
 {
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_unmap();
 
-    auto &top_page = *base_paging_addr;
+    auto &top_page = *(pml4t *)base_paging_addr;
     u64 v = (u64)virt_start_addr;
     u64 pml4e_index = get_bits(v, 39, 8);
     u64 pdpe_index = get_bits(v, 30, 8);
@@ -307,8 +310,7 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
 
     switch (frame_size)
     {
-        case frame_size::size_1gb:
-        {
+        case frame_size::size_1gb: {
             if (!top_page[pml4e_index].is_present())
                 error_unmap();
 
@@ -330,8 +332,7 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
             clean_null_page_pml4e(top_page, pml4e_index);
         }
         break;
-        case frame_size::size_2mb:
-        {
+        case frame_size::size_2mb: {
             if (!top_page[pml4e_index].is_present())
                 error_unmap();
             if (!top_page[pml4e_index].next()[pdpe_index].is_present())
@@ -364,8 +365,7 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
             clean_null_page_pml4e(top_page, pml4e_index);
         }
         break;
-        case frame_size::size_4kb:
-        {
+        case frame_size::size_4kb: {
             if (!top_page[pml4e_index].is_present())
                 error_unmap();
             if (!top_page[pml4e_index].next()[pdpe_index].is_present())
@@ -413,7 +413,7 @@ bool unmap(pml4t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 f
     return true;
 }
 
-void load(pml4t *base_paging_addr)
+void load(base_paging_t *base_paging_addr)
 {
     __asm__ __volatile__("movq %0, %%cr3	\n\t"
                          :
@@ -431,14 +431,24 @@ void reload()
                          : "memory");
 }
 
-void copy_page_table(pml4t *to, pml4t *source)
+base_paging_t *current()
 {
+    u64 v;
+    __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : : "memory");
+    return (base_paging_t *)memory::kernel_phyaddr_to_virtaddr(v);
+}
+
+void copy_page_table(base_paging_t *to, base_paging_t *source)
+{
+    pml4t *dst = (pml4t *)to;
+    pml4t *src = (pml4t *)source;
+
     for (int i = 0; i < 512; i++)
     {
-        auto &pml4e_source = source->entries[i];
+        auto &pml4e_source = src->entries[i];
         if (pml4e_source.is_present())
         {
-            auto &pmle4_to = to->entries[i];
+            auto &pmle4_to = dst->entries[i];
             pmle4_to = pml4e_source;
             pmle4_to.set_addr(new_page_table<pdpt>());
 
@@ -478,5 +488,7 @@ void copy_page_table(pml4t *to, pml4t *source)
         }
     }
 }
+
+base_paging_t *get_kernel_paging() { return base_kernel_page_addr; }
 
 } // namespace arch::paging
