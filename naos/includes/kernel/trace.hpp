@@ -192,9 +192,7 @@ enum text_attribute
     blink = 5,
     reverse = 7,
     hide = 8,
-    set_foreground = 38,
     default_foreground = 39,
-    set_background = 48,
     default_background = 49,
     framed = 51,
 };
@@ -247,10 +245,12 @@ struct console_attribute
     /// color index or color value
     u64 color;
     u64 attr;
+    char sgr_string[64];
     console_attribute()
         : color(0)
         , attr(0)
     {
+        set_changed();
     }
 
     console_attribute(u64 c, u64 attr)
@@ -258,26 +258,64 @@ struct console_attribute
         , attr(attr)
     {
     }
-    void set_foreground(u32 color) { this->color = (this->color & 0xFFFFFFFFFF000000) | (color & 0xFFFFFFUL); };
-    void set_background(u32 color) { this->color = (this->color & 0xFF000000FFFFFFFF) | ((color & 0xFFFFFFUL) << 32); };
+    void set_foreground(u32 color)
+    {
+        this->color = (this->color & 0xFFFFFFFFFF000000) | (color & 0xFFFFFFUL);
+        set_changed();
+    };
+    void set_background(u32 color)
+    {
+        this->color = (this->color & 0xFF000000FFFFFFFF) | ((color & 0xFFFFFFUL) << 32);
+        set_changed();
+    };
     u32 get_foreground() const { return this->color & 0xFFFFFF; }
     u32 get_background() const { return (this->color >> 32) & 0xFFFFFF; }
 
-    bool has_attribute(u8 attr_index) { return attr & (1ul << attr_index); }
-    void set_attribute(u8 attr_index) { attr |= (1ul << attr_index); }
-    void clean_attribute(u8 attr_index) { attr &= ~(1ul << attr_index); }
-    bool has_any_attribute() const { return attr == 0; }
+    bool has_attribute(u8 attr_index) const { return attr & (1ul << attr_index); }
+    void set_attribute(u8 attr_index)
+    {
+        attr |= (1ul << attr_index);
+        set_changed();
+    }
+    void clean_attribute(u8 attr_index)
+    {
+        attr &= ~(1ul << attr_index);
+        set_changed();
+    }
+    bool has_any_attribute() const { return attr != 0; }
 
     bool is_back_full_color() const { return color & (1ul << 63); }
-    void set_back_full_color() { color |= (1ul << 63); }
-    void clean_back_full_color() { color &= ~(1ul << 63); }
+    void set_back_full_color()
+    {
+        color |= (1ul << 63);
+        set_changed();
+    }
+    void clean_back_full_color()
+    {
+        color &= ~(1ul << 63);
+        set_changed();
+    }
 
     bool is_fore_full_color() const { return color & (1ul << 62); }
-    void set_fore_full_color() { color |= (1ul << 62); }
-    void clean_fore_full_color() { color &= ~(1ul << 62); }
+    void set_fore_full_color()
+    {
+        color |= (1ul << 62);
+        set_changed();
+    }
+    void clean_fore_full_color()
+    {
+        color &= ~(1ul << 62);
+        set_changed();
+    }
+
+    bool has_changed() const { return color & (1ul << 61); }
+    void set_changed() { color |= (1ul << 61); }
+    void clean_changed() { color &= ~(1ul << 61); }
 };
 extern const console_attribute default_console_attribute;
 extern console_attribute kernel_console_attribute;
+/// print escape sequences
+void print_SGR(const char *str, console_attribute &current_attribute);
 
 // -------------------- help function------------------
 template <typename T> struct remove_extent
@@ -310,14 +348,14 @@ template <typename TColor, typename std::enable_if_t<has_member_index<TColor>::v
 void set_font_color_attr(console_attribute &attribute, const Foreground<TColor> &cv)
 {
     attribute.set_foreground(TColor::index);
-    attribute.set_attribute(PrintAttr::set_foreground);
+    attribute.clean_attribute(PrintAttr::default_foreground);
     attribute.clean_fore_full_color();
 }
 template <typename TColor, typename std::enable_if_t<has_member_index<TColor>::value> * = nullptr>
 void set_font_color_attr(console_attribute &attribute, const Background<TColor> &cv)
 {
     attribute.set_background(TColor::index);
-    attribute.set_attribute(PrintAttr::set_background);
+    attribute.clean_attribute(PrintAttr::default_background);
     attribute.clean_back_full_color();
 }
 
@@ -325,7 +363,7 @@ template <typename TColor, typename std::enable_if_t<!has_member_index<TColor>::
 void set_font_color_attr(console_attribute &attribute, const Foreground<TColor> &cv)
 {
     attribute.set_foreground(cv.value.color);
-    attribute.set_attribute(PrintAttr::set_foreground);
+    attribute.clean_attribute(PrintAttr::default_foreground);
     attribute.set_fore_full_color();
 }
 
@@ -333,30 +371,33 @@ template <typename TColor, typename std::enable_if_t<!has_member_index<TColor>::
 void set_font_color_attr(console_attribute &attribute, const Background<TColor> &cv)
 {
     attribute.set_background(cv.value.color);
-    attribute.set_attribute(PrintAttr::set_background);
+    attribute.clean_attribute(PrintAttr::default_background);
     attribute.set_back_full_color();
 }
+
+/// print string directly with console attribute context
+void print_inner(const char *str, console_attribute &current_attribute);
 
 template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::Reset>> * = nullptr>
 void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
 {
     attribute = default_console_attribute;
+    print_inner("\0", attribute);
 }
 
 template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::DefaultBackground>> * = nullptr>
 void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
 {
     attribute.set_background(default_console_attribute.get_background());
+    attribute.set_attribute(PrintAttr::default_background);
 }
 
 template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::DefaultForeground>> * = nullptr>
 void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
 {
     attribute.set_foreground(default_console_attribute.get_foreground());
+    attribute.set_attribute(PrintAttr::default_foreground);
 }
-
-/// print string directly with console attribute context
-void print_inner(const char *str, console_attribute &current_attribute);
 
 template <typename Head> void print_fmt_text(console_attribute &attribute, const Head &head)
 {

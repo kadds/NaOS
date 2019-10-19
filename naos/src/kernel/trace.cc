@@ -11,17 +11,19 @@ namespace trace
 {
 namespace PrintAttr
 {
-u8 testable_attributes[] = {bold,  italic, underline, blink, reverse, hide, default_foreground, default_background,
-                            framed};
-
+u8 testable_attributes[] = {bold, italic, underline, blink, reverse, hide, framed};
+u64 testable_attributes_flags =
+    (1ul << bold | 1ul << italic | 1ul << underline | 1ul << blink | 1ul << reverse | 1ul << hide | 1ul << framed);
 } // namespace PrintAttr
 
 bool output_debug = true;
-const console_attribute
-    default_console_attribute((u64)trace::Color::LightGray::index | ((u64)trace::Color::Black::index << 32), 0);
+const console_attribute default_console_attribute(
+    ((u64)trace::Color::LightGray::index | ((u64)trace::Color::Black::index << 32) | (1ul) << 61),
+    (1ul << PrintAttr::default_background | 1ul << PrintAttr::default_foreground));
 
 console_attribute kernel_console_attribute;
 util::ring_buffer *ring_buffer = nullptr;
+int format_SGR(char *output, console_attribute &request_attribute);
 
 void early_init()
 {
@@ -38,118 +40,288 @@ void init()
 
 void print_inner(const char *str, console_attribute &current_attribute)
 {
-    arch::device::vga::putstring(str, current_attribute);
+    if (current_attribute.has_changed())
+    {
+        format_SGR(current_attribute.sgr_string, current_attribute);
+        current_attribute.clean_changed();
+        char *p = current_attribute.sgr_string;
+        while (*p != '\0')
+            arch::device::com::write((byte)*p++);
+    }
+
+    u64 len = arch::device::vga::putstring(str, 0, current_attribute);
     if (unlikely(ring_buffer != nullptr))
     {
-        ring_buffer->write(str, util::strlen(str));
+        ring_buffer->write(str, len);
     }
-    while (*str != 0)
+    arch::device::com::write((const byte *)str, len);
+}
+
+u32 get_num(const char *&str)
+{
+    u32 c = 0;
+    while (*str != '\0' && *str <= '9' && *str >= '0')
     {
-        arch::device::com::write((byte)*str++);
+        c = c * 10 + *str - '0';
+        str++;
+    }
+
+    return c;
+}
+
+bool is_split(char c) { return c == ';' || c == ':'; }
+
+const char *format_SGR(const char *str, console_attribute &current_attribute);
+
+/// https://en.wikipedia.org/wiki/ANSI_escape_code
+/// print escape sequences
+void print_SGR(const char *str, console_attribute &current_attribute)
+{
+    while (*str != '\0')
+    {
+        const char *sgr_start = str, *next, *new_next = str;
+        u64 len;
+        do
+        {
+            next = new_next;
+            new_next = format_SGR(next, current_attribute);
+            len = new_next - sgr_start;
+        } while (new_next != next);
+
+        if (unlikely(ring_buffer != nullptr))
+            ring_buffer->write(str, len);
+        arch::device::com::write((const byte *)str, len);
+        str = next;
+        if (*next == '\0')
+            break;
+
+        arch::device::vga::putstring(str, 1, current_attribute);
+        if (unlikely(ring_buffer != nullptr))
+            ring_buffer->write(str, 1);
+        arch::device::com::write((byte)*str);
+        str++;
     }
 }
 
-/// https://en.wikipedia.org/wiki/ANSI_escape_code
-/// TODO: print escaped str
-void print_SGR(const char *str, console_attribute &current_attribute)
+const char *format_SGR(const char *str, console_attribute &current_attribute)
 {
     console_attribute &attr = current_attribute;
     const char *s = str;
-    while (*s != 0)
+    if (*s == '\e')
     {
-        if (*s == '\e')
+        if (*(s + 1) == '[')
         {
-            if (*s + 1 == '[')
+            s += 2;
+            do
             {
-                int c = 0;
-                do
+                u32 n = get_num(s);
+                if (*s == '\0')
+                    return s;
+                if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97))
                 {
-                    if (*s <= '9' && *s >= '0')
-                        c = c * 10 + *s - '0';
+                    attr.clean_fore_full_color();
+                    if (n <= 37)
+                        attr.set_foreground(n - 30);
                     else
-                    {
-                        if (c > 108)
-                            return;
-                        else
-                            attr.set_attribute(c);
-                    }
-                } while (*s != 'm');
-            }
+                        attr.set_foreground(n - 90 + 8);
+                }
+                else if (n == 38)
+                {
+                    if (!is_split(*s))
+                        return s;
+                    if (2 != get_num(++s))
+                        return s;
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 r = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 g = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 b = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    attr.set_fore_full_color();
+                    attr.set_foreground((r & 0xFF) << 16 | (g & 0xFF) << 8 | (b & 0xFF));
+                }
+                else if (n == 39)
+                {
+                    attr.clean_fore_full_color();
+                    attr.set_foreground(default_console_attribute.get_foreground());
+                }
+                else if ((n >= 40 && n <= 47) || (n >= 100 && n <= 107))
+                {
+                    attr.clean_back_full_color();
+                    if (n <= 47)
+                        attr.set_background(n - 40);
+                    else
+                        attr.set_background(n - 100 + 8);
+                }
+                else if (n == 48)
+                {
+                    if (!is_split(*s))
+                        return s;
+                    if (2 != get_num(++s))
+                        return s;
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 r = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 g = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    if (!is_split(*s))
+                        return s;
+                    u32 b = get_num(++s);
+                    if (*s == '\0')
+                        return s;
+                    attr.set_back_full_color();
+                    attr.set_background((r & 0xFF) << 16 | (g & 0xFF) << 8 | (b & 0xFF));
+                }
+                else if (n == 49)
+                {
+                    attr.clean_back_full_color();
+                    attr.set_background(default_console_attribute.get_background());
+                }
+                else if (n <= 64 && PrintAttr::testable_attributes_flags & (1 << n))
+                {
+                    attr.set_attribute(n);
+                }
+                else if (n == 0)
+                {
+                    attr = default_console_attribute;
+                }
+                if (!is_split(*s++))
+                    return s;
+
+            } while (*s != 'm');
         }
-
-        arch::device::com::write((byte)*s);
-        s++;
     }
-
-    if (unlikely(ring_buffer != nullptr))
-    {
-        ring_buffer->write(str, (u64)(s - str));
-    }
+    return s;
 }
 
-/// TODO: get escape str head
-void format_SGR(const char *str, char *output, console_attribute &request_attribute)
-{
-    char txt[32];
-    char *cur = txt;
-    *cur = 0;
-    console_attribute cat = request_attribute;
+void get_RGB(u32 c, u8 &r, u8 &g, u8 &b) {}
 
+int i2s(u32 c, char *buffer)
+{
+    char *ptr = buffer;
+    if (c >= 10)
+    {
+        if (c >= 100)
+        {
+            *ptr++ = '0' + c / 100 % 10;
+        }
+        *ptr++ = '0' + c / 10 % 10;
+    }
+    *ptr++ = '0' + c % 10;
+    return (int)(ptr - buffer);
+}
+
+/// get escape sequences str head
+int format_SGR(char *output, console_attribute &request_attribute)
+{
+    char *cur = output;
+    console_attribute &cat = request_attribute;
+    *cur++ = '\e';
+    *cur++ = '[';
     if (cat.has_any_attribute())
     {
         if (cat.has_attribute(PrintAttr::reset))
         {
-            util::strcopy(cur, "\e[0m");
-            return;
+            *cur++ = '0';
+            *cur++ = 'm';
+            *cur = '\0';
+            cat.clean_attribute(PrintAttr::reset);
+
+            return cur - output;
         }
-
-        *cur++ = '\e';
-        *cur++ = '[';
-        for (auto i : PrintAttr::testable_attributes)
+        else
         {
-            if (cat.has_attribute(i))
-            {
-                *cur++ = i % 10 + '0';
-
-                if (i >= 10)
+            for (auto i : PrintAttr::testable_attributes)
+                if (cat.has_attribute(i))
                 {
-                    *cur++ = i / 10 % 10 + '0';
+                    cur += i2s(i, cur);
+                    *cur++ = ';';
                 }
-            }
         }
-        // if (cat.is_full_color())
-        // {
-        //     if (cat.has_attribute(PrintAttr::set_foreground))
-        //     {
-        //     }
-        // }
-        // else
-        // {
-        //     int index;
-        //     index = cat.get_foreground();
-        //     if (index >= 16)
-        //         ;
-        //     if (index < 10)
-        //         *cur++ = '0' + index;
-        //     else
-        //     {
-        //         *cur++ = '0' + index % 10;
-        //         *cur++ = '0' + index / 10 % 10;
-        //     }
-        // }
-        if (cat.has_attribute(PrintAttr::set_foreground))
-        {
-            // if (cat.is_full_color())
-            // {
-            //     util::strcopy(cur, "38;");
-            //     *cur += 3;
-            //     *cur++ = '2';
-            //     *cur++ = ';';
-            // }
-        }
-        *cur++ = 'm';
     }
-    request_attribute = cat;
+    if (cat.has_attribute(PrintAttr::default_foreground))
+    {
+        *cur++ = '3';
+        *cur++ = '9';
+    }
+    else if (cat.is_fore_full_color())
+    {
+        *cur++ = '3';
+        *cur++ = '8';
+        *cur++ = ';';
+        *cur++ = '2';
+        *cur++ = ';';
+        u32 bg = cat.get_foreground();
+        cur += i2s((bg & 0xFF0000) >> 16, cur);
+        *cur++ = ';';
+        cur += i2s((bg & 0x00FF00) >> 8, cur);
+        *cur++ = ';';
+        cur += i2s((bg & 0x0000FF), cur);
+    }
+    else
+    {
+        u32 index = cat.get_foreground();
+        if (index > 15)
+            index = 15;
+        if (index > 7)
+            index += 90 - 8;
+        else
+            index += 30;
+        cur += i2s(index, cur);
+    }
+    *cur++ = ';';
+
+    if (cat.has_attribute(PrintAttr::default_background))
+    {
+        *cur++ = '4';
+        *cur++ = '9';
+    }
+    else if (cat.is_back_full_color())
+    {
+        *cur++ = '4';
+        *cur++ = '8';
+        *cur++ = ';';
+        *cur++ = '2';
+        *cur++ = ';';
+        u32 bg = cat.get_background();
+        cur += i2s((bg & 0xFF0000) >> 16, cur);
+        *cur++ = ';';
+        cur += i2s((bg & 0x00FF00) >> 8, cur);
+        *cur++ = ';';
+        cur += i2s((bg & 0x0000FF), cur);
+    }
+    else
+    {
+        u32 index = cat.get_background();
+        if (index > 15)
+            index = 15;
+        if (index > 7)
+            index += 100 - 8;
+        else
+            index += 40;
+        cur += i2s(index, cur);
+    }
+    *cur++ = 'm';
+    *cur = '\0';
+    return cur - output;
 }
 
 NoReturn void keep_panic(const arch::idt::regs_t *regs)

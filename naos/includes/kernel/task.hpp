@@ -35,6 +35,7 @@ enum class thread_state : u8
 
 struct handle_table_t
 {
+    void *console_attribute;
 };
 
 /// The process struct

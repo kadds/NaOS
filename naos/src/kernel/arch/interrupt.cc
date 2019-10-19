@@ -60,9 +60,9 @@ ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
 
     if (likely(global_soft_irq_func))
     {
-        kassert(intr_stack ==
-                    (void *)((get_stack() + memory::interrupt_stack_size - 1) & ~(memory::interrupt_stack_size - 1)),
-                "stack error");
+        // kassert(intr_stack ==
+        //             (void *)((get_stack() + memory::interrupt_stack_size - 1) & ~(memory::interrupt_stack_size - 1)),
+        //         "stack error");
         //  void *soft_rsp = cpu::current().get_soft_irq_rsp();
         if (!cpu::current().in_soft_irq())
         {

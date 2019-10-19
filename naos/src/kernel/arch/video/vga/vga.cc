@@ -121,10 +121,13 @@ void set_auto_flush()
     timer::add_watcher(1000000 / 60, auto_flush, 0);
 }
 
-void putstring(const char *str, trace::console_attribute &attribute)
+u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute)
 {
     uctx::UnInterruptableContext uic;
-    while (*str != '\0')
+    if (max_len == 0)
+        max_len = (u64)(-1);
+    u64 i = 0;
+    while (*str != '\0' && i < max_len)
     {
         if (*str == '\e')
         {
@@ -132,14 +135,16 @@ void putstring(const char *str, trace::console_attribute &attribute)
             {
                 str++;
                 if (*str == '\0')
-                    return;
+                    return i;
             } while (*str != 'm');
         }
         current_output->putchar(*str++, attribute);
+        i++;
     }
 
     if (unlikely(!is_auto_flush))
         flush();
+    return i;
 }
 void tag_memory()
 {

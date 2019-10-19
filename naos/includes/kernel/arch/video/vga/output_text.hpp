@@ -25,7 +25,7 @@ class output_text : public output
     output_text(u32 width, u32 height, void *video, u32 bbp, u32 pitch);
     virtual void init() override;
     virtual void cls() override;
-    virtual void putchar(char ch, trace::console_attribute &attribute) override;
+    virtual void putchar(char ch, const trace::console_attribute &attribute) override;
     virtual void flush(void *vraw) override;
 };
 } // namespace arch::device::vga

@@ -10,4 +10,4 @@ extern "C" char _lib_sys_call;
             "jmp _lib_sys_call \n\t ");
 
 SYS_CALL(0, void, sys_none, void)
-SYS_CALL(1, void, print, const char *arg)
+SYS_CALL(1, void, print, const char *arg, bool normal = false)

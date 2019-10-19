@@ -64,7 +64,7 @@ class output_graphics : public output
     using output::output;
     virtual void init() override;
     virtual void cls() override;
-    virtual void putchar(char ch, trace::console_attribute &attribute) override;
+    virtual void putchar(char ch, const trace::console_attribute &attribute) override;
     virtual void flush(void *vraw) override;
 };
 } // namespace arch::device::vga

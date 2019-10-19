@@ -30,7 +30,7 @@ class output
         , py(0){};
     virtual void init() = 0;
     virtual void cls() = 0;
-    virtual void putchar(char ch, trace::console_attribute &attribute) = 0;
+    virtual void putchar(char ch, const trace::console_attribute &attribute) = 0;
     void *get_addr() { return (void *)video_addr; }
     void set_addr(void *video) { video_addr = video; }
     virtual void flush(void *vraw) = 0;
@@ -52,7 +52,7 @@ void set_video_addr(void *addr);
 void test();
 void set_auto_flush();
 
-void putstring(const char *str, trace::console_attribute &attribute);
+u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute);
 void flush();
 void tag_memory();
 

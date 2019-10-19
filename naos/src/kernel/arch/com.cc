@@ -18,4 +18,12 @@ void write(byte data)
 
     io_out8(base_port, (u8)data);
 }
+void write(const byte *data, u64 len)
+{
+    for (u64 i = 0; i < len; i++)
+    {
+        write(data[i]);
+    }
+}
+
 } // namespace arch::device::com

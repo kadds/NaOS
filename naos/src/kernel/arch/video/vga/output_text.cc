@@ -81,7 +81,7 @@ u8 similar_color_index(u32 color)
     return 15;
 }
 
-void output_text::putchar(char ch, trace::console_attribute &attribute)
+void output_text::putchar(char ch, const trace::console_attribute &attribute)
 {
     if (ch != '\t' && ch != '\n')
     {
