@@ -38,6 +38,7 @@ time_span_scheduler::time_span_scheduler()
 
 void time_span_scheduler::init()
 {
+    uctx::UnInterruptableContext icu;
     timer::add_watcher(5000, timer_tick, (u64)this);
     last_time_millisecond = timer::get_high_resolution_time();
     epoch_time = 50000;

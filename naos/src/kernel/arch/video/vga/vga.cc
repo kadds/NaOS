@@ -74,27 +74,29 @@ void init(const kernel_start_args *args)
 void test()
 {
     using namespace trace;
-    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin\n");
-    print(kernel_console_attribute, Foreground<Color::ColorValue>(0xA0c000), Background<Color::Black>(), "NaOS\n",
+    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin",
           PrintAttr::Reset());
-    print(kernel_console_attribute, Foreground<Color::Black>(), "Black ");
-    print(kernel_console_attribute, Foreground<Color::Blue>(), "Blue ");
-    print(kernel_console_attribute, Foreground<Color::Green>(), "Green ");
-    print(kernel_console_attribute, Foreground<Color::Cyan>(), "Cyan ");
-    print(kernel_console_attribute, Foreground<Color::Red>(), "Red ");
-    print(kernel_console_attribute, Foreground<Color::Magenta>(), "Magenta ");
-    print(kernel_console_attribute, Foreground<Color::Brown>(), "Brown ");
-    print(kernel_console_attribute, Foreground<Color::LightGray>(), "LightGray ");
-    print(kernel_console_attribute, Foreground<Color::DarkGray>(), "DarkGray ");
-    print(kernel_console_attribute, Foreground<Color::LightBlue>(), "LightBlue ");
-    print(kernel_console_attribute, Foreground<Color::LightGreen>(), "LightGreen ");
-    print(kernel_console_attribute, Foreground<Color::LightCyan>(), "LightCyan ");
-    print(kernel_console_attribute, Foreground<Color::LightRed>(), "LightRed ");
-    print(kernel_console_attribute, Foreground<Color::Pink>(), "Pink ");
-    print(kernel_console_attribute, Foreground<Color::Yellow>(), "Yellow ");
-    print(kernel_console_attribute, Foreground<Color::White>(), "White \n");
-    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End\n",
+    print(kernel_console_attribute, Foreground<Color::Black>(), "\n Black ");
+    print(kernel_console_attribute, Foreground<Color::Blue>(), " Blue ");
+    print(kernel_console_attribute, Foreground<Color::Green>(), " Green ");
+    print(kernel_console_attribute, Foreground<Color::Cyan>(), " Cyan ");
+    print(kernel_console_attribute, Foreground<Color::Red>(), " Red ");
+    print(kernel_console_attribute, Foreground<Color::Magenta>(), " Magenta ");
+    print(kernel_console_attribute, Foreground<Color::Brown>(), " Brown ");
+    print(kernel_console_attribute, Foreground<Color::LightGray>(), " LightGray ");
+    print(kernel_console_attribute, Foreground<Color::DarkGray>(), " DarkGray ");
+    print(kernel_console_attribute, Foreground<Color::LightBlue>(), " LightBlue ");
+    print(kernel_console_attribute, Foreground<Color::LightGreen>(), " LightGreen ");
+    print(kernel_console_attribute, Foreground<Color::LightCyan>(), " LightCyan ");
+    print(kernel_console_attribute, Foreground<Color::LightRed>(), " LightRed ");
+    print(kernel_console_attribute, Foreground<Color::Pink>(), " Pink ");
+    print(kernel_console_attribute, Foreground<Color::Yellow>(), " Yellow ");
+    print(kernel_console_attribute, Foreground<Color::White>(), " White \n");
+    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End",
           PrintAttr::Reset());
+    print(kernel_console_attribute, '\n');
+    print(kernel_console_attribute, Foreground<Color::ColorValue>(0xA0c000), Background<Color::Black>(),
+          " NaOS: Nano Operating System (VGA mode) ", PrintAttr::Reset(), '\n');
 }
 
 void *get_video_addr() { return frame_buffer; }

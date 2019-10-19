@@ -33,7 +33,7 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
     u64 end = (u64)_kernel_text_end;
     u64 start = (u64)_kernel_text_start;
     trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
-                 trace::Foreground<trace::Color::Red>(), "stack trace: \n", trace::PrintAttr::Reset());
+                 trace::Foreground<trace::Color::Red>(), "stack trace:", trace::PrintAttr::Reset(), '\n');
     int i = 0;
     while (rbp != 0)
     {
@@ -63,7 +63,7 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
             break;
     }
     trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
-                 trace::Foreground<trace::Color::Red>(), "end of stack trace. \n", trace::PrintAttr::Reset());
+                 trace::Foreground<trace::Color::Red>(), "end of stack trace. ", trace::PrintAttr::Reset(), '\n');
 
     if (regs != nullptr)
     {
@@ -71,8 +71,8 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
         __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : : "memory");
         u64 gs_base, k_gs_base, fs_base;
         trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::Black>(),
-                     trace::Background<trace::Color::LightGray>(), "registers:\n", trace::PrintAttr::Reset(),
-                     "rax=", (void *)regs->rax, ", rbx=", (void *)regs->rbx, ", rcx=", (void *)regs->rcx,
+                     trace::Background<trace::Color::LightGray>(), "registers:", trace::PrintAttr::Reset(),
+                     "\nrax=", (void *)regs->rax, ", rbx=", (void *)regs->rbx, ", rcx=", (void *)regs->rcx,
                      ", rdx=", (void *)regs->rdx, "\n, r8=", (void *)regs->r8, ", r9=", (void *)regs->r9,
                      ", r10=", (void *)regs->r10, ", r11=", (void *)regs->r11, "\n, r12=", (void *)regs->r12,
                      ", r13=", (void *)regs->r13, ", r14=", (void *)regs->r14, ", r15=", (void *)regs->r15,
@@ -89,7 +89,8 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
                      ", gs_base=", (void *)gs_base, ", fs_base=", (void *)fs_base, '\n');
 
         trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::Black>(),
-                     trace::Background<trace::Color::LightGray>(), "end of registers.\n", trace::PrintAttr::Reset());
+                     trace::Background<trace::Color::LightGray>(), "end of registers.", trace::PrintAttr::Reset(),
+                     '\n');
     }
     return (void *)rbp;
 }

@@ -382,6 +382,7 @@ template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAt
 void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
 {
     attribute = default_console_attribute;
+    attribute.set_attribute(PrintAttr::reset);
     print_inner("\0", attribute);
 }
 

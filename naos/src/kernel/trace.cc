@@ -329,7 +329,7 @@ NoReturn void keep_panic(const arch::idt::regs_t *regs)
     uctx::UnInterruptableContext uic;
     print_stack(regs, 30);
     trace::print(kernel_console_attribute, trace::Foreground<trace::Color::Pink>(),
-                 "Kernel panic! Try to connect with debugger.\n", trace::PrintAttr::Reset());
+                 "Kernel panic! Try to connect with debugger.", trace::PrintAttr::Reset(), '\n');
     arch::device::vga::flush();
     for (;;)
         ;
