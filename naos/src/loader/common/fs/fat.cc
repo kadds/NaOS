@@ -11,9 +11,9 @@ int Fat::try_open_partition(partition ppartition)
         gPrinter->printf("can not load fat data, error code %d\n", reader->error_code());
         return -1;
     }
-    if (!(header.discription >= 0xFA || (header.discription >= 0xED && header.discription <= 0xEF) ||
-          header.discription == 0xE5 || header.discription == 0xF0 || header.discription == 0xF4 ||
-          header.discription == 0xF5 || header.discription == 0xF8 || header.discription == 0xF9))
+    if (!(header.description >= 0xFA || (header.description >= 0xED && header.description <= 0xEF) ||
+          header.description == 0xE5 || header.description == 0xF0 || header.description == 0xF4 ||
+          header.description == 0xF5 || header.description == 0xF8 || header.description == 0xF9))
     {
         return -2;
     }
@@ -61,9 +61,9 @@ u32 Fat::get_fat(u32 cluster)
 }
 char **split_url(const char *url, int &count)
 {
-    char **url_componments;
+    char **url_components;
     count = 0;
-    int count_componments[255];
+    int count_components[255];
     int i = 0;
     if (*url != '\0')
         url++;
@@ -73,7 +73,7 @@ char **split_url(const char *url, int &count)
     {
         if (*temp_url == '\\' || *temp_url == '/')
         {
-            count_componments[count] = i;
+            count_components[count] = i;
             i = 0;
             count++;
         }
@@ -83,22 +83,22 @@ char **split_url(const char *url, int &count)
     }
 
     // last : file name
-    count_componments[count++] = i;
+    count_components[count++] = i;
 
     temp_url = url;
-    url_componments = (char **)alloc(sizeof(char *) * count, alignof(char *));
+    url_components = (char **)alloc(sizeof(char *) * count, alignof(char *));
 
     for (i = 0; i < count; i++)
     {
-        url_componments[i] = (char *)alloc(sizeof(char) * count_componments[i] + 1, alignof(char));
-        for (int j = 0; j < count_componments[i]; j++)
+        url_components[i] = (char *)alloc(sizeof(char) * count_components[i] + 1, alignof(char));
+        for (int j = 0; j < count_components[i]; j++)
         {
-            url_componments[i][j] = *temp_url++;
+            url_components[i][j] = *temp_url++;
         }
         temp_url++;
     }
 
-    return url_componments;
+    return url_components;
 }
 bool strcmp(const char *str1, const char *str2)
 {

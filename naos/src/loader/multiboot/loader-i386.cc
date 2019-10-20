@@ -101,7 +101,7 @@ finded:
     printer.printf("kernel size: %u, reserved space size:. %u, RFS size: %u\n", kernel_size,
                    (u32)kernel->reserved_space_size, rfs_size);
 
-    if (kernel->reserved_space_size > 0x1000)
+    if (kernel->reserved_space_size > 0x10000)
     {
         printer.printf("To much memory kernel want to reserved.\n");
         return;

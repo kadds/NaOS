@@ -42,7 +42,7 @@ struct fat_header
     u8 number_of_fat;
     u16 max_root_count;
     u16 selector_all_count_16;
-    u8 discription;
+    u8 description;
     u16 selector_per_fat;
     u16 selector_per_track;
     u16 number_of_track_heads;
@@ -125,7 +125,8 @@ class Fat
     void load_fat(u32 selector_index);
 
   public:
-    Fat(ATADiskReader *reader) : reader(reader){};
+    Fat(ATADiskReader *reader)
+        : reader(reader){};
     ~Fat(){};
     int try_open_partition(partition partition);
     int read_file(const char *url, void *&buffer);

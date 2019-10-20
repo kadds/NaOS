@@ -16,7 +16,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-red-zone -Wframe-larger-than=512 -p
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -Og")
 set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
 
 set(CMAKE_CXX_FLAGS_RELEASE "-g -O2 -fvisibility-inlines-hidden")
