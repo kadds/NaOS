@@ -246,6 +246,7 @@ struct console_attribute
     u64 color;
     u64 attr;
     char sgr_string[64];
+    char temp_format_str[128];
     console_attribute()
         : color(0)
         , attr(0)
@@ -402,51 +403,42 @@ void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
 
 template <typename Head> void print_fmt_text(console_attribute &attribute, const Head &head)
 {
-    char buf[128];
     using RealType = typename remove_extent<std::decay_t<decltype(head)>>::type;
     util::formatter::format<RealType> fmt;
-    print_inner(fmt(head, buf, 128), attribute);
+    print_inner(fmt(head, attribute.temp_format_str, 128), attribute);
 }
 
-struct dispatcher
+template <typename Head,
+          typename std::enable_if_t<!has_member_attr<Head>::value & !has_member_flag<Head>::value> * = nullptr>
+auto dispatch(console_attribute &attribute, const Head &head)
 {
-    template <typename Head,
-              typename std::enable_if_t<!has_member_attr<Head>::value & !has_member_flag<Head>::value> * = nullptr>
-    auto dispatch(console_attribute &attribute, const Head &head)
-    {
-        return print_fmt_text(attribute, head);
-    }
-
-    template <template <typename S> typename Head, typename S>
-    auto dispatch(console_attribute &attribute, const Head<S> &head)
-    {
-        return set_font_color_attr(attribute, head);
-    }
-
-    template <typename Head, typename std::enable_if_t<has_member_attr<Head>::value> * = nullptr>
-    auto dispatch(console_attribute &attribute, const Head &head)
-    {
-        return set_font_text_attr(attribute, head);
-    }
-
-    template <typename Head, typename std::enable_if_t<has_member_flag<Head>::value> * = nullptr>
-    auto dispatch(console_attribute &attribute, const Head &head)
-    {
-        return set_font_text_flag(attribute, head);
-    }
-};
-
-template <typename Head> void print_fmt(console_attribute &attribute, const Head &head)
-{
-    dispatcher dispatch;
-    dispatch.dispatch(attribute, head);
+    return print_fmt_text(attribute, head);
 }
+
+template <template <typename S> typename Head, typename S>
+auto dispatch(console_attribute &attribute, const Head<S> &head)
+{
+    return set_font_color_attr(attribute, head);
+}
+
+template <typename Head, typename std::enable_if_t<has_member_attr<Head>::value> * = nullptr>
+auto dispatch(console_attribute &attribute, const Head &head)
+{
+    return set_font_text_attr(attribute, head);
+}
+
+template <typename Head, typename std::enable_if_t<has_member_flag<Head>::value> * = nullptr>
+auto dispatch(console_attribute &attribute, const Head &head)
+{
+    return set_font_text_flag(attribute, head);
+}
+
+template <typename Head> void print_fmt(console_attribute &attribute, const Head &head) { dispatch(attribute, head); }
 
 template <typename Head, typename... Args>
 void print_fmt(console_attribute &attribute, const Head &head, const Args &... args)
 {
-    dispatcher dispatch;
-    dispatch.dispatch(attribute, head);
+    dispatch(attribute, head);
     print_fmt(attribute, args...);
 }
 
