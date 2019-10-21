@@ -27,7 +27,8 @@ void init(const kernel_start_args *args)
 
     void *back_buffer = nullptr;
     // Find a frame size memory as backbuffer
-    kernel_memory_map_item *mm_item = memory::kernel_phyaddr_to_virtaddr(args->get_mmap_ptr()) + args->mmap_count - 1;
+    kernel_memory_map_item *mm_item =
+        ((kernel_memory_map_item *)memory::kernel_phyaddr_to_virtaddr(args->mmap) + args->mmap_count - 1);
     const u64 align = 0x1000;
     for (i64 i = args->mmap_count - 1; i >= 0; i--, mm_item--)
     {

@@ -12,6 +12,7 @@
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/util/memory.hpp"
 
 ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 {
@@ -34,18 +35,16 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
     }
 }
 
-ExportC NoReturn void _kstart(const kernel_start_args *args);
-
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 {
-    bss_init((void *)_bss_unpaged_start_addr, (void *)_bss_unpaged_end_addr);
-    bss_init((void *)_bss_start_addr, (void *)_bss_end_addr);
+    bss_init((void *)_bss_unpaged_start, (void *)_bss_unpaged_end);
     arch::temp_init(args);
     return (u64)&_kstart;
 }
 
 ExportC NoReturn void _kstart(const kernel_start_args *args)
 {
+    util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     static_init();
     arch::init(args);
     irq::init();
@@ -53,7 +52,7 @@ ExportC NoReturn void _kstart(const kernel_start_args *args)
     trace::debug("VFS init...");
     fs::vfs::init();
     trace::debug("Root file system init...");
-    fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->get_rfs_ptr()), args->rfs_size);
+    fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();
 
     task::init();

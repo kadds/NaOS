@@ -7,37 +7,32 @@ kernel_offset = base_virtual_addr;
 SECTIONS
 {
     . = base_phy_addr;
+    _file_start = .;
     .unpaged.text : 
     {
-        *(.start_kernel)
+        KEEP(*(.start_kernel))
+        KEEP(*(.start_multiboot2))
         *(.unpaged.text)
     }
-    . = ALIGN(4);
+    . = ALIGN(8);
     .unpaged.data : 
     {
         *(.unpaged.data)
     }
-    . = ALIGN(4);
-    .unpaged.bss : 
-    {
-        _bss_unpaged_start_addr = .;
-        *(.unpaged.bss)
-        _bss_unpaged_end_addr = .;
-    }
+
     . += kernel_offset;
-    _kernel_text_start = .;
+    _start_of_kernel_data = . - kernel_offset;
     .text : AT(ADDR(.text) - kernel_offset)
     {
         *(.text*)
-    }    
-    _kernel_text_end = .;
+    }
 
-    . = ALIGN(4);
+    . = ALIGN(8);
     .data : AT(ADDR(.data) - kernel_offset)
     {
-        *(.data .rodata*)
+        *(.data .rodata* COMMON)
     }
-    . = ALIGN(4);
+    . = ALIGN(8);
     .init_array : AT(ADDR(.init_array) - kernel_offset)
     {
         __init_array_start = .;
@@ -45,14 +40,31 @@ SECTIONS
         __init_array_end = .;
     }
     _end_of_init_array = .;
-    . = ALIGN(4);
+    . = ALIGN(8);
+    _end_kernel_data = .  - kernel_offset;
+    
+    _file_end = . - kernel_offset;
+    _bss_start = . - kernel_offset;
+    . = ALIGN(8);
     .bss : AT(ADDR(.bss) - kernel_offset)
     {
         _bss_start_addr = . - kernel_offset;
-        *(.bss COMMON)
-        . = ALIGN(4);
+        *(.bss)
+        . = ALIGN(8);
         _bss_end_addr = . - kernel_offset;
     }
-    _bss_len = _bss_end_addr - (_end_of_init_array - kernel_offset);
-    _end = .;
+    . = ALIGN(8);
+    _bss_end = . - kernel_offset;
+    . = ALIGN(4);
+    . = _bss_start;
+    
+    .unpaged.bss :
+    {
+        _bss_unpaged_start = .;
+        *(.unpaged.bss)
+        . = ALIGN(8);
+        _bss_unpaged_end = .;
+    }
+    
+    _bss_len = _bss_end - _bss_start;
 }

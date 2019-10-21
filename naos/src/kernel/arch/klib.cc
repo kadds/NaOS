@@ -30,8 +30,8 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
 
     trace::print(trace::kernel_console_attribute, "\nend of stack data.\n");
 
-    u64 end = (u64)_kernel_text_end;
-    u64 start = (u64)_kernel_text_start;
+    u64 end = (u64)_file_end + (u64)base_phy_addr;
+    u64 start = (u64)_file_start + (u64)base_phy_addr;
     trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
                  trace::Foreground<trace::Color::Red>(), "stack trace:", trace::PrintAttr::Reset(), '\n');
     int i = 0;

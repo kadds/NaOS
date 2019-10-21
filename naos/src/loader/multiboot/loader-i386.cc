@@ -128,13 +128,13 @@ finded:
     args->stack_size = 0x8000;
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
-    args->set_rfs_ptr(vmrfs);
-    args->rfs_size = rfs_size;
+    args->rfsimg_start = (u64)vmrfs;
+    args->rfsimg_size = rfs_size;
 
     const char flags[] = "trace.debug=true;";
+    args->kernel_flags = (u64)alloc_data(current_data_ptr, sizeof(flags), 1);
 
-    args->set_kernel_flags_ptr((char *)alloc_data(current_data_ptr, sizeof(flags), 1));
-    memcpy(args->get_kernel_flags_ptr(), flags, sizeof(flags));
+    memcpy((void *)(u32)args->kernel_flags, flags, sizeof(flags));
 
     if (CHECK_FLAG(addr->flags, 6))
     {
@@ -144,12 +144,11 @@ finded:
             printer.printf("To many memory map items.\n");
             return;
         }
-        args->set_mmap_ptr((kernel_memory_map_item *)alloc_data(current_data_ptr,
-                                                                sizeof(kernel_memory_map_item) * args->mmap_count, 8));
+        args->mmap = (u64)(alloc_data(current_data_ptr, sizeof(kernel_memory_map_item) * args->mmap_count, 8));
         for (u32 i = 0; i < args->mmap_count; i++)
         {
             auto &ptr = *(((multiboot_memory_map_t *)addr->mmap_addr) + i);
-            auto &target = args->get_mmap_ptr()[i];
+            auto &target = ((kernel_memory_map_item *)args->mmap)[i];
             target.addr = ptr.addr;
             target.len = ptr.len;
             switch (ptr.type)

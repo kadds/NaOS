@@ -3,6 +3,20 @@
 #include "common.hpp"
 #include "kernel/arch/idt.hpp"
 #include "task.hpp"
+extern volatile char base_virtual_addr[];
+extern volatile char base_phy_addr[];
+extern volatile char _file_start[];
+
+extern volatile char _start_of_kernel_data[];
+extern volatile char _end_kernel_data[];
+
+extern volatile char _file_end[];
+
+extern volatile char _bss_start[];
+extern volatile char _bss_end[];
+
+extern volatile char _bss_unpaged_start[];
+extern volatile char _bss_unpaged_end[];
 
 ExportC void _reload_segment(u64 cs, u64 ss);
 

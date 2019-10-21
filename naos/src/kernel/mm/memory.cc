@@ -1,6 +1,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
+#include "kernel/arch/klib.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
@@ -119,7 +120,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     if (args->mmap_count == 0)
         trace::panic("mmap info size shouldn't 0");
     global_zones.count = 0;
-    kernel_memory_map_item *mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
+    kernel_memory_map_item *mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
     max_memory_available = 0;
     max_memory_maped = 0;
 
@@ -142,7 +143,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     trace::info("memory available ", max_memory_available, " -> ", max_memory_available >> 10, "KB -> ",
                 max_memory_available >> 20, "MB -> ", max_memory_available >> 30, "GB");
 
-    mm_item = kernel_phyaddr_to_virtaddr(args->get_mmap_ptr());
+    mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
 
     global_zones.zones = NewArray<zone_t>(VirtBootAllocatorV, global_zones.count);
     int cid = 0;

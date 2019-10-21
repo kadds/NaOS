@@ -18,6 +18,10 @@ struct rootfs_head
 
 void init(byte *start_root_image, u64 size)
 {
+    if (start_root_image == nullptr || size == 0)
+    {
+        trace::panic("Can't find root image.");
+    }
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
     global_root_file_system->load(nullptr, start_root_image, size);

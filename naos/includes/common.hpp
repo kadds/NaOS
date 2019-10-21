@@ -78,23 +78,13 @@ struct kernel_start_args
     u32 fb_width;
     u32 fb_height;
     u32 fb_bbp;
-    u32 fb_type;  ///< 2: text mode, 1: graphics mode, 0: index mode
-    u64 rfs_size; ///< Root file system image size
-
-  private:
+    u32 fb_type; ///< 2: text mode, 1: graphics mode, 0: index mode
     u64 mmap;
-    u64 kernel_flags;
-    u64 rfs_start;
-
-  public:
     u64 mmap_count;
-    void set_mmap_ptr(kernel_memory_map_item *item_ptr) { mmap = (u64)item_ptr; }
-    void set_kernel_flags_ptr(char *ptr) { kernel_flags = (u64)ptr; }
-    void set_rfs_ptr(void *ptr) { rfs_start = (u64)ptr; }
 
-    kernel_memory_map_item *get_mmap_ptr() const { return (kernel_memory_map_item *)mmap; }
-    char *get_kernel_flags_ptr() const { return (char *)kernel_flags; }
-    void *get_rfs_ptr() const { return (void *)rfs_start; };
+    u64 kernel_flags;
+    u64 rfsimg_start;
+    u64 rfsimg_size; ///< Root file system image size
 
 } PackStruct;
 
