@@ -3,11 +3,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 Unpaged_Bss_Section u32 data_offset;
-void Unpaged_Text_Section *alloca(u32 size, u32 align)
+void *Unpaged_Text_Section alloca(u32 size, u32 align)
 {
-    char *start = (char *)(((u64)data_offset + align - 1) & ~(align - 1));
-    data_offset = (u64)start + size;
-    return start;
+    u32 start = (data_offset + align - 1) & ~(align - 1);
+    data_offset = (u32)start + size;
+    return (void *)(u64)start;
 }
 int Unpaged_Text_Section strcmp(const char *str1, const char *str2)
 {
@@ -23,19 +23,80 @@ int Unpaged_Text_Section strcmp(const char *str1, const char *str2)
     }
     return 0;
 }
+
+int Unpaged_Text_Section strlen(const char *str)
+{
+    int i = 0;
+    while (*str++ != 0)
+        i++;
+    return i++;
+}
+
+void Unpaged_Text_Section memcpy(void *dst, const void *source, u32 len)
+{
+    char *d = (char *)dst;
+    const char *s = (const char *)source;
+    for (u32 i = 0; i < len; i++)
+    {
+        *d++ = *s++;
+    }
+}
+
 Unpaged_Data_Section const char rfsimage[] = "rfsimg";
+
+bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *end)
+{
+    for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + ((tags->size + 7) & ~7)))
+    {
+        if (tags->type == MULTIBOOT_TAG_TYPE_MODULE)
+        {
+            multiboot_tag_module *md = (multiboot_tag_module *)tags;
+            if (strcmp((char *)md->cmdline, rfsimage) == 0)
+            {
+                *start = (u64)md->mod_start;
+                *end = (u64)md->mod_end;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+void Unpaged_Text_Section panic()
+{
+    while (1)
+    {
+        __asm__ __volatile__("hlt\n\t" : : : "memory");
+    }
+}
 
 ExportC void Unpaged_Text_Section _multiboot_main(void *header)
 {
     if (header == nullptr)
-        while (1)
-            ;
+        panic();
     u32 len = *(u32 *)header;
     multiboot_tag *tags = (multiboot_tag *)((byte *)header + 8);
-    data_offset = (u64)header + len;
-    kernel_start_args *args = (kernel_start_args *)alloca(sizeof(kernel_start_args), 8);
+    u32 start, end;
+    if (!find_rfsimage(tags, &start, &end))
+        panic();
+    u32 offset;
+    if (end <= 0x1000000) // in lower 16 MB
+    {
+        offset = end;
+    }
+    else if ((u64)header + len < start - 0x1000) // 1KB data
+    {
+        offset = (u64)header + len;
+    }
+    else
+        panic();
 
-    args->mmap_count = 0;
+    offset = (offset + 0x1000 - 1) & ~(0x1000 - 1);
+    data_offset = offset;
+    kernel_start_args *args = (kernel_start_args *)alloca(sizeof(kernel_start_args), 8);
+    args->rfsimg_start = (u64)start;
+    args->rfsimg_size = end - start;
+    args->data_base = offset;
+
     for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + ((tags->size + 7) & ~7)))
     {
         switch (tags->type)
@@ -67,25 +128,32 @@ ExportC void Unpaged_Text_Section _multiboot_main(void *header)
                 args->fb_pitch = fb->common.framebuffer_pitch;
                 break;
             }
-            case MULTIBOOT_TAG_TYPE_MODULE: {
-                multiboot_tag_module *md = (multiboot_tag_module *)tags;
-                if (strcmp((char *)md->cmdline, rfsimage) == 0)
-                {
-                    args->rfsimg_start = (u64)md->mod_start;
-                    args->rfsimg_size = (md->mod_end - md->mod_start);
-                }
+            case MULTIBOOT_TAG_TYPE_CMDLINE: {
+                multiboot_tag_string *str = (multiboot_tag_string *)tags;
+                int len = strlen(str->string);
+                void *p = alloca(len, 1);
+                memcpy(p, str->string, len);
+                args->command_line = (u64)p;
+                break;
+            }
+            case MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME: {
+                multiboot_tag_string *str = (multiboot_tag_string *)tags;
+                int len = strlen(str->string);
+                void *p = alloca(len, 1);
+                memcpy(p, str->string, len);
+                args->boot_loader_name = (u64)p;
                 break;
             }
         }
     }
+
     args->size_of_struct = sizeof(kernel_start_args);
     args->kernel_base = (u64)base_phy_addr;
-    args->kernel_size = (u64)_bss_end;
-    args->data_base = (u64)_bss_end;
+    args->kernel_size = (u64)_bss_end - (u64)base_phy_addr;
 
     u64 rsp = (u64)base_virtual_addr;
 
-    args->data_size = (u32)data_offset - (u32)args->data_base;
+    args->data_size = data_offset - args->data_base;
     _init_unpaged(args);
     __asm__ __volatile__("addq	%0,	%%rsp	\n\t" : : "r"(rsp) : "memory");
     args = (kernel_start_args *)((byte *)args + rsp);

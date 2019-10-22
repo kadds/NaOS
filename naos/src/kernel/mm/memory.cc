@@ -75,14 +75,14 @@ const struct
     {960, "kmalloc-960"},   {1024, "kmalloc-1024"}, {1536, "kmalloc-1536"}, {2048, "kmalloc-2048"},
     {3072, "kmalloc-3072"}, {4096, "kmalloc-4096"}, {6144, "kmalloc-6144"}, {8192, "kmalloc-8192"}};
 
-void tag_zone_buddy_memory(char *start_addr, char *end_addr)
+void tag_zone_buddy_memory(void *start_addr, void *end_addr)
 {
     for (int i = 0; i < global_zones.count; i++)
     {
         auto &zone = global_zones.zones[i];
 
-        u64 start = start_addr > (char *)zone.start ? (u64)start_addr : (u64)zone.start;
-        u64 end = end_addr < (char *)zone.end ? (u64)end_addr : (u64)zone.end;
+        u64 start = (char *)start_addr > (char *)zone.start ? (u64)start_addr : (u64)zone.start;
+        u64 end = (char *)end_addr < (char *)zone.end ? (u64)end_addr : (u64)zone.end;
         if (start < end)
         {
             u64 start_offset = (start - (u64)zone.start) / page_size;
@@ -180,21 +180,53 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         }
         cid++;
     }
+    // map the kernel and data
+    auto start_kernel = args->kernel_base & ~(page_size - 1);
+    auto end_kernel = (args->kernel_base + args->kernel_size + page_size - 1) & ~(page_size - 1);
 
-    char *end_kernel = (char *)PhyBootAllocator::current_ptr_address() + sizeof(slab_cache_pool) * 3 +
-                       sizeof(void *) * 2 * 5 + sizeof(vm::vm_allocator) + fix_memory_limit;
-    char *start_kernel = (char *)base_phy_addr;
-    end_kernel = (char *)(((u64)end_kernel + page_size - 1) & ~(page_size - 1));
-    // Do not use 0x0 - 0x100000 lower 1MB memory
-    tag_zone_buddy_memory(0x0, (char *)0x100000);
+    auto start_data = (args->data_base) & ~(page_size - 1);
+    auto end_data = (u64)PhyBootAllocator::current_ptr_address() + sizeof(slab_cache_pool) * 3 +
+                    sizeof(void *) * 2 * 5 + sizeof(vm::vm_allocator) + fix_memory_limit;
+    end_data = (end_data + page_size - 1) & ~(page_size - 1);
+
+    if (start_data < end_kernel)
+    {
+        start_data = end_kernel;
+        trace::warning("Data space is in kernel code space.");
+        if (end_data < start_data)
+        {
+            end_data = start_data;
+        }
+    }
+
+    auto start_image_data = (args->rfsimg_start) & ~(page_size - 1);
+    auto end_image_data = (args->rfsimg_start + args->rfsimg_size + page_size - 1) & ~(page_size - 1);
+    if (start_image_data < end_kernel)
+    {
+        trace::panic("Image space is in kernel code space.");
+    }
+    if (end_image_data <= start_data || start_image_data >= end_data)
+    {
+        tag_zone_buddy_memory((void *)start_image_data, (void *)end_image_data);
+    }
+    // Don't use 0x0 - 0x100000 lower 1MB memory
+    tag_zone_buddy_memory((void *)0x0, (void *)0x100000);
     // tell buddy system kernel used
-    tag_zone_buddy_memory(start_kernel, end_kernel);
+    tag_zone_buddy_memory((void *)start_kernel, (void *)end_kernel);
+    tag_zone_buddy_memory((void *)start_data, (void *)end_data);
+
+    trace::debug("Kernel(code):", (void *)start_kernel, "-", (void *)end_kernel,
+                 ", length:", (end_kernel - start_kernel), " -> ", (end_kernel - start_kernel) >> 10, "Kib");
+
+    trace::debug("Kernel(boot data):", (void *)start_data, "-", (void *)end_data, ", length:", (end_data - start_data),
+                 " -> ", (end_data - start_data) >> 10, "Kib");
+
+    trace::debug("Kernel(image data):", (void *)start_image_data, "-", (void *)end_image_data,
+                 ", length:", (end_image_data - start_image_data), " -> ", (end_image_data - start_image_data) >> 10,
+                 "Kib");
+
     KernelBuddyAllocatorV = New<BuddyAllocator>(VirtBootAllocatorV);
 
-    trace::debug("kernel used address:", (void *)start_kernel, "-", (void *)end_kernel,
-                 ", length:", (end_kernel - start_kernel));
-
-    // auto r = ((buddy_contanier *)global_zones.zones[1].buddy_impl)->buddys->gen_tree();
     global_kmalloc_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
     global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
     global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
@@ -211,7 +243,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
 
     PhyBootAllocatorV->discard();
-    kassert((char *)PhyBootAllocatorV->current_ptr_address() <= end_kernel, "BootAllocator is Out of memory");
+    kassert((u64)PhyBootAllocatorV->current_ptr_address() <= end_data, "BootAllocator is Out of memory");
 }
 
 irq::request_result _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)

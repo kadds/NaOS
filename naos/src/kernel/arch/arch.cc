@@ -22,6 +22,7 @@ void init(const kernel_start_args *args)
 {
     trace::early_init();
     device::vga::init(args);
+    trace::debug("boot from ", (const char *)args->boot_loader_name);
     if (sizeof(kernel_start_args) != args->size_of_struct)
     {
         trace::panic("kernel args is invalid.");

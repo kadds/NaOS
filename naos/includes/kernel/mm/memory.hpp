@@ -7,7 +7,7 @@
 namespace memory
 {
 
-void tag_zone_buddy_memory(char *start_addr, char *end_addr);
+void tag_zone_buddy_memory(void *start_addr, void *end_addr);
 
 void init(const kernel_start_args *args, u64 fix_memory_limit);
 u64 get_max_available_memory();

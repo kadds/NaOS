@@ -124,17 +124,10 @@ finded:
     args->kernel_base = base_kernel_ptr;
     args->kernel_size = kernel_size;
     // 32 kb
-    args->stack_base = 0x8000;
-    args->stack_size = 0x8000;
     args->data_base = base_data_ptr;
     args->data_size = 0x8;
     args->rfsimg_start = (u64)vmrfs;
     args->rfsimg_size = rfs_size;
-
-    const char flags[] = "trace.debug=true;";
-    args->kernel_flags = (u64)alloc_data(current_data_ptr, sizeof(flags), 1);
-
-    memcpy((void *)(u32)args->kernel_flags, flags, sizeof(flags));
 
     if (CHECK_FLAG(addr->flags, 6))
     {
@@ -190,6 +183,9 @@ finded:
     args->fb_type = addr->framebuffer_type;
     args->fb_pitch = addr->framebuffer_pitch;
 
+    const char name[] = "multiboot V1";
+    args->boot_loader_name = (u32)alloc_data(current_data_ptr, sizeof(name), 1);
+    memcpy((void *)(u32)args->boot_loader_name, name, sizeof(name));
     printer.printf("Enter long mode & Start kernel...\n");
     args->data_size = current_data_ptr - base_data_ptr;
     run_kernel((void *)(kernel->start_addr + base_kernel_ptr), args);

@@ -69,22 +69,22 @@ struct kernel_start_args
     u64 size_of_struct; ///< Struct size. Ready for expansion
     u64 kernel_base;
     u64 kernel_size;
-    u64 stack_base;
-    u64 stack_size;
-    u64 data_base;
+    u64 data_base; ///< Always placed after the kernel image
     u64 data_size;
     u64 fb_addr; ///< Linear frame buffer physical address
     u32 fb_pitch;
     u32 fb_width;
     u32 fb_height;
     u32 fb_bbp;
-    u32 fb_type; ///< 2: text mode, 1: graphics mode, 0: index mode
-    u64 mmap;
-    u64 mmap_count;
+    u32 fb_type;    ///< 2: text mode, 1: graphics mode, 0: index mode
+    u64 mmap;       ///< Pointer, the memory map address
+    u64 mmap_count; ///< The memory map count
 
-    u64 kernel_flags;
-    u64 rfsimg_start;
-    u64 rfsimg_size; ///< Root file system image size
+    u64 rfsimg_start; ///< Root file system image address, must be aligned to page size
+    u64 rfsimg_size;  ///< Root file system image size
+
+    u64 command_line;     ///< Pointer, kernel boot command string
+    u64 boot_loader_name; ///< Pointer, like "grub2", "efi" string
 
 } PackStruct;
 

@@ -47,6 +47,12 @@ _frame_buffer_start:
 .long 32
 _frame_buffer_end:
 .align 8
+_module_start:
+.short MULTIBOOT_HEADER_TAG_MODULE_ALIGN
+.short 0
+.long _module_end-_module_start
+_module_end:
+.align 8
 .short MULTIBOOT_HEADER_TAG_END
 .short 0
 .long 8
