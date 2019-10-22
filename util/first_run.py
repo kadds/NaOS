@@ -8,7 +8,3 @@ if __name__ == "__main__":
     set_self_dir()
     base = "../build/"
     os.mkdir(base)
-    os.mkdir(base + "debug/")
-    os.mkdir(base + "debug/loader/")
-    os.mkdir(base + "debug/system/")
-    os.mkdir(base + "debug/rfsimage/")

@@ -26,7 +26,13 @@ w
 Y
 '''
 
-boot_grub = '''menuentry "NaOS" {
+boot_grub = '''root=(hd0,gpt3);
+menuentry "NaOS multiboot2" {
+multiboot2 /system/kernel
+module2 /system/rfsimg rfsimg
+boot
+}
+menuentry "NaOS" {
 multiboot (hd0,gpt2)/loader-multiboot
 boot
 }

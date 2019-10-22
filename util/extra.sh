@@ -6,7 +6,8 @@ To=$2
 DBGTarget=${To}.dbg
 STarget=${To}.dbg.S
 echo "target is "$Target
-
+dir=`dirname ${DBGTarget}`
+mkdir -p ${dir}
 mv ${Target} ${DBGTarget}
 if [ "$Debug"x == "Debug"x ]; then
     objcopy -O binary -R .note -R .comment -S ${DBGTarget} ${Target}
