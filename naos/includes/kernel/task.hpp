@@ -45,7 +45,8 @@ struct process_t
     u64 parent_pid;           ///< The parent process id
     mm_info_t *mm_info;       ///< Memory map infomation
     handle_table_t res_table; ///< Resource table
-    void *thread_list;        ///< The threads belong to process
+    lock::spinlock_t thread_list_lock;
+    void *thread_list; ///< The threads belong to process
     void *schedule_data;
 };
 namespace thread_attributes
@@ -53,12 +54,28 @@ namespace thread_attributes
 enum attributes
 {
     need_schedule = 1,
-
+    block = 2,
 };
 } // namespace thread_attributes
 struct preempt_t
 {
-    u16 preempt_counter;
+  private:
+    std::atomic_int preempt_counter;
+
+  public:
+    bool preemptible() { return preempt_counter == 0; }
+    void enable_preempt() { --preempt_counter; }
+    void disable_preempt() { ++preempt_counter; }
+    preempt_t()
+        : preempt_counter(0)
+    {
+    }
+};
+struct statistics_t
+{
+    u64 sleep_time;
+    u64 kernel_time;
+    u64 userland_time;
 };
 
 /// The thread struct
@@ -77,15 +94,15 @@ struct thread_t
     void *running_code_entry_address;
 
     /// from 0 - 255, 0 is the highest priority, 100 - 139 to user thread, default is 125
-    i8 static_priority;
-
+    u8 static_priority;
     /// dynamic priority
     ///
-    /// -128 - 128, miniumu value means this is a CPU bound thread, maximum value means is a IO
+    /// -128 - 128, miniumu value means a CPU bound thread, maximum value means a IO
     /// bound thread, the default value is 0.
     i8 dynamic_priority;
-    u16 cpuid;
-    u64 sleep_time;
+    /// run in cpu core
+    u32 cpuid;
+    statistics_t statistics;
     preempt_t preempt_data;
 };
 
@@ -107,6 +124,7 @@ enum exec_flags : flag_t
     immediately = 1,
 };
 } // namespace exec_flags
+
 u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flag);
 
 u64 do_exec(exec_segment code_segment, const char *args, const char *env, flag_t flag);
@@ -117,6 +135,7 @@ namespace fork_flags
 enum fork_flags : flag_t
 {
     vm_sharing = 1,
+    kernel_thread = 2,
 };
 } // namespace fork_flags
 
@@ -140,4 +159,8 @@ inline thread_t *current(void *stack) { return (thread_t *)arch::task::get_task(
 inline process_t *current_process() { return current()->process; }
 inline process_t *current_process(void *stack) { return current(stack)->process; }
 
+void yield_preempt();
+
+void disable_preempt();
+void enable_preempt();
 } // namespace task

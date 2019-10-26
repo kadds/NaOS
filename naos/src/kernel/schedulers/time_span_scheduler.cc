@@ -10,29 +10,34 @@ namespace task::scheduler
 struct thread_time
 {
     i64 rest_time;
+    u64 priority;
 };
 
-bool timer_tick(u64 pass, u64 user_data)
+void timer_tick(u64 pass, u64 user_data)
 {
     time_span_scheduler *scher = (time_span_scheduler *)user_data;
     if (unlikely(scher == nullptr))
-        return true;
+        return;
 
+    timer::add_watcher(5000, timer_tick, user_data);
     scher->schedule_tick();
-    return true;
+    return;
 }
 
 thread_time *get_schedule_data(task::thread_t *t) { return (thread_time *)t->schedule_data; }
 
-u64 goodness(task::thread_t *t)
+u64 priority(task::thread_t *t) { return get_schedule_data(t)->priority; }
+
+void gen_priority(task::thread_t *t)
 {
-    u64 weight = t->static_priority * 10ul + t->dynamic_priority;
-    return weight;
+    get_schedule_data(t)->priority = (t->static_priority * 10ul + t->dynamic_priority) / 10;
 }
 
 time_span_scheduler::time_span_scheduler()
     : runable_list(&list_node_allocator)
-    , wait_list(&list_node_allocator)
+    , expired_list(&list_node_allocator)
+    , block_list(&list_node_allocator)
+
 {
 }
 
@@ -41,11 +46,9 @@ void time_span_scheduler::init()
     uctx::UnInterruptableContext icu;
     timer::add_watcher(5000, timer_tick, (u64)this);
     last_time_millisecond = timer::get_high_resolution_time();
-    epoch_time = 50000;
-    current_epoch = 0;
-
+    epoch_time = 1;
     task::get_idle_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
-    get_schedule_data(task::get_idle_task())->rest_time = -1;
+    get_schedule_data(task::get_idle_task())->rest_time = 0;
 }
 
 void time_span_scheduler::destroy() { timer::remove_watcher(timer_tick); }
@@ -54,61 +57,111 @@ void time_span_scheduler::add(thread_t *thread)
 {
     uctx::SpinLockUnInterruptableContext uic(list_spinlock);
     thread->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
-
-    get_schedule_data(thread)->rest_time = 1;
-    runable_list.insert(runable_list.begin(), thread);
-    // min 50ms
-    epoch_time = 50000 + (runable_list.size() + wait_list.size()) * 2000;
-    // max 300ms
-    epoch_time = epoch_time > 300000 ? 300000 : epoch_time;
+    gen_priority(thread);
+    get_schedule_data(thread)->rest_time =
+        runable_list.size() * 1000 / (runable_list.size() + expired_list.size() + 1) / (epoch_time * 1000);
+    insert_to_runable_list(thread);
 }
 
 void time_span_scheduler::remove(thread_t *thread)
 {
     uctx::SpinLockUnInterruptableContext uic(list_spinlock);
-
-    auto node = runable_list.find(thread);
-    if (node != runable_list.end())
+    auto node = block_list.find(thread);
+    if (node != block_list.end())
     {
-        runable_list.remove(node);
+        block_list.remove(node);
         auto sche_time = get_schedule_data(thread);
         memory::Delete(memory::KernelCommonAllocatorV, sche_time);
     }
-    else
+}
+
+void time_span_scheduler::update(thread_t *thread)
+{
+    uctx::SpinLockUnInterruptableContext uic(list_spinlock);
+
+    if (thread->state == task::thread_state::ready)
     {
-        auto node = wait_list.find(thread);
-        if (node != wait_list.end())
+        auto node = block_list.find(thread);
+        if (node != block_list.end())
         {
-            wait_list.remove(node);
-            auto sche_time = get_schedule_data(thread);
-            memory::Delete(memory::KernelCommonAllocatorV, sche_time);
+            block_list.remove(node);
+            insert_to_runable_list(thread);
+        }
+    }
+    else if (thread->state == task::thread_state::interruptable || thread->state == task::thread_state::uninterruptable)
+    {
+        auto node = runable_list.find(thread);
+        if (node != runable_list.end())
+        {
+            runable_list.remove(node);
+            block_list.push_back(thread);
+            return;
+        }
+        node = expired_list.find(thread);
+        if (node != expired_list.end())
+        {
+            expired_list.remove(node);
+            block_list.push_back(thread);
+            return;
+        }
+
+        if (current() == thread)
+        {
+            thread->attributes |= thread_attributes::block;
         }
     }
 }
 
-void time_span_scheduler::update(thread_t *thread) {}
+void time_span_scheduler::insert_to_runable_list(thread_t *t)
+{
+    auto p = priority(t);
+    for (auto it = runable_list.begin(); it != runable_list.end(); ++it)
+    {
+        if (priority(*it) > p)
+        {
+            runable_list.insert(it, t);
+            return;
+        }
+    }
+    runable_list.push_back(t);
+}
 
 void time_span_scheduler::epoch()
 {
     uctx::SpinLockUnInterruptableContext uic(list_spinlock);
 
-    for (auto thread : wait_list)
-    {
-        get_schedule_data(thread)->rest_time /= 2;
-    }
-
-    u64 count = runable_list.size() + wait_list.size();
+    u64 count = expired_list.size();
     if (count == 0)
         return;
-    u64 tc = epoch_time / count;
-    current_epoch = 0;
-
-    for (auto thread : wait_list)
+    epoch_time = 0;
+    u64 full_priority = 1;
+    // 1ms
+    u64 epoch_time = 1000000;
+    for (auto it : expired_list)
     {
-        get_schedule_data(thread)->rest_time += tc;
-        runable_list.push_back(thread);
+        gen_priority(it);
+        full_priority += get_schedule_data(it)->priority;
+        insert_to_runable_list(it);
     }
-    wait_list.clean();
+    expired_list.clean();
+
+    for (auto it : runable_list)
+    {
+        // 1000
+        get_schedule_data(it)->rest_time +=
+            1000 + get_schedule_data(it)->priority * 1000 / full_priority * epoch_time / 1000;
+    }
+}
+
+thread_t *time_span_scheduler::pick_available_task()
+{
+    if (runable_list.empty())
+    {
+        return task::get_idle_task();
+    }
+    thread_t *t = runable_list.front();
+    runable_list.remove(runable_list.begin());
+    return t;
 }
 
 void time_span_scheduler::schedule()
@@ -117,46 +170,44 @@ void time_span_scheduler::schedule()
     {
         return;
     }
-
-    while (current()->attributes & task::thread_attributes::need_schedule)
+    thread_t *const cur = current();
+    while (cur->attributes & task::thread_attributes::need_schedule)
     {
-        uctx::SpinLockUnInterruptableContext uic(list_spinlock);
-        thread_t *next = task::get_idle_task();
-        u64 cur_time = timer::get_high_resolution_time();
-        u64 delta = cur_time - last_time_millisecond;
-        last_time_millisecond = cur_time;
+        uctx::UnInterruptableContext icu;
 
-        current_epoch += delta;
-
-        if (epoch_time <= current_epoch)
+        cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
+        if (cur->attributes & task::thread_attributes::block)
         {
-            // swap
+            block_list.push_back(cur);
+            cur->attributes &= ~task::thread_attributes::block;
+        }
+        else if (get_schedule_data(cur)->rest_time <= 0 && cur != task::get_idle_task())
+        {
+            expired_list.push_back(cur);
+        }
+
+        if (runable_list.empty())
             epoch();
-        }
-        if (current() != next)
-        {
-            runable_list.remove(runable_list.find(current()));
-            wait_list.push_back(current());
-        }
 
-        if (!runable_list.empty())
-        {
-            current()->state = task::thread_state::ready;
+        thread_t *next = task::get_idle_task();
+        uctx::SpinLockContextController ctr(list_spinlock);
+        list_spinlock.lock();
+        next = pick_available_task();
+        list_spinlock.unlock();
 
-            u64 max_weight = 0;
-            for (auto thd : runable_list)
+        if (cur != next)
+        {
+            next->state = task::thread_state::running;
+            if (cur->state == task::thread_state::running)
             {
-                u64 weight = goodness(thd);
-                if (max_weight <= weight)
-                {
-                    weight = max_weight;
-                    next = thd;
-                }
+                cur->state = task::thread_state::ready; ///< return state to ready
             }
+            task::switch_thread(cur, next);
         }
-        current()->attributes &= ~task::thread_attributes::need_schedule;
-        if (current() != next)
-            task::switch_thread(current(), next);
+        else
+        {
+            cur->state = task::thread_state::running;
+        }
     }
     return;
 }

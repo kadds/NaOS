@@ -13,19 +13,20 @@ i64 location_offset;
 time::microsecond_t start_time_microsecond, current_time_microsecond;
 const time::microsecond_t time_1970_to_start = (30ul * 365 + (2000 - 1970) / 4) * 24 * 60 * 60 * 1000 * 1000;
 
-bool time_tick(time::microsecond_t period_microsecond, u64 user_data)
+void time_tick(time::microsecond_t expires, u64 user_data)
 {
-    current_time_microsecond += period_microsecond;
-    return true;
+    current_time_microsecond += expires;
+    timer::add_watcher(100000, time_tick, 0);
 }
 
-bool print_tick(time::microsecond_t period_microsecond, u64 user_data)
+void print_tick(time::microsecond_t expires, u64 user_data)
 {
     time::time_t t;
     time2time_t(current_time_microsecond, &t);
     trace::debug("current time: ", t.year, ".", t.month, ".", t.day, " ", t.hour, ":", t.minute, ":", t.second, ":",
                  t.millisecond);
-    return true;
+    timer::add_watcher(10000000, print_tick, 0);
+    return;
 }
 
 void init()

@@ -206,12 +206,16 @@ template <typename E> class linked_list
 
     void clean()
     {
-        auto it = begin();
-        while (it != end())
+        auto node = ((list_node *)head)->next;
+        while (node != (list_node *)tail)
         {
-            auto cur = it++;
-            memory::Delete<>(allocator, *cur);
+            auto node2 = node->next;
+            memory::Delete<>(allocator, node);
+            node = node2;
         }
+        head->next = (list_node *)tail;
+        tail->prev = (list_node *)head;
+        node_count = 0;
     }
 
     linked_list(memory::IAllocator *allocator)

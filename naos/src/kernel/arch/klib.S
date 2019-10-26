@@ -36,6 +36,7 @@ _cpu_id:
     ret
 .globl _switch_task
 _switch_task:
+    pushq %rbp
     pushq %rax
     movq %rsp, 0x10(%rdi) # save rsp
     movq 0x10(%rsi), %rsp # new rsp
@@ -51,6 +52,7 @@ _switch_task:
     jmp switch_task
 end_task:
     popq %rax
+    popq %rbp
     retq
 
 .globl _kernel_thread

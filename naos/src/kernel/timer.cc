@@ -23,63 +23,76 @@ clock_source_array_t *clock_sources;
 struct watcher_t
 {
     /// target time microsecond
-    u64 time;
-    u64 current_pass_time;
+    u64 expires;
     watcher_func function;
     u64 data;
+    bool enable;
     watcher_t(){};
-    watcher_t(u64 time, watcher_func func, u64 data)
-        : time(time)
-        , current_pass_time(0)
+    watcher_t(u64 expires, watcher_func func, u64 data)
+        : expires(expires)
         , function(func)
-        , data(data){};
+        , data(data)
+        , enable(true){};
 };
 
 using watcher_list_t = util::linked_list<watcher_t>;
 
 watcher_list_t *watcher_list;
-lock::spinlock_t watcher_list_lock;
-/// save latest time time
-u64 last_time;
+watcher_list_t *tick_list;
+lock::spinlock_t watcher_list_lock, tick_list_lock;
 
 void on_tick(u64 vector, u64 data)
 {
-    u64 us = current_clock_source->current();
-    u64 delta = us - last_time;
-    last_time = us;
-    uctx::SpinLockUnInterruptableContextController ctl(watcher_list_lock);
-    ctl.begin();
-    for (auto it = watcher_list->begin(); it != watcher_list->end();)
-    {
-        auto &e = *it;
+    uctx::SpinLockUnInterruptableContext ctl2(tick_list_lock);
 
-        e.current_pass_time += delta;
-        if (e.current_pass_time > e.time)
+    u64 us = current_clock_source->current();
+    auto it = tick_list->begin();
+    for (; it != tick_list->end();)
+    {
+        if (it->expires <= us)
         {
-            e.current_pass_time -= e.time;
-            ctl.end();
-            bool keep = e.function(e.time, e.data);
-            ctl.begin();
-            if (!keep)
+            if (likely(it->enable))
             {
-                it = watcher_list->remove(it);
-                continue;
+                it->function(it->expires, it->data);
             }
-            ++it;
-            continue;
+            it = tick_list->remove(it);
         }
-        ++it;
+        else
+        {
+            break;
+        }
     }
-    ctl.end();
+
+    // add to tick list
+    uctx::SpinLockUnInterruptableContext ctl(watcher_list_lock);
+
+    for (auto &ws : *watcher_list)
+    {
+        bool has_insert = false;
+        for (auto tk = tick_list->begin(); tk != tick_list->end(); ++tk)
+        {
+            if (ws.expires < tk->expires)
+            {
+                tick_list->insert(tk, ws);
+                has_insert = true;
+                break;
+            }
+        }
+        if (!has_insert)
+            tick_list->push_back(ws);
+    }
+    watcher_list->clean();
 }
 
 void init()
 {
     using namespace clock;
-    watcher_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-    clock_sources = memory::New<clock_source_array_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     {
         uctx::UnInterruptableContext ctx;
+        watcher_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        tick_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        clock_sources =
+            memory::New<clock_source_array_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
         clock_sources->push_back(arch::device::PIT::make_clock());
         clock_sources->push_back(arch::TSC::make_clock());
         current_clock_source = clock_sources->back();
@@ -102,7 +115,6 @@ void init()
         trace::panic("Can't find a availble clock event device.");
     }
 
-    last_time = current_clock_source->current();
     current_clock_event->resume();
     current_clock_event->wait_next_tick();
     clock::start_tick();
@@ -111,20 +123,13 @@ void init()
 
 time::microsecond_t get_high_resolution_time() { return current_clock_source->current(); }
 
-void add_watcher(u64 time, watcher_func func, u64 user_data)
+void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {
     uctx::SpinLockUnInterruptableContext uic(watcher_list_lock);
-    for (auto it = watcher_list->begin(); it != watcher_list->end(); ++it)
-    {
-        if (time < it->time)
-        {
-            watcher_list->insert(it, watcher_t(time, func, user_data));
-            return;
-        }
-    }
-    watcher_list->push_back(watcher_t(time, func, user_data));
+    watcher_list->push_back(watcher_t(expires_delta_time + get_high_resolution_time(), func, user_data));
 }
 
+///< don't remove timer in soft irq context
 void remove_watcher(watcher_func func)
 {
     uctx::SpinLockUnInterruptableContext uic(watcher_list_lock);
@@ -134,6 +139,20 @@ void remove_watcher(watcher_func func)
         {
             watcher_list->remove(it);
             return;
+        }
+    }
+    uctx::SpinLockUnInterruptableContext ctl2(tick_list_lock);
+
+    for (auto it = tick_list->begin(); it != tick_list->end();)
+    {
+        if (it->function <= func)
+        {
+            it->enable = false;
+            return;
+        }
+        else
+        {
+            ++it;
         }
     }
 }

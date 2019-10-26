@@ -40,10 +40,14 @@ call_code:
     callq *%rdx
 return_code:
 	testb $3, 0xa8(%rsp)
-	je not_need_schedule
+	je need_preempt
     movabs $schedule, %rdx
 	callq *%rdx
- not_need_schedule:
+	jmp endjmp
+ need_preempt:
+	movabs $yield_preempt_schedule, %rdx
+	callq *%rdx
+endjmp:
     popq %r15	
 	popq %r14	
 	popq %r13	
@@ -128,8 +132,16 @@ _nmi_wrapper:
     movq %rsp, %rdi
 	movq 0x80(%rsp), %rdx
     callq *%rdx
-	movabs $schedule, %rdx
+
+	testb $3, 0xa8(%rsp)
+	je need_preempt2
+    movabs $schedule, %rdx
 	callq *%rdx
+	jmp endjmp2
+ need_preempt2:
+	movabs $yield_preempt_schedule, %rdx
+	callq *%rdx
+endjmp2:
 
 	popq %r15	
 	popq %r14	

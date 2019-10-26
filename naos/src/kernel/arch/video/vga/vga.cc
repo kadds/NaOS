@@ -109,12 +109,13 @@ void set_video_addr(void *addr)
 }
 
 void flush() { current_output->flush(frame_buffer); }
-bool auto_flush(u64 dt, u64 ud)
+void auto_flush(u64 dt, u64 ud)
 {
     uctx::UnInterruptableContext icu;
-    trace::print(trace::kernel_console_attribute, ".");
     flush();
-    return true;
+    timer::add_watcher(1000000 / 60, auto_flush, 0);
+
+    return;
 }
 
 void set_auto_flush()

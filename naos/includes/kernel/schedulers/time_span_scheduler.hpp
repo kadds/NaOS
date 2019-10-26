@@ -15,12 +15,11 @@ class time_span_scheduler : public scheduler
   private:
     thread_list_cache_allocator_t list_node_allocator;
     thread_list_t runable_list;
-    thread_list_t wait_list;
+    thread_list_t expired_list;
+    thread_list_t block_list;
     lock::spinlock_t list_spinlock;
-
+    u64 epoch_time;
     u64 last_time_millisecond;
-    u32 epoch_time;
-    u32 current_epoch;
 
   public:
     void add(thread_t *thread) override;
@@ -39,5 +38,9 @@ class time_span_scheduler : public scheduler
     u64 get_attribute(const char *attr_name, thread_t *target) override;
 
     time_span_scheduler();
+
+  private:
+    task::thread_t *pick_available_task();
+    void insert_to_runable_list(thread_t *t);
 };
 } // namespace task::scheduler

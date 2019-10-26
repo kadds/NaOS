@@ -77,6 +77,7 @@ const char *format_SGR(const char *str, console_attribute &current_attribute);
 /// print escape sequences
 void print_SGR(const char *str, console_attribute &current_attribute)
 {
+    uctx::UnInterruptableContext icu;
     while (*str != '\0')
     {
         const char *sgr_start = str, *next, *new_next = str;

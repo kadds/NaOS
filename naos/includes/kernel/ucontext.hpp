@@ -4,21 +4,38 @@
 #include "kernel/task.hpp"
 namespace uctx
 {
+struct UnPreemptContextController
+{
+    void begin() { task::disable_preempt(); }
+    void end() { task::enable_preempt(); }
+};
+
+struct UnPreemptContext
+{
+    UnPreemptContextController ctr;
+    UnPreemptContext() { ctr.begin(); }
+    ~UnPreemptContext() { ctr.end(); }
+};
 
 struct UnInterruptableContextController
 {
   private:
     bool IF;
+    UnPreemptContextController ctx;
 
   public:
-    void begin() { IF = arch::idt::save_and_disable(); }
+    void begin()
+    {
+        ctx.begin();
+        IF = arch::idt::save_and_disable();
+    }
     void end()
     {
         if (IF)
             arch::idt::enable();
-
         else
             arch::idt::disable();
+        ctx.end();
     }
 };
 
@@ -36,14 +53,23 @@ struct SpinLockContextController
 {
   private:
     lock::spinlock_t &sl;
+    UnPreemptContextController ctx;
 
   public:
     SpinLockContextController(lock::spinlock_t &sl)
         : sl(sl)
     {
     }
-    void begin() { sl.lock(); }
-    void end() { sl.unlock(); }
+    void begin()
+    {
+        ctx.begin();
+        sl.lock();
+    }
+    void end()
+    {
+        sl.unlock();
+        ctx.end();
+    }
 };
 
 struct SpinLockContext
@@ -97,12 +123,5 @@ struct SpinLockUnInterruptableContext
     }
     ~SpinLockUnInterruptableContext() { ctrl.end(); }
 };
-
-bool inline in_interrupt()
-{
-    // TODO:
-    // task::current()->kernel_stack_high;
-    return true;
-}
 
 } // namespace uctx

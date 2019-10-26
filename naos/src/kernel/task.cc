@@ -1,4 +1,5 @@
 #include "kernel/task.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
@@ -31,6 +32,7 @@ thread_list_node_allocator_t *thread_list_cache_allocator;
 process_list_node_allocator_t *process_list_cache_allocator;
 
 process_list_t *global_process_list;
+lock::spinlock_t process_list_lock;
 
 memory::SlabObjectAllocator *thread_t_allocator;
 memory::SlabObjectAllocator *process_t_allocator;
@@ -45,7 +47,7 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 
 inline process_t *new_kernel_process()
 {
-    uctx::UnInterruptableContext icu;
+    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = nullptr;
@@ -55,7 +57,7 @@ inline process_t *new_kernel_process()
 
 inline process_t *new_process()
 {
-    uctx::UnInterruptableContext icu;
+    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
@@ -65,7 +67,7 @@ inline process_t *new_process()
 
 inline void delete_process(process_t *p)
 {
-    uctx::UnInterruptableContext icu;
+    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     if (p->mm_info != nullptr)
     {
         memory::Delete(mm_info_t_allocator, p->mm_info);
@@ -81,8 +83,8 @@ inline void delete_process(process_t *p)
 
 inline thread_t *new_thread(process_t *p)
 {
-    uctx::UnInterruptableContext icu;
     using arch::task::register_info_t;
+    uctx::SpinLockUnInterruptableContext icu(p->thread_list_lock);
 
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
@@ -94,7 +96,7 @@ inline thread_t *new_thread(process_t *p)
 
 inline void delete_thread(thread_t *thd)
 {
-    uctx::UnInterruptableContext icu;
+    uctx::SpinLockUnInterruptableContext icu(thd->process->thread_list_lock);
 
     using arch::task::register_info_t;
 
@@ -111,6 +113,7 @@ inline void delete_thread(thread_t *thd)
 
 void init()
 {
+    uctx::UnInterruptableContext icu;
     process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
     thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
 
@@ -154,8 +157,15 @@ u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
     }
     else
     {
+        if (flags & fork_flags::kernel_thread)
+        {
+            process = new_kernel_process();
+        }
+        else
+        {
+            process = new_process();
+        }
         // fork thread new procress
-        process = new_process();
         process->parent_pid = current_process()->pid;
         process->pid = current_process()->pid + 1;
     }
@@ -222,28 +232,49 @@ u64 do_exec(const char *filename, const char *args, const char *env, flag_t flag
     return do_exec(segment, args, env, flags);
 }
 
+struct sleep_timer_struct
+{
+    u64 start;
+    u64 end;
+    thread_t *thd;
+};
+
+void sleep_callback_func(u64 pass, u64 data)
+{
+    sleep_timer_struct *st = (sleep_timer_struct *)data;
+    if (st != nullptr)
+    {
+        uctx::UnInterruptableContext icu;
+        st->thd->state = thread_state::ready;
+        scheduler::update(st->thd);
+        memory::Delete<>(memory::KernelCommonAllocatorV, st);
+        return;
+    }
+    return;
+}
+
 void do_sleep(u64 milliseconds)
 {
+    uctx::UnInterruptableContext icu;
     if (milliseconds == 0)
     {
-        current()->state = thread_state::interruptable;
         current()->attributes |= task::thread_attributes::need_schedule;
-
         scheduler::update(current());
-        scheduler::schedule();
+        task::yield_preempt();
     }
     else
     {
         auto start = timer::get_high_resolution_time();
         auto end = start + milliseconds * 1000;
-        while (timer::get_high_resolution_time() <= end)
-        {
-            current()->state = thread_state::interruptable;
-            current()->attributes |= task::thread_attributes::need_schedule;
+        current()->state = thread_state::interruptable;
+        sleep_timer_struct *st = memory::New<sleep_timer_struct>(memory::KernelCommonAllocatorV);
+        st->start = start;
+        st->end = end;
+        st->thd = current();
+        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)st);
 
-            scheduler::update(current());
-            scheduler::schedule();
-        }
+        current()->attributes |= task::thread_attributes::need_schedule;
+        scheduler::update(current());
     }
 }
 
@@ -303,9 +334,39 @@ thread_t *get_idle_task() { return idle_task; }
 
 void switch_thread(thread_t *old, thread_t *new_task)
 {
-    if (old->process != new_task->process)
+    if (old->process != new_task->process && new_task->process->mm_info != nullptr)
         new_task->process->mm_info->mmu_paging.load_paging();
     _switch_task(old->register_info, new_task->register_info, new_task);
 }
 
+void yield_preempt()
+{
+    thread_t *thd = current();
+    if (likely(thd != nullptr))
+    {
+        if (thd->preempt_data.preemptible() && thd->attributes & thread_attributes::need_schedule)
+        {
+            scheduler::schedule();
+        }
+    }
+}
+
+ExportC void yield_preempt_schedule() { yield_preempt(); }
+
+void disable_preempt()
+{
+    thread_t *thd = current();
+    if (likely(thd != nullptr))
+    {
+        thd->preempt_data.disable_preempt();
+    }
+}
+void enable_preempt()
+{
+    thread_t *thd = current();
+    if (likely(thd != nullptr))
+    {
+        thd->preempt_data.enable_preempt();
+    }
+}
 } // namespace task

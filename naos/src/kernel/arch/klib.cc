@@ -23,15 +23,17 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
     }
     trace::print(trace::kernel_console_attribute, "stack data(rbp->rsp):");
     u64 least_rsp = (u64)rbp - sizeof(u64) * 10;
-    for (u64 i = (u64)rbp; (i >= (u64)rsp || i >= least_rsp) && i >= 0xFFFF800000000000; i -= sizeof(u64))
+    u32 p = 0;
+    for (u64 i = (u64)rbp; (i >= (u64)rsp || i >= least_rsp) && i >= 0xFFFF800000000000 && p < 100;
+         i -= sizeof(u64), p++)
     {
         trace::print(trace::kernel_console_attribute, "\n    [", (void *)i, "]=", (void *)(*(u64 *)i));
     }
 
     trace::print(trace::kernel_console_attribute, "\nend of stack data.\n");
 
-    u64 end = (u64)_file_end + (u64)base_phy_addr;
-    u64 start = (u64)_file_start + (u64)base_phy_addr;
+    u64 end = (u64)_file_end + (u64)base_virtual_addr;
+    u64 start = (u64)_file_start + (u64)base_virtual_addr;
     trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
                  trace::Foreground<trace::Color::Red>(), "stack trace:", trace::PrintAttr::Reset(), '\n');
     int i = 0;

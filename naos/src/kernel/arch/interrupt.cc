@@ -8,6 +8,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/linked_list.hpp"
@@ -67,9 +68,11 @@ ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
         if (!cpu::current().in_soft_irq())
         {
             cpu::current().enter_soft_irq();
+            ::task::disable_preempt();
             idt::enable();
             global_soft_irq_func(regs, 0);
             idt::disable();
+            ::task::enable_preempt();
             cpu::current().exit_soft_irq();
         }
     }

@@ -32,6 +32,8 @@ const int irq_count = 256;
 
 bool _ctx_interrupt_ do_irq(const arch::idt::regs_t *regs, u64 extra_data)
 {
+    task::disable_preempt();
+
     auto &locked_list = irq_list[regs->vector];
     if (!locked_list.list->empty())
     {
@@ -43,13 +45,16 @@ bool _ctx_interrupt_ do_irq(const arch::idt::regs_t *regs, u64 extra_data)
             if (ret == request_result::ok)
                 ok = true;
         }
+        task::enable_preempt();
         return ok;
     }
+    task::enable_preempt();
     return false;
 }
 
 void do_soft_irq()
 {
+    task::disable_preempt();
     for (int x = 0; x < 4; x++)
     {
         for (int i = 0; i < soft_vector::COUNT; i++)
@@ -76,6 +81,7 @@ void do_soft_irq()
             }
         }
     }
+    task::enable_preempt();
 }
 
 bool check_and_wakeup_soft_irq(const arch::idt::regs_t *regs, u64 extra_data)
