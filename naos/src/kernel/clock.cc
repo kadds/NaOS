@@ -15,7 +15,7 @@ const time::microsecond_t time_1970_to_start = (30ul * 365 + (2000 - 1970) / 4) 
 
 void time_tick(time::microsecond_t expires, u64 user_data)
 {
-    current_time_microsecond += expires;
+    current_time_microsecond = expires + start_time_microsecond;
     timer::add_watcher(100000, time_tick, 0);
 }
 

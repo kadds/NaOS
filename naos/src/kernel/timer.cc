@@ -117,6 +117,7 @@ void init()
 
     current_clock_event->resume();
     current_clock_event->wait_next_tick();
+    current_clock_source->reinit();
     clock::start_tick();
     irq::insert_soft_request_func(irq::soft_vector::timer, on_tick, 0);
 }
@@ -127,6 +128,17 @@ void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {
     uctx::SpinLockUnInterruptableContext uic(watcher_list_lock);
     watcher_list->push_back(watcher_t(expires_delta_time + get_high_resolution_time(), func, user_data));
+}
+
+bool add_time_point_watcher(u64 expires_time_point, watcher_func func, u64 user_data)
+{
+    uctx::SpinLockUnInterruptableContext uic(watcher_list_lock);
+    if (get_high_resolution_time() < expires_time_point)
+    {
+        watcher_list->push_back(watcher_t(expires_time_point, func, user_data));
+        return true;
+    }
+    return false;
 }
 
 ///< don't remove timer in soft irq context
