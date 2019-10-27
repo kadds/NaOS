@@ -13,6 +13,15 @@ enum class future
     xapic,
     x2apic,
     msr,
+    tsc,
+    contant_tsc,
+    sse,
+    sse2,
+    sse3,
+    ssse3,
+    sse4_1,
+    sse4_2,
+    popcnt_i,
     max_phy_addr,
     max_virt_addr
 };
@@ -23,15 +32,6 @@ bool has_future(future f);
 
 // get the future value
 u64 get_future(future f);
-
-enum class tsc_type
-{
-    future,
-    constant,
-    nonstop,
-};
-tsc_type get_tsc_future();
-
 const char *get_cpu_manufacturer();
 
 } // namespace arch::cpu_info

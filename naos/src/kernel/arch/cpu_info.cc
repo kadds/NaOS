@@ -32,6 +32,18 @@ void init()
     cpu_id(0x80000000, &a, &b, &c, &d);
     max_extend_number = a;
     trace_debug_info();
+    future min_future[] = {
+        future::system_call_ret,
+        future::msr,
+        future::tsc,
+    };
+    for (auto fut : min_future)
+    {
+        if (!has_future(fut))
+        {
+            trace::panic("Unsupported future.");
+        }
+    }
 }
 
 void trace_debug_info()
@@ -63,6 +75,24 @@ bool has_future(future f)
             ret_cpu_future(0x1, ecx, 21);
         case future::msr:
             ret_cpu_future(0x1, edx, 5);
+        case future::tsc:
+            ret_cpu_future(0x1, edx, 4);
+        case future::contant_tsc:
+            ret_cpu_future(0x80000007, edx, 8);
+        case future::sse:
+            ret_cpu_future(0x1, edx, 25);
+        case future::sse2:
+            ret_cpu_future(0x1, edx, 26);
+        case future::sse3:
+            ret_cpu_future(0x1, ecx, 0);
+        case future::ssse3:
+            ret_cpu_future(0x1, ecx, 9);
+        case future::sse4_1:
+            ret_cpu_future(0x1, ecx, 19);
+        case future::sse4_2:
+            ret_cpu_future(0x1, ecx, 20);
+        case future::popcnt_i:
+            ret_cpu_future(0x1, ecx, 23);
         default:
             trace::panic("Unknown future");
     }
