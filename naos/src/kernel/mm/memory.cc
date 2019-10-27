@@ -159,21 +159,21 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         item.start = (void *)start;
         item.end = (void *)end;
         item.page_count = (end - start) / page_size;
-        auto buddys = New<buddy_contanier>(VirtBootAllocatorV);
+        auto buddies = New<buddy_contanier>(VirtBootAllocatorV);
 
-        item.buddy_impl = buddys;
+        item.buddy_impl = buddies;
         auto count = item.page_count / buddy_max_page;
         auto rest = item.page_count % buddy_max_page;
         if (likely(rest > 0))
-            buddys->count = count + 1;
+            buddies->count = count + 1;
         else
-            buddys->count = count;
-        trace::debug("zone ", cid, " page count:", item.page_count, ", buddy count:", buddys->count);
-        if (likely(buddys->count > 0))
+            buddies->count = count;
+        trace::debug("zone ", cid, " page count:", item.page_count, ", buddy count:", buddies->count);
+        if (likely(buddies->count > 0))
         {
-            buddys->buddys = NewArray<buddy>(VirtBootAllocatorV, buddys->count, buddy_max_page);
+            buddies->buddies = NewArray<buddy>(VirtBootAllocatorV, buddies->count, buddy_max_page);
             if (rest > 0)
-                buddys->buddys[buddys->count - 1].tag_alloc(rest, buddy_max_page - rest);
+                buddies->buddies[buddies->count - 1].tag_alloc(rest, buddy_max_page - rest);
         }
         else
         {
@@ -320,22 +320,22 @@ void vfree(void *addr)
 
 void zone_t::tag_used(u64 offset_start, u64 offset_end)
 {
-    auto buddys = (buddy_contanier *)buddy_impl;
+    auto buddies = (buddy_contanier *)buddy_impl;
     u64 s_buddy = offset_start / buddy_max_page;
     u64 e_buddy = offset_end / buddy_max_page;
     u64 s_buddy_rest = offset_start % buddy_max_page;
     u64 e_buddy_rest = offset_end % buddy_max_page;
     if (s_buddy == e_buddy)
     {
-        buddys->buddys[s_buddy].tag_alloc(s_buddy_rest, e_buddy_rest - s_buddy_rest);
+        buddies->buddies[s_buddy].tag_alloc(s_buddy_rest, e_buddy_rest - s_buddy_rest);
         return;
     }
-    buddys->buddys[s_buddy].tag_alloc(s_buddy_rest, buddy_max_page - s_buddy_rest);
+    buddies->buddies[s_buddy].tag_alloc(s_buddy_rest, buddy_max_page - s_buddy_rest);
     for (u64 i = s_buddy + 1; i < e_buddy; i++)
     {
-        buddys->buddys[i].tag_alloc(0, buddy_max_page);
+        buddies->buddies[i].tag_alloc(0, buddy_max_page);
     }
-    buddys->buddys[e_buddy].tag_alloc(0, e_buddy_rest);
+    buddies->buddies[e_buddy].tag_alloc(0, e_buddy_rest);
 }
 
 } // namespace memory

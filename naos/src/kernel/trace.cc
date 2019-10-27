@@ -196,7 +196,7 @@ const char *format_SGR(const char *str, console_attribute &current_attribute)
                     attr.clean_back_full_color();
                     attr.set_background(default_console_attribute.get_background());
                 }
-                else if (n <= 64 && PrintAttr::testable_attributes_flags & (1 << n))
+                else if (n <= 64 && PrintAttr::testable_attributes_flags & (1ul << n))
                 {
                     attr.set_attribute(n);
                 }

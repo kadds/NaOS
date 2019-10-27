@@ -166,7 +166,6 @@ void local_init()
         trace::debug("Use 82489DX");
     }
 
-    v = 1 << 8;
     if ((version_value & (1 << 24)) != 0)
     {
         v |= 1 << 12; // disable broadcast EOI

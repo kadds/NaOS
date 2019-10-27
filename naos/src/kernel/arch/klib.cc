@@ -37,9 +37,9 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
     trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
                  trace::Foreground<trace::Color::Red>(), "stack trace:", trace::PrintAttr::Reset(), '\n');
     int i = 0;
-    while (rbp != 0)
+    while ((u64)rbp != 0)
     {
-        if ((u64)rbp < 0xFFFF800000000000)
+        if (((u64)rbp) < 0xFFFF800000000000)
         {
             break;
         }

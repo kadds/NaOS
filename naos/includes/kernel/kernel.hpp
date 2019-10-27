@@ -6,7 +6,7 @@
 
 static_assert(sizeof(void *) == 8, "Just 64-bit code generation is supported.");
 
-#define _ctx_interrupt_ [[interrupt_context]]
+#define _ctx_interrupt_
 ExportC NoReturn void _kstart(const kernel_start_args *args);
 
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args);

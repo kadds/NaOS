@@ -195,10 +195,10 @@ void *BuddyAllocator::allocate(u64 size, u64 align)
     {
         zone_t &zone = global_zones.zones[i];
 
-        auto buddys = (buddy_contanier *)zone.buddy_impl;
-        for (int j = 0; j < buddys->count; j++)
+        auto buddies = (buddy_contanier *)zone.buddy_impl;
+        for (int j = 0; j < buddies->count; j++)
         {
-            i64 offset = buddys->buddys[j].alloc(page);
+            i64 offset = buddies->buddies[j].alloc(page);
             if (offset >= 0)
             {
                 auto ptr = (char *)zone.start + offset * memory::page_size;
@@ -221,7 +221,7 @@ void BuddyAllocator::deallocate(void *ptr)
 
         if ((char *)ptr >= zone.start && (char *)ptr < zone.end)
         {
-            auto buddys = (buddy_contanier *)zone.buddy_impl;
+            auto buddies = (buddy_contanier *)zone.buddy_impl;
 
             int buddy_index = (u64)((char *)ptr - (char *)zone.start + (memory::page_size * buddy_max_page) - 1) /
                                   (memory::page_size * buddy_max_page) -
@@ -231,7 +231,7 @@ void BuddyAllocator::deallocate(void *ptr)
             kassert(offset >= 0 && offset <= buddy_max_page,
                     "offset should not less than 0 or more than buddy max page");
 
-            buddys->buddys[buddy_index].free(offset);
+            buddies->buddies[buddy_index].free(offset);
             break;
         }
     }

@@ -38,7 +38,7 @@ void set_soft_irq_callback(arch::idt::call_func func) { global_soft_irq_func = f
 
 void init()
 {
-    a_code_len = (char *)interrupt_code_end - (char *)interrupt_code_start;
+    a_code_len = (u64)interrupt_code_end - (u64)interrupt_code_start;
     a_code_len = (a_code_len + 7) & ~(7);
 
     code_buffer = memory::KernelBuddyAllocatorV->allocate(a_code_len * num_of_interrupt, 8);

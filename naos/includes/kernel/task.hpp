@@ -28,7 +28,7 @@ enum class thread_state : u8
     ready = 0,       ///< Can schedule
     running,         ///< Running at a CPU
     interruptable,   ///< Sleep
-    uninterruptable, ///< Uninterruptable sleep
+    uninterruptible, ///< Uninterruptible sleep
     stop,            ///< Can't reschedule
     destroy,
 };

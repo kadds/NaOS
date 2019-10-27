@@ -116,9 +116,9 @@ void slab_group::free(void *ptr)
 
     for (auto it = list_partial.begin(); it != list_partial.end(); ++it)
     {
-        auto &e = **it;
         if (page_addr == (char *)*it)
         {
+            auto &e = **it;
             e.bitmap.set(((char *)ptr - e.data_ptr) / obj_align_size, 0);
             e.rest++;
             all_obj_used--;
@@ -139,10 +139,9 @@ void slab_group::free(void *ptr)
     }
     for (auto it = list_full.begin(); it != list_full.end(); ++it)
     {
-        auto &e = **it;
-
         if (page_addr == (char *)*it)
         {
+            auto &e = **it;
             e.bitmap.set(((char *)ptr - e.data_ptr) / obj_align_size, 0);
             e.rest++;
             all_obj_used--;

@@ -39,7 +39,7 @@ class buddy
 struct buddy_contanier
 {
     int count;
-    buddy *buddys;
+    buddy *buddies;
 };
 
 class BuddyAllocator : public IAllocator

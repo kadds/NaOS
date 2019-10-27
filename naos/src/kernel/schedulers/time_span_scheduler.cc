@@ -70,8 +70,8 @@ void time_span_scheduler::remove(thread_t *thread)
     if (node != block_list.end())
     {
         block_list.remove(node);
-        auto sche_time = get_schedule_data(thread);
-        memory::Delete(memory::KernelCommonAllocatorV, sche_time);
+        auto scher_time = get_schedule_data(thread);
+        memory::Delete(memory::KernelCommonAllocatorV, scher_time);
     }
 }
 
@@ -88,7 +88,7 @@ void time_span_scheduler::update(thread_t *thread)
             insert_to_runable_list(thread);
         }
     }
-    else if (thread->state == task::thread_state::interruptable || thread->state == task::thread_state::uninterruptable)
+    else if (thread->state == task::thread_state::interruptable || thread->state == task::thread_state::uninterruptible)
     {
         auto node = runable_list.find(thread);
         if (node != runable_list.end())
@@ -189,10 +189,9 @@ void time_span_scheduler::schedule()
         if (runable_list.empty())
             epoch();
 
-        thread_t *next = task::get_idle_task();
         uctx::SpinLockContextController ctr(list_spinlock);
         list_spinlock.lock();
-        next = pick_available_task();
+        thread_t *next = pick_available_task();
         list_spinlock.unlock();
 
         if (cur != next)
@@ -223,9 +222,9 @@ void time_span_scheduler::schedule_tick()
     last_time_millisecond = cur_time;
     if (cur->state != task::thread_state::running)
         return;
-    auto sche_data = get_schedule_data(cur);
-    sche_data->rest_time -= delta;
-    if (sche_data->rest_time <= 0)
+    auto scher_data = get_schedule_data(cur);
+    scher_data->rest_time -= delta;
+    if (scher_data->rest_time <= 0)
     {
         cur->attributes |= task::thread_attributes::need_schedule;
     }

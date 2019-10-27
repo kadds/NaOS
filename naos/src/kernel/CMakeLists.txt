@@ -11,7 +11,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system)
 
 add_executable(kernel ${DIR_ALL})
 
-set_target_properties(kernel PROPERTIES LINK_FLAGS "${LINKER_X64} -Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/kernel.ld")
+set_target_properties(kernel PROPERTIES LINK_FLAGS "${LINKER_X64} -Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernel)
 

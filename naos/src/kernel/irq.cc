@@ -17,7 +17,7 @@ struct request_lock_list_t
 {
     lock::spinlock_t spinlock;
     request_list_t *list;
-    request_lock_list_t(memory::IAllocator *a)
+    explicit request_lock_list_t(memory::IAllocator *a)
         : list(memory::New<request_list_t>(memory::KernelCommonAllocatorV, a))
     {
     }

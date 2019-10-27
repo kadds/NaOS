@@ -46,7 +46,11 @@ void init(const kernel_start_args *args)
         }
     }
     if (unlikely(back_buffer == nullptr))
-        return;
+    {
+        // ERROR
+        for (;;)
+            ;
+    }
 
     if (likely(!is_text_mode))
     {

@@ -58,7 +58,7 @@ ExportC void _main(unsigned int magic, multiboot_info_t *addr)
                 Fat *fat = New<Fat>(disk_reader);
                 if (cur_partition.is_valid())
                 {
-                    printer.printf("Partition %d is vaild. start_lba at: %u%u, end_lba at %u%u.\n", i,
+                    printer.printf("Partition %d is valid. start_lba at: %u%u, end_lba at %u%u.\n", i,
                                    (u32)(cur_partition.lba_start >> 32), (u32)cur_partition.lba_start,
                                    (u32)(cur_partition.lba_end >> 32), (u32)cur_partition.lba_end);
                     if (fat->try_open_partition(cur_partition) >= 0)

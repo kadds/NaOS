@@ -320,6 +320,7 @@ process_t *find_pid(process_id pid)
 
 thread_t *find_tid(process_t *process, thread_id tid)
 {
+    uctx::SpinLockUnInterruptableContext icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
     for (auto thd : list)
     {

@@ -12,7 +12,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-red-zone -Wframe-larger-than=512 -pipe -std=c++17 -pedantic -fno-rtti -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -fno-bounds-check -mno-sse -mno-sse2 -Wno-attributes -Wno-pedantic -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-red-zone -Wunreachable-code -fvisibility-inlines-hidden -Wframe-larger-than=512 -pipe -std=c++17 -pedantic -fno-rtti -fno-asynchronous-unwind-tables -fno-common -fno-plt -fno-exceptions -fno-pic -no-pie -Wall -ffreestanding -fno-stack-protector -fno-bounds-check -mno-sse -mno-sse2 -Wno-pedantic -fno-omit-frame-pointer -mno-omit-leaf-frame-pointer")
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
 
