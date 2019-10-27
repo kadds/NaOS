@@ -38,11 +38,11 @@ _cpu_id:
 _switch_task:
     pushq %rbp
     pushq %rax
-    movq %rsp, 0x10(%rdi) # save rsp
-    movq 0x10(%rsi), %rsp # new rsp
+    movq %rsp, 0x8(%rdi) # save rsp
+    movq 0x8(%rsi), %rsp # new rsp
     leaq end_task(%rip), %rax 
-    movq %rax, 0x8(%rdi) # prev rip
-    pushq 0x8(%rsi) # push new rip
+    movq %rax, 0x0(%rdi) # prev rip
+    pushq 0x0(%rsi) # push new rip
 
     # movq 0x18(%rsi), %rax
     # movq %rax, %fs

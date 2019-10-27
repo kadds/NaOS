@@ -216,17 +216,18 @@ void time_span_scheduler::schedule_tick()
 {
     if (unlikely(current() == nullptr))
         return;
-
+    uctx::UnInterruptableContext icu;
+    auto cur = current();
     u64 cur_time = timer::get_high_resolution_time();
     u64 delta = cur_time - last_time_millisecond;
     last_time_millisecond = cur_time;
-    if (current()->state != task::thread_state::running)
+    if (cur->state != task::thread_state::running)
         return;
-    auto sche_data = get_schedule_data(current());
+    auto sche_data = get_schedule_data(cur);
     sche_data->rest_time -= delta;
     if (sche_data->rest_time <= 0)
     {
-        current()->attributes |= task::thread_attributes::need_schedule;
+        cur->attributes |= task::thread_attributes::need_schedule;
     }
 }
 

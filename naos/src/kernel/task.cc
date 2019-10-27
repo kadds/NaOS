@@ -260,7 +260,6 @@ void do_sleep(u64 milliseconds)
     {
         current()->attributes |= task::thread_attributes::need_schedule;
         scheduler::update(current());
-        task::yield_preempt();
     }
     else
     {

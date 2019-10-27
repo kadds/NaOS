@@ -17,8 +17,7 @@ void init(::task::thread_t *thd, register_info_t *register_info)
     register_info->error_code = 0;
     register_info->fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
     register_info->gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
-    register_info->rsp = (u64)stack_low + memory::kernel_stack_size;
-    register_info->rsp0 = register_info->rsp;
+    register_info->rsp = (void *)((u64)stack_low + memory::kernel_stack_size);
     register_info->trap_vector = 0;
 
     thread_info_t *thread_info = new (stack_low) thread_info_t();
@@ -62,9 +61,8 @@ u64 do_fork(::task::thread_t *thd, void *function, u64 arg)
     regs.rflags = (1 << 9); // enable IF
     regs.rip = (u64)_kernel_thread;
     auto &register_info = *thd->register_info;
-    register_info.rip = regs.rip;
-    register_info.rsp = (u64)thd->kernel_stack_top - sizeof(regs);
-    register_info.rsp0 = (u64)thd->kernel_stack_top;
+    register_info.rip = (void *)regs.rip;
+    register_info.rsp = (void *)((u64)thd->kernel_stack_top - sizeof(regs));
     register_info.fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
     register_info.gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
 
@@ -80,7 +78,7 @@ u64 do_exec(::task::thread_t *thd)
 {
     regs_t regs;
     util::memzero(&regs, sizeof(regs));
-    thd->register_info->rip = (u64)&_sys_ret;
+    thd->register_info->rip = (void *)&_sys_ret;
     regs.rcx = (u64)thd->running_code_entry_address;
     regs.r10 = (u64)thd->user_stack_top;
     regs.r11 = (1 << 9); // rFLAGS: enable IF

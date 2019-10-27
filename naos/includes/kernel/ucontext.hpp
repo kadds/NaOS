@@ -21,21 +21,15 @@ struct UnInterruptableContextController
 {
   private:
     bool IF;
-    UnPreemptContextController ctx;
 
   public:
-    void begin()
-    {
-        ctx.begin();
-        IF = arch::idt::save_and_disable();
-    }
+    void begin() { IF = arch::idt::save_and_disable(); }
     void end()
     {
         if (IF)
             arch::idt::enable();
         else
             arch::idt::disable();
-        ctx.end();
     }
 };
 

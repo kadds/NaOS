@@ -12,12 +12,11 @@ namespace arch::task
 // register info in task
 struct register_info_t
 {
-    u64 rsp0; // base rsp
-    u64 rip;
-    u64 rsp;
+    void *rip;
+    void *rsp;
     u64 fs;
     u64 gs;
-    u64 cr2;
+    void *cr2;
     u64 trap_vector;
     u64 error_code;
 };
