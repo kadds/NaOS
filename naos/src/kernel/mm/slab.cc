@@ -248,6 +248,7 @@ slab_cache_pool::slab_cache_pool()
     : slab_groups(memory::KernelBuddyAllocatorV)
 {
 }
+
 void *SlabObjectAllocator::allocate(u64 size, u64 align)
 {
     if (unlikely(size > slab_obj->get_size()))
@@ -258,36 +259,4 @@ void *SlabObjectAllocator::allocate(u64 size, u64 align)
 
 void SlabObjectAllocator::deallocate(void *ptr) { slab_obj->free(ptr); };
 
-void *SlabSizeAllocator::allocate(u64 size, u64 align)
-{
-    auto &groups = pool->get_slab_groups();
-    if (groups.empty())
-        return nullptr;
-    slab_group *last = nullptr;
-    for (auto &group : groups)
-    {
-        if (group.get_size() >= size)
-        {
-            if (last == nullptr)
-                last = &group;
-            else if (group.get_size() < last->get_size())
-                last = &group;
-        }
-    }
-    if (last != nullptr)
-        return last->alloc();
-    return nullptr;
-};
-void SlabSizeAllocator::deallocate(void *ptr)
-{
-    auto &groups = pool->get_slab_groups();
-    for (auto &group : groups)
-    {
-        if (group.include_address(ptr))
-        {
-            group.free(ptr);
-            return;
-        }
-    }
-};
 } // namespace memory

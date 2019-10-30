@@ -63,17 +63,24 @@ const u64 page_size = 0x1000;
 
 vm::vm_allocator *kernel_vma;
 
-const struct
+struct kmalloc_t
 {
     u64 size;
     const char *name;
+    slab_group *group;
+    kmalloc_t(u64 size, const char *name)
+        : size(size)
+        , name(name){
+
+          };
 } kmalloc_fixed_slab_size[] = {
     {8, "kmalloc-8"},       {16, "kmalloc-16"},     {24, "kmalloc-24"},     {32, "kmalloc-32"},
-    {48, "kmalloc-48"},     {56, "kmalloc-56"},     {64, "kmalloc-64"},     {80, "kmalloc-80"},
-    {96, "kmalloc-96"},     {128, "kmalloc-128"},   {192, "kmalloc-192"},   {256, "kmalloc-256"},
-    {384, "kmalloc-384"},   {448, "kmalloc-448"},   {512, "kmalloc-512"},   {768, "kmalloc-768"},
-    {960, "kmalloc-960"},   {1024, "kmalloc-1024"}, {1536, "kmalloc-1536"}, {2048, "kmalloc-2048"},
-    {3072, "kmalloc-3072"}, {4096, "kmalloc-4096"}, {6144, "kmalloc-6144"}, {8192, "kmalloc-8192"}};
+    {40, "kmalloc-40"},     {48, "kmalloc-48"},     {56, "kmalloc-56"},     {64, "kmalloc-64"},
+    {80, "kmalloc-80"},     {96, "kmalloc-96"},     {112, "kmalloc-112"},   {128, "kmalloc-128"},
+    {192, "kmalloc-192"},   {256, "kmalloc-256"},   {384, "kmalloc-384"},   {448, "kmalloc-448"},
+    {512, "kmalloc-512"},   {768, "kmalloc-768"},   {960, "kmalloc-960"},   {1024, "kmalloc-1024"},
+    {1536, "kmalloc-1536"}, {2048, "kmalloc-2048"}, {3072, "kmalloc-3072"}, {4096, "kmalloc-4096"},
+    {6144, "kmalloc-6144"}, {8192, "kmalloc-8192"}};
 
 void tag_zone_buddy_memory(void *start_addr, void *end_addr)
 {
@@ -231,9 +238,9 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
     global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
 
-    for (auto i : kmalloc_fixed_slab_size)
+    for (auto &i : kmalloc_fixed_slab_size)
     {
-        global_kmalloc_slab_domain->create_new_slab_group(i.size, i.name, 8, 0);
+        i.group = global_kmalloc_slab_domain->create_new_slab_group(i.size, i.name, 8, 0);
     }
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 
@@ -282,14 +289,40 @@ void *kmalloc(u64 size, u64 align)
         trace::panic("allocate size is too large");
         return nullptr;
     }
-    SlabSizeAllocator allocator(global_kmalloc_slab_domain);
+    u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid;
+
+    while (left < right)
+    {
+        mid = left + (right - left) / 2;
+        if (kmalloc_fixed_slab_size[mid].size >= size)
+        {
+            if (kmalloc_fixed_slab_size[mid - 1].size < size)
+            {
+                break;
+            }
+            right = mid;
+        }
+        else if (kmalloc_fixed_slab_size[mid].size < size)
+        {
+            left = mid + 1;
+        }
+    }
+
+    SlabObjectAllocator allocator(kmalloc_fixed_slab_size[mid].group);
     return allocator.allocate(size, align);
 }
 
 void kfree(void *addr)
 {
-    SlabSizeAllocator allocator(global_kmalloc_slab_domain);
-    allocator.deallocate(addr);
+    for (auto it : kmalloc_fixed_slab_size)
+    {
+        if (it.group->include_address(addr))
+        {
+            SlabObjectAllocator allocator(it.group);
+            allocator.deallocate(addr);
+            return;
+        }
+    }
 }
 
 void *vmalloc(u64 size, u64 align)

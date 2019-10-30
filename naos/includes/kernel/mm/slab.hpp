@@ -105,19 +105,4 @@ struct SlabObjectAllocator : IAllocator
     void deallocate(void *ptr) override;
 };
 
-// A allocator get memory for slab
-struct SlabSizeAllocator : IAllocator
-{
-  private:
-    slab_cache_pool *pool;
-
-  public:
-    SlabSizeAllocator(slab_cache_pool *pool)
-        : pool(pool){
-
-          };
-    void *allocate(u64 size, u64 align) override;
-
-    void deallocate(void *ptr) override;
-};
 } // namespace memory
