@@ -166,6 +166,14 @@ class KernelVirtualAllocator : public IAllocator
     void deallocate(void *p) override { vfree(p); }
 };
 
+/// Allocate virtual memory or fixed kernel memory depends on allocate size
+class KernelMemoryAllocator : public IAllocator
+{
+  public:
+    void *allocate(u64 size, u64 align) override;
+    void deallocate(void *p) override;
+};
+
 class FixMemoryAllocator : public IAllocator
 {
   private:
@@ -183,5 +191,5 @@ extern VirtBootAllocator *VirtBootAllocatorV;
 extern PhyBootAllocator *PhyBootAllocatorV;
 extern KernelCommonAllocator *KernelCommonAllocatorV;
 extern KernelVirtualAllocator *KernelVirtualAllocatorV;
-
+extern KernelMemoryAllocator *KernelMemoryAllocatorV;
 } // namespace memory
