@@ -9,7 +9,6 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/trace.hpp"
-
 namespace arch
 {
 ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
@@ -22,10 +21,14 @@ void init(const kernel_start_args *args)
 {
     trace::early_init();
     device::vga::init(args);
-    trace::debug("boot from ", (const char *)args->boot_loader_name);
+    trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::ColorValue>(0xA0c000),
+                 trace::Background<trace::Color::Black>(), " NaOS: Nano Operating System (arch X86_64)",
+                 trace::PrintAttr::Reset(), '\n');
+
+    trace::debug("Boot from ", (const char *)args->boot_loader_name);
     if (sizeof(kernel_start_args) != args->size_of_struct)
     {
-        trace::panic("kernel args is invalid.");
+        trace::panic("Kernel args is invalid.");
     }
     trace::debug("Arch init start...");
     cpu_info::init();

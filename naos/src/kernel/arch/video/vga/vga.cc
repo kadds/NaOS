@@ -1,6 +1,5 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/arch/video/vga/output_graphics.hpp"
-#include "kernel/arch/video/vga/output_text.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
@@ -15,14 +14,21 @@ u64 frame_size;
 void *frame_buffer;
 bool is_auto_flush = false;
 
-Aligned(8) char reserved_space[sizeof(output_text) > sizeof(output_graphics) ? sizeof(output_text)
-                                                                             : sizeof(output_graphics)];
+Aligned(8) char reserved_space[sizeof(output_graphics)];
 
 void init(const kernel_start_args *args)
 {
     using namespace trace;
+    bool is_graphics_mode = args->fb_type == 1;
+
+    if (!is_graphics_mode || args->fb_addr == 0)
+    {
+        frame_buffer = nullptr;
+        trace::warning("Not find video device!");
+        return;
+    }
+
     frame_buffer = (void *)args->fb_addr;
-    bool is_text_mode = args->fb_type == 2;
     frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
 
     void *back_buffer = nullptr;
@@ -52,24 +58,12 @@ void init(const kernel_start_args *args)
             ;
     }
 
-    if (likely(!is_text_mode))
-    {
-        current_output = new (&reserved_space)
-            output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
-        current_output->init();
-        current_output->cls();
-        print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X",
-              args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
-    }
-    else
-    {
-        current_output = new (&reserved_space)
-            output_text(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
-        current_output->init();
-        current_output->cls();
-        print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA text mode. ", args->fb_width, "X",
-              args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
-    }
+    current_output = new (&reserved_space)
+        output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
+    current_output->init();
+    current_output->cls();
+    print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X",
+          args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
 
     test();
     trace::debug("Video address ", (void *)frame_buffer);
@@ -100,37 +94,57 @@ void test()
     print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End",
           PrintAttr::Reset());
     print(kernel_console_attribute, '\n');
-    print(kernel_console_attribute, Foreground<Color::ColorValue>(0xA0c000), Background<Color::Black>(),
-          " NaOS: Nano Operating System (VGA mode) ", PrintAttr::Reset(), '\n');
 }
 
 void *get_video_addr() { return frame_buffer; }
 
 void set_video_addr(void *addr)
 {
-    frame_buffer = addr;
-    trace::print(trace::kernel_console_attribute, "VGA frame buffer mapped at ", addr, "\n");
+    if (likely(frame_buffer != nullptr))
+    {
+        frame_buffer = addr;
+        trace::print(trace::kernel_console_attribute, "VGA frame buffer mapped at ", addr, "\n");
+    }
 }
 
-void flush() { current_output->flush(frame_buffer); }
+void flush()
+{
+    if (likely(frame_buffer != nullptr))
+    {
+        current_output->flush(frame_buffer);
+    }
+}
+
 void auto_flush(u64 dt, u64 ud)
 {
-    uctx::UnInterruptableContext icu;
-    flush();
-    timer::add_watcher(1000000 / 60, auto_flush, 0);
-
-    return;
+    if (likely(frame_buffer != nullptr))
+    {
+        uctx::UnInterruptableContext icu;
+        flush();
+        timer::add_watcher(1000000 / 60, auto_flush, 0);
+    }
 }
 
 void set_auto_flush()
 {
-    is_auto_flush = true;
-    // 60HZ
-    timer::add_watcher(1000000 / 60, auto_flush, 0);
+    if (likely(frame_buffer != nullptr))
+    {
+
+        is_auto_flush = true;
+        // 60HZ
+        timer::add_watcher(1000000 / 60, auto_flush, 0);
+    }
 }
 
 u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute)
 {
+    if (unlikely(frame_buffer == nullptr))
+    {
+        u64 i = 0;
+        while (*str != '\0' && i < max_len)
+            i++;
+        return i;
+    }
     uctx::UnInterruptableContext uic;
     if (max_len == 0)
         max_len = (u64)(-1);
@@ -156,9 +170,12 @@ u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attr
 }
 void tag_memory()
 {
-    memory::tag_zone_buddy_memory(
-        memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr()),
-        (memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr() + frame_size)));
+    if (likely(frame_buffer != nullptr))
+    {
+        memory::tag_zone_buddy_memory(
+            memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr()),
+            (memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr() + frame_size)));
+    }
 }
 
 } // namespace arch::device::vga
