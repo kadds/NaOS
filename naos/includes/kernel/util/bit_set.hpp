@@ -5,136 +5,184 @@
 
 namespace util
 {
-template <typename BaseType, int BitPreElement> class bit_set
+namespace bit_set_opeartion
+{
+using BaseType = u64;
+
+bool get(byte *data, u64 index);
+
+void set(byte *data, u64 index);
+/// set [0, element_count) to 1
+void set_all(byte *data, u64 element_count);
+/// set [start, start+element_count) to 1
+void set_all(byte *data, u64 start, u64 element_count);
+
+void clean(byte *data, u64 index);
+/// set [0, element_count) to 0
+void clean_all(byte *data, u64 element_count);
+/// set [start, start+element_count) to 0
+void clean_all(byte *data, u64 start, u64 element_count);
+/// scan [offset, offset+max_len)
+u64 scan_zero(byte *data, u64 offset, u64 max_len);
+
+u64 scan_set(byte *data, u64 offset, u64 max_len);
+
+}; // namespace bit_set_opeartion
+class bit_set
 {
   private:
-    using raw_type = BaseType;
-    constexpr static u64 SizePreElement = (BitPreElement + 8 - 1) / 8;
     memory::IAllocator *allocator;
-
     // data pointer
-    raw_type *data;
-    int element_count;
-
-    static_assert((BitPreElement & (BitPreElement - 1)) == 0, "BitPreElement can only be a power of 2.");
-    static_assert(BitPreElement <= sizeof(raw_type) * 8, "BitPreElement is bigger than BaseType.");
+    byte *data;
+    u64 element_count;
 
   public:
-    bit_set(memory::IAllocator *allocator, int element_count)
+    bit_set(memory::IAllocator *allocator, u64 element_count)
         : allocator(allocator)
         , element_count(element_count)
-
     {
 
-        u64 bytes = (element_count * BitPreElement + 7) / 8;
-        bytes = (bytes + sizeof(raw_type) - 1) & ~(sizeof(raw_type) - 1);
-        data = memory::NewArray<raw_type>(allocator, bytes / sizeof(raw_type));
+        u64 bytes = (element_count + 7) / 8;
+        data = (byte *)allocator->allocate(bytes, 1);
     }
 
-    bit_set(const bit_set &v) {}
+    bit_set(const bit_set &v) = delete;
+    bit_set &operator=(const bit_set &v) = delete;
 
-    ~bit_set()
+    ~bit_set() { allocator->deallocate(data); }
+
+    void clean_all() { bit_set_opeartion::clean_all(data, element_count); }
+
+    void set_all() { bit_set_opeartion::set_all(data, element_count); }
+
+    bool get(u64 index)
     {
-        int bytes = (element_count * BitPreElement + 7) / 8;
-        bytes = (bytes + sizeof(raw_type) - 1) & ~(sizeof(raw_type) - 1);
-        memory::DeleteArray<raw_type>(allocator, data, bytes / sizeof(raw_type));
+        kassert(index < element_count, "Index is out of range. index:", index, " maximum:", element_count);
+        return bit_set_opeartion::get(data, index);
     }
 
-    BaseType get(int index) const
+    void set(u64 index)
     {
-        kassert(index < element_count, "out of range");
-
-        auto bit = BitPreElement * index; // which bit
-        auto i8 = bit / 8;
-        auto rest = bit % 8;
-        auto v = data[i8 / sizeof(raw_type)];
-        v >>= (i8 % sizeof(raw_type) * 8 + rest);
-        v &= ((1 << BitPreElement) - 1);
-        return v;
+        kassert(index < element_count, "Index is out of range. index:", index, " maximum:", element_count);
+        bit_set_opeartion::set(data, index);
     }
 
-    void set(int index, BaseType value)
+    void set_all(u64 index, u64 count)
     {
-        kassert(index < element_count, "out of range");
-
-        value &= (1 << BitPreElement) - 1;
-        auto bit = BitPreElement * index; // which bit
-        auto i8 = bit / 8;
-        auto rest = bit % 8;
-        auto &v = data[i8 / sizeof(raw_type)];
-        int offset = i8 % sizeof(raw_type) * 8 + rest;
-
-        u64 x = ((1lu << offset) - 1);
-        if (unlikely(offset + BitPreElement < 64))
-        {
-            x |= ~((1lu << (offset + BitPreElement)) - 1);
-        }
-
-        v = (v & x) | (value << offset);
+        kassert(index < element_count, "Index is out of range. index:", index, " maximum:", element_count);
+        kassert(index + count < element_count, "Index + Count is out of range:", index, "+", count,
+                " maximum:", element_count);
+        bit_set_opeartion::set_all(data, index, count);
     }
 
-    void clean(int index) { set(index, 0); }
-
-    void clean_all()
+    void clean(u64 index)
     {
-        int bytes = element_count * SizePreElement / 8;
-        util::memzero(data, bytes);
+        kassert(index < element_count, "Index is out of range. index:", index, " maximum:", element_count);
+        bit_set_opeartion::clean(data, index);
     }
 
-    int count() const { return element_count; }
+    void clean_all(u64 index, u64 count)
+    {
+        kassert(index < element_count, "Index is out of range. index:", index, " maximum:", element_count);
+        kassert(index + count < element_count, "Index + Count is out of range:", index, "+", count,
+                " maximum:", element_count);
+        bit_set_opeartion::clean_all(data, index, count);
+    }
+
+    u64 scan_zero(u64 offset, u64 max_len)
+    {
+        kassert(offset < element_count, "Offset is out of range. offset:", offset, " maximum:", element_count);
+        kassert(offset + max_len < element_count, "Offset + Count is out of range:", offset, "+", max_len,
+                " maximum:", element_count);
+        return bit_set_opeartion::scan_zero(data, offset, max_len);
+    }
+
+    u64 scan_zero() { return bit_set_opeartion::scan_zero(data, 0, element_count); }
+
+    u64 scan_set(u64 offset, u64 max_len)
+    {
+        kassert(offset < element_count, "Offset is out of range. offset:", offset, " maximum:", element_count);
+        kassert(offset + max_len < element_count, "Offset + Count is out of range:", offset, "+", max_len,
+                " maximum:", element_count);
+        return bit_set_opeartion::scan_set(data, offset, max_len);
+    }
+
+    u64 scan_set() { return bit_set_opeartion::scan_set(data, 0, element_count); }
+
+    u64 count() const { return element_count; }
 };
 
-template <typename BaseType, int BitPreElement, int ElementCount> class bit_set_fixed
+template <int ElementCount> class bit_set_inplace
 {
-    using raw_type = BaseType;
-    raw_type data[((BitPreElement * ElementCount + 7) / 8 + sizeof(raw_type) - 1) / sizeof(raw_type)];
+    u8 data[(ElementCount + 7) / 8];
 
   public:
-    bit_set_fixed() {}
+    bit_set_inplace() = default;
 
-    ~bit_set_fixed() {}
+    bit_set_inplace(const bit_set_inplace &v) = delete;
 
-    BaseType get(int index) const
+    bit_set_inplace &operator=(const bit_set_inplace &v) = delete;
+
+    ~bit_set_inplace() = default;
+
+    void clean_all() { bit_set_opeartion::clean_all((byte *)data, ElementCount); }
+
+    void set_all() { bit_set_opeartion::set_all((byte *)data, ElementCount); }
+
+    bool get(u64 index)
     {
-        kassert(index < ElementCount, "out of range");
-
-        auto bit = BitPreElement * index; // which bit
-        auto i8 = bit / 8;
-        auto rest = bit % 8;
-        auto v = data[i8 / sizeof(raw_type)];
-        v >>= (i8 % sizeof(raw_type) * 8 + rest);
-        v &= ((1 << BitPreElement) - 1);
-        return v;
+        kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
+        return bit_set_opeartion::get((byte *)data, index);
     }
 
-    void set(int index, BaseType value)
+    void set(u64 index)
     {
-        kassert(index < ElementCount, "out of range");
-
-        value &= (1 << BitPreElement) - 1;
-        auto bit = BitPreElement * index; // which bit
-        auto i8 = bit / 8;
-        auto rest = bit % 8;
-        auto &v = data[i8 / sizeof(raw_type)];
-        int offset = i8 % sizeof(raw_type) * 8 + rest;
-
-        u64 x = ((1lu << offset) - 1);
-        if (unlikely(offset + BitPreElement < 64))
-        {
-            x |= ~((1lu << (offset + BitPreElement)) - 1);
-        }
-
-        v = (v & x) | (value << offset);
+        kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
+        bit_set_opeartion::set((byte *)data, index);
     }
 
-    void clean(int index) { set(index, 0); }
-
-    void clean_all()
+    void set_all(u64 index, u64 count)
     {
-        int bytes = ElementCount * BitPreElement / 8;
-        util::memzero(data, bytes);
+        kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
+        kassert(index + count < ElementCount, "Index + Count is out of range:", index, "+", count,
+                " maximum:", ElementCount);
+        bit_set_opeartion::set_all((byte *)data, index, count);
     }
 
-    int count() const { return ElementCount; }
+    void clean(u64 index)
+    {
+        kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
+        bit_set_opeartion::clean((byte *)data, index);
+    }
+
+    void clean_all(u64 index, u64 count)
+    {
+        kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
+        kassert(index + count < ElementCount, "Index + Count is out of range:", index, "+", count,
+                " maximum:", ElementCount);
+        bit_set_opeartion::clean_all((byte *)data, index, count);
+    }
+
+    u64 scan_zero(u64 offset, u64 max_len)
+    {
+        kassert(offset < ElementCount, "Offset is out of range. offset:", offset, " maximum:", ElementCount);
+        kassert(offset + max_len < ElementCount, "Offset + Count is out of range:", offset, "+", max_len,
+                " maximum:", ElementCount);
+        return bit_set_opeartion::scan_zero((byte *)data, offset, max_len);
+    }
+
+    u64 scan_zero() { return bit_set_opeartion::scan_zero((byte *)data, 0, ElementCount); }
+
+    u64 scan_set(u64 offset, u64 max_len)
+    {
+        kassert(offset < ElementCount, "Offset is out of range. offset:", offset, " maximum:", ElementCount);
+        kassert(offset + max_len < ElementCount, "Offset + Count is out of range:", offset, "+", max_len,
+                " maximum:", ElementCount);
+        return bit_set_opeartion::scan_set((byte *)data, offset, max_len);
+    }
+
+    u64 scan_set() { return bit_set_opeartion::scan_set((byte *)data, 0, ElementCount); }
+
+    u64 count() const { return ElementCount; }
 };
 } // namespace util

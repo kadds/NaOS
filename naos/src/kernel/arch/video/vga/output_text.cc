@@ -34,8 +34,7 @@ void output_text::scroll(i32 n)
 
         for (u64 i = height * width - disp; i < height * width; i++, fb++)
             *fb = 0; // clean 0
-        for (u64 i = 0; i < height; i++)
-            bitmap.set(i, 1);
+        bitmap.set_all();
     }
     else if (n < 0)
     {
@@ -89,7 +88,7 @@ void output_text::putchar(char ch, const trace::console_attribute &attribute)
         u8 bg = similar_color_index(attribute.get_background());
         *((u8 *)video_addr + (px + py * width) * 2) = ch;
         *((u8 *)video_addr + (px + py * width) * 2 + 1) = fg | (bg << 4);
-        bitmap.set(py, 1);
+        bitmap.set(py);
         has_write = true;
         move_pen(1, 0);
     }

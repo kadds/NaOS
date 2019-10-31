@@ -6,14 +6,10 @@
 namespace memory
 {
 
-typedef util::bit_set<u64, 16> bits_t;
-
 const int buddy_max_page = 1 << 8;
 
 BuddyAllocator *KernelBuddyAllocatorV;
 lock::spinlock_t buddy_lock;
-
-bits_t &get(void *impl) { return *(bits_t *)impl; }
 
 u64 buddy::fit_size(u64 size)
 {
@@ -27,14 +23,13 @@ u64 buddy::fit_size(u64 size)
 
 int buddy::alloc(u64 pages)
 {
-    auto &bitset = get(bits_impl);
     if (pages == 0)
         pages = 1;
     else if ((pages & (pages - 1)) != 0) // not pow of 2
         pages = fit_size(pages);
 
     // The existing maximum size does not apply to callers.
-    if (bitset.get(0) < pages)
+    if (array[0] < pages)
         return -1;
 
     // Find block
@@ -42,7 +37,7 @@ int buddy::alloc(u64 pages)
     int i = 0;
     for (; target_page != pages; target_page >>= 1)
     {
-        if (bitset.get(i * 2 + 1) >= pages) // Available at left branch
+        if (array[i * 2 + 1] >= pages) // Available at left branch
         {
             i = i * 2 + 1;
         }
@@ -51,66 +46,63 @@ int buddy::alloc(u64 pages)
             i = i * 2 + 2;
         }
     }
-    bitset.set(i, 0);
+    array[i] = 0;
     int index = i;
-    while (index >= 0) // Modify the value of it
+    while (index >= 0) ///< Modify the value of it
     {
         index = ((index + 1) >> 1) - 1;
-        auto a = bitset.get(index * 2 + 1);
-        auto b = bitset.get(index * 2 + 2);
+        auto a = array[index * 2 + 1];
+        auto b = array[index * 2 + 2];
         if (a < b) // maximum size
         {
             a = b;
         }
-        bitset.set(index, a); // reset maximum size
+        array[index] = a; ///< reset maximum size
     }
     return (i + 1) * target_page - (size + 1) / 2;
 }
 
 void buddy::free(int offset)
 {
-    auto &bitset = get(bits_impl);
     int index = offset + (size + 1) / 2 - 1;
     u64 node_size = 1;
-    for (; bitset.get(index); index = ((index + 1) >> 1) - 1)
+    for (; array[index]; index = ((index + 1) >> 1) - 1)
     {
         node_size *= 2;
         if (index == 0)
             return;
     }
-    bitset.set(index, node_size);
+    array[index] = node_size;
 
     while (index)
     {
         index = ((index + 1) >> 1) - 1;
         node_size *= 2;
 
-        auto left = bitset.get(index * 2 + 1);
-        auto right = bitset.get(index * 2 + 2);
+        auto left = array[index * 2 + 1];
+        auto right = array[index * 2 + 2];
 
         if (left + right == node_size)
-            bitset.set(index, node_size);
+            array[index] = node_size;
         else
-            bitset.set(index, left > right ? left : right);
+            array[index] = left > right ? left : right;
     }
 }
 
 buddy::buddy(int page_count)
     : size(page_count * 2 - 1)
-    , bits_impl(memory::New<bits_t>(memory::VirtBootAllocatorV, memory::VirtBootAllocatorV, size))
+    , array((u16 *)memory::VirtBootAllocatorV->allocate(sizeof(u16) * size, 1))
 {
     if ((page_count & (page_count - 1)) != 0)
         return;
     u64 node_size = size + 1;
-    auto &bitset = get(bits_impl);
     for (int i = 0; i < size; i++)
     {
         if (((i + 1) & (i)) == 0)
         {
             node_size >>= 1;
         }
-
-        bitset.set(i, node_size);
+        array[i] = node_size;
     }
 }
 
@@ -119,7 +111,6 @@ Tag memory used by kernel.
 */
 bool buddy::tag_alloc(int start_offset, int len)
 {
-    auto &bitset = get(bits_impl);
     // no include this [start_offset, end_offset)
     int end_offset = start_offset + len - 1;
 
@@ -127,7 +118,7 @@ bool buddy::tag_alloc(int start_offset, int len)
     int end_index = end_offset + (size + 1) / 2 - 1;
     for (int i = start_index; i <= end_index; i++)
     {
-        bitset.set(i, 0);
+        array[i] = 0;
     }
     int sindex = start_index, eindex = end_index;
     u64 node_size = size + 1;
@@ -137,15 +128,14 @@ bool buddy::tag_alloc(int start_offset, int len)
         eindex = ((eindex + 1) >> 1) - 1;
         for (int i = sindex; i <= eindex; i++)
         {
-            auto left = bitset.get(i * 2 + 1);
-            auto right = bitset.get(i * 2 + 2);
+            auto left = array[i * 2 + 1];
+            auto right = array[i * 2 + 2];
 
             if (left + right == node_size)
-                bitset.set(i, node_size); // merge
+                array[i] = node_size; // merge
             else
             {
-                auto v = left > right ? left : right;
-                bitset.set(i, v);
+                array[i] = left > right ? left : right;
             }
         }
         node_size >>= 1;
@@ -159,7 +149,7 @@ void buddy::cat_tree(buddy_tree *tree, int index)
     {
         return;
     }
-    tree->val = get(bits_impl).get(index);
+    tree->val = array[index];
 
     if (index * 2 + 2 > size)
     {

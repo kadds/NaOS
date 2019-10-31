@@ -16,7 +16,7 @@ class output_text : public output
     memory::FixMemoryAllocator allocator;
 
     // Each bit indicates which line has changed
-    util::bit_set<u64, 1> bitmap;
+    util::bit_set bitmap;
 
     // Shows whether it has been modified since last flush
     bool has_write;

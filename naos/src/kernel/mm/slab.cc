@@ -91,21 +91,16 @@ void *slab_group::alloc()
     }
     slab *slab = list_partial.back();
     auto &bitmap = slab->bitmap;
-    for (int i = 0; i < bitmap.count(); i++)
+    u64 i = bitmap.scan_zero();
+    kassert(i < bitmap.count(), "Memory leacorruption in slab");
+    bitmap.set(i);
+    slab->rest--;
+    all_obj_used++;
+    if (slab->rest == 0)
     {
-        if (bitmap.get(i) == 0)
-        {
-            slab->rest--;
-            all_obj_used++;
-            bitmap.set(i, 1);
-            if (slab->rest == 0)
-            {
-                list_full.push_back(list_partial.pop_back());
-            }
-            return slab->data_ptr + i * obj_align_size;
-        }
+        list_full.push_back(list_partial.pop_back());
     }
-    trace::panic("Unreachable control flow.");
+    return slab->data_ptr + i * obj_align_size;
 }
 
 void slab_group::free(void *ptr)
@@ -119,7 +114,7 @@ void slab_group::free(void *ptr)
         if (page_addr == (char *)*it)
         {
             auto &e = **it;
-            e.bitmap.set(((char *)ptr - e.data_ptr) / obj_align_size, 0);
+            e.bitmap.clean(((char *)ptr - e.data_ptr) / obj_align_size);
             e.rest++;
             all_obj_used--;
             if (e.rest == node_pre_slab)
@@ -142,7 +137,7 @@ void slab_group::free(void *ptr)
         if (page_addr == (char *)*it)
         {
             auto &e = **it;
-            e.bitmap.set(((char *)ptr - e.data_ptr) / obj_align_size, 0);
+            e.bitmap.clean(((char *)ptr - e.data_ptr) / obj_align_size);
             e.rest++;
             all_obj_used--;
             list_partial.push_back(*it);

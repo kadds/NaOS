@@ -8,9 +8,21 @@ namespace task
 
 typedef void kernel_thread_start_func(u64 args);
 typedef u64 user_main_func(char *args, u64 argc);
-typedef u64 handle_t;
-typedef u64 thread_id;
-typedef u64 process_id;
+
+using handle_t = u64;
+using thread_id = u64;
+using process_id = u64;
+using group_id = u64;
+using file_desc = u64;
+
+/// 65536
+extern const thread_id max_thread_id;
+
+/// 1048576
+extern const process_id max_process_id;
+
+/// 65536
+extern const group_id max_group_id;
 
 struct mm_info_t
 {
@@ -33,7 +45,7 @@ enum class thread_state : u8
     destroy,
 };
 
-struct handle_table_t
+struct resource_table_t
 {
     void *console_attribute;
 };
@@ -42,16 +54,17 @@ struct handle_table_t
 struct process_t
 {
     process_id pid;
-    u64 parent_pid;           ///< The parent process id
-    mm_info_t *mm_info;       ///< Memory map infomation
-    handle_table_t res_table; ///< Resource table
+    u64 parent_pid;             ///< The parent process id
+    mm_info_t *mm_info;         ///< Memory map infomation
+    resource_table_t res_table; ///< Resource table
+    void *thread_id_gen;
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
 };
 namespace thread_attributes
 {
-enum attributes
+enum attributes : u32
 {
     need_schedule = 1,
     block = 2,

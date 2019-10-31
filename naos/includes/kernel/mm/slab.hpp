@@ -12,7 +12,7 @@ namespace memory
 
 struct slab
 {
-    using bitmap_t = util::bit_set_fixed<u64, 1, 512>;
+    using bitmap_t = util::bit_set_inplace<512>;
     bitmap_t bitmap; // max 512 element
     u32 rest;
     u32 color_offset;

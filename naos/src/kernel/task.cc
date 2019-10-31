@@ -20,13 +20,26 @@
 
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
+#include "kernel/util/id_generator.hpp"
 namespace task
 {
+const thread_id max_thread_id = 0x10000;
+
+const process_id max_process_id = 0x100000;
+
+const group_id max_group_id = 0x10000;
 
 using thread_list_t = util::linked_list<thread_t *>;
 using process_list_t = util::linked_list<process_t *>;
 using thread_list_node_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
 using process_list_node_allocator_t = memory::list_node_cache_allocator<process_list_t>;
+
+const u64 process_id_param[] = {0x1000, 0x8000, 0x40000, 0x80000};
+using process_id_generator_t = util::id_level_generator<sizeof(process_id_param) / sizeof(u64)>;
+process_id_generator_t *process_id_generator;
+
+const u64 thread_id_param[] = {0x1000, 0x8000, 0x40000};
+using thread_id_generator_t = util::id_level_generator<sizeof(thread_id_param) / sizeof(u64)>;
 
 thread_list_node_allocator_t *thread_list_cache_allocator;
 process_list_node_allocator_t *process_list_cache_allocator;
@@ -48,9 +61,14 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 inline process_t *new_kernel_process()
 {
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    auto id = process_id_generator->next();
+    if (id == util::null_id)
+        return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
+    process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = nullptr;
+    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_list->push_back(process);
     return process;
 }
@@ -58,9 +76,14 @@ inline process_t *new_kernel_process()
 inline process_t *new_process()
 {
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    auto id = process_id_generator->next();
+    if (id == util::null_id)
+        return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
+    process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
+    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_list->push_back(process);
     return process;
 }
@@ -69,15 +92,15 @@ inline void delete_process(process_t *p)
 {
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     if (p->mm_info != nullptr)
-    {
         memory::Delete(mm_info_t_allocator, p->mm_info);
-    }
+
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
     auto node = global_process_list->find(p);
     if (likely(node != global_process_list->end()))
     {
         global_process_list->remove(node);
     }
+    process_id_generator->collect(p->pid);
     memory::Delete<>(process_t_allocator, p);
 }
 
@@ -86,11 +109,18 @@ inline thread_t *new_thread(process_t *p)
     using arch::task::register_info_t;
     uctx::SpinLockUnInterruptableContext icu(p->thread_list_lock);
 
+    auto id = ((thread_id_generator_t *)p->thread_id_gen)->next();
+    if (unlikely(id == util::null_id))
+    {
+        return nullptr;
+    }
+
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
     ((thread_list_t *)p->thread_list)->push_back(thd);
     register_info_t *register_info = memory::New<register_info_t>(register_info_t_allocator);
     thd->register_info = register_info;
+    thd->tid = id;
     return thd;
 }
 
@@ -101,12 +131,9 @@ inline void delete_thread(thread_t *thd)
     using arch::task::register_info_t;
 
     auto thd_list = ((thread_list_t *)thd->process->thread_list);
-    auto node = thd_list->find(thd);
-    if (likely(node != thd_list->end()))
-    {
-        thd_list->remove(node);
-    }
+    thd_list->remove(thd_list->find(thd));
 
+    ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
     memory::Delete<>(register_info_t_allocator, thd->register_info);
     memory::Delete<>(thread_t_allocator, thd);
 }
@@ -132,19 +159,20 @@ void init()
     register_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
         memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
 
+    process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, process_id_param);
+
     // init for kernel process
     process_t *process = new_kernel_process();
-    process->pid = 0;
     process->parent_pid = 0;
 
     thread_t *thd = new_thread(process);
-    thd->tid = 0;
     thd->state = thread_state::running;
     thd->static_priority = 125;
     thd->dynamic_priority = 0;
 
     arch::task::init(thd, thd->register_info);
     idle_task = thd;
+    trace::debug("idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init...");
 }
 
 u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
@@ -167,17 +195,24 @@ u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
         }
         // fork thread new procress
         process->parent_pid = current_process()->pid;
-        process->pid = current_process()->pid + 1;
     }
     thread_t *thd = new_thread(process);
     thd->state = thread_state::ready;
-    thd->tid = current()->tid + 1;
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
 
     arch::task::do_fork(thd, (void *)func, args);
     scheduler::add(thd);
+    if (process == current_process())
+    {
+        trace::debug("New thread forked tid=", thd->tid, ", pid=", process->pid);
+    }
+    else
+    {
+        trace::debug("New process(thread) forked tid=", thd->tid, ", pid=", process->pid,
+                     ", parent pid=", process->parent_pid);
+    }
     return 0;
 }
 
@@ -277,13 +312,12 @@ void do_sleep(u64 milliseconds)
     }
 }
 
-NoReturn void do_exit(u64 value)
+void do_exit(u64 value)
 {
     thread_t *thd = current();
-    for (;;)
-    {
-        thd->state = thread_state::stop;
-    }
+    thd->register_info->trap_vector = value;
+    thd->attributes = thread_attributes::need_schedule;
+    thd->state = thread_state::stop;
 }
 
 void destroy_thread(thread_t *thread)

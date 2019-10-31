@@ -19,17 +19,20 @@ class buddy
 {
   private:
     const int size;
-    // The 0th to last element comes from the output of the binary tree traversal. Element 0 is root.
-    // Using impl for avoid cyclic dependence
-    void *bits_impl;
+    /// The 0th to last element comes from the output of the binary tree traversal. Element 0 is root.
+    u16 *array;
     u64 fit_size(u64 size);
 
   public:
+    buddy(int max_level);
+    ~buddy() = default;
+    buddy(const buddy &) = delete;
+    buddy &operator=(const buddy &) = delete;
+
     int alloc(u64 size);
     void free(int offset);
 
     bool tag_alloc(int start_offset, int len);
-    buddy(int max_level);
     // for debug
     buddy_tree *gen_tree();
     // also for debug
