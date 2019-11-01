@@ -21,16 +21,19 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
         ret = (u64 *)regs->rip;
         rsp = (u64 *)regs->rsp;
     }
-    trace::print(trace::kernel_console_attribute, "stack data(rbp->rsp):");
+    trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
+                 trace::Foreground<trace::Color::Red>(), "stack data(rbp->rsp):", trace::PrintAttr::Reset());
     u64 least_rsp = (u64)rbp - sizeof(u64) * 10;
     u32 p = 0;
     for (u64 i = (u64)rbp; (i >= (u64)rsp || i >= least_rsp) && i >= 0xFFFF800000000000 && p < 100;
          i -= sizeof(u64), p++)
     {
+        /// print stack value
         trace::print(trace::kernel_console_attribute, "\n    [", (void *)i, "]=", (void *)(*(u64 *)i));
     }
 
-    trace::print(trace::kernel_console_attribute, "\nend of stack data.\n");
+    trace::print(trace::kernel_console_attribute, "\n", trace::Background<trace::Color::White>(),
+                 trace::Foreground<trace::Color::Red>(), "end of stack data.", trace::PrintAttr::Reset(), "\n");
 
     u64 end = (u64)_file_end + (u64)base_virtual_addr;
     u64 start = (u64)_file_start + (u64)base_virtual_addr;
@@ -71,9 +74,8 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
     {
         u64 fs, gs;
         __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : : "memory");
-        u64 gs_base, k_gs_base, fs_base;
-        trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::Black>(),
-                     trace::Background<trace::Color::LightGray>(), "registers:", trace::PrintAttr::Reset(),
+        trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
+                     trace::Foreground<trace::Color::Red>(), "registers(with intr regs):", trace::PrintAttr::Reset(),
                      "\nrax=", (void *)regs->rax, ", rbx=", (void *)regs->rbx, ", rcx=", (void *)regs->rcx,
                      ", rdx=", (void *)regs->rdx, "\n, r8=", (void *)regs->r8, ", r9=", (void *)regs->r9,
                      ", r10=", (void *)regs->r10, ", r11=", (void *)regs->r11, "\n, r12=", (void *)regs->r12,
@@ -83,16 +85,45 @@ void *print_stack(const arch::idt::regs_t *regs, int max_depth)
                      ",ss=", (void *)regs->ss, "\nrip=", (void *)regs->rip, ", rsp=", (void *)regs->rsp,
                      ", rbp=", (void *)regs->rbp, "\nrflags=", (void *)regs->rflags, "\nvector=", (void *)regs->vector,
                      ", error_code=", (void *)regs->error_code, "\n");
-
-        k_gs_base = _rdmsr(0xC0000102);
-        gs_base = _rdmsr(0xC0000101);
-        fs_base = _rdmsr(0xC0000100);
-        trace::print(trace::kernel_console_attribute, "current kernel_gs_base=", (void *)k_gs_base,
-                     ", gs_base=", (void *)gs_base, ", fs_base=", (void *)fs_base, '\n');
-
-        trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::Black>(),
-                     trace::Background<trace::Color::LightGray>(), "end of registers.", trace::PrintAttr::Reset(),
-                     '\n');
     }
+    else
+    {
+        u64 cs, ds, es, fs, gs, ss;
+        __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t  movq %%ds, %2\n\t  movq %%es,  %3\n\t  movq %%ss, "
+                             "%4\n\t movq %%cs, %5\n\t"
+                             : "=r"(fs), "=r"(gs), "=r"(ds), "=r"(es), "=r"(ss), "=r"(cs)
+                             :
+                             : "memory");
+        u64 rsp, rip, rbp, rflags;
+        __asm__ __volatile__("movq %%rsp, %0 \n\t lea (%%rip), %1\n\t movq %%rbp, %2 \n\t pushf \n\t popq %3"
+                             : "=r"(rsp), "=r"(rip), "=r"(rbp), "=r"(rflags)
+                             :
+                             : "memory");
+
+        trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
+                     trace::Foreground<trace::Color::Red>(), "registers(without intr regs):", trace::PrintAttr::Reset(),
+                     "\ncs=", (void *)cs, ", ds=", (void *)ds, ", es=", (void *)es, ", fs=", (void *)fs,
+                     ", gs=", (void *)gs, ",ss=", (void *)ss, "\nrip=", (void *)rip, ", rsp=", (void *)rsp,
+                     ", rbp=", (void *)rbp, "\nrflags=", (void *)rflags, "\n");
+    }
+    u64 gs_base, k_gs_base, fs_base;
+
+    k_gs_base = _rdmsr(0xC0000102);
+    gs_base = _rdmsr(0xC0000101);
+    fs_base = _rdmsr(0xC0000100);
+    trace::print(trace::kernel_console_attribute, "current kernel_gs_base=", (void *)k_gs_base,
+                 ", gs_base=", (void *)gs_base, ", fs_base=", (void *)fs_base, '\n');
+    u64 cr0, cr2, cr3, cr4, cr8;
+    __asm__ __volatile__(
+        "movq %%cr0, %0 \n\t movq %%cr2, %1\n\t  movq %%cr3, %2\n\t  movq %%cr4,  %3\n\t  movq %%cr8, %4\n\t "
+        : "=r"(cr0), "=r"(cr2), "=r"(cr3), "=r"(cr4), "=r"(cr8)
+        :
+        : "memory");
+
+    trace::print(trace::kernel_console_attribute, "current control registers: cr0=", (void *)cr0, ", cr2=", (void *)cr2,
+                 ", cr3=", (void *)cr3, ", cr4=", (void *)cr4, ", cr8=", (void *)cr8, '\n');
+
+    trace::print(trace::kernel_console_attribute, trace::Background<trace::Color::White>(),
+                 trace::Foreground<trace::Color::Red>(), "end of registers.", trace::PrintAttr::Reset(), '\n');
     return (void *)rbp;
 }
