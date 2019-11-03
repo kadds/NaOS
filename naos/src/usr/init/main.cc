@@ -1,6 +1,6 @@
 #include "usr/init/main.hpp"
 
-extern "C" __attribute__((section(".start"))) void main()
+extern "C" void _start()
 {
     sys_none();
     print("userland init");

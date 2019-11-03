@@ -9,6 +9,7 @@
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/linked_list.hpp"
 #include "kernel/util/str.hpp"

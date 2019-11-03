@@ -13,6 +13,7 @@
 #include "kernel/util/linked_list.hpp"
 #include "kernel/util/memory.hpp"
 
+#include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/scheduler.hpp"
@@ -21,6 +22,11 @@
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/id_generator.hpp"
+
+#include "kernel/mm/vm.hpp"
+#include "kernel/task/binary_handle/bin_handle.hpp"
+#include "kernel/task/binary_handle/elf.hpp"
+using mm_info_t = memory::vm::info_t;
 namespace task
 {
 const thread_id max_thread_id = 0x10000;
@@ -67,7 +73,7 @@ inline process_t *new_kernel_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
-    process->mm_info = nullptr;
+    process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_list->push_back(process);
     return process;
@@ -82,7 +88,7 @@ inline process_t *new_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
-    process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
+    process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator, true);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_list->push_back(process);
     return process;
@@ -92,7 +98,7 @@ inline void delete_process(process_t *p)
 {
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     if (p->mm_info != nullptr)
-        memory::Delete(mm_info_t_allocator, p->mm_info);
+        memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
     auto node = global_process_list->find(p);
@@ -138,6 +144,13 @@ inline void delete_thread(thread_t *thd)
     memory::Delete<>(thread_t_allocator, thd);
 }
 
+using file_array_t = util::array<fs::vfs::file *>;
+
+resource_table_t::resource_table_t()
+    : files(memory::New<file_array_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV))
+{
+}
+
 void init()
 {
     uctx::UnInterruptableContext icu;
@@ -173,6 +186,7 @@ void init()
     arch::task::init(thd, thd->register_info);
     idle_task = thd;
     trace::debug("idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init...");
+    bin_handle::init();
 }
 
 u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
@@ -216,55 +230,49 @@ u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
     return 0;
 }
 
-u64 do_exec(exec_segment code_segment, const char *args, const char *env, flag_t flags)
+u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flags)
 {
     auto thd = current();
-    auto mm_info = thd->process->mm_info;
+    {
+        uctx::SpinLockUnInterruptableContext icu(thd->process->thread_list_lock);
+        if (((thread_list_t *)thd->process->thread_list)->size() > 1)
+        {
+            return 2;
+        }
+    }
+
+    auto old_mm = (mm_info_t *)thd->process->mm_info;
+    thd->process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator, true);
+    auto mm_info = (mm_info_t *)thd->process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
-    using namespace memory::vm;
-    using namespace arch::task;
+    byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
+    file->move(0);
+    file->read(header, 128);
+    bin_handle::execute_info exec_info;
+    if (flags & exec_flags::binary_file)
+    {
+        bin_handle::load_bin(header, file, old_mm, &exec_info);
+    }
+    else if (!bin_handle::load(header, file, old_mm, &exec_info))
+    {
+        trace::info("Can't load execute file.");
+        memory::Delete<>(mm_info_t_allocator, mm_info);
+        thd->process->mm_info = old_mm;
+        memory::KernelCommonAllocatorV->deallocate(header);
 
-    // stack mapping, stack size 8MB
-    auto stack_vm = vm_paging.get_vma().allocate_map(
-        memory::user_stack_maximum_size, flags::readable | flags::writeable | flags::expand_low | flags::user_mode);
+        return 1;
+    }
+    memory::KernelCommonAllocatorV->deallocate(header);
 
-    thd->user_stack_top = (void *)stack_vm->end;
-    thd->user_stack_bottom = (void *)stack_vm->start;
-
-    code_segment.length = (code_segment.length + memory::page_size - 1) & ~(memory::page_size - 1);
-
-    u64 code_end = memory::user_code_bottom_address + code_segment.length;
-    // code mapping
-    auto code_vm = vm_paging.get_vma().add_map(memory::user_code_bottom_address, code_end,
-                                               flags::readable | flags::exec | flags::user_mode);
-
-    mm_info->mmu_paging.map_area_phy(code_vm, (void *)code_segment.start_offset);
-    // head mapping
-    vm_paging.get_vma().add_map(code_end, code_end + 0x1000,
-                                flags::readable | flags::writeable | flags::expand_high | flags::user_mode);
-
-    mm_info->app_code_start = (void *)memory::user_code_bottom_address;
-    thd->running_code_entry_address = mm_info->app_code_start;
-
-    mm_info->app_head_start = (void *)code_end;
-    mm_info->app_current_head = (char *)code_end + 0x1000;
-
-    mm_info->mmu_paging.load_paging();
-
-    return arch::task::do_exec(thd);
-}
-
-u64 do_exec(const char *filename, const char *args, const char *env, flag_t flags)
-{
-    fs::vfs::file *f = fs::vfs::open(filename, fs::vfs::mode::bin | fs::vfs::mode::read, 0);
-    u64 file_size = fs::vfs::size(f);
-    void *buffer = memory::KernelBuddyAllocatorV->allocate(file_size, 0);
-    fs::vfs::read(f, (byte *)buffer, file_size);
-    fs::vfs::close(f);
-    exec_segment segment;
-    segment.start_offset = (u64)memory::kernel_virtaddr_to_phyaddr(buffer);
-    segment.length = file_size;
-    return do_exec(segment, args, env, flags);
+    thd->user_stack_top = exec_info.stack_top;
+    thd->user_stack_bottom = exec_info.stack_bottom;
+    if (old_mm != nullptr)
+    {
+        memory::Delete<>(mm_info_t_allocator, (mm_info_t *)old_mm);
+    }
+    vm_paging.load_paging();
+    file->remove_ref();
+    return arch::task::do_exec(thd, exec_info.entry_start_address);
 }
 
 struct sleep_timer_struct
@@ -368,8 +376,8 @@ thread_t *get_idle_task() { return idle_task; }
 
 void switch_thread(thread_t *old, thread_t *new_task)
 {
-    if (old->process != new_task->process && new_task->process->mm_info != nullptr)
-        new_task->process->mm_info->mmu_paging.load_paging();
+    if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
+        ((mm_info_t *)new_task->process->mm_info)->mmu_paging.load_paging();
     _switch_task(old->register_info, new_task->register_info, new_task);
 }
 

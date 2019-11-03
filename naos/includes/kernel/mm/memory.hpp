@@ -4,12 +4,20 @@
 #include "common.hpp"
 #include <new>
 #include <utility>
+
 namespace memory
 {
+namespace vm
+{
+struct info_t;
+} // namespace vm
+
+extern vm::info_t *kernel_vm_info;
 
 void tag_zone_buddy_memory(void *start_addr, void *end_addr);
 
 void init(const kernel_start_args *args, u64 fix_memory_limit);
+void paging();
 u64 get_max_available_memory();
 u64 get_max_maped_memory();
 

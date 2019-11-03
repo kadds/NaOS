@@ -11,4 +11,4 @@ extern "C" char _lib_sys_call;
 
 SYS_CALL(0, void, sys_none, void)
 SYS_CALL(1, void, print, const char *arg, bool normal = false)
-SYS_CALL(5, void, sleep, unsigned long ms)
+SYS_CALL(31, void, sleep, unsigned long ms)

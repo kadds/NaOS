@@ -168,7 +168,6 @@ void temp_init();
 
 void copy_page_table(base_paging_t *to, base_paging_t *source);
 
-base_paging_t *get_kernel_paging();
 base_paging_t *current();
 
 } // namespace arch::paging

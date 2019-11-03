@@ -19,7 +19,10 @@ class id_generator
     id_generator(u64 max)
         : max(max)
         , last_index(0)
-        , bitmap(memory::KernelMemoryAllocatorV, max){};
+        , bitmap(memory::KernelMemoryAllocatorV, max)
+    {
+        bitmap.clean_all();
+    };
 
     u64 next()
     {
@@ -77,6 +80,7 @@ template <u8 levels> class id_level_generator
                 {
                     pack[i].bitmap = memory::New<bit_set>(memory::KernelCommonAllocatorV,
                                                           memory::KernelMemoryAllocatorV, pack[0].rest);
+                    pack[i].bitmap->clean_all();
                 }
                 return &pack[i];
             }
@@ -100,6 +104,7 @@ template <u8 levels> class id_level_generator
         }
         pack[0].bitmap =
             memory::New<bit_set>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV, pack[0].rest);
+        pack[0].bitmap->clean_all();
         current_pack = &pack[0];
     };
 

@@ -125,8 +125,12 @@ sys_call_setlabel:
     movq $0, %rax
 sys_call_label:
 	leaq system_call_table(%rip), %rbx
+    movq (%rbx,%rax,8), %r15
+    cmp $0, %r15
+    jnz sys_call_label2
+    movq $0, %rax
+sys_call_label2:
 	callq *(%rbx,%rax,8)
-
     movq %rax, 0x80(%rsp) # return value
     
     movabs $schedule, %rdx

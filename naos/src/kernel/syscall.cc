@@ -3,8 +3,6 @@
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 
-#define SYSCALL(name) ((void *)&name),
-
 namespace syscall
 {
 /// none system call, just print a warning
@@ -25,32 +23,11 @@ void print(const char *str, bool normal)
         trace::print_inner(str, trace::kernel_console_attribute);
 }
 
-/// exit thread with return value
-void exit(u64 ret_value) { task::do_exit(ret_value); }
+void *system_call_table[];
 
-void fork_kernel_thread(u64 args) {}
-
-u64 fork(u64 flags, u64 args) { return task::do_fork(fork_kernel_thread, args, flags); }
-
-void exec(const char *filename, const char *args, u64 flags) { task::do_exec(filename, 0, 0, flags); }
-
-void new_process(const char *filename, const char *args, u64 flags) {}
-
-/// sleep current thread
-void sleep(u64 milliseconds) { task::do_sleep(milliseconds); }
-
-task::file_desc open(const char *filename, u64 mode) { return 0; }
-
-bool close(task::file_desc file_desc) { return 0; }
-
-u64 write(task::file_desc file_desc, byte *buffer, u64 max_len) { return 0; }
-
-u64 read(task::file_desc file_desc, byte *buffer, u64 max_len) { return 0; }
-
-u64 lseek(task::file_desc file_desc, u64 offset, u64 type) { return 0; }
-
-u64 brk(u64 offset, u64 mode) { return 0; }
-
-void *system_call_table[] = {SYSCALL(none) SYSCALL(print) SYSCALL(exit) SYSCALL(fork) SYSCALL(exec) SYSCALL(sleep)};
+BEGIN_SYSCALL
+SYSCALL(0, none)
+SYSCALL(1, print)
+END_SYSCALL
 
 } // namespace syscall

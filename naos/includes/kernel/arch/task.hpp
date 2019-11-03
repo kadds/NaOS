@@ -87,5 +87,5 @@ inline void *get_task(void *stack)
 void init(::task::thread_t *thd, register_info_t *first_task_reg_info);
 
 u64 do_fork(::task::thread_t *thd, void *function, u64 arg);
-u64 do_exec(::task::thread_t *thd);
+u64 do_exec(::task::thread_t *thd, void *entry);
 } // namespace arch::task

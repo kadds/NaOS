@@ -51,7 +51,7 @@ void init(const kernel_start_args *args)
     void *video_start = device::vga::get_video_addr();
     void *video_start_2mb = (void *)(((u64)video_start) & ~(paging::frame_size::size_2mb - 1));
 
-    paging::map(paging::get_kernel_paging(), (void *)memory::kernel_vga_bottom_address, video_start_2mb,
+    paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start_2mb,
                 paging::frame_size::size_2mb,
                 (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
                 paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);

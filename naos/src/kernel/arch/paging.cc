@@ -5,6 +5,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
 
 namespace arch::paging
@@ -12,8 +13,6 @@ namespace arch::paging
 
 static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
               "sizeof paging struct is not 4KB.");
-
-pml4t *base_kernel_page_addr;
 
 template <typename _T> _T *new_page_table()
 {
@@ -73,7 +72,7 @@ Unpaged_Text_Section void temp_init()
 
 void init()
 {
-    base_kernel_page_addr = new_page_table<pml4t>();
+    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr();
     u64 max_maped_memory = memory::get_max_maped_memory();
     if (max_maped_memory > memory::max_memory_support)
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
@@ -96,6 +95,7 @@ void init()
 
     trace::debug("Reload page table");
     load(base_kernel_page_addr);
+    memory::kernel_vm_info->mmu_paging.load_paging();
 }
 
 void check_pml4e(pml4t *base_addr, int pml4_index)
@@ -449,8 +449,11 @@ void copy_page_table(base_paging_t *to, base_paging_t *source)
         if (pml4e_source.is_present())
         {
             auto &pmle4_to = dst->entries[i];
-            pmle4_to = pml4e_source;
-            pmle4_to.set_addr(new_page_table<pdpt>());
+            if (!pmle4_to.is_present())
+            {
+                pmle4_to = pml4e_source;
+                pmle4_to.set_addr(new_page_table<pdpt>());
+            }
 
             for (int j = 0; j < 512; j++)
             {
@@ -488,7 +491,5 @@ void copy_page_table(base_paging_t *to, base_paging_t *source)
         }
     }
 }
-
-base_paging_t *get_kernel_paging() { return base_kernel_page_addr; }
 
 } // namespace arch::paging

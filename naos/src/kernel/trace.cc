@@ -2,6 +2,8 @@
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/mm/buddy.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/ring_buffer.hpp"
 #include "kernel/util/str.hpp"

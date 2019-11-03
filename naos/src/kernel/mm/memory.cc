@@ -63,7 +63,7 @@ zones_t global_zones;
 const u64 linear_addr_offset = 0xffff800000000000;
 const u64 page_size = 0x1000;
 
-vm::vm_allocator *kernel_vma;
+vm::info_t *kernel_vm_info;
 
 struct kmalloc_t
 {
@@ -245,8 +245,8 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 
     memory::vm::init();
-    kernel_vma =
-        New<vm::vm_allocator>(VirtBootAllocatorV, memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
+    kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV, false);
+    kernel_vm_info->vma.set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
     KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
     KernelMemoryAllocatorV = New<KernelMemoryAllocator>(VirtBootAllocatorV);
 
@@ -258,21 +258,18 @@ irq::request_result _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *reg
 {
     if (arch::cpu::current().is_in_user_context((void *)regs->rsp))
         return irq::request_result::no_handled;
-    auto vm = kernel_vma->get_vm_area(extra_data);
+    auto vm = kernel_vm_info->vma.get_vm_area(extra_data);
     if (vm != nullptr)
     {
-        arch::paging::copy_page_table(arch::paging::current(), arch::paging::get_kernel_paging());
+        arch::paging::copy_page_table(arch::paging::current(),
+                                      (arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr());
         arch::paging::reload();
         return irq::request_result::ok;
     }
     return irq::request_result::no_handled;
 }
 
-void listen_page_fault()
-{
-    irq::insert_request_func(arch::exception::vector::page_fault, page_fault_func, 0);
-    vm::listen_page_fault();
-}
+void listen_page_fault() { vm::listen_page_fault(); }
 
 u64 get_max_available_memory() { return max_memory_available; }
 
@@ -328,14 +325,15 @@ void kfree(void *addr)
 
 void *vmalloc(u64 size, u64 align)
 {
-    auto vm = kernel_vma->allocate_map(size, align);
+    auto vm = kernel_vm_info->vma.allocate_map(size, align, 0, 0);
     for (u64 start = vm->start; start < vm->end; start += page_size)
     {
         auto phy = memory::kernel_virtaddr_to_phyaddr(KernelBuddyAllocatorV->allocate(1, 0));
-        arch::paging::map(arch::paging::get_kernel_paging(), (void *)start, phy, arch::paging::frame_size::size_4kb, 1,
+        arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr(), (void *)start, phy,
+                          arch::paging::frame_size::size_4kb, 1,
                           arch::paging::flags::writable | arch::paging::flags::present);
     }
-    if (arch::paging::current() == arch::paging::get_kernel_paging())
+    if (arch::paging::current() == (arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr())
     {
         arch::paging::reload();
     }
@@ -344,11 +342,14 @@ void *vmalloc(u64 size, u64 align)
 
 void vfree(void *addr)
 {
-    auto vm = kernel_vma->deallocate_map(addr);
-    if (vm.start != 0)
+    auto vm = kernel_vm_info->vma.get_vm_area((u64)addr);
+    if (vm)
     {
-        arch::paging::unmap(arch::paging::get_kernel_paging(), (void *)vm.start, arch::paging::frame_size::size_4kb,
-                            (vm.end - vm.start) / arch::paging::frame_size::size_4kb);
+        /// TODO: free page memory
+        kernel_vm_info->vma.deallocate_map(vm);
+        arch::paging::unmap((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr(),
+                            (void *)vm->start, arch::paging::frame_size::size_4kb,
+                            (vm->end - vm->start) / arch::paging::frame_size::size_4kb);
     }
 }
 
@@ -383,11 +384,10 @@ void *KernelMemoryAllocator::allocate(u64 size, u64 align)
 
 void KernelMemoryAllocator::deallocate(void *p)
 {
-    auto vm = kernel_vma->deallocate_map(p);
-    if (vm.start != 0)
+    auto vm = kernel_vm_info->vma.get_vm_area((u64)p);
+    if (!vm)
     {
-        arch::paging::unmap(arch::paging::get_kernel_paging(), (void *)vm.start, arch::paging::frame_size::size_4kb,
-                            (vm.end - vm.start) / arch::paging::frame_size::size_4kb);
+        vfree(p);
         return;
     }
     kfree(p);

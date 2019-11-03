@@ -22,15 +22,16 @@ set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
 set(CMAKE_CXX_FLAGS_RELEASE "-g -O2 -fvisibility-inlines-hidden")
 set(CMAKE_ASM_FLAGS_RELEASE "-g -O2")
 
-set(LINKER_X86 "-Wl,-n -Wl,-melf_i386 -Wl,--no-relax -Wl,--gc-sections -Wl,--build-id=none")
+set(LINKER_X86 "-Wl,-n -Wl,-melf_i386 -Wl,--no-relax -Wl,--build-id=none")
 set(ASM_X86 "-Wa,--32")
 set(CXX_X86 "-m32")
 
-set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64 -Wl,--no-relax -Wl,--gc-sections -Wl,--build-id=none")
+set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64 -Wl,--no-relax -Wl,--build-id=none")
 set(ASM_X64 "-mcmodel=large -Wa,--64")
 set(CXX_X64 "-mcmodel=large -m64")
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
+set(UTIL_STRIP ${UTILDIR}/strip.sh)
 set(UTIL_MKIMG ${UTILDIR}/make_rfs_image.py)
 set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
 

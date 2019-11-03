@@ -1,19 +1,20 @@
 #pragma once
 #include "arch/task.hpp"
 #include "common.hpp"
-#include "mm/vm.hpp"
+#include "id_defined.hpp"
+#include "lock.hpp"
+#include "util/array.hpp"
 #include <atomic>
+
+namespace fs::vfs
+{
+class file;
+}
 namespace task
 {
 
 typedef void kernel_thread_start_func(u64 args);
 typedef u64 user_main_func(char *args, u64 argc);
-
-using handle_t = u64;
-using thread_id = u64;
-using process_id = u64;
-using group_id = u64;
-using file_desc = u64;
 
 /// 65536
 extern const thread_id max_thread_id;
@@ -23,16 +24,26 @@ extern const process_id max_process_id;
 
 /// 65536
 extern const group_id max_group_id;
+using file_array_t = util::array<fs::vfs::file *>;
 
-struct mm_info_t
+struct resource_table_t
 {
-    memory::vm::mmu_paging mmu_paging;
+    void *console_attribute;
+    file_array_t *files;
+    resource_table_t();
+};
 
-    void *app_code_start;
-    void *app_head_start;
-    void *app_current_head;
-    void *map_start;
-    void *map_end;
+/// The process struct
+struct process_t
+{
+    process_id pid;
+    u64 parent_pid;             ///< The parent process id
+    void *mm_info;              ///< Memory map infomation
+    resource_table_t res_table; ///< Resource table
+    void *thread_id_gen;
+    lock::spinlock_t thread_list_lock;
+    void *thread_list; ///< The threads belong to process
+    void *schedule_data;
 };
 
 enum class thread_state : u8
@@ -45,23 +56,6 @@ enum class thread_state : u8
     destroy,
 };
 
-struct resource_table_t
-{
-    void *console_attribute;
-};
-
-/// The process struct
-struct process_t
-{
-    process_id pid;
-    u64 parent_pid;             ///< The parent process id
-    mm_info_t *mm_info;         ///< Memory map infomation
-    resource_table_t res_table; ///< Resource table
-    void *thread_id_gen;
-    lock::spinlock_t thread_list_lock;
-    void *thread_list; ///< The threads belong to process
-    void *schedule_data;
-};
 namespace thread_attributes
 {
 enum attributes : u32
@@ -104,7 +98,6 @@ struct thread_t
     void *kernel_stack_top;
     void *user_stack_top;
     void *user_stack_bottom;
-    void *running_code_entry_address;
 
     /// from 0 - 255, 0 is the highest priority, 100 - 139 to user thread, default is 125
     u8 static_priority;
@@ -119,12 +112,6 @@ struct thread_t
     preempt_t preempt_data;
 };
 
-struct exec_segment
-{
-    u64 start_offset;
-    u64 length;
-};
-
 void init();
 void start_task_idle(const kernel_start_args *args);
 int kernel_thread(kernel_thread_start_func *function, u64 arg);
@@ -135,13 +122,12 @@ namespace exec_flags
 enum exec_flags : flag_t
 {
     immediately = 1,
+    binary_file = 2,
 };
 } // namespace exec_flags
 
 u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flag);
-
-u64 do_exec(exec_segment code_segment, const char *args, const char *env, flag_t flag);
-u64 do_exec(const char *filename, const char *args, const char *env, flag_t flag);
+u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flag);
 
 namespace fork_flags
 {

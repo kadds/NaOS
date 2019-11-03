@@ -92,7 +92,7 @@ template <typename E> class array
     /// insert before iter
     void insert(iterator iter, const E &e)
     {
-        u64 index = iter.buffer - begin();
+        u64 index = iter.current - buffer;
         insert(index, e);
     }
     /// remove at index
@@ -109,7 +109,7 @@ template <typename E> class array
     /// remove current iter
     iterator remove(iterator iter)
     {
-        u64 index = iter.buffer - begin();
+        u64 index = iter.current - buffer;
         return remove(index);
     }
 

@@ -74,12 +74,12 @@ u64 do_fork(::task::thread_t *thd, void *function, u64 arg)
     return 0;
 }
 
-u64 do_exec(::task::thread_t *thd)
+u64 do_exec(::task::thread_t *thd, void *entry)
 {
     regs_t regs;
     util::memzero(&regs, sizeof(regs));
     thd->register_info->rip = (void *)&_sys_ret;
-    regs.rcx = (u64)thd->running_code_entry_address;
+    regs.rcx = (u64)entry;
     regs.r10 = (u64)thd->user_stack_top;
     regs.r11 = (1 << 9); // rFLAGS: enable IF
     regs.ds = gdt::gen_selector(gdt::selector_type::user_data, 3);
