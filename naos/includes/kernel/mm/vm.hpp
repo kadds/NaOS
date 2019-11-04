@@ -93,7 +93,7 @@ class mmu_paging
     void *base_paging_addr;
 
   public:
-    mmu_paging(bool copy);
+    mmu_paging();
     ~mmu_paging();
     void load_paging();
 
@@ -106,13 +106,15 @@ class mmu_paging
     void *get_page_addr();
 
     void *page_map_vir2phy(void *virtual_addr);
+
+    void sync_kernel();
 };
 
 struct info_t
 {
     memory::vm::vm_allocator vma;
     memory::vm::mmu_paging mmu_paging;
-    info_t(bool copy);
+    info_t();
 };
 struct map_t
 {

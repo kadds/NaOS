@@ -88,7 +88,7 @@ inline process_t *new_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
-    process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator, true);
+    process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_list->push_back(process);
     return process;
@@ -206,6 +206,8 @@ u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
         else
         {
             process = new_process();
+            /// copy the kernel page table
+            ((memory::vm::info_t *)process->mm_info)->mmu_paging.sync_kernel();
         }
         // fork thread new procress
         process->parent_pid = current_process()->pid;
@@ -242,7 +244,7 @@ u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flags
     }
 
     auto old_mm = (mm_info_t *)thd->process->mm_info;
-    thd->process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator, true);
+    thd->process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     auto mm_info = (mm_info_t *)thd->process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
@@ -263,6 +265,7 @@ u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flags
         return 1;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
+    mm_info->mmu_paging.sync_kernel();
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;

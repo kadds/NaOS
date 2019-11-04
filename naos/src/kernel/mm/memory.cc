@@ -245,28 +245,13 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
 
     memory::vm::init();
-    kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV, false);
+    kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV);
     kernel_vm_info->vma.set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
     KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
     KernelMemoryAllocatorV = New<KernelMemoryAllocator>(VirtBootAllocatorV);
 
     PhyBootAllocatorV->discard();
     kassert((u64)PhyBootAllocatorV->current_ptr_address() <= end_data, "BootAllocator is Out of memory");
-}
-
-irq::request_result _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
-{
-    if (arch::cpu::current().is_in_user_context((void *)regs->rsp))
-        return irq::request_result::no_handled;
-    auto vm = kernel_vm_info->vma.get_vm_area(extra_data);
-    if (vm != nullptr)
-    {
-        arch::paging::copy_page_table(arch::paging::current(),
-                                      (arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr());
-        arch::paging::reload();
-        return irq::request_result::ok;
-    }
-    return irq::request_result::no_handled;
 }
 
 void listen_page_fault() { vm::listen_page_fault(); }
@@ -333,10 +318,7 @@ void *vmalloc(u64 size, u64 align)
                           arch::paging::frame_size::size_4kb, 1,
                           arch::paging::flags::writable | arch::paging::flags::present);
     }
-    if (arch::paging::current() == (arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr())
-    {
-        arch::paging::reload();
-    }
+    arch::paging::reload();
     return (void *)vm->start;
 }
 

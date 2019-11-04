@@ -166,7 +166,11 @@ void reload();
 void init();
 void temp_init();
 
-void copy_page_table(base_paging_t *to, base_paging_t *source);
+void copy_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 end, bool override);
+void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel);
+
+/// get phy addr
+bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **phy_addr);
 
 base_paging_t *current();
 

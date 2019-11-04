@@ -157,16 +157,7 @@ const vm_t *vm_allocator::get_vm_area(u64 p)
     return nullptr;
 }
 
-mmu_paging::mmu_paging(bool copy)
-{
-    base_paging_addr = new_page_table<arch::paging::base_paging_t>();
-    if (likely(copy))
-    {
-        arch::paging::copy_page_table(
-            (arch::paging::base_paging_t *)base_paging_addr,
-            (arch::paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.base_paging_addr);
-    }
-}
+mmu_paging::mmu_paging() { base_paging_addr = new_page_table<arch::paging::base_paging_t>(); }
 
 mmu_paging::~mmu_paging() { delete_page_table((arch::paging::base_paging_t *)base_paging_addr); }
 
@@ -251,9 +242,15 @@ void mmu_paging::unmap_area(const vm_t *vm)
 
 void *mmu_paging::get_page_addr() { return base_paging_addr; }
 
-info_t::info_t(bool copy)
+void mmu_paging::sync_kernel()
+{
+    arch::paging::sync_kernel_page_table(
+        (arch::paging::base_paging_t *)base_paging_addr,
+        (arch::paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.base_paging_addr);
+}
+
+info_t::info_t()
     : vma(memory::user_mmap_top_address, memory::user_code_bottom_address)
-    , mmu_paging(copy)
 {
 }
 
@@ -321,16 +318,6 @@ const vm_t *map_file(u64 start, info_t *vm_info, fs::vfs::file *file, u64 file_m
         (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, vm_info));
 
     return vm;
-}
-
-const vm_t *map_file(info_t *vm_info, const char *path, u64 offset, u64 length, flag_t ext_attr)
-{
-
-    auto file = fs::vfs::open(path, fs::vfs::mode::bin | fs::vfs::mode::read, 0);
-    if (length == 0)
-    {
-        length = fs::vfs::size(file);
-    }
 }
 
 const vm_t *map_shared_file(const vm_t *shared_vm, info_t *vm_info, flag_t ext_flags)
