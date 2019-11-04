@@ -215,8 +215,6 @@ const char *format_SGR(const char *str, console_attribute &current_attribute)
     return s;
 }
 
-void get_RGB(u32 c, u8 &r, u8 &g, u8 &b) {}
-
 int i2s(u32 c, char *buffer)
 {
     char *ptr = buffer;

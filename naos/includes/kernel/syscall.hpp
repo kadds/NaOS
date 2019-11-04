@@ -4,7 +4,7 @@
 #include "task.hpp"
 namespace syscall
 {
-ExportC void *system_call_table[128];
+ExportC void *system_call_table[];
 
 #define SYSCALL(idx, name) system_call_table[idx] = ((void *)&(name));
 #define BEGIN_SYSCALL                                                                                                  \

@@ -3,13 +3,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
-
-#include "kernel/idle_task.hpp"
-#include "kernel/init_task.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/slab.hpp"
+#include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/util/linked_list.hpp"
 #include "kernel/util/memory.hpp"
 

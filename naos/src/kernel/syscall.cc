@@ -23,7 +23,7 @@ void print(const char *str, bool normal)
         trace::print_inner(str, trace::kernel_console_attribute);
 }
 
-void *system_call_table[];
+void *system_call_table[128];
 
 BEGIN_SYSCALL
 SYSCALL(0, none)

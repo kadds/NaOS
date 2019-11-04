@@ -1,7 +1,7 @@
-#include "kernel/idle_task.hpp"
-#include "kernel/init_task.hpp"
+#include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/task.hpp"
+#include "kernel/task/builtin/init_task.hpp"
 #include "kernel/trace.hpp"
 namespace task::builtin::idle
 {
