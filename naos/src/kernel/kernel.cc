@@ -14,6 +14,8 @@
 #include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
 
+kernel_start_args *kernel_args;
+
 ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 {
     char *s = (char *)start;
@@ -42,9 +44,10 @@ ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
     return (u64)&_kstart;
 }
 
-ExportC NoReturn void _kstart(const kernel_start_args *args)
+ExportC NoReturn void _kstart(kernel_start_args *args)
 {
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
+    kernel_args = args;
     static_init();
     arch::init(args);
     irq::init();

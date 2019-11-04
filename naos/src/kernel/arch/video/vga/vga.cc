@@ -9,30 +9,31 @@
 
 namespace arch::device::vga
 {
-output *current_output;
-u64 frame_size;
-void *frame_buffer;
-bool is_auto_flush = false;
+void test();
 
-Aligned(8) char reserved_space[sizeof(output_graphics)];
+u64 frame_size;
+byte *vram_addr;
+byte *backbuffer_addr;
+bool is_auto_flush = false;
+cursor_t cursor;
 
 void init(const kernel_start_args *args)
 {
     using namespace trace;
     bool is_graphics_mode = args->fb_type == 1;
+    backbuffer_addr = nullptr;
 
     if (!is_graphics_mode || args->fb_addr == 0)
     {
-        frame_buffer = nullptr;
-        trace::warning("Not find video device!");
+        vram_addr = nullptr;
+        trace::warning("Can't find a video device!");
         return;
     }
 
-    frame_buffer = (void *)args->fb_addr;
+    vram_addr = (byte *)args->fb_addr;
     frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
 
-    void *back_buffer = nullptr;
-    // Find a frame size memory as backbuffer
+    /// XXX: Find memory as backbuffer
     kernel_memory_map_item *mm_item =
         ((kernel_memory_map_item *)memory::kernel_phyaddr_to_virtaddr(args->mmap) + args->mmap_count - 1);
     const u64 align = 0x1000;
@@ -46,28 +47,28 @@ void init(const kernel_start_args *args)
                 break;
             if (end - start >= frame_size)
             {
-                back_buffer = memory::kernel_phyaddr_to_virtaddr((void *)(end - frame_size));
+                backbuffer_addr = memory::kernel_phyaddr_to_virtaddr((byte *)(end - frame_size));
                 break;
             }
         }
     }
-    if (unlikely(back_buffer == nullptr))
+    if (unlikely(backbuffer_addr == nullptr))
     {
-        // ERROR
+        /// TODO: Report an error
         for (;;)
             ;
     }
+    graphics::init(args->fb_width, args->fb_height, (byte *)backbuffer_addr, args->fb_pitch, args->fb_bbp);
+    graphics::cls(cursor);
 
-    current_output = new (&reserved_space)
-        output_graphics(args->fb_width, args->fb_height, back_buffer, args->fb_pitch, args->fb_bbp);
-    current_output->init();
-    current_output->cls();
     print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X",
           args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
 
     test();
-    trace::debug("Video address ", (void *)frame_buffer);
-    trace::debug("Video backbuffer ", (void *)back_buffer, "-", (void *)((char *)back_buffer + frame_size));
+
+    /// print video card memory info
+    trace::debug("Vram address ", (void *)vram_addr);
+    trace::debug("Video backbuffer ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
 }
 
 void test()
@@ -96,71 +97,70 @@ void test()
     print(kernel_console_attribute, '\n');
 }
 
-void *get_video_addr() { return frame_buffer; }
+byte *get_vram() { return vram_addr; }
 
-void set_video_addr(void *addr)
+void set_vram(byte *addr)
 {
-    if (likely(frame_buffer != nullptr))
-    {
-        frame_buffer = addr;
-        trace::print(trace::kernel_console_attribute, "VGA frame buffer mapped at ", addr, "\n");
-    }
+    vram_addr = addr;
+    flush();
+}
+
+byte *get_backbuffer() { return backbuffer_addr; }
+
+void set_backbuffer(byte *addr)
+{
+    /// TODO: release old buffer
+    backbuffer_addr = addr;
+    graphics::set_buffer(addr);
 }
 
 void flush()
 {
-    if (likely(frame_buffer != nullptr))
+    if (likely(vram_addr != nullptr))
     {
-        current_output->flush(frame_buffer);
+        graphics::flush(vram_addr);
     }
 }
 
-void auto_flush(u64 dt, u64 ud)
+void flush_timer(u64 dt, u64 ud)
 {
-    if (likely(frame_buffer != nullptr))
+    if (likely(vram_addr != nullptr))
     {
         uctx::UnInterruptableContext icu;
         flush();
-        timer::add_watcher(1000000 / 60, auto_flush, 0);
+        timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
 }
 
-void set_auto_flush()
+void auto_flush()
 {
-    if (likely(frame_buffer != nullptr))
+    if (likely(vram_addr != nullptr))
     {
 
         is_auto_flush = true;
         // 60HZ
-        timer::add_watcher(1000000 / 60, auto_flush, 0);
+        timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
 }
 
 u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute)
 {
-    if (unlikely(frame_buffer == nullptr))
+    uctx::UnInterruptableContext uic;
+
+    if (unlikely(vram_addr == nullptr))
     {
         u64 i = 0;
         while (*str != '\0' && i < max_len)
             i++;
         return i;
     }
-    uctx::UnInterruptableContext uic;
+
     if (max_len == 0)
         max_len = (u64)(-1);
     u64 i = 0;
     while (*str != '\0' && i < max_len)
     {
-        if (*str == '\e')
-        {
-            do
-            {
-                str++;
-                if (*str == '\0')
-                    return i;
-            } while (*str != 'm');
-        }
-        current_output->putchar(*str++, attribute);
+        graphics::putchar(cursor, *str++, attribute);
         i++;
     }
 
@@ -168,13 +168,13 @@ u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attr
         flush();
     return i;
 }
+
 void tag_memory()
 {
-    if (likely(frame_buffer != nullptr))
+    if (likely(backbuffer_addr != nullptr))
     {
-        memory::tag_zone_buddy_memory(
-            memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr()),
-            (memory::kernel_virtaddr_to_phyaddr((char *)current_output->get_addr() + frame_size)));
+        memory::tag_zone_buddy_memory(memory::kernel_virtaddr_to_phyaddr((byte *)backbuffer_addr),
+                                      (memory::kernel_virtaddr_to_phyaddr((byte *)backbuffer_addr + frame_size)));
     }
 }
 

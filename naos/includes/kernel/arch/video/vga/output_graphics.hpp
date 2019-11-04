@@ -3,9 +3,8 @@
 #include "kernel/common/font/font.hpp"
 #include "vga.hpp"
 
-namespace arch::device::vga
+namespace arch::device::vga::graphics
 {
-
 struct rectangle
 {
     u32 left;
@@ -44,27 +43,16 @@ struct rectangle
     }
 };
 
-class output_graphics : public output
-{
-  private:
-    // Reserve for font struct. So font struct size must less than 64 bytes.
-    char reserved_space[64];
-    u32 font_width;
-    u32 font_height;
-    u32 text_count_per_line;
-    u32 text_count_vertical;
-    rectangle dirty_rectangle;
-    font::font *cur_font;
+void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp);
+void cls(cursor_t &cur);
+void putchar(cursor_t &cur, char ch, const trace::console_attribute &attribute);
 
-    void move_pen(i32 x, i32 y);
-    void scroll(i32 n);
-    void set_bit(u32 x, u32 y, u32 color);
+void set_buffer(byte *buffer);
 
-  public:
-    using output::output;
-    virtual void init() override;
-    virtual void cls() override;
-    virtual void putchar(char ch, const trace::console_attribute &attribute) override;
-    virtual void flush(void *vraw) override;
-};
-} // namespace arch::device::vga
+void draw_line(u64 x, u64 y, u64 color);
+void draw_rectangle(const rectangle &rect, u64 color);
+void draw_pixel(u64 px, u64 py, u64 color);
+void draw_text(u64 px, u64 py, const char *text);
+
+void flush(byte *vraw);
+} // namespace arch::device::vga::graphics
