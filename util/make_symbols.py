@@ -5,6 +5,10 @@ from mod import set_self_dir, run_shell
 
 
 def gen_symbols(file, target_file):
+    try:
+        os.makedirs(os.path.dirname(os.path.realpath(target_file)))
+    except FileExistsError:
+        pass
     smps = run_shell("nm \"" + file +
                      "\" | cut -d ' ' -f 1,2,3 | c++filt | sort", None, False)
     lines = smps.splitlines(False)

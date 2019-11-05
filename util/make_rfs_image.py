@@ -6,7 +6,10 @@ from mod import set_self_dir
 
 def pack_image(base_dir, target_file):
     fileList = []
-
+    try:
+        os.makedirs(os.path.dirname(os.path.realpath(target_file)))
+    except FileExistsError:
+        pass
     for dirs in os.walk(base_dir):
         if len(dirs[2]) != 0:
             basefile = dirs[0]

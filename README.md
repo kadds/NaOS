@@ -2,35 +2,19 @@
 
 ## Nano Operating system
 A 64bit (x86-64) Simple Operating System Writing By C++.  (:sunglasses:)  
-NaOS targets Intel / AMD modern processors.  
+NaOS running at Intel / AMD modern processors.  
 
 ![build passing](https://img.shields.io/badge/build-passing-green) ![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
 
 
 ## Features  
-* - [x] Four-level Paging
-* - [x] VGA display
-* - [x] Buddy and Slab system
-* - [ ] Process scheduling (Time span, CFS)
-* - [ ] MultiThread
-* - [x] Soft IRQ
-* - [ ] VFS
-* - [x] System call
-* - [ ] APIC (Local/APIC, IO/APIC)
-* - [ ] Multicore support (SMP)
-* - [ ] Kernel module
-* - [ ] Disk driver
-* - [ ] Native display driver
-* - [ ] POSIX layer
-* - [ ] ELF part support
-* - [ ] UEFI boot
-  
+View [Features](./FEATURES.MD) .
 
 ## Quick Start  
 
 ### **Requirement**  
-* A **\*nix** system
-* **GNU Binutils** *(objcopy, objdump, version 2.32 tested)*
+* A linux system
+* **GNU Binutils** *(version 2.32 tested)*
 * **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
@@ -46,29 +30,26 @@ NaOS targets Intel / AMD modern processors.
 ### 1. Download code
 Clone this repo ```git clone https://url/path/to/repo``` 
 
-### 2. Before the first compilation
-Run these commands before the first compilation
+### 2. Compile
 ```Bash
-# Firstly going into NaOS root directory
 cd /path/to/repo
 
-# Create directories
-python util/first_run.py
-# Make a raw disk file for running
-python util/make_disk.py
-```
-### 3. Compile
-```Bash
-# Firstly going into NaOS root directory
-cd /path/to/repo
-
+mkdir build
 cd build
 # CMAKE_BUILD_TYPE: Debug; Release
 # USE_CLANG: OFF (Use GCC); ON (Use Clang)
 cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
 # Then make
-make
+make -j4
 ```
+
+### 3. Make a raw disk
+```Bash
+cd /path/to/repo
+# Make a raw disk file for running
+python util/make_disk.py
+```
+
 ### 4. Run
 After ```make``` success, you will get these files
 ```
@@ -87,11 +68,15 @@ build
 ```Bash
 # Run emulator
 # qemu: python util/run.py q
+# qemu headless: python util/run.py qw
 # bochs: python util/run.py b
 sudo python util/run.py q
 ```
+
+The kernel log will be generated in *util/kernel_out.log*, just ```cat util/kernel_out.log```.
+
 ### 5. Debug
-Use command ```python util/gen_debug_asm.py kernel``` to generate kernel disassembly if needed. (e.g. Debug in Bochs)
+Use command ```python util/gen_debug_asm.py kernel``` to generate kernel disassembly if needed. (e.g. Debug in bochs)
 
 Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.vscode/launch.json*
 ```Json
@@ -104,7 +89,7 @@ Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.
 ## Repo Tree
 ```
 NaOS
-├── build # code generate directory
+├── build # generate directory
 ├── naos
 │   ├── includes
 │   │   ├── kernel
@@ -115,6 +100,9 @@ NaOS
 │       │   ├── common # kernel data
 │       │   ├── fs # file system 
 │       │   ├── mm # memory subsystem
+│       │   ├── module # module support code
+│       │   ├── schedulers # time span scheduler and completely fair scheduler
+│       │   ├── task # elf file loader and built-in task
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── loader
 │           ├── common # common loader libraries such as disk reader, ScreenPrinter
