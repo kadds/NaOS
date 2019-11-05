@@ -4,10 +4,27 @@
 #include "kernel/util/memory.hpp"
 #include <new>
 
-namespace arch::device::vga
+namespace arch::device::vga::graphics
 {
-void output_graphics::init()
+
+char reserved_space[256];
+
+u32 font_width;
+u32 font_height;
+u32 text_count_per_line;
+u32 text_count_vertical;
+rectangle dirty_rectangle;
+u64 width;
+u64 height;
+font::font *cur_font;
+byte *video_addr;
+
+void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp)
 {
+    width = w;
+    height = h;
+    video_addr = buffer;
+    /// XXX: check reserved space size
     cur_font = new (&reserved_space) font::font_16X8();
     cur_font->init();
     cur_font->get_size(font_width, font_height);
@@ -15,15 +32,17 @@ void output_graphics::init()
     text_count_vertical = height / font_height;
 }
 
-void output_graphics::cls()
+void cls(cursor_t &cur)
 {
     for (u32 i = 0; i < width * height; i++)
         *((u32 *)video_addr + i) = 0;
+    cur.px = 0;
+    cur.py = 0;
 }
 
-void output_graphics::set_bit(u32 x, u32 y, u32 color) { *((u32 *)video_addr + x + y * width) = color; }
+void set_buffer(byte *buffer) { video_addr = buffer; }
 
-void output_graphics::scroll(i32 n)
+void scroll(cursor_t &cur, i32 n)
 {
     const u64 bits = height * width;
     u32 *fb = (u32 *)video_addr;
@@ -56,23 +75,23 @@ void output_graphics::scroll(i32 n)
         return;
     }
 
-    py -= n;
+    cur.py -= n;
 }
 
-void output_graphics::move_pen(i32 x, i32 y)
+void move_pen(cursor_t &cur, i32 x, i32 y)
 {
-    py += y;
-    px += x;
-    if (px >= text_count_per_line)
+    cur.py += y;
+    cur.px += x;
+    if (cur.px >= text_count_per_line)
     {
-        px = 0;
-        py++;
+        cur.px = 0;
+        cur.py++;
     }
-    if (py >= text_count_vertical)
-        scroll(py - text_count_vertical + 1);
+    if (cur.py >= text_count_vertical)
+        scroll(cur, cur.py - text_count_vertical + 1);
 }
 
-void output_graphics::putchar(char ch, const trace::console_attribute &attribute)
+void putchar(cursor_t &cur, char ch, const trace::console_attribute &attribute)
 {
     static u32 color_table[] = {0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
                                 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF};
@@ -94,7 +113,7 @@ void output_graphics::putchar(char ch, const trace::console_attribute &attribute
         else
             bg = color_table[attribute.get_background()];
 
-        u32 *v_start = (u32 *)video_addr + py * (u64)width * (u64)font_height + px * (u64)font_width;
+        u32 *v_start = (u32 *)video_addr + cur.py * (u64)width * (u64)font_height + cur.px * (u64)font_width;
 
         for (u32 y = 0; y < font_height; y++)
         {
@@ -103,17 +122,17 @@ void output_graphics::putchar(char ch, const trace::console_attribute &attribute
                 *(v_start + x + y * (u64)width) = cur_font->hit(font_data, x, y) ? fg : bg;
             }
         }
-        dirty_rectangle +=
-            rectangle(px * font_width, py * font_height, px * font_width + font_width, py * font_height + font_height);
-        move_pen(1, 0);
+        dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height, cur.px * font_width + font_width,
+                                     cur.py * font_height + font_height);
+        move_pen(cur, 1, 0);
     }
     else
     {
-        move_pen(-px, 1);
+        move_pen(cur, -cur.px, 1);
     }
 }
 
-void output_graphics::flush(void *vraw)
+void flush(byte *vraw)
 {
     u32 left = dirty_rectangle.left;
     u32 right = dirty_rectangle.right;
@@ -143,4 +162,6 @@ void output_graphics::flush(void *vraw)
     dirty_rectangle.clean();
 }
 
-} // namespace arch::device::vga
+void draw_pixel(u64 px, u64 py, u64 color) { *((u32 *)video_addr + px + py * width) = color; }
+
+} // namespace arch::device::vga::graphics

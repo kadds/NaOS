@@ -467,7 +467,7 @@ template <typename... Args> NoReturn void panic_stack(const arch::idt::regs_t *r
 
 template <typename... Args> void warning(const Args &... args)
 {
-    print(kernel_console_attribute, Foreground<Color::LightCyan>(), "[warn]    ", PrintAttr::Reset(), args...);
+    print(kernel_console_attribute, Foreground<Color::LightCyan>(), "[warning] ", PrintAttr::Reset(), args...);
     print(kernel_console_attribute, '\n');
 }
 

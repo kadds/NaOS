@@ -9,7 +9,6 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/trace.hpp"
-
 namespace arch
 {
 ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
@@ -22,10 +21,14 @@ void init(const kernel_start_args *args)
 {
     trace::early_init();
     device::vga::init(args);
-    trace::debug("boot from ", (const char *)args->boot_loader_name);
+    trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::ColorValue>(0xA0c000),
+                 trace::Background<trace::Color::Black>(), " NaOS: Nano Operating System (arch X86_64)",
+                 trace::PrintAttr::Reset(), '\n');
+
+    trace::debug("Boot from ", (const char *)args->boot_loader_name);
     if (sizeof(kernel_start_args) != args->size_of_struct)
     {
-        trace::panic("kernel args is invalid.");
+        trace::panic("Kernel args is invalid.");
     }
     trace::debug("Arch init start...");
     cpu_info::init();
@@ -48,7 +51,7 @@ void init(const kernel_start_args *args)
     trace::debug("Paging init...");
     device::vga::flush();
     paging::init();
-    void *video_start = device::vga::get_video_addr();
+    void *video_start = device::vga::get_vram();
     void *video_start_2mb = (void *)(((u64)video_start) & ~(paging::frame_size::size_2mb - 1));
 
     paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start_2mb,
@@ -57,8 +60,8 @@ void init(const kernel_start_args *args)
                 paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);
     paging::reload();
 
-    device::vga::set_video_addr(
-        (void *)(memory::kernel_vga_bottom_address + (u64)((char *)video_start - (char *)video_start_2mb)));
+    device::vga::set_vram(
+        (byte *)(memory::kernel_vga_bottom_address + (u64)((byte *)video_start - (byte *)video_start_2mb)));
 
     device::vga::flush();
 
@@ -76,5 +79,5 @@ void init(const kernel_start_args *args)
     trace::debug("Arch init end");
 }
 
-void last_init() { device::vga::set_auto_flush(); }
+void last_init() { device::vga::auto_flush(); }
 } // namespace arch

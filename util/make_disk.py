@@ -26,7 +26,9 @@ w
 Y
 '''
 
-boot_grub = '''root=(hd0,gpt3);
+boot_grub = '''root=(hd0,gpt3)
+set default=0
+set timeout=1
 menuentry "NaOS multiboot2" {
 multiboot2 /system/kernel
 module2 /system/rfsimg rfsimg

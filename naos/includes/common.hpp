@@ -71,7 +71,7 @@ struct kernel_start_args
     u64 kernel_size;
     u64 data_base; ///< Always placed after the kernel image
     u64 data_size;
-    u64 fb_addr; ///< Linear frame buffer physical address
+    u64 fb_addr; ///< Linear frame buffer physical address, 0: does not exist video device
     u32 fb_pitch;
     u32 fb_width;
     u32 fb_height;
