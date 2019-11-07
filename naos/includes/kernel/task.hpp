@@ -13,8 +13,10 @@ class file;
 namespace task
 {
 
-typedef void kernel_thread_start_func(u64 args);
-typedef u64 user_main_func(char *args, u64 argc);
+typedef void (*kernel_thread_entry)(u64 arg);
+typedef void (*userland_thread_entry)(u64 arg);
+
+typedef void (*thread_start_func)(void *entry, u64 arg2);
 
 /// 65536
 extern const thread_id max_thread_id;
@@ -114,29 +116,31 @@ struct thread_t
 
 void init();
 void start_task_idle(const kernel_start_args *args);
-int kernel_thread(kernel_thread_start_func *function, u64 arg);
+void kernel_thread(kernel_thread_entry entry, u64 arg);
+void userland_thread(userland_thread_entry entry, u64 arg);
 void switch_thread(thread_t *old, thread_t *new_task);
 
-namespace exec_flags
+namespace create_thread_flags
 {
-enum exec_flags : flag_t
+enum create_thread_flags : flag_t
 {
     immediately = 1,
+
+    noreturn = 4,
+};
+} // namespace create_thread_flags
+
+namespace create_process_flags
+{
+enum create_process_flags : flag_t
+{
+    noreturn = 1,
     binary_file = 2,
 };
-} // namespace exec_flags
+} // namespace create_process_flags
 
-u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flag);
-u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flag);
-
-namespace fork_flags
-{
-enum fork_flags : flag_t
-{
-    vm_sharing = 1,
-    kernel_thread = 2,
-};
-} // namespace fork_flags
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, u64 arg, flag_t flags);
+process_t *create_process(fs::vfs::file *file, const char *args, const char *env, flag_t flags);
 
 void do_sleep(u64 milliseconds);
 

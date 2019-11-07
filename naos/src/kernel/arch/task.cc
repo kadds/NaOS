@@ -46,13 +46,14 @@ ExportC void task_do_exit(u64 exit_code)
         ;
 }
 
-u64 do_fork(::task::thread_t *thd, void *function, u64 arg)
+u64 create_thread(::task::thread_t *thd, void *function, u64 arg1, u64 arg2)
 {
     regs_t regs;
     util::memset(&regs, 0, sizeof(regs));
 
     regs.rbx = (u64)function;
-    regs.rdx = (u64)arg;
+    regs.rdx = arg1;
+    regs.rcx = arg2;
 
     regs.ds = gdt::gen_selector(gdt::selector_type::kernel_data, 0);
     regs.es = regs.ds;
@@ -74,7 +75,7 @@ u64 do_fork(::task::thread_t *thd, void *function, u64 arg)
     return 0;
 }
 
-u64 do_exec(::task::thread_t *thd, void *entry)
+u64 enter_userland(::task::thread_t *thd, void *entry)
 {
     regs_t regs;
     util::memzero(&regs, sizeof(regs));

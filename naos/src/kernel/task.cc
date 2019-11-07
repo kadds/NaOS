@@ -187,93 +187,64 @@ void init()
     bin_handle::init();
 }
 
-u64 do_fork(kernel_thread_start_func *func, u64 args, flag_t flags)
+struct userland_thread_param
 {
-    process_t *process;
-    if (flags & fork_flags::vm_sharing)
-    {
-        // fork thread
-        process = current_process();
-    }
-    else
-    {
-        if (flags & fork_flags::kernel_thread)
-        {
-            process = new_kernel_process();
-        }
-        else
-        {
-            process = new_process();
-            /// copy the kernel page table
-            ((memory::vm::info_t *)process->mm_info)->mmu_paging.sync_kernel();
-        }
-        // fork thread new procress
-        process->parent_pid = current_process()->pid;
-    }
+    const char *args;
+    const char *env;
+};
+
+void kernel_thread(kernel_thread_entry entry, u64 arg) {}
+
+void userland_thread(userland_thread_entry entry, u64 arg) { arch::task::enter_userland(current(), (void *)entry); }
+
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, u64 arg, flag_t flags)
+{
     thread_t *thd = new_thread(process);
     thd->state = thread_state::ready;
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
-
-    arch::task::do_fork(thd, (void *)func, args);
+    arch::task::create_thread(thd, (void *)start_func, (u64)entry, arg);
     scheduler::add(thd);
-    if (process == current_process())
-    {
-        trace::debug("New thread forked tid=", thd->tid, ", pid=", process->pid);
-    }
-    else
-    {
-        trace::debug("New process(thread) forked tid=", thd->tid, ", pid=", process->pid,
-                     ", parent pid=", process->parent_pid);
-    }
-    return 0;
+    return thd;
 }
 
-u64 do_exec(fs::vfs::file *file, const char *args, const char *env, flag_t flags)
+process_t *create_process(fs::vfs::file *file, const char *args, const char *env, flag_t flags)
 {
-    auto thd = current();
-    {
-        uctx::SpinLockUnInterruptableContext icu(thd->process->thread_list_lock);
-        if (((thread_list_t *)thd->process->thread_list)->size() > 1)
-        {
-            return 2;
-        }
-    }
+    auto process = new_process();
+    if (!process)
+        return nullptr;
 
-    auto old_mm = (mm_info_t *)thd->process->mm_info;
-    thd->process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
-    auto mm_info = (mm_info_t *)thd->process->mm_info;
+    process->parent_pid = current_process()->pid;
+
+    auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
+    // read executeable file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
     file->move(0);
     file->read(header, 128);
     bin_handle::execute_info exec_info;
-    if (flags & exec_flags::binary_file)
+    if (flags & create_process_flags::binary_file)
     {
-        bin_handle::load_bin(header, file, old_mm, &exec_info);
+        bin_handle::load_bin(header, file, mm_info, &exec_info);
     }
-    else if (!bin_handle::load(header, file, old_mm, &exec_info))
+    else if (!bin_handle::load(header, file, mm_info, &exec_info))
     {
         trace::info("Can't load execute file.");
-        memory::Delete<>(mm_info_t_allocator, mm_info);
-        thd->process->mm_info = old_mm;
+        delete_process(process);
         memory::KernelCommonAllocatorV->deallocate(header);
-
-        return 1;
+        return nullptr;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
-    mm_info->mmu_paging.sync_kernel();
+
+    auto thd = create_thread(process, (thread_start_func)userland_thread, exec_info.entry_start_address, (u64)args, 0);
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
-    if (old_mm != nullptr)
-    {
-        memory::Delete<>(mm_info_t_allocator, (mm_info_t *)old_mm);
-    }
-    vm_paging.load_paging();
-    file->remove_ref();
-    return arch::task::do_exec(thd, exec_info.entry_start_address);
+
+    vm_paging.sync_kernel();
+
+    return process;
 }
 
 struct sleep_timer_struct

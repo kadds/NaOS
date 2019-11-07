@@ -167,7 +167,7 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
     return (program_64 *)p;
 }
 
-bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *old_mm_info, execute_info *info)
+bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
     elf_header_64 *elf = (elf_header_64 *)header;
     if (!is_valid(elf))
@@ -175,7 +175,6 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *old
     if (elf->shentsize != sizeof(section_64) || elf->phentsize != sizeof(program_64))
         return false;
 
-    memory::vm::info_t *new_mm_info = (memory::vm::info_t *)task::current()->process->mm_info;
     auto &vma = new_mm_info->vma;
     using namespace memory::vm;
     using namespace arch::task;

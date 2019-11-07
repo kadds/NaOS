@@ -20,9 +20,8 @@ struct handle_data
     }
 };
 
-bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *old_mm_info, execute_info *info)
+bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
-    memory::vm::info_t *new_mm_info = (memory::vm::info_t *)task::current()->process->mm_info;
     auto &vma = new_mm_info->vma;
     using namespace memory::vm;
     using namespace arch::task;
@@ -69,11 +68,11 @@ bool unregister_handle(handle *handle_class, const char *name)
     return false;
 }
 
-bool load(byte *header, fs::vfs::file *file, memory::vm::info_t *old_mm_info, execute_info *info)
+bool load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
     for (auto it = handles->begin(); it != handles->end(); ++it)
     {
-        if (it->handle_ptr->load(header, file, old_mm_info, info))
+        if (it->handle_ptr->load(header, file, new_mm_info, info))
         {
             info->user_data = (u64)it->handle_ptr;
             return true;
@@ -82,9 +81,9 @@ bool load(byte *header, fs::vfs::file *file, memory::vm::info_t *old_mm_info, ex
     return false;
 }
 
-bool load_bin(byte *header, fs::vfs::file *file, memory::vm::info_t *old_mm_info, execute_info *info)
+bool load_bin(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
-    bin_handle_ptr->load(header, file, old_mm_info, info);
+    bin_handle_ptr->load(header, file, new_mm_info, info);
     return true;
 }
 
