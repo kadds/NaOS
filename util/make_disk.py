@@ -34,10 +34,6 @@ multiboot2 /system/kernel
 module2 /system/rfsimg rfsimg
 boot
 }
-menuentry "NaOS" {
-multiboot (hd0,gpt2)/loader-multiboot
-boot
-}
 '''
 base_mnt = "../run/image/mnt/"
 
