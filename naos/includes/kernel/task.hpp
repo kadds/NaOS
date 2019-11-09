@@ -16,7 +16,7 @@ namespace task
 typedef void (*kernel_thread_entry)(u64 arg);
 typedef void (*userland_thread_entry)(u64 arg);
 
-typedef void (*thread_start_func)(void *entry, u64 arg2);
+typedef void (*thread_start_func)(u64 arg0, u64 arg1, u64 arg2, u64 arg3);
 
 /// 65536
 extern const thread_id max_thread_id;
@@ -136,11 +136,13 @@ enum create_process_flags : flag_t
 {
     noreturn = 1,
     binary_file = 2,
+    kernel_process = 4,
 };
 } // namespace create_process_flags
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, u64 arg, flag_t flags);
-process_t *create_process(fs::vfs::file *file, const char *args, const char *env, flag_t flags);
+thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags);
+process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64 arg0, const char *args,
+                          const char *env, flag_t flags);
 
 void do_sleep(u64 milliseconds);
 
@@ -166,4 +168,6 @@ void yield_preempt();
 
 void disable_preempt();
 void enable_preempt();
+
+void schedule();
 } // namespace task

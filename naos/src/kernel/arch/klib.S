@@ -78,11 +78,10 @@ _kernel_thread:
 	popq %rax
     addq $0x28, %rsp
 
-    movq %rdx, %rdi
     sti
     callq *%rbx
     movq %rax, %rdi
-    callq task_do_exit
+    callq do_exit
     ret
 
 // args -> rdi, rsi, r12, r13, r8, r9

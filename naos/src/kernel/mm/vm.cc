@@ -244,6 +244,7 @@ void *mmu_paging::get_page_addr() { return base_paging_addr; }
 
 void mmu_paging::sync_kernel()
 {
+    uctx::UnInterruptableContext icu;
     arch::paging::sync_kernel_page_table(
         (arch::paging::base_paging_t *)base_paging_addr,
         (arch::paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.base_paging_addr);

@@ -12,11 +12,11 @@ void main(const kernel_start_args *args)
 {
     trace::info("idle task running.");
     auto file = fs::vfs::open("/bin/init", fs::vfs::mode::read | fs::vfs::mode::bin, 0);
-    task::create_process(file, 0, 0, 0);
+    task::create_process(file, init::main, 0, 0, 0, 0);
     // fs::vfs::close(file);
     trace::debug("init task has forked.");
     trace::debug("idle hlt.");
-    task::do_sleep(0);
+    task::schedule();
     while (1)
         __asm__ __volatile__("hlt\n\t" : : : "memory");
 }

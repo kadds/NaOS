@@ -8,6 +8,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/linked_list.hpp"
+#include "kernel/wait.hpp"
 namespace irq
 {
 using request_list_t = util::linked_list<request_func_data>;
@@ -27,6 +28,8 @@ request_lock_list_t *irq_list;
 request_lock_list_t *soft_irq_list;
 
 request_list_node_allocator_t *list_allocator;
+
+task::wait_queue *wait_queue;
 
 const int irq_count = 256;
 
@@ -55,7 +58,7 @@ bool _ctx_interrupt_ do_irq(const arch::idt::regs_t *regs, u64 extra_data)
 void do_soft_irq()
 {
     task::disable_preempt();
-    for (int x = 0; x < 4; x++)
+    for (int x = 0; x < 3; x++)
     {
         for (int i = 0; i < soft_vector::COUNT; i++)
         {
@@ -82,6 +85,7 @@ void do_soft_irq()
         }
     }
     task::enable_preempt();
+    task::do_wake_up(wait_queue);
 }
 
 bool check_and_wakeup_soft_irq(const arch::idt::regs_t *regs, u64 extra_data)
@@ -100,7 +104,23 @@ bool check_and_wakeup_soft_irq(const arch::idt::regs_t *regs, u64 extra_data)
     return false;
 }
 
-void wakeup_soft_irq_daemon() {}
+bool wakeup_condition(u64 ud)
+{
+    for (int i = 0; i < soft_vector::COUNT; i++)
+    {
+        if (arch::cpu::current().is_irq_pending(i))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void wakeup_soft_irq_daemon()
+{
+    task::do_wait(wait_queue, wakeup_condition, 0, task::wait_context_type::uninterruptible);
+    do_soft_irq();
+}
 
 void raise_soft_irq(u64 soft_irq_number)
 {
@@ -111,17 +131,16 @@ void raise_soft_irq(u64 soft_irq_number)
 void init()
 {
     list_allocator = memory::New<request_list_node_allocator_t>(memory::KernelCommonAllocatorV);
+    wait_queue = memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
-    {
-        uctx::UnInterruptableContext uic;
-        arch::exception::set_callback(&do_irq);
-        arch::interrupt::set_callback(&do_irq);
-        arch::interrupt::set_soft_irq_callback(&check_and_wakeup_soft_irq);
+    uctx::UnInterruptableContext uic;
+    arch::exception::set_callback(&do_irq);
+    arch::interrupt::set_callback(&do_irq);
+    arch::interrupt::set_soft_irq_callback(&check_and_wakeup_soft_irq);
 
-        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
-        soft_irq_list =
-            memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
-    }
+    irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
+    soft_irq_list =
+        memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
 }
 
 void insert_request_func(u32 vector, request_func func, u64 user_data)

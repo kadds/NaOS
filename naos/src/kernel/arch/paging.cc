@@ -523,6 +523,10 @@ void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel)
     for (int i = 256; i < 512; i++)
     {
         auto &pml4e_source = src->entries[i];
+        if (pml4e_source.is_present() && unlikely(pml4e_source.get_addr() != dst->entries[i].get_addr()))
+        {
+            /// TODO: free page table
+        }
         dst->entries[i] = pml4e_source;
     }
 }

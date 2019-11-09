@@ -39,21 +39,23 @@ ExportC void switch_task(register_info_t *prev, register_info_t *next, ::task::t
     cpu::current().set_context(thd);
 }
 
-ExportC void task_do_exit(u64 exit_code)
+ExportC void do_exit(u64 exit_code)
 {
     trace::debug("thread exit!");
     while (1)
         ;
 }
 
-u64 create_thread(::task::thread_t *thd, void *function, u64 arg1, u64 arg2)
+u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     regs_t regs;
     util::memset(&regs, 0, sizeof(regs));
 
     regs.rbx = (u64)function;
-    regs.rdx = arg1;
-    regs.rcx = arg2;
+    regs.rsi = arg0;
+    regs.rdi = arg1;
+    regs.rdx = arg2;
+    regs.rcx = arg3;
 
     regs.ds = gdt::gen_selector(gdt::selector_type::kernel_data, 0);
     regs.es = regs.ds;

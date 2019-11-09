@@ -8,6 +8,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
+#include "kernel/util/array.hpp"
 #include "kernel/util/linked_list.hpp"
 #include "kernel/util/memory.hpp"
 
@@ -24,6 +25,7 @@
 #include "kernel/mm/vm.hpp"
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
+#include "kernel/task/builtin/soft_irq_task.hpp"
 using mm_info_t = memory::vm::info_t;
 namespace task
 {
@@ -171,7 +173,6 @@ void init()
         memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
 
     process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, process_id_param);
-
     // init for kernel process
     process_t *process = new_kernel_process();
     process->parent_pid = 0;
@@ -193,23 +194,24 @@ struct userland_thread_param
     const char *env;
 };
 
-void kernel_thread(kernel_thread_entry entry, u64 arg) {}
+void kernel_thread(kernel_thread_entry entry, u64 arg) { entry(arg); }
 
 void userland_thread(userland_thread_entry entry, u64 arg) { arch::task::enter_userland(current(), (void *)entry); }
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, u64 arg, flag_t flags)
+thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags)
 {
     thread_t *thd = new_thread(process);
     thd->state = thread_state::ready;
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
-    arch::task::create_thread(thd, (void *)start_func, (u64)entry, arg);
+    arch::task::create_thread(thd, (void *)start_func, arg0, arg1, arg2, 0);
     scheduler::add(thd);
     return thd;
 }
 
-process_t *create_process(fs::vfs::file *file, const char *args, const char *env, flag_t flags)
+process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64 arg0, const char *args,
+                          const char *env, flag_t flags)
 {
     auto process = new_process();
     if (!process)
@@ -237,12 +239,20 @@ process_t *create_process(fs::vfs::file *file, const char *args, const char *env
     }
     memory::KernelCommonAllocatorV->deallocate(header);
 
-    auto thd = create_thread(process, (thread_start_func)userland_thread, exec_info.entry_start_address, (u64)args, 0);
+    /// create thread
+    thread_t *thd = new_thread(process);
+    thd->state = thread_state::ready;
+    void *stack = new_kernel_stack();
+    void *stack_top = (char *)stack + memory::kernel_stack_size;
+    thd->kernel_stack_top = stack_top;
+    arch::task::create_thread(thd, (void *)start_func, arg0, (u64)args, (u64)env, (u64)exec_info.entry_start_address);
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
 
     vm_paging.sync_kernel();
+
+    scheduler::add(thd);
 
     return process;
 }
@@ -319,6 +329,7 @@ void start_task_idle(const kernel_start_args *args)
         memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
     scheduler::set_scheduler(scheduler);
 
+    create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
     task::builtin::idle::main(args);
 }
 
@@ -382,5 +393,11 @@ void enable_preempt()
     {
         thd->preempt_data.enable_preempt();
     }
+}
+
+void schedule()
+{
+    current()->attributes |= thread_attributes::need_schedule;
+    scheduler::schedule();
 }
 } // namespace task
