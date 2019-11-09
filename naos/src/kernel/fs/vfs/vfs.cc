@@ -297,12 +297,6 @@ void rename(const char *new_dir, const char *old_dir)
     rename(new_dir, entry);
 }
 
-u64 write(file *f, byte *buffer, u64 size) { return f->write(buffer, size); }
-
-u64 read(file *f, byte *buffer, u64 max_size) { return f->read(buffer, max_size); }
-
-void flush(file *f) { f->flush(); }
-
 void mkdir(const char *dir, flag_t attr)
 {
     attr &= ~attribute::auto_create_file;

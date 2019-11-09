@@ -30,6 +30,7 @@ class file
 
     virtual void seek(i64 offset);
     virtual void move(i64 where);
+    virtual i64 current_offset();
 
     u64 size() const;
     dentry *get_entry() const;

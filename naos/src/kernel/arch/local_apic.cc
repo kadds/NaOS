@@ -5,6 +5,7 @@
 #include "kernel/arch/pit.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 

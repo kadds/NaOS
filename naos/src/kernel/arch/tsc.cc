@@ -2,7 +2,7 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock/clock_event.hpp"
 #include "kernel/irq.hpp"
-#include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 namespace arch::TSC
 {

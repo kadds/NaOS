@@ -2,7 +2,7 @@
 #include "bit_set.hpp"
 #include "common.hpp"
 #include "kernel/lock.hpp"
-#include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/ucontext.hpp"
 namespace util
 {
@@ -53,6 +53,14 @@ class id_generator
 
         bitmap.clean(i);
     };
+
+    bool has_use(u64 i)
+    {
+        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        if (unlikely(i == null_id))
+            return false;
+        return bitmap.get(last_index);
+    }
 };
 /// multi-level id generator
 template <u8 levels> class id_level_generator
@@ -151,5 +159,20 @@ template <u8 levels> class id_level_generator
             }
         }
     };
+
+    bool has_use(u64 i)
+    {
+        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        if (unlikely(i == null_id))
+            return false;
+        for (u8 i = 0; i < levels; i++)
+        {
+            if (i < pack[i].max)
+            {
+                return pack[i].bitmap->get(i);
+            }
+        }
+        return false;
+    }
 };
 } // namespace util

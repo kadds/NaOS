@@ -1,11 +1,10 @@
 #pragma once
 #include "arch/task.hpp"
 #include "common.hpp"
-#include "id_defined.hpp"
 #include "lock.hpp"
-#include "util/array.hpp"
+#include "resource.hpp"
+#include "types.hpp"
 #include <atomic>
-
 namespace fs::vfs
 {
 class file;
@@ -26,14 +25,6 @@ extern const process_id max_process_id;
 
 /// 65536
 extern const group_id max_group_id;
-using file_array_t = util::array<fs::vfs::file *>;
-
-struct resource_table_t
-{
-    void *console_attribute;
-    file_array_t *files;
-    resource_table_t();
-};
 
 /// The process struct
 struct process_t
@@ -163,11 +154,6 @@ inline thread_t *current() { return (thread_t *)arch::task::current_task(); }
 inline thread_t *current(void *stack) { return (thread_t *)arch::task::get_task(stack); }
 inline process_t *current_process() { return current()->process; }
 inline process_t *current_process(void *stack) { return current(stack)->process; }
-
-void yield_preempt();
-
-void disable_preempt();
-void enable_preempt();
 
 void schedule();
 } // namespace task

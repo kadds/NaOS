@@ -91,7 +91,7 @@ extern slab_cache_pool *global_kmalloc_slab_domain;
 extern slab_cache_pool *global_dma_slab_domain;
 extern slab_cache_pool *global_object_slab_domain;
 
-// A object allocator,
+// An object allocator
 struct SlabObjectAllocator : IAllocator
 {
   private:

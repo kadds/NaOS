@@ -1,5 +1,5 @@
 #pragma once
-#include "../mm/memory.hpp"
+#include "../mm/new.hpp"
 #include "../trace.hpp"
 #include "../util/memory.hpp"
 

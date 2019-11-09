@@ -1,6 +1,6 @@
 #pragma once
 #include "buddy.hpp"
-#include "memory.hpp"
+#include "new.hpp"
 
 namespace memory
 {

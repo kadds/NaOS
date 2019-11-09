@@ -9,6 +9,13 @@ extern "C" char _lib_sys_call;
             "movq $" #index ", %rax \n\t"                                                                              \
             "jmp _lib_sys_call \n\t ");
 
+#define OPEN_READ 0
+#define OPEN_WRITE 1
+
 SYS_CALL(0, void, sys_none, void)
 SYS_CALL(1, void, print, const char *arg, bool normal = false)
 SYS_CALL(31, void, sleep, unsigned long ms)
+SYS_CALL(10, int, open, const char *path, unsigned long mode, unsigned long attr);
+SYS_CALL(11, void, close, int fd);
+SYS_CALL(12, unsigned long, write, int fd, char *buffer, unsigned long len);
+SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len);

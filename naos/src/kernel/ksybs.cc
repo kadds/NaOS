@@ -1,6 +1,7 @@
 #include "kernel/ksybs.hpp"
+#include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
-#include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 namespace ksybs
 {
@@ -34,7 +35,7 @@ void init()
     u64 size = fs::vfs::size(f);
     file_header = (header *)memory::KernelVirtualAllocatorV->allocate(size, 8);
 
-    if (unlikely(fs::vfs::read(f, (byte *)file_header, size) != size))
+    if (unlikely(f->read((byte *)file_header, size) != size))
     {
         memory::KernelVirtualAllocatorV->deallocate(file_header);
         trace::info("Can't read kernel symbols file.");

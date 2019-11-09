@@ -8,6 +8,8 @@ void file::seek(i64 offset) { pointer_offset += offset; }
 
 void file::move(i64 where) { pointer_offset = where; }
 
+i64 file::current_offset() { return pointer_offset; }
+
 u64 file::size() const { return entry->get_inode()->get_size(); }
 
 dentry *file::get_entry() const { return entry; }

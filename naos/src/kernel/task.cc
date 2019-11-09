@@ -6,6 +6,8 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
+
 #include "kernel/mm/slab.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/util/array.hpp"
@@ -71,6 +73,7 @@ inline process_t *new_kernel_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
+    process->res_table.set_console_attribute(&trace::kernel_console_attribute);
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::kernel_vm_info;
@@ -86,6 +89,8 @@ inline process_t *new_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
+    process->res_table.set_console_attribute(memory::New<trace::console_attribute>(memory::KernelCommonAllocatorV));
+
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
@@ -99,6 +104,10 @@ inline void delete_process(process_t *p)
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
+    if (p->res_table.get_console_attribute() != &trace::kernel_console_attribute)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, p->res_table.get_console_attribute());
+    }
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
     auto node = global_process_list->find(p);
@@ -142,13 +151,6 @@ inline void delete_thread(thread_t *thd)
     ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
     memory::Delete<>(register_info_t_allocator, thd->register_info);
     memory::Delete<>(thread_t_allocator, thd);
-}
-
-using file_array_t = util::array<fs::vfs::file *>;
-
-resource_table_t::resource_table_t()
-    : files(memory::New<file_array_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV))
-{
 }
 
 void init()
@@ -362,37 +364,6 @@ void switch_thread(thread_t *old, thread_t *new_task)
     if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
         ((mm_info_t *)new_task->process->mm_info)->mmu_paging.load_paging();
     _switch_task(old->register_info, new_task->register_info, new_task);
-}
-
-void yield_preempt()
-{
-    thread_t *thd = current();
-    if (likely(thd != nullptr))
-    {
-        if (thd->preempt_data.preemptible() && thd->attributes & thread_attributes::need_schedule)
-        {
-            scheduler::schedule();
-        }
-    }
-}
-
-ExportC void yield_preempt_schedule() { yield_preempt(); }
-
-void disable_preempt()
-{
-    thread_t *thd = current();
-    if (likely(thd != nullptr))
-    {
-        thd->preempt_data.disable_preempt();
-    }
-}
-void enable_preempt()
-{
-    thread_t *thd = current();
-    if (likely(thd != nullptr))
-    {
-        thd->preempt_data.enable_preempt();
-    }
 }
 
 void schedule()

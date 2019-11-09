@@ -1,5 +1,5 @@
 #pragma once
-#include "../mm/allocator.hpp"
+#include "../mm/new.hpp"
 #include "common.hpp"
 
 namespace util
@@ -20,7 +20,7 @@ template <typename E> class linked_list
     };
     struct list_info_node
     {
-        char data[sizeof(E)];
+        char data[sizeof(list_node) - sizeof(list_node *) * 2];
         list_node *prev, *next;
         list_info_node(){};
     };
@@ -137,11 +137,7 @@ template <typename E> class linked_list
         return e;
     };
 
-    u64 size() const
-    {
-        // kassert(node_count == calc_size(), "node count != ", node_count);
-        return node_count;
-    }
+    u64 size() const { return node_count; }
 
     iterator begin() const { return iterator(head->next); }
 
@@ -280,6 +276,7 @@ template <typename E> class linked_list
         head->prev = nullptr;
         tail->prev = (list_node *)head;
         tail->next = nullptr;
+        node_count = 0;
 
         auto iter = l.begin();
         while (iter != l.end())

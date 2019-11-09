@@ -6,6 +6,7 @@
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 namespace memory
@@ -354,6 +355,14 @@ void zone_t::tag_used(u64 offset_start, u64 offset_end)
     }
     buddies->buddies[e_buddy].tag_alloc(0, e_buddy_rest);
 }
+
+void *KernelCommonAllocator::allocate(u64 size, u64 align) { return kmalloc(size, align); }
+
+void KernelCommonAllocator::deallocate(void *p) { kfree(p); }
+
+void *KernelVirtualAllocator::allocate(u64 size, u64 align) { return vmalloc(size, align); }
+
+void KernelVirtualAllocator::deallocate(void *p) { vfree(p); }
 
 void *KernelMemoryAllocator::allocate(u64 size, u64 align)
 {

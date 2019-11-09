@@ -1,5 +1,6 @@
 #pragma once
 #include "../mm/allocator.hpp"
+#include "../mm/new.hpp"
 #include "common.hpp"
 
 namespace util
@@ -16,7 +17,7 @@ template <typename E> class singly_linked_list
     };
     struct list_info_node
     {
-        char data[sizeof(E)];
+        char data[sizeof(list_node) - sizeof(list_node *)];
         list_node *next;
         list_info_node(){};
     };
@@ -26,7 +27,7 @@ template <typename E> class singly_linked_list
 
     struct iterator
     {
-        friend class linked_list;
+        friend class singly_linked_list;
 
       private:
         list_node *node;
@@ -54,7 +55,7 @@ template <typename E> class singly_linked_list
     memory::IAllocator *allocator;
 
     list_info_node *head, *tail;
-    list_info_node *back_node;
+    list_node *back_node;
     u64 node_count;
 
     u64 calc_size() const
@@ -69,7 +70,7 @@ template <typename E> class singly_linked_list
         return i;
     }
 
-    iterator before_iterator(iterator start = iterator((list_node *)head), iterator target = end())
+    iterator before_iterator(iterator start, iterator target)
     {
         auto iter = start;
         do
@@ -85,18 +86,24 @@ template <typename E> class singly_linked_list
     iterator push_back(const E &e)
     {
         list_node *node = memory::New<list_node>(allocator, e);
-        list_node *prev;
-
-        if (unlikely(back_node == nullptr))
-            prev = head;
-        else
-            prev = back_node;
-
         node->next = (list_node *)tail;
-        prev->next = node;
-        back_node = node;
+        back_node->next = node;
         node_count++;
+        back_node = node;
         return iterator(node);
+    }
+
+    E pop_back()
+    {
+        if (unlikely(node_count <= 0))
+            return E();
+        auto iter = before_iterator(iterator((list_node *)head), iterator(back_node));
+        iter->next = tail;
+        E e = back_node->element;
+        memory::Delete<list_node>(allocator, back_node);
+        back_node = iter.node;
+        node_count--;
+        return e;
     }
 
     iterator push_front(const E &e)
@@ -105,20 +112,12 @@ template <typename E> class singly_linked_list
         node->next = head->next;
         head->next = node;
         node_count++;
+        if (unlikely(back_node == (list_node *)head))
+        {
+            back_node = node;
+        }
         return iterator(node);
     }
-
-    E pop_back()
-    {
-        E e = tail->prev->element;
-        iterator iter = before_iterator(iterator((list_node *)head), back_node);
-        list_node *new_back_node = *iter;
-        new_back_node->next = back_node->next;
-        memory::Delete<>(allocator, back_node);
-        back_node = new_back_node;
-        node_count--;
-        return e;
-    };
 
     E pop_front()
     {
@@ -127,14 +126,14 @@ template <typename E> class singly_linked_list
         head->next = head->next->next;
         memory::Delete<>(allocator, node);
         node_count--;
+        if (unlikely(node_count == 0))
+        {
+            back_node = (list_node *)head;
+        }
         return e;
     };
 
-    u64 size() const
-    {
-        kassert(node_count == calc_size(), "node count != ", node_count);
-        return node_count;
-    }
+    u64 size() const { return node_count; }
 
     iterator begin() const { return iterator(head->next); }
 
@@ -142,7 +141,7 @@ template <typename E> class singly_linked_list
 
     bool empty() const { return head->next == (list_node *)tail; }
 
-    E back() const { return tail->prev->element; }
+    E back() const { return back_node->element; }
 
     E front() const { return head->next->element; }
 
@@ -168,10 +167,14 @@ template <typename E> class singly_linked_list
     {
         list_node *prev_node = *iter;
         list_node *node = memory::New<list_node>(allocator, e);
-        auto last = after_node->prev;
 
         node->next = prev_node->next;
         prev_node->next = node;
+
+        if (iter->next->next == (list_node *)tail)
+        {
+            back_node = iter->next;
+        }
 
         node_count++;
         return iterator(node);
@@ -181,25 +184,24 @@ template <typename E> class singly_linked_list
     {
         if (unlikely(iter == end() || iter == iterator((list_node *)head)))
             return end();
-        list_node *prev = before_iterator((list_node *)head, iter).node;
-        prev->next = iter.node->next;
-        node_count--;
-        memory::Delete<>(allocator, iter.node);
-        return iterator(next);
-    }
-
-    iterator remove(iterator prev, iterator iter)
-    {
-        if (unlikely(iter == end() || iter == iterator((list_node *)head)))
-            return end();
-        list_node *prev_node = prev.node;
-        if (prev_node->next != iter.node)
-            return end();
-
-        prev_node->next = iter.node->next;
-        node_count--;
-        memory::Delete<>(allocator, iter.node);
-        return iterator(next);
+        if (iter.node->next != (list_node *)tail)
+        {
+            auto del = iter.node->next;
+            iter.node->next = iter.node->next->next;
+            iter.node->element = del->element;
+            memory::Delete<>(allocator, del);
+            node_count--;
+            return iterator(iter.node->next);
+        }
+        else
+        {
+            auto prev_iter = before_iterator(iterator((list_node *)head), iter);
+            prev_iter.node->next = (list_node *)tail;
+            memory::Delete<>(allocator, iter.node);
+            back_node = prev_iter.node;
+            node_count--;
+            return iterator(back_node->next);
+        }
     }
 
     void clean()
@@ -234,11 +236,10 @@ template <typename E> class singly_linked_list
         }
     }
 
-    linked_list(const linked_list &l)
+    singly_linked_list(const singly_linked_list &l)
         : allocator(l.allocator)
         , head(memory::New<list_info_node>(allocator))
         , tail(memory::New<list_info_node>(allocator))
-        , back_node(nullptr)
     {
         head->next = (list_node *)tail;
         tail->next = nullptr;
@@ -251,7 +252,7 @@ template <typename E> class singly_linked_list
         }
     }
 
-    linked_list &operator=(const linked_list &l)
+    singly_linked_list &operator=(const singly_linked_list &l)
     {
         if (&l == this)
             return *this;
@@ -269,6 +270,7 @@ template <typename E> class singly_linked_list
         tail = memory::New<list_info_node>(allocator);
         head->next = (list_node *)tail;
         tail->next = nullptr;
+        node_count = 0;
 
         auto iter = l.begin();
         while (iter != l.end())
@@ -279,4 +281,4 @@ template <typename E> class singly_linked_list
         return *this;
     }
 };
-}
+} // namespace util
