@@ -20,6 +20,9 @@ const u64 user_mmap_top_address = 0x00008000000000 - 0x10000000;
 
 const u64 user_code_bottom_address = 0x400000;
 
+/// 4G
+const u64 user_head_size = 0x100000000;
+
 const u64 kernel_mmap_top_address = 0xFFFF800d00000000;
 
 const u64 kernel_mmap_bottom_address = 0xFFFF800b00000000;

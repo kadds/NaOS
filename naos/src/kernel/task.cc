@@ -190,16 +190,6 @@ void init()
     bin_handle::init();
 }
 
-struct userland_thread_param
-{
-    const char *args;
-    const char *env;
-};
-
-void kernel_thread(kernel_thread_entry entry, u64 arg) { entry(arg); }
-
-void userland_thread(userland_thread_entry entry, u64 arg) { arch::task::enter_userland(current(), (void *)entry); }
-
 thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags)
 {
     thread_t *thd = new_thread(process);
@@ -207,6 +197,20 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
+    auto &vma = ((mm_info_t *)process->mm_info)->vma;
+
+    if (process->mm_info != memory::kernel_vm_info)
+    {
+
+        auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
+                                         memory::vm::flags::readable | memory::vm::flags::writeable |
+                                             memory::vm::flags::expand | memory::vm::flags::user_mode,
+                                         memory::vm::fill_expand_vm, 0);
+
+        thd->user_stack_top = (void *)stack_vm->end;
+        thd->user_stack_bottom = (void *)stack_vm->start;
+    }
+
     arch::task::create_thread(thd, (void *)start_func, arg0, arg1, arg2, 0);
     scheduler::add(thd);
     return thd;

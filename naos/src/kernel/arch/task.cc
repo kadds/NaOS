@@ -52,8 +52,8 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     util::memset(&regs, 0, sizeof(regs));
 
     regs.rbx = (u64)function;
-    regs.rsi = arg0;
-    regs.rdi = arg1;
+    regs.rdi = arg0;
+    regs.rsi = arg1;
     regs.rdx = arg2;
     regs.rcx = arg3;
 
@@ -77,7 +77,7 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     return 0;
 }
 
-u64 enter_userland(::task::thread_t *thd, void *entry)
+u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
 {
     regs_t regs;
     util::memzero(&regs, sizeof(regs));
@@ -88,6 +88,7 @@ u64 enter_userland(::task::thread_t *thd, void *entry)
     regs.ds = gdt::gen_selector(gdt::selector_type::user_data, 3);
     regs.es = regs.ds;
     regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
+    regs.rdi = arg;
 
     cpu::current().set_context(thd);
     _call_sys_ret(&regs);

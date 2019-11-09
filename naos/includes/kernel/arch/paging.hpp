@@ -66,20 +66,24 @@ struct base_entry
     void clear_global() { data &= ~flags::global; }
 
     void *get_addr() const;
+    void *get_phy_addr() const;
+
     base_entry(void *baseAddr, u32 flags) { data = (((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | (flags & 0x1FF); }
     base_entry() { data = 0; }
     void set_addr(void *ptr);
+    void set_phy_addr(void *ptr);
     void add_attributes(u16 attr) { data &= (attr & 0x1FF); }
     // can only save 14 bits data
     void set_common_data(u16 dt)
     {
         dt &= 0x3FFF;
-        data |= (((u64)dt & 0x3FFC) << 50) & ((dt & 0x3000) >> 3);
+        data &= 0x800FFFFFFFFFF1FFUL;
+        data |= (((u64)dt & 0x3FF8) << 49) | ((dt & 0x7) << 9);
     }
     u16 get_common_data()
     {
         u16 rt;
-        rt = (((data) >> 9) & 0x2) | ((((data) >> 52) & 0xFFF) << 2);
+        rt = (((data) >> 9) & 0x7) | ((((data) >> 52) & 0xFFF) << 3);
         return rt;
     }
     // can only save 62 bits data, notice: will clean common data

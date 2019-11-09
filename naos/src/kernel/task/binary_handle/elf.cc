@@ -167,6 +167,7 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
     return (program_64 *)p;
 }
 
+/// TODO: release memory resource
 bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
     elf_header_64 *elf = (elf_header_64 *)header;
@@ -184,6 +185,8 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
         return false;
 
     program_64 *program_last = program + elf->phnum;
+
+    u64 max_code = 0;
 
     while (program != program_last)
     {
@@ -203,8 +206,10 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
                 flag |= flags::readable;
             }
             u64 start = program->vaddr & ~(memory::page_size - 1);
-            //  u64 end = start + memory::page_size;
             u64 off = program->offset & ~(memory::page_size - 1);
+            u64 end = start + program->file_size + (program->offset - off);
+            if (max_code < end)
+                max_code = end;
 
             memory::vm::map_file(start, new_mm_info, file, off, program->file_size + (program->offset - off), flag);
         }
@@ -213,16 +218,30 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
         }
         program++;
     }
+    if (max_code == 0)
+    {
+        return false;
+    }
 
+    new_mm_info->init_brk(((max_code + memory::page_size - 1) & ~(memory::page_size - 1)) + memory::page_size);
+    if (new_mm_info->get_brk() == 0)
+    {
+        return false;
+    }
     // stack mapping, stack size 8MB
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
                                      memory::vm::fill_expand_vm, 0);
+    if (stack_vm == nullptr)
+    {
+        return false;
+    }
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;
     info->entry_start_address = (void *)elf->entry;
+
     return true;
 }
 

@@ -87,5 +87,5 @@ inline void *get_task(void *stack)
 void init(::task::thread_t *thd, register_info_t *first_task_reg_info);
 
 u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
-u64 enter_userland(::task::thread_t *thd, void *entry);
+u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg);
 } // namespace arch::task

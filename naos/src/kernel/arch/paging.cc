@@ -31,10 +31,14 @@ void *base_entry::get_addr() const
     return memory::kernel_phyaddr_to_virtaddr((void *)((u64)data & 0xFFFFFFFFFF000UL));
 }
 
+void *base_entry::get_phy_addr() const { return (void *)((u64)data & 0xFFFFFFFFFF000UL); }
+
 void base_entry::set_addr(void *ptr)
 {
     data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL);
 }
+
+void base_entry::set_phy_addr(void *ptr) { data = (data & ~0xFFFFFFFFFF000UL) | (((u64)ptr) & 0xFFFFFFFFFF000UL); }
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
@@ -169,6 +173,7 @@ NoReturn void error_unmap()
 bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags)
 {
+    uctx::UnInterruptableContext icu;
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_map();
@@ -297,6 +302,7 @@ void clean_null_page_pde(pml4t &base_page, u64 pml4e_index, u64 pdpe_index, u64 
 
 bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count)
 {
+    uctx::UnInterruptableContext icu;
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_unmap();
@@ -546,7 +552,7 @@ bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **ph
         {
             if (pdpe.is_big_page())
             {
-                *phy_addr = (void *)pdpe.get_addr();
+                *phy_addr = (void *)pdpe.get_phy_addr();
                 return true;
             }
             auto &pde = pdpe.next()[pde_index];
@@ -554,13 +560,13 @@ bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **ph
             {
                 if (pde.is_big_page())
                 {
-                    *phy_addr = (void *)pde.get_addr();
+                    *phy_addr = (void *)pde.get_phy_addr();
                     return true;
                 }
                 auto &pe = pde.next()[pte_index];
                 if (likely(pe.is_present()))
                 {
-                    *phy_addr = (void *)pe.get_addr();
+                    *phy_addr = (void *)pe.get_phy_addr();
                     return true;
                 }
             }

@@ -36,6 +36,8 @@ extern const u64 user_mmap_top_address;
 
 extern const u64 user_code_bottom_address;
 
+extern const u64 user_head_size;
+
 extern const u64 kernel_mmap_top_address;
 
 extern const u64 kernel_mmap_bottom_address;

@@ -100,7 +100,6 @@ class mmu_paging
     void map_area(const vm_t *vm);
     void map_area_phy(const vm_t *vm, void *phy_address_start);
 
-    void expand_area(const vm_t *vm, void *pointer);
     void unmap_area(const vm_t *vm);
 
     void *get_page_addr();
@@ -112,9 +111,19 @@ class mmu_paging
 
 struct info_t
 {
+  public:
     memory::vm::vm_allocator vma;
     memory::vm::mmu_paging mmu_paging;
+    const vm_t *head_vm;
+
+  private:
+    u64 current_head_ptr;
+
+  public:
     info_t();
+    void init_brk(u64 start);
+    bool set_brk(u64 ptr);
+    u64 get_brk();
 };
 struct map_t
 {

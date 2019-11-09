@@ -10,6 +10,6 @@ namespace task::builtin::init
 void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     trace::info("init task running.");
-    arch::task::enter_userland(current(), (void *)arg3);
+    arch::task::enter_userland(current(), (void *)arg3, 0);
 }
 } // namespace task::builtin::init

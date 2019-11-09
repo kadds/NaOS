@@ -18,7 +18,6 @@ class time_span_scheduler : public scheduler
     thread_list_t expired_list;
     thread_list_t block_list;
     lock::spinlock_t list_spinlock;
-    u64 epoch_time;
     u64 last_time_millisecond;
 
   public:

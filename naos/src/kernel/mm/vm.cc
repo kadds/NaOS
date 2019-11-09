@@ -68,16 +68,15 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
 
     if (!list.empty())
     {
-        u64 last_end = range_top;
-
+        u64 high_bound = range_top;
         for (auto it = list.rbegin(); it != list.rend(); --it)
         {
             vm_t *vm = &it;
-            if (last_end - vm->start >= size)
+            if (high_bound - vm->end >= size)
             {
-                return &list.insert(it, vm_t(vm->end, vm->end + size, flags, func, user_data));
+                return &list.insert(++it, vm_t(high_bound - size, high_bound, flags, func, user_data));
             }
-            last_end = vm->end;
+            high_bound = vm->start;
         }
     }
     else
@@ -122,21 +121,21 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
     if (unlikely(end > range_top))
         return nullptr;
 
-    if (list.begin() == list.end())
+    if (list.empty())
     {
         return &list.push_back(vm_t(start, end, flags, func, user_data));
     }
-
+    u64 low_bound = range_bottom;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        if ((char *)start < (char *)it->start)
+        if (start < it->end)
         {
-            if ((char *)end <= (char *)it->start)
-            {
+            if (end <= it->start && start >= low_bound)
                 return &list.insert(it, vm_t(start, end, flags, func, user_data));
-            }
-            return nullptr;
+            else
+                return nullptr;
         }
+        low_bound = it->end;
     }
     return &list.push_back(vm_t(start, end, flags, func, user_data));
 }
@@ -162,28 +161,6 @@ mmu_paging::mmu_paging() { base_paging_addr = new_page_table<arch::paging::base_
 mmu_paging::~mmu_paging() { delete_page_table((arch::paging::base_paging_t *)base_paging_addr); }
 
 void mmu_paging::load_paging() { arch::paging::load((arch::paging::base_paging_t *)base_paging_addr); }
-
-void mmu_paging::expand_area(const vm_t *vm, void *ptr)
-{
-    if (unlikely(vm == nullptr))
-        return;
-    u64 attr = 0;
-    if (vm->flags & flags::writeable)
-    {
-        attr |= arch::paging::flags::writable;
-    }
-    if (vm->flags & flags::user_mode)
-    {
-        attr |= arch::paging::flags::user_mode;
-    }
-
-    byte *start = (byte *)(((u64)ptr) & ~(memory::page_size - 1));
-
-    void *phy_addr = memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(1, 0));
-
-    arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, phy_addr,
-                      arch::paging::frame_size::size_4kb, 1, attr);
-}
 
 void mmu_paging::map_area(const vm_t *vm)
 {
@@ -235,9 +212,40 @@ void mmu_paging::unmap_area(const vm_t *vm)
 {
     if (unlikely(vm == nullptr))
         return;
-
-    arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vm->start,
-                        arch::paging::frame_size::size_4kb, (vm->end - vm->start) / arch::paging::frame_size::size_4kb);
+    if (vm->flags & flags::expand)
+    {
+        auto page_count = (vm->end - vm->start) / page_size;
+        for (auto i = 0; i < page_count; i++)
+        {
+            auto vir = (void *)(vm->start + i * page_size);
+            void *phy;
+            if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
+            {
+                arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vir,
+                                    arch::paging::frame_size::size_4kb, 1);
+                memory::KernelBuddyAllocatorV->deallocate(phy);
+            }
+        }
+    }
+    else
+    {
+        auto page_count = (vm->end - vm->start) / page_size;
+        for (auto i = 0; i < page_count; i++)
+        {
+            auto vir = (void *)(vm->start + i * page_size);
+            void *phy;
+            if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
+            {
+                memory::KernelBuddyAllocatorV->deallocate(phy);
+            }
+            else
+            {
+                trace::panic("mmu_paging umap failed! This is not a expand vm_area.");
+            }
+        }
+        arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vm->start,
+                            arch::paging::frame_size::size_4kb, page_count);
+    }
 }
 
 void *mmu_paging::get_page_addr() { return base_paging_addr; }
@@ -252,7 +260,64 @@ void mmu_paging::sync_kernel()
 
 info_t::info_t()
     : vma(memory::user_mmap_top_address, memory::user_code_bottom_address)
+    , head_vm(nullptr)
+    , current_head_ptr(0)
 {
+}
+
+bool head_expand_vm(u64 page_addr, const vm_t *item);
+
+void info_t::init_brk(u64 start)
+{
+    head_vm = vma.add_map(start, start + memory::user_head_size,
+                          memory::vm::flags::readable | memory::vm::flags::writeable | memory::vm::flags::expand |
+                              memory::vm::flags::user_mode,
+                          memory::vm::head_expand_vm, 0);
+    if (likely(head_vm))
+        current_head_ptr = head_vm->start;
+}
+
+bool info_t::set_brk(u64 ptr)
+{
+    ptr = (ptr + memory::page_size - 1) & ~(memory::page_size - 1);
+
+    if (ptr > head_vm->end || ptr < head_vm->start)
+    {
+        return false;
+    }
+
+    if (ptr > current_head_ptr)
+    {
+        /// add page
+        /// \see head_expand_vm
+    }
+    else
+    {
+        /// remove pages
+        vm_t vm = *head_vm;
+        vm.start = ptr;
+        vm.end = current_head_ptr;
+        mmu_paging.unmap_area(&vm);
+    }
+    current_head_ptr = ptr;
+    return true;
+}
+
+u64 info_t::get_brk() { return current_head_ptr; }
+
+bool head_expand_vm(u64 page_addr, const vm_t *item)
+{
+    auto info = (info_t *)task::current_process()->mm_info;
+    if (info->get_brk() > page_addr)
+    {
+        vm_t vm = *item;
+        vm.start = (page_addr) & ~(memory::page_size - 1);
+        vm.end = vm.start + memory::page_size;
+        byte *ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
+        info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
+        return true;
+    }
+    return false;
 }
 
 bool fill_expand_vm(u64 page_addr, const vm_t *item)

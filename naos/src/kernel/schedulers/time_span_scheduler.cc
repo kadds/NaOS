@@ -46,7 +46,6 @@ void time_span_scheduler::init()
     uctx::UnInterruptableContext icu;
     timer::add_watcher(5000, timer_tick, (u64)this);
     last_time_millisecond = timer::get_high_resolution_time();
-    epoch_time = 1;
     task::get_idle_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
     get_schedule_data(task::get_idle_task())->rest_time = 0;
 }
@@ -59,7 +58,7 @@ void time_span_scheduler::add(thread_t *thread)
     thread->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
     gen_priority(thread);
     get_schedule_data(thread)->rest_time =
-        runable_list.size() * 1000 / (runable_list.size() + expired_list.size() + 1) / (epoch_time * 1000);
+        runable_list.size() * 1000 / (runable_list.size() + expired_list.size() + 1) / 1000;
     insert_to_runable_list(thread);
 }
 
@@ -133,7 +132,6 @@ void time_span_scheduler::epoch()
     u64 count = expired_list.size();
     if (count == 0)
         return;
-    epoch_time = 0;
     u64 full_priority = 1;
     // 1ms
     u64 epoch_time = 1000000;

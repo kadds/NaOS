@@ -218,8 +218,8 @@ template <typename E> class singly_linked_list
         : allocator(allocator)
         , head(memory::New<list_info_node>(allocator))
         , tail(memory::New<list_info_node>(allocator))
-        , node_count(0)
         , back_node(nullptr)
+        , node_count(0)
     {
         head->next = (list_node *)tail;
         tail->next = nullptr;

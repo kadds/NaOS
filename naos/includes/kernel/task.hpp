@@ -107,8 +107,6 @@ struct thread_t
 
 void init();
 void start_task_idle(const kernel_start_args *args);
-void kernel_thread(kernel_thread_entry entry, u64 arg);
-void userland_thread(userland_thread_entry entry, u64 arg);
 void switch_thread(thread_t *old, thread_t *new_task);
 
 namespace create_thread_flags
