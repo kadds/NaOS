@@ -1,4 +1,4 @@
-Features
+Features / TODO
 ====
 
 * - [ ] X86-64 Architecture
@@ -16,25 +16,37 @@ Features
     - [ ] Scheduler
         - [x] Time span
         - [ ] CFS
-    - [x] Thread
+    - [ ] Thread
+        - [x] Schedule
+        - [ ] Synchronize
+            - [ ] Condition wait
+            - [x] Sleep
+            - [ ] Locks
     - [ ] IPC
+    - [ ] Signal
     - [x] Memory map
+        - [ ] Memory shared
     - [ ] Elf loader
-        - [ ] Static binary loader
+        - [X] Static binary loader
         - [ ] Dynamic link
 * - [ ] File subsystem
     - [ ] Virtual File system
         - [x] Read, Write, Seek
         - [ ] Authority identification
+    - [ ] Network File system
 * - [x] Interrupt subsystem
     - [x] Hard IRQ
     - [x] Soft IRQ
+        - [x] Kernel softirq thread
     - [x] APIC (Local/APIC, IO/APIC)
 * - [ ] Network subsystem
     - [ ] socket
 * - [ ] Drivers
     - [ ] ATA Disk driver
+        - [ ] DMA
     - [ ] Native display driver
+    - [ ] Network interface card driver
+    - [ ] Mouse & Keyboard driver
 * - [ ] Compatibility layer
     - [ ] UEFI boot loader
     - [ ] POSIX API
@@ -44,3 +56,6 @@ Features
     - [ ] Kernel modules loader
     - [x] Kernel symbols query
     - [ ] User / Group
+        - [ ] Root 
+    - [ ] C++ lib integration  
+    - [ ] Rust integration
