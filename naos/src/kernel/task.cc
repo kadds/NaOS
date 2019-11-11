@@ -2,9 +2,7 @@
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
-#include "kernel/arch/tss.hpp"
 
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -19,7 +17,6 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 
-#include "kernel/kernel.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/schedulers/time_span_scheduler.hpp"
 

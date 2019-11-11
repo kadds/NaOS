@@ -11,7 +11,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rfsimage/bi
 
 add_executable(init ${DIR_ALL})
 
-# set_target_properties(init PROPERTIES LINK_FLAGS "${LINKER_X64} -Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/init.ld")
 target_link_libraries(init PUBLIC usr-common)
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/init)

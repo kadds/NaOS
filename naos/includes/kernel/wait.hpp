@@ -1,5 +1,5 @@
 #pragma once
-#include "kernel/mm/memory.hpp"
+#include "kernel/mm/allocator.hpp"
 #include "kernel/task.hpp"
 #include "kernel/util/linked_list.hpp"
 namespace task

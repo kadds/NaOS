@@ -1,7 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
 #include "common.hpp"
-#include "kernel/arch/idt.hpp"
+#include "idt.hpp"
 #include "task.hpp"
 extern volatile char base_virtual_addr[];
 extern volatile char base_phy_addr[];

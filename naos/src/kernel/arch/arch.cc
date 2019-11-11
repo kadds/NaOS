@@ -8,6 +8,7 @@
 #include "kernel/arch/tss.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/mm.hpp"
 #include "kernel/trace.hpp"
 namespace arch
 {

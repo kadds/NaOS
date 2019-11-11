@@ -1,4 +1,4 @@
-#include "usr/init/main.hpp"
+#include "../common/arch/lib.hpp"
 
 void thread(int id)
 {
