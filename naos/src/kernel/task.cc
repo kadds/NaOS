@@ -3,31 +3,34 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
+
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-
 #include "kernel/mm/slab.hpp"
-#include "kernel/task/builtin/idle_task.hpp"
+#include "kernel/mm/vm.hpp"
+
 #include "kernel/util/array.hpp"
-#include "kernel/util/linked_list.hpp"
+#include "kernel/util/hash_map.hpp"
+#include "kernel/util/id_generator.hpp"
 #include "kernel/util/memory.hpp"
 
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+
 #include "kernel/kernel.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/schedulers/time_span_scheduler.hpp"
 
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/id_generator.hpp"
 
-#include "kernel/mm/vm.hpp"
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
+#include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
+
 using mm_info_t = memory::vm::info_t;
 namespace task
 {
@@ -38,9 +41,9 @@ const process_id max_process_id = 0x100000;
 const group_id max_group_id = 0x10000;
 
 using thread_list_t = util::linked_list<thread_t *>;
-using process_list_t = util::linked_list<process_t *>;
+// using process_list_t = util::linked_list<process_t *>;
 using thread_list_node_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
-using process_list_node_allocator_t = memory::list_node_cache_allocator<process_list_t>;
+// using process_list_node_allocator_t = memory::list_node_cache_allocator<process_list_t>;
 
 const u64 process_id_param[] = {0x1000, 0x8000, 0x40000, 0x80000};
 using process_id_generator_t = util::id_level_generator<sizeof(process_id_param) / sizeof(u64)>;
@@ -50,15 +53,29 @@ const u64 thread_id_param[] = {0x1000, 0x8000, 0x40000};
 using thread_id_generator_t = util::id_level_generator<sizeof(thread_id_param) / sizeof(u64)>;
 
 thread_list_node_allocator_t *thread_list_cache_allocator;
-process_list_node_allocator_t *process_list_cache_allocator;
-
-process_list_t *global_process_list;
-lock::spinlock_t process_list_lock;
+// process_list_node_allocator_t *process_list_cache_allocator;
 
 memory::SlabObjectAllocator *thread_t_allocator;
 memory::SlabObjectAllocator *process_t_allocator;
 memory::SlabObjectAllocator *mm_info_t_allocator;
 memory::SlabObjectAllocator *register_info_t_allocator;
+
+struct process_hash
+{
+    u64 operator()(process_id pid) { return pid; }
+};
+
+struct thread_hash
+{
+    u64 operator()(thread_id tid) { return tid; }
+};
+
+using process_map_t = util::hash_map<process_id, process_t *, process_hash>;
+using thread_map_t = util::hash_map<process_id, process_t *, process_hash>;
+
+process_map_t *global_process_map;
+// process_list_t *global_process_list;
+lock::spinlock_t process_list_lock;
 
 thread_t *idle_task;
 
@@ -78,7 +95,7 @@ inline process_t *new_kernel_process()
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
-    global_process_list->push_back(process);
+    global_process_map->insert(id, process);
     return process;
 }
 
@@ -95,7 +112,8 @@ inline process_t *new_process()
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
-    global_process_list->push_back(process);
+    global_process_map->insert(id, process);
+
     return process;
 }
 
@@ -110,11 +128,7 @@ inline void delete_process(process_t *p)
     }
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
-    auto node = global_process_list->find(p);
-    if (likely(node != global_process_list->end()))
-    {
-        global_process_list->remove(node);
-    }
+    global_process_map->remove(p->pid);
     process_id_generator->collect(p->pid);
     memory::Delete<>(process_t_allocator, p);
 }
@@ -156,10 +170,10 @@ inline void delete_thread(thread_t *thd)
 void init()
 {
     uctx::UnInterruptableContext icu;
-    process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
+    // process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
     thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-
-    global_process_list = memory::New<process_list_t>(memory::KernelCommonAllocatorV, process_list_cache_allocator);
+    global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
+    // global_process_list = memory::New<process_list_t>(memory::KernelCommonAllocatorV, process_list_cache_allocator);
 
     thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
         memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
@@ -341,12 +355,9 @@ void start_task_idle(const kernel_start_args *args)
 
 process_t *find_pid(process_id pid)
 {
-    for (auto pro : *global_process_list)
-    {
-        if (pro->pid == pid)
-            return pro;
-    }
-    return nullptr;
+    process_t *process = nullptr;
+    global_process_map->get(pid, &process);
+    return process;
 }
 
 thread_t *find_tid(process_t *process, thread_id tid)

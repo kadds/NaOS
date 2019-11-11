@@ -1,47 +1,137 @@
 #pragma once
+#include "../mm/new.hpp"
 #include "common.hpp"
-#include "singly_linked_list.hpp"
+#include "memory.hpp"
 #include <type_traits>
 namespace util
 {
-template <typename T> u64 try_hash(const T &t) { return 0; }
 
-template <typename K, typename V> class hash_map
+template <typename T> struct member_hash
+{
+    u64 operator()(const T &t) { return t.hash(); }
+};
+
+template <typename K, typename V, typename hash_func = member_hash<K>> class hash_map
 {
   public:
-    struct entry
+    struct pair
     {
         K key;
         V value;
-        entry(const K &key, const V &value)
+
+        pair(const K &key, const V &value)
             : key(key)
             , value(value){};
     };
+    struct node_t
+    {
+        pair content;
+        node_t *next;
+        pair &operator*() { return content; }
 
-    using list_entry_t = singly_linked_list<entry>;
+        node_t(const K &key, const V &value, node_t *next)
+            : content(key, value)
+            , next(next){};
+    };
+
+    struct entry
+    {
+        node_t *next;
+    };
 
     struct map_helper
     {
-        entry *e;
-        map_helper(entry *e)
+        node_t *e;
+        map_helper(node_t *e)
             : e(e)
         {
         }
         map_helper &operator=(const V &v)
         {
-            e->value = v;
+            e->content.value = v;
             return *this;
         }
     };
 
+    struct iterator
+    {
+        entry *table;
+        node_t *node;
+        iterator(entry *table, node_t *node)
+            : table(table)
+            , node(node)
+        {
+        }
+
+        iterator operator++(int)
+        {
+            auto node = this->node;
+            auto table = this->table;
+
+            if (!node->next)
+            {
+                while (!table->next)
+                    table++;
+                node = table->next;
+            }
+            else
+                node = node->next;
+
+            return iterator(table, node);
+        }
+
+        iterator &operator++()
+        {
+            if (!node->next)
+            {
+                while (!table->next)
+                    table++;
+                node = table->next;
+            }
+            else
+                node = node->next;
+            return *this;
+        }
+
+        bool operator==(const iterator &it) { return node == it.node; }
+
+        bool operator!=(const iterator &it) { return !operator==(it); }
+
+        pair *operator->() { return &node->content; }
+
+        pair &operator*() { return node->content; }
+
+        pair *operator&() { return &node->content; }
+    };
+
   private:
     u64 count;
-    list_entry_t *table;
+    entry *table;
     // fix point 12345.67
-    const u64 load_factor;
+    u64 load_factor;
     u64 threshold;
     u64 capacity;
     memory::IAllocator *allocator;
+
+    void recapcity(entry *new_table, u64 new_capacity)
+    {
+        for (auto i = 0; i < capacity; i++)
+        {
+            for (auto it = table[i].next; it != nullptr;)
+            {
+                u64 hash = hash_func()(it->content.key) % new_capacity;
+                auto next_it = it->next;
+                auto next_node = new_table[hash].next;
+                new_table[hash].next = it;
+                it->next = next_node;
+                it = next_it;
+            }
+        }
+        memory::KernelMemoryAllocatorV->deallocate(table);
+        table = new_table;
+        capacity = new_capacity;
+        threshold = load_factor * new_capacity / 100;
+    }
 
   public:
     hash_map(memory::IAllocator *allocator, u64 capacity, u64 factor)
@@ -50,7 +140,8 @@ template <typename K, typename V> class hash_map
         , allocator(allocator)
     {
         threshold = load_factor * capacity / 100;
-        table = memory::NewArray<list_entry_t>(allocator, capacity, allocator);
+        table = (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * capacity, alignof(entry));
+        memzero(table, sizeof(entry) * capacity);
     }
 
     hash_map(memory::IAllocator *allocator, u64 capacity)
@@ -63,34 +154,63 @@ template <typename K, typename V> class hash_map
     {
     }
 
-    void insert(const K &key, const V &value)
+    hash_map(const hash_map &map)
+        : allocator(map.allocator)
+        , capacity(map.capacity)
+        , load_factor(map.load_factor)
     {
-        u64 hash = try_hash(key) % capacity;
-        table[hash].push_front(entry(key, value));
+    }
+
+    hash_map &operator=(const hash_map &map)
+    {
+        if (&map == this)
+            return *this;
+        clear();
+
+        return *this;
+    }
+
+    ~hash_map()
+    {
+        clear();
+        memory::KernelMemoryAllocatorV->deallocate(table);
+    }
+
+    u64 hash_key(const K &key) { return hash_func()(key) % capacity; }
+
+    iterator insert(const K &key, const V &value)
+    {
+        if (count >= threshold)
+        {
+            expand(capacity * 1.5);
+        }
+        u64 hash = hash_key(key);
+        auto next_node = table[hash].next;
+        table[hash].next = memory::New<node_t>(allocator, key, value, next_node);
+        count++;
+        return iterator(&table[hash], table[hash].next);
     }
 
     bool insert_once(const K &key, const V &value)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto it : table[hash])
+        u64 hash = hash_key(key);
+        for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
-            if (it.key == key)
-            {
+            if (it->key == key)
                 return false;
-            }
         }
-        table[hash].push_front(entry(key, value));
+        insert(key, value);
         return true;
     }
 
     bool get(const K &key, V *v)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto it : table[hash])
+        u64 hash = hash_key(key);
+        for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
-            if (it.key == key)
+            if (it->content.key == key)
             {
-                *v = it.value;
+                *v = it->content.value;
                 return true;
             }
         }
@@ -99,72 +219,158 @@ template <typename K, typename V> class hash_map
 
     bool has(const K &key)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto it : table[hash])
+        u64 hash = hash_key(key);
+        for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
-            if (it.key == key)
-                return true;
+            if (it->content.key == key)
+                return false;
         }
         return false;
     }
 
     int key_count(const K &key)
     {
-        u64 hash = try_hash(key) % capacity;
+        u64 hash = hash_key(key);
         int i = 0;
-        for (auto it : table[hash])
+        for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
-            if (it.key == key)
-            {
+            if (it->content.key == key)
                 i++;
-            }
         }
         return i;
     }
 
     void remove(const K &key)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto it = table[hash].begin(); it != table[hash].end();)
+        u64 hash = hash_key(key);
+
+        node_t *prev = nullptr;
+        for (auto it = table[hash].next; it != nullptr;)
         {
-            if (it->key == key)
+            if (it->content.key == key)
             {
-                it = table[hash].remove(it);
+                auto cur_node = it;
+                it = it->next;
+
+                if (likely(prev))
+                    prev->next = it;
+                else
+                    table[hash].next = it;
+                memory::Delete<>(allocator, cur_node);
+                continue;
             }
-            else
-                ++it;
+            prev = it;
+            it = it->next;
         }
     }
 
-    void remove_once(K key)
+    void remove_once(const K &key)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto it = table[hash].begin(); it != table[hash].end();)
+        u64 hash = hash_key(key);
+        node_t *prev = nullptr;
+        for (auto it = table[hash].next; it != nullptr;)
         {
-            if (it->key == key)
+            if (it->content.key == key)
             {
-                table[hash].remove(it);
+                auto cur_node = it;
+                it = it->next;
+
+                if (likely(prev))
+                    prev->next = it;
+                else
+                    table[hash].next = it;
+                memory::Delete<>(allocator, cur_node);
                 return;
             }
-            else
-                ++it;
+            prev = it;
+            it = it->next;
         }
     }
 
     map_helper operator[](const K &key)
     {
-        u64 hash = try_hash(key) % capacity;
-        for (auto &it : table[hash])
+        u64 hash = hash_key(key);
+        for (auto it = table[hash].next; it != nullptr;)
         {
-            if (it.key == key)
+            if (it->content.key == key)
             {
-                return map_helper(&it);
+                return map_helper(it);
             }
         }
-        return map_helper(&table[hash].push_front(entry(key, V())));
+
+        return map_helper(insert(key, V()).node);
     }
 
     u64 size() const { return count; }
+
+    void clear()
+    {
+        for (u64 i = 0; i < capacity; i++)
+        {
+            for (auto it = table[i].next; it != nullptr;)
+            {
+                auto n = it;
+                it = it->next;
+                memory::Delete<>(allocator, n);
+            }
+            table[i].next = nullptr;
+        }
+        count = 0;
+    }
+
+    void shrink(u64 new_capacity)
+    {
+        if (new_capacity > capacity)
+        {
+            return;
+        }
+
+        if (new_capacity > threshold)
+        {
+            new_capacity = threshold;
+        }
+        if (new_capacity < 2)
+        {
+            new_capacity = 2;
+        }
+
+        auto new_table =
+            (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * new_capacity, alignof(entry));
+        util::memzero(table, sizeof(entry) * new_capacity);
+
+        recapcity(new_table, new_capacity);
+    }
+
+    void expand(u64 new_capacity)
+    {
+        if (new_capacity < capacity)
+        {
+            return;
+        }
+
+        auto new_table =
+            (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * new_capacity, alignof(entry));
+        util::memzero(table, sizeof(entry) * new_capacity);
+
+        recapcity(new_table, new_capacity);
+    }
+
+    iterator begin()
+    {
+        auto table = this->table;
+        auto node = this->table->next;
+        if (!node)
+        {
+            while (!table->next)
+            {
+                table++;
+            }
+            node = table->next;
+        }
+        return iterator(table, node);
+    }
+
+    iterator end() { return iterator(table + capacity, nullptr); }
 };
 
 // template <typename K> using hash_set = hash_map<K, std::void_t>;

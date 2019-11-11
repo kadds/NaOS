@@ -17,7 +17,12 @@ struct console_attribute;
 namespace task
 {
 
-using file_map_t = util::hash_map<file_desc, fs::vfs::file *>;
+struct hash_file_desc
+{
+    u64 operator()(const file_desc &fd) { return fd; }
+};
+
+using file_map_t = util::hash_map<file_desc, fs::vfs::file *, hash_file_desc>;
 
 struct resource_table_t
 {
