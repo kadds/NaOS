@@ -3,39 +3,65 @@
 namespace task
 {
 const u64 file_id_table[] = {128, 4096, 65536};
-resource_table_t::resource_table_t()
-    : console_attribute(nullptr)
-    , file_map(memory::KernelMemoryAllocatorV)
+
+file_table::file_table()
+    : file_map(memory::KernelMemoryAllocatorV)
     , id_gen(file_id_table)
 {
 }
 
+resource_table_t::resource_table_t(file_table *ft)
+    : console_attribute(nullptr)
+
+{
+    if (ft != nullptr)
+    {
+        f_table = ft;
+    }
+    else
+    {
+        f_table = memory::New<file_table>(memory::KernelCommonAllocatorV);
+    }
+
+    void copy_file_table(file_table * raw_ft);
+}
+
+resource_table_t::~resource_table_t() {}
+
+void resource_table_t::copy_file_table(file_table *raw_ft)
+{
+    if (f_table == nullptr)
+    {
+        return;
+    }
+}
+
 file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
 {
-    auto id = id_gen.next();
-    file_map[id] = file;
+    auto id = f_table->id_gen.next();
+    f_table->file_map[id] = file;
     return id;
 }
 
 void resource_table_t::delete_file_desc(file_desc fd)
 {
-    id_gen.collect(fd);
-    file_map.remove_once(fd);
-    file_map[fd] = nullptr;
+    f_table->id_gen.collect(fd);
+    f_table->file_map.remove_once(fd);
+    f_table->file_map[fd] = nullptr;
 }
 
 fs::vfs::file *resource_table_t::get_file(file_desc fd)
 {
     fs::vfs::file *f = nullptr;
-    file_map.get(fd, &f);
+    f_table->file_map.get(fd, &f);
     return f;
 }
 
 void resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
 {
-    if (file_map.has(fd))
+    if (f_table->file_map.has(fd))
     {
-        file_map[fd] = file;
+        f_table->file_map[fd] = file;
     }
 }
 

@@ -1,10 +1,8 @@
 #pragma once
 #include "common.hpp"
+#include "defines.hpp"
 namespace fs::vfs
 {
-class file_system;
-class dentry;
-
 void init();
 int register_fs(file_system *fs);
 int unregister_fs(file_system *fs);
@@ -13,29 +11,7 @@ file_system *get_file_system(const char *name);
 bool mount(file_system *fs, const char *path);
 bool umount(file_system *fs);
 
-class file;
-
-namespace mode
-{
-// open file mode
-enum mode : flag_t
-{
-    read = 1,
-    write = 2,
-    bin = 4,
-    append = 8,
-};
-} // namespace mode
-
 // create file attribute,
-namespace attribute
-{
-enum attribute : flag_t
-{
-    auto_create_file = 1,
-    auto_create_dir_rescure = 2,
-};
-} // namespace attribute
 
 dentry *path_walk(const char *name, dentry *root, flag_t create_attribute);
 

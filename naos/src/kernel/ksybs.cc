@@ -27,7 +27,7 @@ header *file_header = nullptr;
 void init()
 {
     trace::debug("kernel symbols init...");
-    auto f = fs::vfs::open("/data/ksybs", fs::vfs::mode::read | fs::vfs::mode::bin, 0);
+    auto f = fs::vfs::open("/data/ksybs", fs::mode::read | fs::mode::bin, 0);
     if (f == nullptr)
     {
         trace::info("Can't load kernel symbols.");

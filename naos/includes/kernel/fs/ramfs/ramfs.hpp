@@ -5,6 +5,7 @@
 #include "kernel/fs/vfs/file_system.hpp"
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
+#include "kernel/util/hash_map.hpp"
 
 namespace fs::ramfs
 {
@@ -21,31 +22,10 @@ class inode : public vfs::inode
 {
     friend class super_block;
     friend class file;
-
-  private:
-    enum node_type
-    {
-        file,
-        directory,
-        other,
-    };
-    node_type type;
     byte *start_ptr;
     u64 ram_size;
 
   public:
-    // create file at fisk
-    void create(vfs::dentry *entry, vfs::nameidata *idata) override;
-    // remove file in disk
-    void remove() override;
-
-    bool has_permission(flag_t pf) override { return true; };
-
-    void mkdir(vfs::dentry *entry) override;
-    void rename(vfs::dentry *old_entry, vfs::dentry *new_entry) override;
-    void rmdir() override;
-
-    u64 hash() override { return 0; }
 };
 
 class file : public vfs::file
@@ -70,7 +50,10 @@ class file_system : public vfs::file_system
     virtual bool load(const char *device_name, byte *data, u64 size) override;
     void unload() override;
 };
-
+struct member_hash
+{
+    u64 operator()(u64 i) { return i; }
+};
 class super_block : public vfs::super_block
 {
   private:
@@ -78,6 +61,8 @@ class super_block : public vfs::super_block
     u64 block_size;
     u64 max_ram_size;
     u64 current_ram_used;
+    util::hash_map<u64, inode *, member_hash> inode_map;
+    int last_inode_index;
 
   public:
     super_block(u64 max_ram_size);
@@ -90,6 +75,7 @@ class super_block : public vfs::super_block
     void save_dentry(vfs::dentry *entry) override;
 
     void write_inode(vfs::inode *node) override;
+    vfs::inode *get_inode(u64 node_index);
 
     file *alloc_file() override;
     void dealloc_file(vfs::file *f) override;

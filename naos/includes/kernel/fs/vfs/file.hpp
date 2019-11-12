@@ -17,8 +17,8 @@ class file
         , ref_count(0){};
     virtual ~file() = default;
 
-    virtual int open(dentry *entry, flag_t mode) = 0;
-    virtual int close() = 0;
+    virtual int open(dentry *entry, flag_t mode);
+    virtual int close();
 
     void add_ref() { ref_count++; }
     void remove_ref() { ref_count--; }

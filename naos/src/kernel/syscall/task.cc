@@ -21,7 +21,7 @@ void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
 process_id create_process(const char *filename, const char *args, u64 flags)
 {
-    auto file = fs::vfs::open(filename, fs::vfs::mode::read | fs::vfs::mode::bin, flags);
+    auto file = fs::vfs::open(filename, fs::mode::read | fs::mode::bin, flags);
     auto p = task::create_process(file, user_process_thread, 0, args, 0, 0);
     if (p)
     {

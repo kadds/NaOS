@@ -223,6 +223,7 @@ template <typename E> class singly_linked_list
     {
         head->next = (list_node *)tail;
         tail->next = nullptr;
+        back_node = (list_node *)head;
     };
 
     ~singly_linked_list()
@@ -243,6 +244,7 @@ template <typename E> class singly_linked_list
     {
         head->next = (list_node *)tail;
         tail->next = nullptr;
+        back_node = (list_node *)head;
 
         auto iter = l.begin();
         while (iter != l.end())
@@ -270,6 +272,7 @@ template <typename E> class singly_linked_list
         tail = memory::New<list_info_node>(allocator);
         head->next = (list_node *)tail;
         tail->next = nullptr;
+        back_node = (list_node *)head;
         node_count = 0;
 
         auto iter = l.begin();

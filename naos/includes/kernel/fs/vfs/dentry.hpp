@@ -1,17 +1,16 @@
 #pragma once
 #include "common.hpp"
+#include "defines.hpp"
 #include "kernel/mm/list_node_cache.hpp"
-#include "kernel/util/linked_list.hpp"
+#include "kernel/util/singly_linked_list.hpp"
 
 namespace fs::vfs
 {
-class inode;
-class dentry;
 
 class dentry
 {
   public:
-    using dentry_list_t = util::linked_list<dentry *>;
+    using dentry_list_t = util::singly_linked_list<dentry *>;
     using dentry_list_node_allocator_t = memory::list_node_cache_allocator<dentry_list_t>;
 
   protected:

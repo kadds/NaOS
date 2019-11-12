@@ -4,6 +4,15 @@
 
 namespace fs::vfs
 {
+int file::open(dentry *entry, flag_t mode)
+{
+    this->entry = entry;
+    this->mode = mode;
+    return 0;
+}
+
+int file::close() { remove_ref(); }
+
 void file::seek(i64 offset) { pointer_offset += offset; }
 
 void file::move(i64 where) { pointer_offset = where; }

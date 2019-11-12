@@ -39,8 +39,8 @@ void init(byte *start_root_image, u64 size)
             int len = util::strlen(file_name);
             u64 data_size = *(u64 *)(start_of_file + len + 1);
             byte *data = start_of_file + len + 1 + sizeof(u64);
-            auto file = vfs::open(file_name, vfs::mode::write | vfs::mode::bin,
-                                  vfs::attribute::auto_create_file | vfs::attribute::auto_create_dir_rescure);
+            auto file = vfs::open(file_name, mode::write | mode::bin,
+                                  attribute::auto_create_file | attribute::auto_create_dir_rescure);
             file->write(data, data_size);
             vfs::close(file);
 
@@ -50,23 +50,6 @@ void init(byte *start_root_image, u64 size)
             trace::panic("rfsimg has incorrect content!");
     }
 }
-
-file *super_block::alloc_file() { return memory::New<file>(memory::KernelCommonAllocatorV); }
-
-void super_block::dealloc_file(vfs::file *f) { memory::Delete(memory::KernelCommonAllocatorV, f); }
-
-inode *super_block::alloc_inode()
-{
-    inode *i = memory::New<inode>(memory::KernelCommonAllocatorV);
-    i->set_super_block(this);
-    return i;
-}
-
-void super_block::dealloc_inode(vfs::inode *node) { memory::Delete(memory::KernelCommonAllocatorV, node); }
-
-dentry *super_block::alloc_dentry() { return memory::New<dentry>(memory::KernelCommonAllocatorV); }
-
-void super_block::dealloc_dentry(vfs::dentry *entry) { memory::Delete(memory::KernelCommonAllocatorV, entry); }
 
 file_system::file_system()
     : ramfs::file_system("rootfs", 1)

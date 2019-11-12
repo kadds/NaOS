@@ -110,7 +110,7 @@ void delete_file(dentry *entry)
     super_block *su_block = entry->get_inode()->get_super_block();
 
     entry->get_parent()->remove_sub_file(entry);
-    entry->get_inode()->remove();
+    entry->get_inode()->unlink(entry);
     su_block->dealloc_inode(entry->get_inode());
     su_block->dealloc_dentry(entry);
 }

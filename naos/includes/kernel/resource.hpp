@@ -1,13 +1,11 @@
 #pragma once
-#include "kernel/mm/new.hpp"
+#include "fs/vfs/defines.hpp"
+#include "lock.hpp"
+#include "mm/new.hpp"
 #include "types.hpp"
 #include "util/hash_map.hpp"
 #include "util/id_generator.hpp"
-
-namespace fs::vfs
-{
-class file;
-}
+#include <atomic>
 namespace trace
 {
 struct console_attribute;
@@ -24,15 +22,29 @@ struct hash_file_desc
 
 using file_map_t = util::hash_map<file_desc, fs::vfs::file *, hash_file_desc>;
 
+struct file_table
+{
+    std::atomic_int64_t count;
+    lock::spinlock_t lock;
+    file_map_t file_map;
+    util::id_level_generator<3> id_gen;
+    fs::vfs::dentry *root, *current;
+
+    file_table();
+};
+
 struct resource_table_t
 {
   private:
     trace::console_attribute *console_attribute;
-    file_map_t file_map;
-    util::id_level_generator<3> id_gen;
+    file_table *f_table;
 
   public:
-    resource_table_t();
+    resource_table_t(file_table *ft = nullptr);
+    ~resource_table_t();
+
+    void copy_file_table(file_table *raw_ft);
+
     file_desc new_file_desc(fs::vfs::file *);
     void delete_file_desc(file_desc fd);
     fs::vfs::file *get_file(file_desc fd);
