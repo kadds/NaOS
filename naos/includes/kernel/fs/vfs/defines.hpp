@@ -1,6 +1,6 @@
 #pragma once
+#include "../../types.hpp"
 #include "common.hpp"
-
 namespace fs
 {
 namespace permission_flags
@@ -21,6 +21,17 @@ enum permission : flag_t
 };
 } // namespace permission_flags
 
+namespace access_flags
+{
+enum access_flags : flag_t
+{
+    exec = 1,
+    write = 2,
+    read = 4,
+    exist = 8,
+};
+} // namespace access_flags
+
 namespace mode
 {
 // open file mode
@@ -39,6 +50,9 @@ enum attribute : flag_t
 {
     auto_create_file = 1,
     auto_create_dir_rescure = 2,
+    parent = 4,
+    not_symlink = 8,
+
 };
 } // namespace attribute
 
@@ -59,5 +73,10 @@ class file_system;
 struct nameidata;
 class super_block;
 } // namespace vfs
+
+struct dirstream
+{
+    file_desc fd;
+};
 
 } // namespace fs

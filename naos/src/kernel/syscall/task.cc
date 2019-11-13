@@ -21,7 +21,17 @@ void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
 process_id create_process(const char *filename, const char *args, u64 flags)
 {
-    auto file = fs::vfs::open(filename, fs::mode::read | fs::mode::bin, flags);
+    if (!is_user_space_pointer(filename))
+    {
+        return -1;
+    }
+    if (!is_user_space_pointer(args))
+    {
+        return -1;
+    }
+
+    auto file = fs::vfs::open(filename, task::current_process()->res_table.get_file_table()->root,
+                              fs::mode::read | fs::mode::bin, flags);
     auto p = task::create_process(file, user_process_thread, 0, args, 0, 0);
     if (p)
     {
@@ -37,6 +47,10 @@ void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
 thread_id create_thread(void *entry, u64 arg, u64 flags)
 {
+    if (!is_user_space_pointer(entry))
+    {
+        return -1;
+    }
     if ((u64)entry >= (u64)base_virtual_addr) /// in kernel space
     {
         return -2;

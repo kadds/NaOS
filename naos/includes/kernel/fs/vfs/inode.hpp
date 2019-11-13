@@ -12,9 +12,16 @@ class inode
   protected:
     u64 file_size;
     u64 index;
+    /// hard link count
     u64 link_count;
     u64 ref_count;
     super_block *su_block;
+    time::microsecond_t last_read_time;
+    time::microsecond_t last_write_time;
+    time::microsecond_t last_attr_change_time;
+    time::microsecond_t birth_time;
+    user_id owner;
+    group_id group;
 
   public:
     inode() = default;
@@ -22,7 +29,7 @@ class inode
     // create file in disk
     virtual void create(dentry *entry, nameidata *idata);
 
-    virtual bool has_permission(flag_t pf);
+    virtual bool has_permission(flag_t pf, user_id uid, group_id gid);
 
     virtual void mkdir(dentry *entry);
     virtual void rmdir();
@@ -43,5 +50,26 @@ class inode
 
     void set_index(u64 index) { this->index = index; }
     u64 get_index() const { return index; }
+
+    time::microsecond_t get_last_read_time() { return last_read_time; }
+    time::microsecond_t get_last_write_time() { return last_write_time; }
+    time::microsecond_t get_last_attr_change_time() { return last_attr_change_time; }
+
+    time::microsecond_t get_birth_time() { return birth_time; }
+
+    void update_last_read_time();
+    void update_last_write_time();
+    void update_last_attr_change_time();
+
+    user_id get_owner() { return owner; }
+    group_id get_group() { return group; }
+
+    void set_owner(user_id uid) { this->owner = uid; }
+    void set_group(group_id gid) { this->group = gid; };
+    void set_owner_group(user_id uid, group_id gid)
+    {
+        this->owner = uid;
+        this->group = gid;
+    }
 };
 } // namespace fs::vfs

@@ -46,9 +46,9 @@ class file : public vfs::file
 class file_system : public vfs::file_system
 {
   public:
-    file_system(const char *fsname = "ramfs", int version = 1);
-    virtual bool load(const char *device_name, byte *data, u64 size) override;
-    void unload() override;
+    file_system(const char *fsname = "ramfs");
+    virtual vfs::super_block *load(const char *device_name, byte *data, u64 size) override;
+    void unload(vfs::super_block *block) override;
 };
 struct member_hash
 {
@@ -65,7 +65,7 @@ class super_block : public vfs::super_block
     int last_inode_index;
 
   public:
-    super_block(u64 max_ram_size);
+    super_block(u64 max_ram_size, file_system *fs);
 
     void load() override;
     void save() override;

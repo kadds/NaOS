@@ -8,6 +8,7 @@ namespace fs::vfs
 {
 dentry::dentry()
     : loaded_child(false)
+    , mount_point(false)
     , child_dir_list(memory::KernelCommonAllocatorV)
     , child_file_list(memory::KernelCommonAllocatorV)
 

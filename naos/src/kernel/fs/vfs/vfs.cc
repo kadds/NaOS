@@ -82,9 +82,7 @@ dentry *mkdir(dentry *parent, const char *name)
     util::memcopy(cname, (const void *)name, util::strlen(name) + 1);
     entry->set_name(cname);
     inode *node = su_block->alloc_inode();
-    entry->set_inode(node);
     node->mkdir(entry);
-    node->set_type(inode_type_t::directory);
     entry->set_parent(parent);
     parent->add_sub_dir(entry);
     return entry;
@@ -96,10 +94,7 @@ dentry *create_file(dentry *parent, const char *name, nameidata *idata)
     dentry *entry = su_block->alloc_dentry();
     entry->set_name(name);
     inode *node = su_block->alloc_inode();
-    entry->set_inode(node);
     node->create(entry, idata);
-    node->set_type(inode_type_t::file);
-
     entry->set_parent(parent);
     parent->add_sub_file(entry);
     return entry;
@@ -214,13 +209,19 @@ dentry *path_walk(const char *name, dentry *root, flag_t create_attribute)
     return nullptr;
 }
 
-bool mount(file_system *fs, const char *path)
+bool mount(file_system *fs, const char *dev, const char *path)
 {
     if (util::strcmp(path, "/") == 0)
     {
+        if (global_root != nullptr)
+        {
+            trace::panic("Mount point \"/\" has been mount.");
+        }
         // mount global root
-        global_root = fs->get_super_block()->get_root();
-        data->mount_list.push_back(mount_t("/", nullptr));
+        auto su_block = fs->load(dev, 0, 0);
+        mount_t mnt("/", nullptr, nullptr, su_block);
+        global_root = su_block->get_root();
+        data->mount_list.push_back(mnt);
     }
     else
     {
@@ -231,45 +232,52 @@ bool mount(file_system *fs, const char *path)
         dentry *dir = path_walk(path, global_root, 0);
         if (unlikely(dir == nullptr))
         {
-            trace::info("Mount point doesn't exist.");
+            trace::warning("Mount point doesn't exist.");
             return false;
         }
-        data->mount_list.push_back(mount_t(path, dir));
+        auto su_block = fs->load(dev, 0, 0);
+        /// TODO: copy dev string
+        mount_t mnt(path, dev, dir, su_block);
 
-        auto new_root = fs->get_super_block()->get_root();
+        data->mount_list.push_back(mnt);
+
+        auto new_root = su_block->get_root();
         new_root->set_parent(dir->get_parent());
-        dir = new_root;
+        new_root->set_mount_point();
+        dir->get_parent()->remove_sub_dir(dir);
+        dir->get_parent()->add_sub_dir(new_root);
     }
     return true;
 }
 
-bool umount(file_system *fs)
+bool umount(const char *path)
 {
-    for (auto &mnt : data->mount_list)
-    {
-        if (mnt.su_block == fs->get_super_block())
-        {
-            dentry *now = path_walk(mnt.mount_point, global_root, 0);
+    dentry *dir = path_walk(path, global_root, 0);
+    auto sb = dir->get_inode()->get_super_block();
 
-            if (mnt.root == nullptr)
+    for (auto mnt = data->mount_list.begin(); mnt != data->mount_list.end(); ++mnt)
+    {
+        if (mnt->su_block == sb)
+        {
+            if (mnt->mount_entry != nullptr)
             {
-                global_root = mnt.root;
+                global_root = mnt->mount_entry;
             }
             else
             {
-                now = mnt.root;
             }
+            data->mount_list.remove(mnt);
 
             return true;
         }
     }
-    trace::info("File system ", fs->get_name(), " doesn't mounted.");
+    trace::info("File system ", sb->get_file_system()->get_name(), " doesn't mounted.");
     return false;
 }
 
-file *open(const char *filepath, flag_t mode, flag_t attr)
+file *open(const char *filepath, dentry *root, flag_t mode, flag_t attr)
 {
-    dentry *entry = path_walk(filepath, global_root, attr);
+    dentry *entry = path_walk(filepath, root, attr);
     if (entry == nullptr)
         return nullptr;
     file *f = entry->get_inode()->get_super_block()->alloc_file();
@@ -277,11 +285,7 @@ file *open(const char *filepath, flag_t mode, flag_t attr)
     return f;
 }
 
-void close(file *f)
-{
-    f->close();
-    f->get_entry()->get_inode()->get_super_block()->dealloc_file(f);
-}
+void close(file *f) { f->close(); }
 
 void delete_file(const char *file)
 {
@@ -297,19 +301,32 @@ void rename(const char *new_dir, const char *old_dir)
     rename(new_dir, entry);
 }
 
-void mkdir(const char *dir, flag_t attr)
+bool mkdir(const char *dir, flag_t attr)
 {
     attr &= ~attribute::auto_create_file;
-    path_walk(dir, global_root, attr);
+    attr |= attribute::auto_create_dir_rescure;
+    dentry *e = path_walk(dir, global_root, attr);
+    return e != nullptr;
 }
 
-void rmdir(const char *dir)
+bool rmdir(const char *dir)
 {
     dentry *entry = path_walk(dir, global_root, 0);
     if (entry == nullptr)
-        return;
+        return false;
     rmdir(entry);
+    return true;
 }
+
+bool access(const char *pathname, flag_t mode)
+{
+    dentry *entry = path_walk(pathname, global_root, 0);
+    if (entry == nullptr)
+        return false;
+    return entry->get_inode()->has_permission(permission_flags::read, 0, 0);
+}
+
+u64 pathname(dentry *root, dentry *current, char *path, u64 max_len) { return 0; }
 
 u64 size(file *f) { return f->get_entry()->get_inode()->get_size(); }
 

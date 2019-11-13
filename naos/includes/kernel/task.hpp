@@ -126,6 +126,11 @@ enum create_process_flags : flag_t
     noreturn = 1,
     binary_file = 2,
     kernel_process = 4,
+
+    shared_files = 8,
+    no_shared_root = 16,
+    shared_work_dir = 32,
+    shared_file_table = 64,
 };
 } // namespace create_process_flags
 

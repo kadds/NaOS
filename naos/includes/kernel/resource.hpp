@@ -40,10 +40,16 @@ struct resource_table_t
     file_table *f_table;
 
   public:
+    char **args;
+    int argc;
+    char *env;
+
+  public:
     resource_table_t(file_table *ft = nullptr);
     ~resource_table_t();
 
     void copy_file_table(file_table *raw_ft);
+    file_table *get_file_table() { return f_table; }
 
     file_desc new_file_desc(fs::vfs::file *);
     void delete_file_desc(file_desc fd);

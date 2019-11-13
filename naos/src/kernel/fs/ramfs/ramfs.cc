@@ -46,27 +46,27 @@ u64 file::read(byte *buffer, u64 max_size)
     return max_size;
 }
 
-file_system::file_system(const char *fsname, int version)
-    : vfs::file_system(fsname, version)
+file_system::file_system(const char *fsname)
+    : vfs::file_system(fsname)
 {
 }
 
-bool file_system::load(const char *device_name, byte *data, u64 size)
+vfs::super_block *file_system::load(const char *device_name, byte *data, u64 size)
 {
-    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, size);
-    this->su_block = su_block;
+    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, size, this);
     su_block->load();
-    return true;
+    return su_block;
 }
 
-void file_system::unload()
+void file_system::unload(vfs::super_block *su_block)
 {
     su_block->save();
     memory::Delete<>(memory::KernelCommonAllocatorV, su_block);
 }
 
-super_block::super_block(u64 max_ram_size)
-    : block_size(memory::page_size)
+super_block::super_block(u64 max_ram_size, file_system *fs)
+    : vfs::super_block(fs)
+    , block_size(memory::page_size)
     , max_ram_size(max_ram_size)
     , current_ram_used(0)
     , inode_map(memory::KernelMemoryAllocatorV, 20, 500)

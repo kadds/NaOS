@@ -3,6 +3,7 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/formatter.hpp"
+#include <initializer_list>
 #include <type_traits>
 
 namespace trace
@@ -435,17 +436,14 @@ auto dispatch(console_attribute &attribute, const Head &head)
 
 template <typename Head> void print_fmt(console_attribute &attribute, const Head &head) { dispatch(attribute, head); }
 
-template <typename Head, typename... Args>
-void print_fmt(console_attribute &attribute, const Head &head, const Args &... args)
-{
-    dispatch(attribute, head);
-    print_fmt(attribute, args...);
-}
-
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 template <typename... Args> void print(console_attribute &current_attribute, const Args &... args)
 {
-    print_fmt(current_attribute, args...);
+    auto i = std::initializer_list<int>{(print_fmt(current_attribute, args), 0)...};
 }
+#pragma GCC diagnostic pop
 
 NoReturn void keep_panic(const arch::idt::regs_t *regs = 0);
 

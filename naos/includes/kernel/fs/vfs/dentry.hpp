@@ -19,7 +19,7 @@ class dentry
     inode *node;
     dentry *parent;
     bool loaded_child;
-    bool mounted;
+    bool mount_point;
 
     dentry_list_t child_dir_list;
     dentry_list_t child_file_list;
@@ -39,6 +39,10 @@ class dentry
 
     void set_name(const char *name);
     const char *get_name() const;
+
+    void clean_mount_point() { mount_point = false; }
+    void set_mount_point() { mount_point = true; }
+    bool is_mount_point() { return mount_point; }
 
     bool is_load_child() const { return loaded_child; }
     void set_loaded(bool has_load) { loaded_child = has_load; }

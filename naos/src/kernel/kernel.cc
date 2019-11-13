@@ -55,14 +55,12 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     trace::debug("VFS init...");
     fs::vfs::init();
     trace::debug("Root file system init...");
+    timer::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();
 
     task::init();
     trace::info("kernel main");
-
-    timer::init();
-
     arch::last_init();
     task::start_task_idle(args);
     trace::panic("Unreachable control flow in _kstart.");

@@ -1,10 +1,8 @@
 #pragma once
 #include "common.hpp"
+#include "defines.hpp"
 namespace fs::vfs
 {
-class dentry;
-class inode;
-class file;
 
 class super_block
 {
@@ -13,9 +11,12 @@ class super_block
     const char *name;
     u64 block_size;
     dentry *root;
+    file_system *fs;
 
   public:
-    super_block() = default;
+    super_block(file_system *fs)
+        : fs(fs){};
+
     virtual ~super_block() = default;
     dentry *get_root() { return root; };
 
@@ -34,5 +35,7 @@ class super_block
     virtual void dealloc_inode(inode *node) = 0;
     virtual dentry *alloc_dentry() = 0;
     virtual void dealloc_dentry(dentry *entry) = 0;
+
+    file_system *get_file_system() { return fs; }
 };
 } // namespace fs::vfs

@@ -8,19 +8,15 @@ class file_system
 {
   protected:
     const char *name;
-    int version;
-    super_block *su_block;
 
   public:
-    file_system(const char *name, int version)
-        : name(name)
-        , version(version){};
+    file_system(const char *name)
+        : name(name){};
 
     virtual ~file_system(){};
 
     const char *get_name() { return name; }
-    super_block *get_super_block() { return su_block; };
-    virtual bool load(const char *device_name, byte *data, u64 size) = 0;
-    virtual void unload() = 0;
+    virtual super_block *load(const char *device_name, byte *data, u64 size) = 0;
+    virtual void unload(super_block *su_block) = 0;
 };
 } // namespace fs::vfs

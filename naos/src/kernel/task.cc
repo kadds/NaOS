@@ -189,6 +189,8 @@ void init()
     // init for kernel process
     process_t *process = new_kernel_process();
     process->parent_pid = 0;
+    process->res_table.get_file_table()->root = fs::vfs::global_root;
+    process->res_table.get_file_table()->current = fs::vfs::global_root;
 
     thread_t *thd = new_thread(process);
     thd->state = thread_state::running;
@@ -235,6 +237,23 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
         return nullptr;
 
     process->parent_pid = current_process()->pid;
+    if (unlikely(flags & create_process_flags::no_shared_root))
+    {
+        process->res_table.get_file_table()->root = fs::vfs::global_root;
+    }
+    else
+    {
+        process->res_table.get_file_table()->root = current_process()->res_table.get_file_table()->root;
+    }
+
+    if (unlikely(flags & create_process_flags::shared_work_dir))
+    {
+        process->res_table.get_file_table()->current = current_process()->res_table.get_file_table()->current;
+    }
+    else
+    {
+        process->res_table.get_file_table()->current = file->get_entry();
+    }
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
@@ -258,15 +277,20 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
 
     /// create thread
     thread_t *thd = new_thread(process);
+    if (!thd)
+        return nullptr;
+
     thd->state = thread_state::ready;
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
+
+    /// TODO: cast args, env
+
     arch::task::create_thread(thd, (void *)start_func, arg0, (u64)args, (u64)env, (u64)exec_info.entry_start_address);
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
-
     vm_paging.sync_kernel();
 
     scheduler::add(thd);
@@ -323,8 +347,15 @@ void do_exit(u64 value)
 {
     thread_t *thd = current();
     thd->register_info->trap_vector = value;
-    thd->attributes = thread_attributes::need_schedule;
+    thd->attributes |= thread_attributes::need_schedule;
     thd->state = thread_state::stop;
+    scheduler::remove(thd);
+    scheduler::schedule();
+    for (;;)
+    {
+        thd->attributes |= thread_attributes::need_schedule;
+        scheduler::schedule();
+    }
 }
 
 void destroy_thread(thread_t *thread)

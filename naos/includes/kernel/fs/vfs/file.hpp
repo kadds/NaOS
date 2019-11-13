@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "defines.hpp"
 namespace fs::vfs
 {
 class dentry;

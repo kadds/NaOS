@@ -5,6 +5,7 @@
 #include "task.hpp"
 extern volatile char base_virtual_addr[];
 extern volatile char base_phy_addr[];
+
 extern volatile char _file_start[];
 
 extern volatile char _start_of_kernel_data[];
@@ -69,3 +70,18 @@ inline static u64 get_stack()
 }
 
 void *print_stack(const arch::idt::regs_t *regs, int max_depth);
+
+constexpr u64 maximum_user_addr = 0x7FFFFFFFFFFFFUL;
+constexpr u64 minimum_user_addr = 0UL;
+constexpr u64 maximum_kernel_addr = 0xFFF800000000UL;
+constexpr u64 minimum_kernel_addr = 0xFFFFFFFFFFFFUL;
+
+template <typename T> static inline bool is_user_space_pointer(T ptr)
+{
+    return (u64)ptr >= minimum_user_addr && (u64)ptr <= maximum_user_addr;
+}
+
+template <typename T> static inline bool is_kernel_space_pointer(T ptr)
+{
+    return (u64)ptr >= minimum_kernel_addr && (u64)ptr <= maximum_kernel_addr;
+}

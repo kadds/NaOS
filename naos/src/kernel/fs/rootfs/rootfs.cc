@@ -25,7 +25,7 @@ void init(byte *start_root_image, u64 size)
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
     global_root_file_system->load(nullptr, start_root_image, size);
-    vfs::mount(global_root_file_system, "/");
+    vfs::mount(global_root_file_system, nullptr, "/");
     rootfs_head *head = (rootfs_head *)start_root_image;
     if (head->magic != 0xF5EEEE5F)
         trace::panic("rfsimg magic head is invalid");
@@ -39,7 +39,7 @@ void init(byte *start_root_image, u64 size)
             int len = util::strlen(file_name);
             u64 data_size = *(u64 *)(start_of_file + len + 1);
             byte *data = start_of_file + len + 1 + sizeof(u64);
-            auto file = vfs::open(file_name, mode::write | mode::bin,
+            auto file = vfs::open(file_name, vfs::global_root, mode::write | mode::bin,
                                   attribute::auto_create_file | attribute::auto_create_dir_rescure);
             file->write(data, data_size);
             vfs::close(file);
@@ -52,18 +52,18 @@ void init(byte *start_root_image, u64 size)
 }
 
 file_system::file_system()
-    : ramfs::file_system("rootfs", 1)
+    : ramfs::file_system("rootfs")
 {
 }
 
-bool file_system::load(const char *device_name, byte *data, u64 size)
+vfs::super_block *file_system::load(const char *device_name, byte *data, u64 size)
 {
-    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV);
-    this->su_block = su_block;
+    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, this);
     su_block->load();
-    return true;
+    return su_block;
 }
-void file_system::unload()
+
+void file_system::unload(vfs::super_block *su_block)
 {
     su_block->save();
     memory::Delete<>(memory::KernelCommonAllocatorV, su_block);

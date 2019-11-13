@@ -115,7 +115,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
     void recapcity(entry *new_table, u64 new_capacity)
     {
-        for (auto i = 0; i < capacity; i++)
+        for (u64 i = 0; i < capacity; i++)
         {
             for (auto it = table[i].next; it != nullptr;)
             {
