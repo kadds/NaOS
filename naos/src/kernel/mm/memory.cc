@@ -153,6 +153,11 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     }
     trace::info("Memory available ", max_memory_available, "byte -> ", max_memory_available >> 10, "Kib -> ",
                 max_memory_available >> 20, "Mib -> ", max_memory_available >> 30, "Gib");
+    // 16MB
+    if (max_memory_available < 0x1000000)
+    {
+        trace::panic("Too few memory to boot.");
+    }
 
     mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
 

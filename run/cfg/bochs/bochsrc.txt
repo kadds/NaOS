@@ -350,7 +350,7 @@ cpuid: x86_64=1, mmx=1, sep=1, simd=sse4_2, apic=x2apic, aes=0, movbe=1, xsave=1
 # used all allocated host memory and wants more.
 #
 #=======================================================================
-memory: guest=128, host=64
+memory: guest=24, host=24
 
 #=======================================================================
 # ROMIMAGE:

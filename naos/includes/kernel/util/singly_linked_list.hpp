@@ -72,14 +72,14 @@ template <typename E> class singly_linked_list
 
     iterator before_iterator(iterator start, iterator target)
     {
-        auto iter = start;
+        auto n = start.node;
         do
         {
-            auto next = iter;
-            if (++next == target)
+            if (n->next == target.node)
                 break;
+            n = n->next;
         } while (true);
-        return iter;
+        return iterator(n);
     }
 
   public:
@@ -161,19 +161,19 @@ template <typename E> class singly_linked_list
         return last;
     }
     /// insert node before parameter iter
-    iterator insert(iterator iter, const E &e) { insert_after(before_iterator((list_node *)head, iter), e); }
+    iterator insert(iterator iter, const E &e) { return insert_after(before_iterator((list_node *)head, iter), e); }
 
     iterator insert_after(iterator iter, const E &e)
     {
-        list_node *prev_node = *iter;
+        list_node *prev_node = iter.node;
         list_node *node = memory::New<list_node>(allocator, e);
 
         node->next = prev_node->next;
         prev_node->next = node;
 
-        if (iter->next->next == (list_node *)tail)
+        if (iter.node->next == (list_node *)tail)
         {
-            back_node = iter->next;
+            back_node = iter.node->next;
         }
 
         node_count++;
@@ -206,19 +206,22 @@ template <typename E> class singly_linked_list
 
     void clean()
     {
-        auto it = begin();
-        while (it != end())
+        auto node = ((list_node *)head)->next;
+        while (node != (list_node *)tail)
         {
-            auto cur = it++;
-            memory::Delete<>(allocator, *cur);
+            auto node2 = node->next;
+            memory::Delete<>(allocator, node);
+            node = node2;
         }
+        head->next = (list_node *)tail;
+        node_count = 0;
+        back_node = (list_node *)head;
     }
 
     singly_linked_list(memory::IAllocator *allocator)
         : allocator(allocator)
         , head(memory::New<list_info_node>(allocator))
         , tail(memory::New<list_info_node>(allocator))
-        , back_node(nullptr)
         , node_count(0)
     {
         head->next = (list_node *)tail;
@@ -241,6 +244,7 @@ template <typename E> class singly_linked_list
         : allocator(l.allocator)
         , head(memory::New<list_info_node>(allocator))
         , tail(memory::New<list_info_node>(allocator))
+        , node_count(0)
     {
         head->next = (list_node *)tail;
         tail->next = nullptr;

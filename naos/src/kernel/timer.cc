@@ -35,10 +35,11 @@ struct watcher_t
         , enable(true){};
 };
 
-using watcher_list_t = util::linked_list<watcher_t>;
+using watcher_list_t = util::array<watcher_t>;
+using tick_list_t = util::linked_list<watcher_t>;
 
 watcher_list_t *watcher_list;
-watcher_list_t *tick_list;
+tick_list_t *tick_list;
 lock::spinlock_t watcher_list_lock, tick_list_lock;
 
 void on_tick(u64 vector, u64 data)
@@ -90,7 +91,7 @@ void init()
     {
         uctx::UnInterruptableContext ctx;
         watcher_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-        tick_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        tick_list = memory::New<tick_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
         clock_sources =
             memory::New<clock_source_array_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
         clock_sources->push_back(arch::device::PIT::make_clock());

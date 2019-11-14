@@ -31,7 +31,7 @@ template <typename E> class array
         }
 
       public:
-        E operator*() { return *current; }
+        E &operator*() { return *current; }
         E *operator&() { return current; }
         E *operator->() { return current; }
 
@@ -57,7 +57,7 @@ template <typename E> class array
         count++;
         check_capacity();
         buffer[count - 1] = e;
-        return iterator(buffer[count]);
+        return iterator(buffer[count - 1]);
     }
 
     iterator push_front(const E &e) { return insert(0, e); }
@@ -78,22 +78,22 @@ template <typename E> class array
     }
 
     // insert before
-    void insert(u64 index, const E &e)
+    iterator insert(u64 index, const E &e)
     {
         count++;
         check_capacity();
-        for (u64 i = count; i > index; i--)
+        for (u64 i = count - 1; i > index; i--)
         {
             buffer[i] = buffer[i - 1];
         }
-        buffer[0] = e;
-        return begin();
+        buffer[index] = e;
+        return iterator(&buffer[index]);
     }
     /// insert before iter
-    void insert(iterator iter, const E &e)
+    iterator insert(iterator iter, const E &e)
     {
         u64 index = iter.current - buffer;
-        insert(index, e);
+        return insert(index, e);
     }
     /// remove at index
     iterator remove(int index)
@@ -104,7 +104,7 @@ template <typename E> class array
         }
         count--;
         check_capacity();
-        return iterator(buffer[index]);
+        return iterator(&buffer[index]);
     }
     /// remove current iter
     iterator remove(iterator iter)
@@ -117,9 +117,9 @@ template <typename E> class array
 
     u64 size() const { return count; }
 
-    iterator begin() const { return iterator(buffer[0]); }
+    iterator begin() const { return iterator(&buffer[0]); }
 
-    iterator end() const { return iterator(buffer[count]); }
+    iterator end() const { return iterator(&buffer[count]); }
 
     E front() const { return *begin(); }
     E back() const { return buffer[count - 1]; }
@@ -148,6 +148,9 @@ template <typename E> class array
         buffer = new_buffer;
         capacity = element_count;
     }
+
+    /// XXX: deconst
+    void clean() { count = 0; }
 
     void expand(u64 element_count)
     {
@@ -185,10 +188,10 @@ template <typename E> class array
         {
             expand(capacity * 3 / 2);
         }
-        else if (unlikely(count <= capacity * 2))
-        {
-            shrink(count);
-        }
+        // else if (unlikely(count <= capacity * 2))
+        // {
+        //     shrink(count);
+        // }
     }
 };
 
