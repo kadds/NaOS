@@ -8,42 +8,54 @@
 namespace syscall
 {
 
-bool access(const char *filepathname, flag_t mode) { return fs::vfs::access(filepathname, mode); }
-
-u64 mkdir(const char *pathname, u64 attr)
+bool access(const char *filepathname, flag_t mode)
 {
-    if (pathname != nullptr || !is_user_space_pointer(pathname))
+    if (filepathname == nullptr || !is_user_space_pointer(filepathname))
     {
-        return -1;
+        return false;
     }
-    if (fs::vfs::mkdir(pathname, attr))
-        return 0;
-
-    else
-        return 2;
+    auto &res = task::current_process()->res_table;
+    auto ft = res.get_file_table();
+    return fs::vfs::access(filepathname, ft->get_path_root(filepathname), mode);
 }
 
-u64 rmdir(const char *pathname)
+int mkdir(const char *pathname, u64 attr)
 {
-    if (pathname != nullptr || !is_user_space_pointer(pathname))
+    if (pathname == nullptr || !is_user_space_pointer(pathname))
     {
         return -1;
     }
-    if (fs::vfs::rmdir(pathname))
+    auto &res = task::current_process()->res_table;
+    auto ft = res.get_file_table();
+    if (fs::vfs::mkdir(pathname, ft->get_path_root(pathname), attr))
         return 0;
-    return 2;
+    else
+        return -1;
+}
+
+int rmdir(const char *pathname)
+{
+    if (pathname == nullptr || !is_user_space_pointer(pathname))
+    {
+        return -1;
+    }
+    auto &res = task::current_process()->res_table;
+    auto ft = res.get_file_table();
+    if (fs::vfs::rmdir(pathname, ft->get_path_root(pathname)))
+        return 0;
+    return -2;
 }
 
 u64 create(const char *pathname, u64 mode) { return 0; }
 
 bool chdir(const char *pathname)
 {
-    if (pathname != nullptr || !is_user_space_pointer(pathname))
+    if (pathname == nullptr || !is_user_space_pointer(pathname))
     {
         return false;
     }
     auto ft = task::current_process()->res_table.get_file_table();
-    auto entry = fs::vfs::path_walk(pathname, ft->root, 0);
+    auto entry = fs::vfs::path_walk(pathname, ft->get_path_root(pathname), 0);
     if (entry != nullptr)
     {
         ft->current = entry;
@@ -70,7 +82,7 @@ bool chroot(const char *pathname)
         return false;
     }
     auto ft = task::current_process()->res_table.get_file_table();
-    auto entry = fs::vfs::path_walk(pathname, ft->root, 0);
+    auto entry = fs::vfs::path_walk(pathname, ft->get_path_root(pathname), 0);
     if (entry != nullptr)
     {
         ft->root = entry;
@@ -83,17 +95,21 @@ void set_attr(file_desc fd, const char *name, void *value, u64 size, u64 flags) 
 
 void get_attr(file_desc fd, const char *name, void *value, u64 max_size) {}
 
-void link(const char *filepath, const char *to_filepath) {}
+int link(const char *filepath, const char *to_filepath) {}
 
-u64 unlink(const char *filepath)
+int unlink(const char *filepath)
 {
     if (filepath != nullptr || !is_user_space_pointer(filepath))
     {
         return -1;
     }
+    auto ft = task::current_process()->res_table.get_file_table();
+    if (fs::vfs::unlink(filepath, ft->get_path_root(filepath)))
+        return 0;
+    return -1;
 }
 
-u64 mount(const char *dev, const char *pathname, const char *fs_type)
+int mount(const char *dev, const char *pathname, const char *fs_type)
 {
     if (pathname != nullptr || !is_user_space_pointer(pathname))
     {
@@ -115,10 +131,26 @@ u64 mount(const char *dev, const char *pathname, const char *fs_type)
     {
         return -2;
     }
-    fs::vfs::mount(ffs, dev, pathname);
+    auto ft = task::current_process()->res_table.get_file_table();
+
+    if (fs::vfs::mount(ffs, dev, pathname, ft->get_path_root(pathname)))
+    {
+        return 0;
+    }
+    return -1;
 }
 
-void unmount(const char *pathname) {}
+int umount(const char *pathname)
+{
+    if (pathname != nullptr || !is_user_space_pointer(pathname))
+    {
+        return -1;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+    if (fs::vfs::umount(pathname, ft->get_path_root(pathname)))
+        return 0;
+    return -1;
+}
 
 BEGIN_SYSCALL
 SYSCALL(20, access);
@@ -129,6 +161,8 @@ SYSCALL(24, current_dir);
 SYSCALL(25, chroot);
 SYSCALL(26, link);
 SYSCALL(27, unlink);
+SYSCALL(28, mount);
+SYSCALL(29, umount);
 END_SYSCALL
 
 } // namespace syscall

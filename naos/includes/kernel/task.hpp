@@ -145,8 +145,8 @@ NoReturn void do_exit(u64 value);
 void destroy_thread(thread_t *thread);
 void destroy_process(process_t *process);
 
-u64 wait_procress(process_id pid, u64 max_time);
-u64 wait_thread(thread_id tid, u64 max_time);
+u64 wait_procress(process_id pid, u64 max_time, u64 &ret);
+u64 wait_thread(thread_id tid, u64 max_time, u64 &ret);
 
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);

@@ -1,4 +1,5 @@
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/arch/klib.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
@@ -7,10 +8,14 @@ namespace syscall
 {
 file_desc open(const char *filepath, u64 mode, u64 flags)
 {
+    if (filepath == nullptr || !is_user_space_pointer(filepath))
+    {
+        return -1;
+    }
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
 
-    auto file = fs::vfs::open(filepath, ft->root, mode, flags);
+    auto file = fs::vfs::open(filepath, ft->get_path_root(filepath), mode, flags);
     if (file)
     {
         auto fd = res.new_file_desc(file);
@@ -31,8 +36,12 @@ bool close(file_desc fd)
     return false;
 }
 
-u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
+u64 write(file_desc fd, byte *buffer, u64 max_len)
 {
+    if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
+    {
+        return 0;
+    }
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
     if (file)
@@ -42,8 +51,13 @@ u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
     return 0;
 }
 
-u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
+u64 read(file_desc fd, byte *buffer, u64 max_len)
 {
+    if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
+    {
+        return 0;
+    }
+
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
     if (file)

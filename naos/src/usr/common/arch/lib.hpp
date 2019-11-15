@@ -21,10 +21,13 @@ SYS_CALL(12, unsigned long, write, int fd, const char *buffer, unsigned long len
 SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len);
 SYS_CALL(16, unsigned long, lseek, int fd, long offset, int mode);
 
-SYS_CALL(30, void, exit, unsigned long ret)
+SYS_CALL(30, void, exit, long ret)
 SYS_CALL(31, void, sleep, unsigned long ms)
-SYS_CALL(34, unsigned long, create_process, const char *filename, const char *args, unsigned long flags)
-SYS_CALL(35, unsigned long, create_thread, void *entry, unsigned long arg, unsigned long flags)
+SYS_CALL(34, long, create_process, const char *filename, const char *args, unsigned long flags)
+SYS_CALL(35, long, create_thread, void *entry, unsigned long arg, unsigned long flags)
+
+SYS_CALL(38, long, wait_process, long pid, unsigned long timeout, long *ret)
+SYS_CALL(39, long, wait_thread, long tid, unsigned long timeout, long *ret)
 
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)

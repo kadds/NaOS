@@ -30,8 +30,12 @@ process_id create_process(const char *filename, const char *args, u64 flags)
         return -1;
     }
 
-    auto file = fs::vfs::open(filename, task::current_process()->res_table.get_file_table()->root,
+    auto file = fs::vfs::open(filename, task::current_process()->res_table.get_file_table()->get_path_root(filename),
                               fs::mode::read | fs::mode::bin, flags);
+    if (!file)
+    {
+        return -2;
+    }
     auto p = task::create_process(file, user_process_thread, 0, args, 0, 0);
     if (p)
     {
@@ -51,10 +55,7 @@ thread_id create_thread(void *entry, u64 arg, u64 flags)
     {
         return -1;
     }
-    if ((u64)entry >= (u64)base_virtual_addr) /// in kernel space
-    {
-        return -2;
-    }
+
     auto t = task::create_thread(task::current_process(), user_thread, arg, (u64)entry, 0, flags);
     if (t)
     {
@@ -66,8 +67,31 @@ thread_id create_thread(void *entry, u64 arg, u64 flags)
 void destory_process(process_id pid) {}
 
 void destory_thread(thread_id tid) {}
+
+long wait_process(process_id pid, time::millisecond_t ms, u64 *ret)
+{
+    u64 r;
+    u64 retv = task::wait_procress(pid, ms, r);
+    if (is_user_space_pointer(ret) && ret != nullptr) /// in kernel space
+    {
+        *ret = r;
+    }
+    return retv;
+}
+
+long wait_thread(thread_id tid, time::millisecond_t ms, u64 *ret)
+{
+    u64 r;
+    u64 retv = task::wait_thread(tid, ms, r);
+    if (is_user_space_pointer(ret) && ret != nullptr) /// in kernel space
+    {
+        *ret = r;
+    }
+    return retv;
+}
+
 /// sleep current thread
-void sleep(u64 milliseconds) { task::do_sleep(milliseconds); }
+void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 
 BEGIN_SYSCALL
 SYSCALL(30, exit)
@@ -78,7 +102,8 @@ SYSCALL(34, create_process)
 SYSCALL(35, create_thread)
 SYSCALL(36, destory_process)
 SYSCALL(37, destory_thread)
-
+SYSCALL(38, wait_process)
+SYSCALL(39, wait_thread)
 END_SYSCALL
 
 } // namespace syscall

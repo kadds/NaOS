@@ -9,6 +9,12 @@ file_table::file_table()
     , id_gen(file_id_table)
 {
 }
+fs::vfs::dentry *file_table::get_path_root(const char *path)
+{
+    if (*path == '/')
+        return root;
+    return current;
+}
 
 resource_table_t::resource_table_t(file_table *ft)
     : console_attribute(nullptr)

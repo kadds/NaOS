@@ -25,7 +25,7 @@ void init(byte *start_root_image, u64 size)
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
     global_root_file_system->load(nullptr, start_root_image, size);
-    vfs::mount(global_root_file_system, nullptr, "/");
+    vfs::mount(global_root_file_system, nullptr, "/", nullptr);
     rootfs_head *head = (rootfs_head *)start_root_image;
     if (head->magic != 0xF5EEEE5F)
         trace::panic("rfsimg magic head is invalid");

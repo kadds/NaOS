@@ -31,6 +31,7 @@ struct file_table
     fs::vfs::dentry *root, *current;
 
     file_table();
+    fs::vfs::dentry *get_path_root(const char *path);
 };
 
 struct resource_table_t

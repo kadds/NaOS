@@ -27,6 +27,7 @@
 #include "kernel/task/binary_handle/elf.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
+#include "kernel/wait.hpp"
 
 using mm_info_t = memory::vm::info_t;
 namespace task
@@ -380,6 +381,10 @@ void start_task_idle(const kernel_start_args *args)
     create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
     task::builtin::idle::main(args);
 }
+
+u64 wait_procress(process_id pid, u64 max_time, u64 &ret) { return 0; }
+
+u64 wait_thread(thread_id tid, u64 max_time, u64 &ret) { return 0; }
 
 process_t *find_pid(process_id pid)
 {
