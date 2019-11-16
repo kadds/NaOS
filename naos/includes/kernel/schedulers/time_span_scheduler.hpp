@@ -25,7 +25,7 @@ class time_span_scheduler : public scheduler
     void remove(thread_t *thread) override;
     void update(thread_t *thread) override;
 
-    void schedule() override;
+    void schedule(flag_t flag) override;
     void schedule_tick() override;
 
     void init() override;

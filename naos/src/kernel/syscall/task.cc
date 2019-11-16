@@ -7,7 +7,7 @@
 namespace syscall
 {
 
-/// exit thread with return value
+/// exit process with return value
 void exit(u64 ret_value) { task::do_exit(ret_value); }
 
 thread_id current_tid() { return task::current()->tid; }
@@ -64,26 +64,36 @@ thread_id create_thread(void *entry, u64 arg, u64 flags)
     return -1;
 }
 
-void destory_process(process_id pid) {}
+void exit_thread(u64 ret)
+{
+    if (task::current()->attributes & task::thread_attributes::main)
+    {
+        exit(ret);
+    }
+    else
+    {
+        task::exit_thread(ret);
+    }
+}
 
-void destory_thread(thread_id tid) {}
+int detach(thread_id tid) { return task::detach_thread(task::find_tid(task::current_process(), tid)); }
 
-long wait_process(process_id pid, time::millisecond_t ms, u64 *ret)
+int join(thread_id tid, u64 *ret)
 {
     u64 r;
-    u64 retv = task::wait_procress(pid, ms, r);
-    if (is_user_space_pointer(ret) && ret != nullptr) /// in kernel space
+    auto rt = task::join_thread(task::find_tid(task::current_process(), tid), r);
+    if (ret != nullptr && is_user_space_pointer(ret))
     {
         *ret = r;
     }
-    return retv;
+    return rt;
 }
 
-long wait_thread(thread_id tid, time::millisecond_t ms, u64 *ret)
+long wait_process(process_id pid, u64 *ret)
 {
     u64 r;
-    u64 retv = task::wait_thread(tid, ms, r);
-    if (is_user_space_pointer(ret) && ret != nullptr) /// in kernel space
+    u64 retv = task::wait_process(task::find_pid(pid), r);
+    if (ret != nullptr && is_user_space_pointer(ret))
     {
         *ret = r;
     }
@@ -100,10 +110,10 @@ SYSCALL(32, current_tid)
 SYSCALL(33, current_pid)
 SYSCALL(34, create_process)
 SYSCALL(35, create_thread)
-SYSCALL(36, destory_process)
-SYSCALL(37, destory_thread)
+SYSCALL(36, detach)
+SYSCALL(37, join)
 SYSCALL(38, wait_process)
-SYSCALL(39, wait_thread)
+SYSCALL(39, exit_thread)
 END_SYSCALL
 
 } // namespace syscall

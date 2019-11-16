@@ -6,7 +6,7 @@ void thread(int arg)
     if (arg != 2)
     {
         print("thread param id!=2\n");
-        exit(-1);
+        exit_thread(1, 0);
     }
     for (int i = 0; i < 2; i++)
     {
@@ -14,7 +14,7 @@ void thread(int arg)
         sleep(100);
     }
     print("thread2 exit\n");
-    exit(0);
+    exit_thread(0, 0);
 }
 
 void test_file()
@@ -81,7 +81,15 @@ extern "C" void _start(char *args)
     test_file();
     test_fs();
     long ret;
-    wait_thread(tid, 0, &ret);
-    print("All test tests succeeded.\n");
-    exit(0);
+    join(tid, &ret);
+    if (ret != 0)
+    {
+        print("Some test tests failed.\n");
+        exit(-1);
+    }
+    else
+    {
+        print("All test tests succeeded.\n");
+        exit(0);
+    }
 }

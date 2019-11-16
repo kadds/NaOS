@@ -21,7 +21,7 @@ void update(thread_t *thread) { global_scheduler->update(thread); }
 void schedule()
 {
     if (likely(global_scheduler != nullptr))
-        global_scheduler->schedule();
+        global_scheduler->schedule(0);
 }
 
 void schedule_tick() { global_scheduler->schedule_tick(); }
@@ -35,4 +35,6 @@ u64 get_attribute(const char *attr_name, thread_t *target)
 {
     return global_scheduler->get_attribute(attr_name, target);
 }
+
+void force_schedule() { global_scheduler->schedule(schedule_flags::current_remove); }
 } // namespace task::scheduler

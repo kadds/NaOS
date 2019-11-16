@@ -84,6 +84,7 @@ void time_span_scheduler::update(thread_t *thread)
         if (node != block_list.end())
         {
             block_list.remove(node);
+            thread->attributes &= ~thread_attributes::block;
             insert_to_runable_list(thread);
         }
     }
@@ -162,50 +163,62 @@ thread_t *time_span_scheduler::pick_available_task()
     return t;
 }
 
-void time_span_scheduler::schedule()
+void time_span_scheduler::schedule(flag_t flag)
 {
     if (unlikely(current() == nullptr))
     {
         return;
     }
     thread_t *const cur = current();
-    while (cur->attributes & task::thread_attributes::need_schedule)
+    if (flag & schedule_flags::current_remove)
     {
-        uctx::UnInterruptableContext icu;
-
-        cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
-        if (cur->attributes & task::thread_attributes::block)
-        {
-            block_list.push_back(cur);
-            cur->attributes &= ~task::thread_attributes::block;
-        }
-        else if (get_schedule_data(cur)->rest_time <= 0 && cur != task::get_idle_task())
-        {
-            expired_list.push_back(cur);
-        }
-
-        if (runable_list.empty())
-            epoch();
-
         uctx::SpinLockContextController ctr(list_spinlock);
         list_spinlock.lock();
         thread_t *next = pick_available_task();
         list_spinlock.unlock();
+        next->state = task::thread_state::running;
+        task::switch_thread(cur, next);
+    }
+    else
+    {
+        while (cur->attributes & task::thread_attributes::need_schedule)
+        {
+            uctx::UnInterruptableContext icu;
 
-        if (cur != next)
-        {
-            next->state = task::thread_state::running;
-            if (cur->state == task::thread_state::running)
+            cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
+            if (cur->attributes & task::thread_attributes::block)
             {
-                cur->state = task::thread_state::ready; ///< return state to ready
+                block_list.push_back(cur);
             }
-            task::switch_thread(cur, next);
-        }
-        else
-        {
-            cur->state = task::thread_state::running;
+            else if (get_schedule_data(cur)->rest_time <= 0 && cur != task::get_idle_task())
+            {
+                expired_list.push_back(cur);
+            }
+
+            if (runable_list.empty())
+                epoch();
+
+            uctx::SpinLockContextController ctr(list_spinlock);
+            list_spinlock.lock();
+            thread_t *next = pick_available_task();
+            list_spinlock.unlock();
+
+            if (cur != next)
+            {
+                next->state = task::thread_state::running;
+                if (cur->state == task::thread_state::running)
+                {
+                    cur->state = task::thread_state::ready; ///< return state to ready
+                }
+                task::switch_thread(cur, next);
+            }
+            else
+            {
+                cur->state = task::thread_state::running;
+            }
         }
     }
+
     return;
 }
 

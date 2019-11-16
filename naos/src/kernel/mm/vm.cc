@@ -265,6 +265,16 @@ info_t::info_t()
 {
 }
 
+info_t::~info_t()
+{
+    uctx::SpinLockUnInterruptableContext ctx(vma.get_lock());
+    auto &list = vma.get_list();
+    for (auto it = list.begin(); it != list.end(); ++it)
+    {
+        mmu_paging.unmap_area(&it);
+    }
+}
+
 bool head_expand_vm(u64 page_addr, const vm_t *item);
 
 void info_t::init_brk(u64 start)
@@ -374,13 +384,13 @@ const vm_t *map_file(u64 start, info_t *vm_info, fs::vfs::file *file, u64 file_m
     if (start == 0)
     {
         auto vm = vm_info->vma.allocate_map(
-            alen, flags::file | flags::lock | memory::vm::flags::user_mode | page_ext_attr, fill_file_vm,
+            alen, flags::file | flags::lock | flags::user_mode | flags::expand | page_ext_attr, fill_file_vm,
             (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, vm_info));
 
         return vm;
     }
     auto vm = vm_info->vma.add_map(
-        start, start + alen, flags::file | flags::lock | memory::vm::flags::user_mode | page_ext_attr, fill_file_vm,
+        start, start + alen, flags::file | flags::lock | flags::user_mode | flags::expand | page_ext_attr, fill_file_vm,
         (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, vm_info));
 
     return vm;

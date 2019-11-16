@@ -1,7 +1,7 @@
 #pragma once
 #include "kernel/mm/allocator.hpp"
-#include "kernel/task.hpp"
 #include "kernel/util/linked_list.hpp"
+#include "lock.hpp"
 namespace task
 {
 enum class wait_context_type : u32
@@ -11,14 +11,14 @@ enum class wait_context_type : u32
 };
 
 typedef bool (*condition_func)(u64 user_data);
-
+struct thread_t;
 struct wait_context_t
 {
     thread_t *thd;
     condition_func condition;
     u64 user_data;
-    wait_context_t(condition_func condition, u64 user_data)
-        : thd(current())
+    wait_context_t(thread_t *thd, condition_func condition, u64 user_data)
+        : thd(thd)
         , condition(condition)
         , user_data(user_data)
     {
@@ -28,6 +28,8 @@ struct wait_context_t
     {
         return thd == w.thd && user_data == w.user_data && condition == w.condition;
     }
+
+    bool operator!=(const wait_context_t &w) const { return !operator==(w); }
 };
 
 struct wait_queue

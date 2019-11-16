@@ -121,6 +121,9 @@ struct info_t
 
   public:
     info_t();
+    ~info_t();
+    info_t(const info_t &) = delete;
+    info_t &operator=(const info_t &) = delete;
     void init_brk(u64 start);
     bool set_brk(u64 ptr);
     u64 get_brk();

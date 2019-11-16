@@ -4,6 +4,7 @@
 #include "lock.hpp"
 #include "resource.hpp"
 #include "types.hpp"
+#include "wait.hpp"
 #include <atomic>
 namespace fs::vfs
 {
@@ -25,18 +26,39 @@ extern const process_id max_process_id;
 
 /// 65536
 extern const group_id max_group_id;
+struct thread_t;
+
+namespace process_attributes
+{
+enum attributes : flag_t
+{
+    destroy = 1,
+    no_thread = 2,
+};
+} // namespace process_attributes
 
 /// The process struct
 struct process_t
 {
     process_id pid;
+    volatile flag_t attributes;
     u64 parent_pid;             ///< The parent process id
     void *mm_info;              ///< Memory map infomation
     resource_table_t res_table; ///< Resource table
     void *thread_id_gen;
+    wait_queue wait_que;
+    std::atomic_int wait_counter;
+
+    union
+    {
+        thread_t *main_thread;
+        u64 ret_val;
+    };
+
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
+    process_t();
 };
 
 enum class thread_state : u8
@@ -51,10 +73,12 @@ enum class thread_state : u8
 
 namespace thread_attributes
 {
-enum attributes : u32
+enum attributes : flag_t
 {
     need_schedule = 1,
     block = 2,
+    detached = 8,
+    main = 16,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -82,7 +106,7 @@ struct statistics_t
 struct thread_t
 {
     volatile thread_state state;
-    volatile u32 attributes;
+    volatile flag_t attributes;
     thread_id tid;
     process_t *process;
     void *schedule_data;
@@ -103,6 +127,9 @@ struct thread_t
     u32 cpuid;
     statistics_t statistics;
     preempt_t preempt_data;
+    wait_queue wait_que;
+    std::atomic_int wait_counter;
+    thread_t();
 };
 
 void init();
@@ -145,8 +172,14 @@ NoReturn void do_exit(u64 value);
 void destroy_thread(thread_t *thread);
 void destroy_process(process_t *process);
 
-u64 wait_procress(process_id pid, u64 max_time, u64 &ret);
-u64 wait_thread(thread_id tid, u64 max_time, u64 &ret);
+u64 wait_process(process_t *process, u64 &ret);
+
+void check_process(process_t *process);
+void check_thread(thread_t *thd);
+
+NoReturn void exit_thread(u64 ret);
+u64 detach_thread(thread_t *thd);
+u64 join_thread(thread_t *thd, u64 &ret);
 
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);

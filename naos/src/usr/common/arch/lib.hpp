@@ -25,9 +25,10 @@ SYS_CALL(30, void, exit, long ret)
 SYS_CALL(31, void, sleep, unsigned long ms)
 SYS_CALL(34, long, create_process, const char *filename, const char *args, unsigned long flags)
 SYS_CALL(35, long, create_thread, void *entry, unsigned long arg, unsigned long flags)
-
-SYS_CALL(38, long, wait_process, long pid, unsigned long timeout, long *ret)
-SYS_CALL(39, long, wait_thread, long tid, unsigned long timeout, long *ret)
+SYS_CALL(36, int, detach, long tid)
+SYS_CALL(37, int, join, long tid, long *ret)
+SYS_CALL(38, long, wait_process, long pid, long *ret)
+SYS_CALL(39, void, exit_thread, long ret, long state)
 
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)
