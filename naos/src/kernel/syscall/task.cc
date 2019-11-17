@@ -29,9 +29,9 @@ process_id create_process(const char *filename, const char *args, u64 flags)
     {
         return -1;
     }
-
-    auto file = fs::vfs::open(filename, task::current_process()->res_table.get_file_table()->get_path_root(filename),
-                              fs::mode::read | fs::mode::bin, flags);
+    auto ft = task::current_process()->res_table.get_file_table();
+    auto file = fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin,
+                              flags | fs::path_walk_flags::file);
     if (!file)
     {
         return -2;
@@ -106,8 +106,8 @@ void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 BEGIN_SYSCALL
 SYSCALL(30, exit)
 SYSCALL(31, sleep)
-SYSCALL(32, current_tid)
-SYSCALL(33, current_pid)
+SYSCALL(32, current_pid)
+SYSCALL(33, current_tid)
 SYSCALL(34, create_process)
 SYSCALL(35, create_thread)
 SYSCALL(36, detach)

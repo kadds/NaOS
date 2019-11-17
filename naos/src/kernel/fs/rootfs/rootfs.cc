@@ -25,7 +25,7 @@ void init(byte *start_root_image, u64 size)
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
     global_root_file_system->load(nullptr, start_root_image, size);
-    vfs::mount(global_root_file_system, nullptr, "/", nullptr);
+    vfs::mount(global_root_file_system, nullptr, "/", vfs::global_root, vfs::global_root);
     rootfs_head *head = (rootfs_head *)start_root_image;
     if (head->magic != 0xF5EEEE5F)
         trace::panic("rfsimg magic head is invalid");
@@ -39,8 +39,9 @@ void init(byte *start_root_image, u64 size)
             int len = util::strlen(file_name);
             u64 data_size = *(u64 *)(start_of_file + len + 1);
             byte *data = start_of_file + len + 1 + sizeof(u64);
-            auto file = vfs::open(file_name, vfs::global_root, mode::write | mode::bin,
-                                  attribute::auto_create_file | attribute::auto_create_dir_rescure);
+            auto file = vfs::open(file_name, vfs::global_root, vfs::global_root, mode::write | mode::bin,
+                                  path_walk_flags::auto_create_file | path_walk_flags::auto_create_dir_rescure |
+                                      path_walk_flags::file);
             file->write(data, data_size);
             vfs::close(file);
 

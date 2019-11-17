@@ -16,12 +16,14 @@ int strcmp(const char *str1, const char *str2)
     return 0;
 }
 
-void strcopy(char *dst, const char *src, int max_len)
+int strcopy(char *dst, const char *src, int max_len)
 {
     int i = 0;
     while (*src != 0 && i++ < max_len)
         *dst++ = *src++;
+    return i;
 }
+
 void strcopy(char *dst, const char *src)
 {
     while (*src != 0)

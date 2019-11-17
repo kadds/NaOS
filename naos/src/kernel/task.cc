@@ -14,6 +14,7 @@
 #include "kernel/util/id_generator.hpp"
 #include "kernel/util/memory.hpp"
 
+#include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 
@@ -270,7 +271,7 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     }
     else
     {
-        process->res_table.get_file_table()->current = file->get_entry();
+        process->res_table.get_file_table()->current = file->get_entry()->get_parent();
     }
 
     auto mm_info = (mm_info_t *)process->mm_info;

@@ -44,17 +44,18 @@ enum mode : flag_t
 };
 } // namespace mode
 
-namespace attribute
+namespace path_walk_flags
 {
-enum attribute : flag_t
+enum path_walk_flags : flag_t
 {
     auto_create_file = 1,
     auto_create_dir_rescure = 2,
     parent = 4,
     not_symlink = 8,
-
+    directory = 16,
+    file = 32,
 };
-} // namespace attribute
+} // namespace path_walk_flags
 
 enum class inode_type_t : u8
 {

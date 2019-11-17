@@ -15,7 +15,7 @@ file_desc open(const char *filepath, u64 mode, u64 flags)
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
 
-    auto file = fs::vfs::open(filepath, ft->get_path_root(filepath), mode, flags);
+    auto file = fs::vfs::open(filepath, ft->root, ft->current, mode, flags);
     if (file)
     {
         auto fd = res.new_file_desc(file);

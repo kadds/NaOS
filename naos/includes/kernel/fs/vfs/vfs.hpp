@@ -10,25 +10,24 @@ int register_fs(file_system *fs);
 int unregister_fs(file_system *fs);
 file_system *get_file_system(const char *name);
 
-bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root);
-bool umount(const char *path, dentry *path_root);
+dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags);
 
-dentry *path_walk(const char *name, dentry *root, flag_t create_attribute);
-
-file *open(const char *path, dentry *root, flag_t mode, flag_t attr);
+file *open(const char *path, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr);
 void close(file *file);
 
-bool mkdir(const char *dir, dentry *root, flag_t attr);
-bool rmdir(const char *dir, dentry *root);
+bool mkdir(const char *dir, dentry *root, dentry *cur_dir, flag_t attr);
+bool rmdir(const char *dir, dentry *root, dentry *cur_dir);
 
-void rename(const char *new_dir, const char *old_dir);
+void rename(const char *new_dir, const char *old_dir, dentry *root, dentry *cur_dir);
 
 u64 pathname(dentry *root, dentry *current, char *path, u64 max_len);
+bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t flags);
 
-bool access(const char *pathname, dentry *path_root, flag_t mode);
+bool link(const char *pathname, dentry *path_root, const char *target_path, dentry *target_root, dentry *cur_dir);
+bool unlink(const char *pathname, dentry *root, dentry *cur_dir);
 
-bool link(const char *pathname, dentry *path_root, const char *target_path, dentry *target_root);
-bool unlink(const char *pathname, dentry *root);
+bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root, dentry *cur_dir);
+bool umount(const char *path, dentry *path_root, dentry *cur_dir);
 
 u64 size(file *f);
 

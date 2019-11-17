@@ -85,4 +85,22 @@ extern KernelCommonAllocator *KernelCommonAllocatorV;
 extern KernelVirtualAllocator *KernelVirtualAllocatorV;
 extern KernelMemoryAllocator *KernelMemoryAllocatorV;
 
+template <typename T> struct MemoryView
+{
+    T *ptr;
+    IAllocator *allocator;
+    MemoryView(IAllocator *allocator, u64 size, u64 align)
+        : allocator(allocator)
+    {
+        ptr = (T *)allocator->allocate(size, align);
+    }
+    ~MemoryView() { allocator->deallocate((void *)ptr); }
+
+    MemoryView(const MemoryView &) = delete;
+    MemoryView &operator=(const MemoryView &) = delete;
+    T &operator->() { return *ptr; }
+
+    T *get() { return ptr; }
+};
+
 } // namespace memory

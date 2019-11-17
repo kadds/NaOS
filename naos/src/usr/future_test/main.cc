@@ -17,12 +17,15 @@ void thread(int arg)
     exit_thread(0, 0);
 }
 
-void test_file()
+void test_file(const char *file_path)
 {
-    int fd = open("/data/hello", 0, 0);
+    int fd = open(file_path, 0, 0);
     if (fd < 0)
     {
-        print("Can't find file /data/hello\n");
+        print("Can't find file ");
+        print(file_path);
+        print("\n");
+        exit_thread(1, 0);
     }
     else
     {
@@ -57,7 +60,22 @@ void test_file()
     }
 }
 
-void test_fs() {}
+void test_fs()
+{
+    char path[256];
+    current_dir(path, 255);
+    print("current work dir:");
+    print(path);
+    print("\n");
+    mkdir("/temp/", 0);
+    mkdir("/temp/future_test/", 0);
+    chroot("/temp");
+    chdir("/future_test");
+    create("text", 0);
+    test_file("/future_test/text");
+    chroot("../");
+    chdir("../");
+}
 
 unsigned long test_thread() { return create_thread((void *)thread, 2, 0); }
 
@@ -78,7 +96,6 @@ extern "C" void _start(char *args)
     print("Begin tests.\n");
     test_memory();
     unsigned long tid = test_thread();
-    test_file();
     test_fs();
     long ret;
     join(tid, &ret);
