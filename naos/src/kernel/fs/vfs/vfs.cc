@@ -192,12 +192,15 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags)
 
         if (is_dir)
         {
-            if (section_len == 2 && util::strcmp(".", path_buffer.get()) == 0)
+            if (section_len == 1 && util::strcmp(".", path_buffer.get()) == 0)
                 continue;
-            else if (section_len == 3 && util::strcmp("..", path_buffer.get()) == 0)
+            else if (section_len == 2 && util::strcmp("..", path_buffer.get()) == 0)
             {
                 if (prev_entry != root)
                     prev_entry = prev_entry->get_parent();
+                else if (path_walk_flags::cross_root & flags)
+                    if (prev_entry->get_parent() != nullptr)
+                        prev_entry = prev_entry->get_parent();
                 continue;
             }
 
@@ -225,6 +228,14 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags)
                     if (unlikely(next_entry == nullptr))
                         return nullptr;
                 }
+                else
+                {
+                    return nullptr;
+                }
+            }
+            if (next_entry->get_inode()->get_link_count() == 0)
+            {
+                return nullptr;
             }
 
             return next_entry;
@@ -234,16 +245,17 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags)
     return prev_entry;
 }
 
-bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root, dentry *cur_dir)
+bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root, dentry *cur_dir, const byte *fs_data,
+           u64 max_len)
 {
-    if (util::strcmp(path, "/") == 0)
+    if (util::strcmp(path, "/") == 0 && path_root == nullptr && cur_dir == nullptr)
     {
         if (global_root != nullptr)
         {
             trace::panic("Mount point \"/\" has been mount.");
         }
         // mount global root
-        auto su_block = fs->load(dev, 0, 0);
+        auto su_block = fs->load(dev, fs_data, max_len);
         mount_t mnt("/", nullptr, nullptr, su_block);
         global_root = su_block->get_root();
         data->mount_list.push_back(mnt);
@@ -260,7 +272,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
             trace::warning("Mount point doesn't exist.");
             return false;
         }
-        auto su_block = fs->load(dev, 0, 0);
+        auto su_block = fs->load(dev, fs_data, max_len);
         /// TODO: copy dev string
         mount_t mnt(path, dev, dir, su_block);
 
@@ -268,6 +280,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
 
         auto new_root = su_block->get_root();
         new_root->set_parent(dir->get_parent());
+        new_root->set_name(dir->get_name());
         new_root->set_mount_point();
         dir->get_parent()->remove_sub_dir(dir);
         dir->get_parent()->add_sub_dir(new_root);
@@ -278,6 +291,8 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
 bool umount(const char *path, dentry *path_root, dentry *cur_dir)
 {
     dentry *dir = path_walk(path, path_root, cur_dir, 0);
+    if (dir == nullptr)
+        return false;
     auto sb = dir->get_inode()->get_super_block();
 
     for (auto mnt = data->mount_list.begin(); mnt != data->mount_list.end(); ++mnt)
@@ -288,6 +303,7 @@ bool umount(const char *path, dentry *path_root, dentry *cur_dir)
             {
                 dir->get_parent()->remove_sub_dir(sb->get_root());
                 dir->get_parent()->add_sub_dir(mnt->mount_entry);
+                sb->get_root()->set_name("/");
                 data->mount_list.remove(mnt);
             }
             else
@@ -354,11 +370,12 @@ bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t fla
 
 bool link(const char *pathname, dentry *path_root, const char *target_path, dentry *target_root, dentry *cur_dir)
 {
-    dentry *entry_target = path_walk(target_path, target_root, cur_dir, path_walk_flags::directory);
+    dentry *entry_target =
+        path_walk(target_path, target_root, cur_dir, path_walk_flags::file | path_walk_flags::auto_create_file);
     if (entry_target == nullptr)
         return false;
 
-    dentry *entry = path_walk(pathname, path_root, cur_dir, path_walk_flags::directory);
+    dentry *entry = path_walk(pathname, path_root, cur_dir, path_walk_flags::file);
     if (entry == nullptr)
         return false;
     entry->get_inode()->link(entry, entry_target);
@@ -367,10 +384,14 @@ bool link(const char *pathname, dentry *path_root, const char *target_path, dent
 
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
 {
-    dentry *entry = path_walk(pathname, root, cur_dir, path_walk_flags::directory);
+    dentry *entry = path_walk(pathname, root, cur_dir, 0);
     if (entry == nullptr)
         return false;
     entry->get_inode()->unlink(entry);
+    if (entry->get_inode()->get_link_count() == 0)
+    {
+        entry->get_inode()->get_super_block()->write_inode(entry->get_inode());
+    }
     return true;
 }
 

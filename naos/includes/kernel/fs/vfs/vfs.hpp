@@ -26,7 +26,8 @@ bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t fla
 bool link(const char *pathname, dentry *path_root, const char *target_path, dentry *target_root, dentry *cur_dir);
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir);
 
-bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root, dentry *cur_dir);
+bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root, dentry *cur_dir, const byte *data,
+           u64 max_len);
 bool umount(const char *path, dentry *path_root, dentry *cur_dir);
 
 u64 size(file *f);

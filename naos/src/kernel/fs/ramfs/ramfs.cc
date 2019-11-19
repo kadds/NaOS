@@ -1,9 +1,11 @@
 #include "kernel/fs/ramfs/ramfs.hpp"
+#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/util/memory.hpp"
-
 namespace fs::ramfs
 {
+
+void init() { vfs::register_fs(memory::New<file_system>(memory::KernelCommonAllocatorV)); }
 
 u64 file::write(byte *buffer, u64 size)
 {
@@ -17,10 +19,13 @@ u64 file::write(byte *buffer, u64 size)
         {
             memory::KernelBuddyAllocatorV->deallocate(node->start_ptr);
         }
-        node->file_size = pointer_offset + size;
-        node->ram_size = (node->file_size + memory::page_size - 1) & ~(memory::page_size - 1);
-        if (sublock->get_current_used() + node->ram_size < sublock->get_max_ram_size())
+        auto file_size = pointer_offset + size;
+        auto ram_size = (file_size + memory::page_size - 1) & ~(memory::page_size - 1);
+
+        if (sublock->get_current_used() + ram_size < sublock->get_max_ram_size())
         {
+            node->file_size = file_size;
+            node->ram_size = ram_size;
             node->start_ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(node->ram_size, 0);
             sublock->add_ram_used(node->ram_size);
         }
@@ -51,7 +56,7 @@ file_system::file_system(const char *fsname)
 {
 }
 
-vfs::super_block *file_system::load(const char *device_name, byte *data, u64 size)
+vfs::super_block *file_system::load(const char *device_name, const byte *data, u64 size)
 {
     super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, size, this);
     su_block->load();

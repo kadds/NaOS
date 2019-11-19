@@ -24,8 +24,8 @@ void init(byte *start_root_image, u64 size)
     }
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
-    global_root_file_system->load(nullptr, start_root_image, size);
-    vfs::mount(global_root_file_system, nullptr, "/", vfs::global_root, vfs::global_root);
+    vfs::mount(global_root_file_system, nullptr, "/", vfs::global_root, vfs::global_root, nullptr,
+               size + memory::page_size * 4);
     rootfs_head *head = (rootfs_head *)start_root_image;
     if (head->magic != 0xF5EEEE5F)
         trace::panic("rfsimg magic head is invalid");
@@ -57,7 +57,7 @@ file_system::file_system()
 {
 }
 
-vfs::super_block *file_system::load(const char *device_name, byte *data, u64 size)
+vfs::super_block *file_system::load(const char *device_name, const byte *data, u64 size)
 {
     super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, this);
     su_block->load();

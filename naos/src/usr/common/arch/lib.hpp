@@ -30,7 +30,8 @@ SYS_CALL(24, unsigned long, current_dir, char *path, unsigned long max_len)
 SYS_CALL(25, int, chroot, const char *path)
 SYS_CALL(26, int, link, const char *src, const char *target)
 SYS_CALL(27, int, unlink, const char *target)
-SYS_CALL(28, int, mount, const char *dev, const char *mount_point, const char *fs_type)
+SYS_CALL(28, int, mount, const char *dev, const char *mount_point, const char *fs_type, unsigned long flags,
+         const char *data, unsigned long size)
 SYS_CALL(29, int, umount, const char *mount_point)
 
 SYS_CALL(30, void, exit, long ret)

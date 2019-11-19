@@ -17,7 +17,7 @@ void thread(int arg)
     exit_thread(0, 0);
 }
 
-void test_file(const char *file_path)
+void print_file(const char *file_path)
 {
     int fd = open(file_path, 0, 0);
     if (fd < 0)
@@ -44,8 +44,11 @@ void test_file(const char *file_path)
 
         close(fd);
     }
+}
 
-    fd = open("/data/init.text", 2 | 4, 1 | 2);
+void test_file(const char *file_path)
+{
+    int fd = open(file_path, 2 | 4, 1 | 2);
     write(fd, file_content, sizeof(file_content));
     char fc[52];
     lseek(fd, 0, 1);
@@ -54,7 +57,7 @@ void test_file(const char *file_path)
     {
         if (file_content[i] != fc[i])
         {
-            print("syscall write/read failed!");
+            print("syscall write/read failed!\n");
             exit(-1);
         }
     }
@@ -62,19 +65,34 @@ void test_file(const char *file_path)
 
 void test_fs()
 {
+    print_file("/data/hello");
     char path[256];
     current_dir(path, 255);
     print("current work dir:");
     print(path);
     print("\n");
-    mkdir("/temp/", 0);
-    mkdir("/temp/future_test/", 0);
-    chroot("/temp");
+    mkdir("/tmp/", 0);
+    mount("", "/tmp/", "ramfs", 0, nullptr, 0x10000);
+    chroot("/tmp");
+    mkdir("/future_test/", 0);
     chdir("/future_test");
-    create("text", 0);
-    test_file("/future_test/text");
+    create("./text", 0);
+    link("./text", "the_text");
+    test_file("/future_test/the_text");
+    unlink("text");
+    unlink("the_text");
+
+    int fd = open("text", 0, 0);
+    if (fd >= 0)
+    {
+        print("Can't delete file text ");
+        print("\n");
+        exit_thread(1, 0);
+    }
+
     chroot("../");
-    chdir("../");
+    chdir("/");
+    umount("/tmp");
 }
 
 unsigned long test_thread() { return create_thread((void *)thread, 2, 0); }

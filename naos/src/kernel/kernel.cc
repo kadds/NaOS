@@ -56,6 +56,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     fs::vfs::init();
     trace::debug("Root file system init...");
     timer::init();
+    fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();
 

@@ -71,5 +71,8 @@ class inode
         this->owner = uid;
         this->group = gid;
     }
+
+    u64 get_link_count() { return link_count; }
+    u64 get_ref_count() { return ref_count; }
 };
 } // namespace fs::vfs

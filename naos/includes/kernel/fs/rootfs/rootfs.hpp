@@ -7,7 +7,7 @@ class file_system : public ramfs::file_system
 {
   public:
     file_system();
-    vfs::super_block *load(const char *device_name, byte *data, u64 size) override;
+    vfs::super_block *load(const char *device_name, const byte *data, u64 size) override;
     void unload(vfs::super_block *su_block) override;
 };
 

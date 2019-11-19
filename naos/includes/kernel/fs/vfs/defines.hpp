@@ -54,6 +54,7 @@ enum path_walk_flags : flag_t
     not_symlink = 8,
     directory = 16,
     file = 32,
+    cross_root = 64,
 };
 } // namespace path_walk_flags
 
@@ -79,5 +80,14 @@ struct dirstream
 {
     file_desc fd;
 };
+
+namespace fs_flags
+{
+enum : flag_t
+{
+    kernel_only = 1,
+
+};
+} // namespace fs_flags
 
 } // namespace fs

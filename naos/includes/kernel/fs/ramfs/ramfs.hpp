@@ -9,6 +9,7 @@
 
 namespace fs::ramfs
 {
+void init();
 class super_block;
 class inode;
 class dentry : public vfs::dentry
@@ -47,7 +48,7 @@ class file_system : public vfs::file_system
 {
   public:
     file_system(const char *fsname = "ramfs");
-    virtual vfs::super_block *load(const char *device_name, byte *data, u64 size) override;
+    virtual vfs::super_block *load(const char *device_name, const byte *data, u64 size) override;
     void unload(vfs::super_block *block) override;
 };
 struct member_hash

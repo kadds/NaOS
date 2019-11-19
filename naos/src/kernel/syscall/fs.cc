@@ -99,7 +99,8 @@ int chroot(const char *pathname)
         return -1;
     }
     auto ft = task::current_process()->res_table.get_file_table();
-    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current, fs::path_walk_flags::directory);
+    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current,
+                                    fs::path_walk_flags::directory | fs::path_walk_flags::cross_root);
     if (entry != nullptr)
     {
         ft->root = entry;
@@ -140,19 +141,24 @@ int unlink(const char *filepath)
     return -1;
 }
 
-int mount(const char *dev, const char *pathname, const char *fs_type)
+int mount(const char *dev, const char *pathname, const char *fs_type, flag_t flags, const byte *data, u64 size)
 {
     if (pathname == nullptr || !is_user_space_pointer(pathname))
     {
         return -1;
     }
 
-    if (dev == nullptr || !is_user_space_pointer(dev))
+    if (!is_user_space_pointer(dev))
     {
         return -1;
     }
 
     if (fs_type == nullptr || !is_user_space_pointer(fs_type))
+    {
+        return -1;
+    }
+
+    if (!is_user_space_pointer(data))
     {
         return -1;
     }
@@ -164,7 +170,7 @@ int mount(const char *dev, const char *pathname, const char *fs_type)
     }
     auto ft = task::current_process()->res_table.get_file_table();
 
-    if (fs::vfs::mount(ffs, dev, pathname, ft->root, ft->current))
+    if (fs::vfs::mount(ffs, dev, pathname, ft->root, ft->current, data, size))
     {
         return 0;
     }

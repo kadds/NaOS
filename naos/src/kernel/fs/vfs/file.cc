@@ -18,6 +18,7 @@ int file::close()
 {
     remove_ref();
     entry->get_inode()->get_super_block()->dealloc_file(this);
+    return 0;
 }
 
 void file::seek(i64 offset) { pointer_offset += offset; }
