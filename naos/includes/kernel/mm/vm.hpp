@@ -127,6 +127,10 @@ struct info_t
     void init_brk(u64 start);
     bool set_brk(u64 ptr);
     u64 get_brk();
+
+    const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_map_offset, u64 map_length, flag_t page_ext_attr);
+    bool umap_file(u64 addr);
+    void sync_map_file(u64 addr);
 };
 struct map_t
 {
@@ -144,13 +148,6 @@ struct map_t
 bool fill_file_vm(u64 page_addr, const vm_t *item);
 bool fill_expand_vm(u64 page_addr, const vm_t *item);
 
-const vm_t *map_file(u64 start, info_t *vm_info, fs::vfs::file *file, u64 file_map_offset, u64 map_length,
-                     flag_t page_ext_attr);
-
-const vm_t *map_shared_file(const vm_t *shared_vm, info_t *vm_info, flag_t ext_flags);
-const vm_t *map_shared_file(u64 start, const vm_t *shared_vm, info_t *vm_info, flag_t ext_flags);
-
-void sync_map_file(const vm_t *vm);
-void umap_file(const vm_t *vm);
+void sync_map_file(u64 addr);
 
 } // namespace memory::vm

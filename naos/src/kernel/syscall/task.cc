@@ -19,7 +19,7 @@ void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     arch::task::enter_userland(task::current(), (void *)arg3, arg1);
 }
 
-process_id create_process(const char *filename, const char *args, u64 flags)
+process_id create_process(const char *filename, const char *args, flag_t flags)
 {
     if (!is_user_space_pointer(filename))
     {
@@ -30,13 +30,13 @@ process_id create_process(const char *filename, const char *args, u64 flags)
         return -1;
     }
     auto ft = task::current_process()->res_table.get_file_table();
-    auto file = fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin,
-                              flags | fs::path_walk_flags::file);
+    auto file =
+        fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
     if (!file)
     {
         return -2;
     }
-    auto p = task::create_process(file, user_process_thread, 0, args, 0, 0);
+    auto p = task::create_process(file, user_process_thread, 0, args, 0, flags);
     if (p)
     {
         return p->pid;
@@ -49,7 +49,7 @@ void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     arch::task::enter_userland(task::current(), (void *)arg1, arg0);
 }
 
-thread_id create_thread(void *entry, u64 arg, u64 flags)
+thread_id create_thread(void *entry, u64 arg, flag_t flags)
 {
     if (!is_user_space_pointer(entry))
     {

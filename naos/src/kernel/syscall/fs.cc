@@ -8,7 +8,7 @@
 namespace syscall
 {
 
-int create(const char *pathname, u64 mode)
+int create(const char *pathname)
 {
     if (pathname == nullptr || !is_user_space_pointer(pathname))
     {
@@ -16,7 +16,7 @@ int create(const char *pathname, u64 mode)
     }
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
-    auto file = fs::vfs::open(pathname, ft->root, ft->current, mode, fs::path_walk_flags::auto_create_file);
+    auto file = fs::vfs::open(pathname, ft->root, ft->current, 0, fs::path_walk_flags::auto_create_file);
     if (file)
     {
         file->close();
@@ -38,7 +38,7 @@ int access(const char *filepathname, flag_t mode)
     return -2;
 }
 
-int mkdir(const char *pathname, u64 attr)
+int mkdir(const char *pathname)
 {
     if (pathname == nullptr || !is_user_space_pointer(pathname))
     {
@@ -46,7 +46,7 @@ int mkdir(const char *pathname, u64 attr)
     }
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
-    if (fs::vfs::mkdir(pathname, ft->root, ft->current, attr))
+    if (fs::vfs::mkdir(pathname, ft->root, ft->current, 0))
         return 0;
     else
         return -1;

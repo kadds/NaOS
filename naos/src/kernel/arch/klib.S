@@ -86,7 +86,8 @@ _kernel_thread:
 
 // args -> rdi, rsi, r12, r13, r8, r9
 // r10: rsp
-// r11: return address
+// r11: return eflags
+// rcx: return address
 .globl _sys_call
 _sys_call:
     cld
@@ -129,12 +130,13 @@ sys_call_label:
     jnz sys_call_label2
     movq $0, %rax
 sys_call_label2:
+    xchgq %r12, %rcx
 	callq *(%rbx,%rax,8)
     movq %rax, 0x80(%rsp) # return value
     
     movabs $schedule, %rdx
 	callq *%rdx
-
+    
 .globl _sys_ret
 _sys_ret:
     popq %r15

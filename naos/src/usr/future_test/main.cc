@@ -3,6 +3,8 @@ const char file_content[] = "init file write context";
 
 void thread(int arg)
 {
+    print("thread testing\n");
+
     if (arg != 2)
     {
         print("thread param id!=2\n");
@@ -19,7 +21,7 @@ void thread(int arg)
 
 void print_file(const char *file_path)
 {
-    int fd = open(file_path, 0, 0);
+    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
     if (fd < 0)
     {
         print("Can't find file ");
@@ -48,7 +50,8 @@ void print_file(const char *file_path)
 
 void test_file(const char *file_path)
 {
-    int fd = open(file_path, 2 | 4, 1 | 2);
+    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN,
+                  OPEN_ATTR_AUTO_CREATE_FILE | OPEN_ATTR_AUTO_CREATE_DIR);
     write(fd, file_content, sizeof(file_content));
     char fc[52];
     lseek(fd, 0, 1);
@@ -65,24 +68,27 @@ void test_file(const char *file_path)
 
 void test_fs()
 {
+    print("file system testing\n");
+
     print_file("/data/hello");
     char path[256];
     current_dir(path, 255);
     print("current work dir:");
+    path[255] = 0;
     print(path);
     print("\n");
-    mkdir("/tmp/", 0);
+    mkdir("/tmp/");
     mount("", "/tmp/", "ramfs", 0, nullptr, 0x10000);
     chroot("/tmp");
-    mkdir("/future_test/", 0);
+    mkdir("/future_test/");
     chdir("/future_test");
-    create("./text", 0);
+    create("./text");
     link("./text", "the_text");
     test_file("/future_test/the_text");
     unlink("text");
     unlink("the_text");
 
-    int fd = open("text", 0, 0);
+    int fd = open("text", OPEN_MODE_READ, 0);
     if (fd >= 0)
     {
         print("Can't delete file text ");
@@ -99,6 +105,7 @@ unsigned long test_thread() { return create_thread((void *)thread, 2, 0); }
 
 void test_memory()
 {
+    print("memory testing\n");
     void *head = (void *)sbrk(0);
     sbrk(1024);
     void *new_head = (void *)sbrk(0);
@@ -106,6 +113,10 @@ void test_memory()
     *(char *)head = 'A';
 
     brk((unsigned long)head);
+
+    void *p = mmap(0, 0, 0, 2048, MMAP_READ | MMAP_WRITE);
+    *(char *)p = 'A';
+    mumap(p);
 }
 
 extern "C" void _start(char *args)

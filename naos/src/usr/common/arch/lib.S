@@ -6,15 +6,12 @@ _lib_sys_call:
     pushq %r10
     pushq %r11
     pushq %r12
-    pushq %r13
-    movq %rdx, %r12
-    movq %rcx, %r13
+    movq %rcx, %r12
     movq %rsp, %r10
     syscall
-    popq %r13
     popq %r12
-    pop %r11
-    pop %r10
+    popq %r11
+    popq %r10
     retq
 
 

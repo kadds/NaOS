@@ -371,8 +371,7 @@ bool fill_file_vm(u64 page_addr, const vm_t *item)
     return true;
 }
 
-const vm_t *map_file(u64 start, info_t *vm_info, fs::vfs::file *file, u64 file_map_offset, u64 map_length,
-                     flag_t page_ext_attr)
+const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_map_offset, u64 map_length, flag_t page_ext_attr)
 {
     if (start >= 0xFFFF800000000000)
     {
@@ -380,50 +379,37 @@ const vm_t *map_file(u64 start, info_t *vm_info, fs::vfs::file *file, u64 file_m
     }
 
     u64 alen = (map_length + memory::page_size - 1) & ~(memory::page_size - 1);
+    auto cflags = flags::lock | flags::user_mode | flags::expand;
+    auto func = fill_expand_vm;
+    u64 user_data = (u64)this;
+
+    if (file)
+    {
+        cflags |= flags::file;
+        func = fill_file_vm;
+        user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, this);
+    }
 
     if (start == 0)
     {
-        auto vm = vm_info->vma.allocate_map(
-            alen, flags::file | flags::lock | flags::user_mode | flags::expand | page_ext_attr, fill_file_vm,
-            (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, vm_info));
-
-        return vm;
+        return vma.allocate_map(alen, cflags | page_ext_attr, func, user_data);
     }
-    auto vm = vm_info->vma.add_map(
-        start, start + alen, flags::file | flags::lock | flags::user_mode | flags::expand | page_ext_attr, fill_file_vm,
-        (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_map_offset, map_length, vm_info));
-
-    return vm;
+    return vma.add_map(start, start + alen, cflags | page_ext_attr, func, user_data);
 }
 
-const vm_t *map_shared_file(const vm_t *shared_vm, info_t *vm_info, flag_t ext_flags)
+void info_t::sync_map_file(u64 addr) {}
+
+bool info_t::umap_file(u64 addr)
 {
-    auto alen = shared_vm->end - shared_vm->start;
-    map_t *mt = (map_t *)shared_vm->user_data;
-
-    auto vm = vm_info->vma.allocate_map(
-        alen, flags::file | flags::lock | ext_flags, fill_file_vm,
-        (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, mt->file, mt->offset, mt->length, vm_info));
-    return vm;
+    auto vm = vma.get_vm_area(addr);
+    if (!vm)
+        return false;
+    if (vm->flags & flags::file)
+    {
+        map_t *mt = (map_t *)vm->user_data;
+        memory::Delete<>(memory::KernelCommonAllocatorV, mt);
+    }
+    vma.deallocate_map(vm);
+    mmu_paging.unmap_area(vm);
 }
-
-const vm_t *map_shared_file(u64 start, const vm_t *shared_vm, info_t *vm_info, flag_t ext_flags)
-{
-    auto alen = shared_vm->end - shared_vm->start;
-    map_t *mt = (map_t *)shared_vm->user_data;
-
-    auto vm = vm_info->vma.add_map(
-        start, start + alen, flags::file | flags::lock | ext_flags, fill_file_vm,
-        (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, mt->file, mt->offset, mt->length, vm_info));
-    return vm;
-}
-
-void sync_map_file(const vm_t *vm) {}
-
-void umap_file(const vm_t *vm)
-{
-    map_t *mt = (map_t *)vm->user_data;
-    mt->vm_info->vma.deallocate_map(vm);
-}
-
 } // namespace memory::vm

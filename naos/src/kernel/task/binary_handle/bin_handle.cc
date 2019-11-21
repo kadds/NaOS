@@ -25,9 +25,9 @@ bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     auto &vma = new_mm_info->vma;
     using namespace memory::vm;
     using namespace arch::task;
-    auto new_vm = memory::vm::map_file(memory::user_code_bottom_address, new_mm_info, file, 0, file->size(),
-                                       memory::vm::flags::readable | memory::vm::flags::writeable |
-                                           memory::vm::flags::executeable);
+    auto new_vm = new_mm_info->map_file(memory::user_code_bottom_address, file, 0, file->size(),
+                                        memory::vm::flags::readable | memory::vm::flags::writeable |
+                                            memory::vm::flags::executeable);
     info->entry_start_address = (void *)new_vm->start;
 
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,

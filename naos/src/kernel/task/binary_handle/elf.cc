@@ -210,8 +210,7 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
             u64 end = start + program->file_size + (program->offset - off);
             if (max_code < end)
                 max_code = end;
-
-            memory::vm::map_file(start, new_mm_info, file, off, program->file_size + (program->offset - off), flag);
+            new_mm_info->map_file(start, file, off, program->file_size + (program->offset - off), flag);
         }
         else if (program->type == program_type::interp)
         {
