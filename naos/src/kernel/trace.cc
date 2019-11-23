@@ -336,4 +336,6 @@ NoReturn void keep_panic(const arch::idt::regs_t *regs)
         ;
 }
 
+ExportC NoReturn void panic_once(const char *string) { trace::panic(string); }
+
 } // namespace trace

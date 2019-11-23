@@ -1,4 +1,5 @@
 #include "kernel/schedulers/time_span_scheduler.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
@@ -69,9 +70,33 @@ void time_span_scheduler::remove(thread_t *thread)
     if (node != block_list.end())
     {
         block_list.remove(node);
-        auto scher_time = get_schedule_data(thread);
-        memory::Delete(memory::KernelCommonAllocatorV, scher_time);
     }
+    else
+    {
+        node = expired_list.find(thread);
+        if (node != expired_list.end())
+        {
+            expired_list.remove(node);
+        }
+        else
+        {
+            node = runable_list.find(thread);
+            if (node != runable_list.end())
+            {
+                runable_list.remove(node);
+            }
+            else
+            {
+                auto &cpu = arch::cpu::current();
+                if (cpu.get_task() != thread)
+                {
+                    trace::panic("Can not remove task");
+                }
+            }
+        }
+    }
+    auto scher_time = get_schedule_data(thread);
+    memory::Delete(memory::KernelCommonAllocatorV, scher_time);
 }
 
 void time_span_scheduler::update(thread_t *thread)
@@ -90,6 +115,12 @@ void time_span_scheduler::update(thread_t *thread)
     }
     else if (thread->state == task::thread_state::interruptable || thread->state == task::thread_state::uninterruptible)
     {
+        thread->attributes |= thread_attributes::block;
+
+        if (current() == thread)
+        {
+            return;
+        }
         auto node = runable_list.find(thread);
         if (node != runable_list.end())
         {
@@ -104,12 +135,9 @@ void time_span_scheduler::update(thread_t *thread)
             block_list.push_back(thread);
             return;
         }
-
-        if (current() == thread)
-        {
-            thread->attributes |= thread_attributes::block;
-        }
     }
+    else
+        trace::panic("Unreachable control flow.\n");
 }
 
 void time_span_scheduler::insert_to_runable_list(thread_t *t)
@@ -169,9 +197,11 @@ void time_span_scheduler::schedule(flag_t flag)
     {
         return;
     }
-    thread_t *const cur = current();
+    thread_t *cur = current();
     if (flag & schedule_flags::current_remove)
     {
+        uctx::UnInterruptableContext icu;
+
         uctx::SpinLockContextController ctr(list_spinlock);
         list_spinlock.lock();
         thread_t *next = pick_available_task();
@@ -185,7 +215,6 @@ void time_span_scheduler::schedule(flag_t flag)
         {
             uctx::UnInterruptableContext icu;
 
-            cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
             if (cur->attributes & task::thread_attributes::block)
             {
                 block_list.push_back(cur);
@@ -194,6 +223,7 @@ void time_span_scheduler::schedule(flag_t flag)
             {
                 expired_list.push_back(cur);
             }
+            cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
             if (runable_list.empty())
                 epoch();

@@ -72,7 +72,7 @@ SYS_CALL(35, long, create_thread, void *entry, unsigned long arg, unsigned long 
 SYS_CALL(36, int, detach, long tid)
 SYS_CALL(37, int, join, long tid, long *ret)
 SYS_CALL(38, long, wait_process, long pid, long *ret)
-SYS_CALL(39, void, exit_thread, long ret, long state)
+SYS_CALL(39, void, exit_thread, long ret)
 
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)

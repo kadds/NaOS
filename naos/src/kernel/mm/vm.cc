@@ -115,11 +115,11 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
     kassert((char *)start < (char *)end, "parameter start must < parameter end");
     kassert((u64)start == ((u64)start & ~(memory::page_size - 1)), "parameter start must aligned");
     kassert((u64)end == ((u64)end & ~(memory::page_size - 1)), "parameter end must aligned");
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
     if (unlikely(start < range_bottom))
         return nullptr;
     if (unlikely(end > range_top))
         return nullptr;
+    uctx::SpinLockUnInterruptableContext ctx(list_lock);
 
     if (list.empty())
     {
@@ -212,10 +212,11 @@ void mmu_paging::unmap_area(const vm_t *vm)
 {
     if (unlikely(vm == nullptr))
         return;
+    uctx::UnInterruptableContext uic;
     if (vm->flags & flags::expand)
     {
-        auto page_count = (vm->end - vm->start) / page_size;
-        for (auto i = 0; i < page_count; i++)
+        u64 page_count = (vm->end - vm->start) / page_size;
+        for (u64 i = 0; i < page_count; i++)
         {
             auto vir = (void *)(vm->start + i * page_size);
             void *phy;
@@ -223,14 +224,14 @@ void mmu_paging::unmap_area(const vm_t *vm)
             {
                 arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vir,
                                     arch::paging::frame_size::size_4kb, 1);
-                memory::KernelBuddyAllocatorV->deallocate(phy);
+                memory::KernelBuddyAllocatorV->deallocate(memory::kernel_phyaddr_to_virtaddr(phy));
             }
         }
     }
     else
     {
-        auto page_count = (vm->end - vm->start) / page_size;
-        for (auto i = 0; i < page_count; i++)
+        u64 page_count = (vm->end - vm->start) / page_size;
+        for (u64 i = 0; i < page_count; i++)
         {
             auto vir = (void *)(vm->start + i * page_size);
             void *phy;
@@ -411,5 +412,6 @@ bool info_t::umap_file(u64 addr)
     }
     vma.deallocate_map(vm);
     mmu_paging.unmap_area(vm);
+    return true;
 }
 } // namespace memory::vm

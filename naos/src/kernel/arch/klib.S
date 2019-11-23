@@ -84,20 +84,18 @@ _kernel_thread:
     callq do_exit
     ret
 
-// args -> rdi, rsi, r12, r13, r8, r9
+// args -> rdi, rsi, rdx, r12, r8, r9
 // r10: rsp
 // r11: return eflags
 // rcx: return address
 .globl _sys_call
 _sys_call:
+    cli
     cld
-    pushq %rax
     swapgs
-    movq %gs:0x8, %rax
-    movq %rax, %rsp
-    movq -0x8(%r10), %rax
-    pushq %rax
+    movq %gs:0x8, %rsp
 
+    pushq %rax
 	movq %es,	%rax
 	pushq %rax
 	movq %ds,	%rax
@@ -130,13 +128,14 @@ sys_call_label:
     jnz sys_call_label2
     movq $0, %rax
 sys_call_label2:
-    xchgq %r12, %rcx
+    movq %r12, %rcx 
+    sti
 	callq *(%rbx,%rax,8)
     movq %rax, 0x80(%rsp) # return value
-    
+
     movabs $schedule, %rdx
 	callq *%rdx
-    
+    cli
 .globl _sys_ret
 _sys_ret:
     popq %r15
@@ -157,9 +156,9 @@ _sys_ret:
 	movq %rax, %ds	
 	popq %rax
 	movq %rax, %es
-    swapgs
-	popq %rax
+    popq %rax
     movq %r10, %rsp
+    swapgs
     sysretq
 
 

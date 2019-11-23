@@ -162,7 +162,7 @@ void delete_thread(thread_t *thd)
     auto thd_list = ((thread_list_t *)thd->process->thread_list);
     thd_list->remove(thd_list->find(thd));
     if (likely((u64)thd->kernel_stack_top > memory::kernel_stack_size))
-        delete_kernel_stack(thd->kernel_stack_top - memory::kernel_stack_size);
+        delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
 
     ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
     memory::Delete<>(register_info_t_allocator, thd->register_info);
@@ -318,22 +318,14 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     return process;
 }
 
-struct sleep_timer_struct
-{
-    u64 start;
-    u64 end;
-    thread_t *thd;
-};
-
 void sleep_callback_func(u64 pass, u64 data)
 {
-    sleep_timer_struct *st = (sleep_timer_struct *)data;
-    if (st != nullptr)
+    thread_t *thd = (thread_t *)data;
+    if (thd != nullptr)
     {
         uctx::UnInterruptableContext icu;
-        st->thd->state = thread_state::ready;
-        scheduler::update(st->thd);
-        memory::Delete<>(memory::KernelCommonAllocatorV, st);
+        thd->state = thread_state::ready;
+        scheduler::update(thd);
         return;
     }
     return;
@@ -342,23 +334,12 @@ void sleep_callback_func(u64 pass, u64 data)
 void do_sleep(u64 milliseconds)
 {
     uctx::UnInterruptableContext icu;
-    if (milliseconds == 0)
-    {
-        current()->attributes |= task::thread_attributes::need_schedule;
-        scheduler::update(current());
-    }
-    else
-    {
-        auto start = timer::get_high_resolution_time();
-        auto end = start + milliseconds * 1000;
-        current()->state = thread_state::interruptable;
-        sleep_timer_struct *st = memory::New<sleep_timer_struct>(memory::KernelCommonAllocatorV);
-        st->start = start;
-        st->end = end;
-        st->thd = current();
-        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)st);
+    current()->attributes |= task::thread_attributes::need_schedule;
 
-        current()->attributes |= task::thread_attributes::need_schedule;
+    if (milliseconds != 0)
+    {
+        current()->state = thread_state::interruptable;
+        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
         scheduler::update(current());
     }
 }
@@ -372,8 +353,15 @@ void do_exit(u64 ret)
         for (auto thd : list)
         {
             // Just destroy all thread
-            thd->state = thread_state::destroy;
-            scheduler::remove(thd);
+            if (thd->state == thread_state::stop || thd->state == thread_state::destroy)
+            {
+                thd->state = thread_state::destroy;
+            }
+            else
+            {
+                scheduler::remove(thd);
+            }
+
             // do_wake_up(&thd->wait_que); don't wake up
         }
         process->ret_val = ret;
@@ -417,6 +405,8 @@ u64 wait_process(process_t *process, u64 &ret)
 {
     if (process == nullptr)
         return 1;
+    uctx::UnInterruptableContext icu;
+
     process->wait_counter++;
     do_wait(&process->wait_que, wait_process_exit, (u64)process, wait_context_type::interruptable);
     ret = (u64)process->ret_val;
@@ -447,7 +437,7 @@ void check_process(process_t *process)
             {
                 memory::Delete<>(register_info_t_allocator, sub_thd->register_info);
                 if (likely((u64)sub_thd->kernel_stack_top > memory::kernel_stack_size))
-                    delete_kernel_stack(sub_thd->kernel_stack_top - memory::kernel_stack_size);
+                    delete_kernel_stack((void *)((u64)sub_thd->kernel_stack_top - memory::kernel_stack_size));
                 memory::Delete<>(thread_t_allocator, sub_thd);
                 it = list->remove(it);
             }
@@ -475,18 +465,23 @@ void check_thread(thread_t *thd)
 
 void exit_thread(u64 ret)
 {
-    auto thd = current();
-    thd->user_stack_top = (void *)ret;
-    thd->state = thread_state::stop;
-    scheduler::remove(thd);
-    if (thd->attributes & thread_attributes::detached)
     {
-        thd->state = thread_state::destroy;
+        uctx::UnInterruptableContext icu;
+        auto thd = current();
+        thd->user_stack_top = (void *)ret;
+        thd->state = thread_state::stop;
+        scheduler::remove(thd);
+        if (thd->attributes & thread_attributes::detached)
+        {
+            thd->state = thread_state::destroy;
+            check_thread(thd);
+        }
+        else
+        {
+            do_wake_up(&thd->wait_que);
+        }
     }
-    else
-    {
-        do_wake_up(&thd->wait_que);
-    }
+
     scheduler::force_schedule();
     trace::panic("Unreachable control flow.");
 }
@@ -515,6 +510,7 @@ u64 join_thread(thread_t *thd, u64 &ret)
         return 2;
     if (thd->attributes & thread_attributes::main)
         return 4;
+    uctx::UnInterruptableContext icu;
     thd->wait_counter++;
     do_wait(&thd->wait_que, wait_exit, (u64)thd, wait_context_type::interruptable);
     ret = (u64)thd->user_stack_top;

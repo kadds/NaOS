@@ -19,8 +19,11 @@ u64 clock_source::calibrate_tsc(::clock::clock_source *cs)
     ev->wait_next_tick();
     u64 t = test_time + cs->current();
     u64 start_tsc = _rdtsc();
+
     while (cs->current() <= t)
-        ;
+    {
+        __asm__ __volatile__("hlt\n\t" : : : "memory");
+    }
     u64 end_tsc = _rdtsc();
     t = cs->current() - t + test_time;
     ev->suspend();

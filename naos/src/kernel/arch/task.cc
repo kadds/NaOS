@@ -89,7 +89,7 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
     regs.es = regs.ds;
     regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
     regs.rdi = arg;
-
+    uctx::UnInterruptableContext icu;
     cpu::current().set_context(thd);
     _call_sys_ret(&regs);
     return 1;

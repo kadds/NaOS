@@ -3,23 +3,26 @@ const char file_content[] = "init file write context";
 
 void thread(int arg)
 {
-    print("thread testing\n");
+    print("thread sleep testing\n");
 
     if (arg != 2)
     {
         print("thread param id!=2\n");
-        exit_thread(1, 0);
+        exit_thread(1);
     }
     for (int i = 0; i < 2; i++)
     {
         print("thread2 sleep\n");
-        sleep(100);
+        sleep(1000);
+        print("thread2 sleep end\n");
     }
     print("thread2 exit\n");
-    exit_thread(0, 0);
+    exit_thread(0);
+    for (;;)
+        print("thread2 can't exit\n");
 }
 
-void print_file(const char *file_path)
+bool print_file(const char *file_path)
 {
     int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
     if (fd < 0)
@@ -27,7 +30,7 @@ void print_file(const char *file_path)
         print("Can't find file ");
         print(file_path);
         print("\n");
-        exit_thread(1, 0);
+        return false;
     }
     else
     {
@@ -46,6 +49,7 @@ void print_file(const char *file_path)
 
         close(fd);
     }
+    return true;
 }
 
 void test_file(const char *file_path)
@@ -61,7 +65,7 @@ void test_file(const char *file_path)
         if (file_content[i] != fc[i])
         {
             print("syscall write/read failed!\n");
-            exit(-1);
+            exit_thread(-1);
         }
     }
 }
@@ -93,22 +97,26 @@ void test_fs()
     {
         print("Can't delete file text ");
         print("\n");
-        exit_thread(1, 0);
+        exit_thread(1);
     }
 
     chroot("../");
     chdir("/");
     umount("/tmp");
+    print("file system tested\n");
 }
 
-unsigned long test_thread() { return create_thread((void *)thread, 2, 0); }
+unsigned long test_thread()
+{
+    print("thread testing\n");
+    return create_thread((void *)thread, 2, 0);
+}
 
 void test_memory()
 {
     print("memory testing\n");
     void *head = (void *)sbrk(0);
     sbrk(1024);
-    void *new_head = (void *)sbrk(0);
 
     *(char *)head = 'A';
 
@@ -117,16 +125,19 @@ void test_memory()
     void *p = mmap(0, 0, 0, 2048, MMAP_READ | MMAP_WRITE);
     *(char *)p = 'A';
     mumap(p);
+    print("memory tested.\n");
 }
 
 extern "C" void _start(char *args)
 {
     // __asm__ __volatile__("INT $3  \n\t" : : : "memory");
     print("Begin tests.\n");
-    test_memory();
+
     unsigned long tid = test_thread();
     test_fs();
+    test_memory();
     long ret;
+    print("join thread2\n");
     join(tid, &ret);
     if (ret != 0)
     {

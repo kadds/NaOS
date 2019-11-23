@@ -313,7 +313,9 @@ u64 clock_source::calibrate_apic(::clock::clock_source *cs)
     u64 t = test_time + cs->current();
     u64 start_count = ev->tick_count;
     while (cs->current() < t)
-        ;
+    {
+        __asm__ __volatile__("hlt\n\t" : : : "memory");
+    }
     u64 end_count = ev->tick_count;
 
     t = cs->current() - t + test_time;

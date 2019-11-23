@@ -61,7 +61,6 @@ u64 umap(u64 address)
     {
         return 0;
     }
-    auto &res = task::current_process()->res_table;
     auto vm_info = ((memory::vm::info_t *)(task::current_process()->mm_info));
     vm_info->umap_file(address);
     return 1;

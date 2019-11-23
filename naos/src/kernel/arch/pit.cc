@@ -97,23 +97,23 @@ u64 clock_source::current()
     u16 count;
     u64 jiff;
     {
-
         uctx::UnInterruptableContext uic;
+
         jiff = ev->tick_jiff;
 
         io_out8(command_port, 0);
         count = io_in8(channel_0_port);
         count |= ((u16)io_in8(channel_0_port)) << 8;
+
+        if (count > ev->pc)
+            count = ev->pc - 1;
+
+        if (count > old_count && old_jiff == jiff)
+            count = old_count;
+
+        old_count = count;
+        old_jiff = jiff;
     }
-
-    if (count > ev->pc)
-        count = ev->pc - 1;
-
-    if (count > old_count && old_jiff == jiff)
-        count = old_count;
-
-    old_count = count;
-    old_jiff = jiff;
     count = ev->pc - 1 - count;
 
     return (jiff * ev->pc + count) * 1000000ul / (rate + ev->hz / 2);

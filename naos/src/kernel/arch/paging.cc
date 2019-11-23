@@ -481,7 +481,7 @@ void copy_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 en
     u64 page_count = (end - start) / memory::page_size;
     if (override)
     {
-        for (u64 i = 0; i < page_count;)
+        for (u64 i = 0; i < page_count; i++)
         {
             if (copy(dst, src, pml4e_index))
             {
