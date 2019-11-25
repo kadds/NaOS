@@ -1,8 +1,8 @@
 #pragma once
+#include "./arch/idt.hpp"
+#include "./util/formatter.hpp"
 #include "common.hpp"
-#include "kernel/arch/idt.hpp"
-#include "kernel/ucontext.hpp"
-#include "kernel/util/formatter.hpp"
+#include "ucontext.hpp"
 #include <initializer_list>
 #include <type_traits>
 

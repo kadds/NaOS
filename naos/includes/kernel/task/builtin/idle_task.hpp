@@ -2,5 +2,5 @@
 #include "common.hpp"
 namespace task::builtin::idle
 {
-void main(const kernel_start_args *args);
+void main();
 } // namespace task::builtin::idle

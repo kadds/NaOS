@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #ifdef _DEBUG
-#include "kernel/arch/klib.hpp"
+#include "arch/klib.hpp"
 #endif
 #include <atomic>
 

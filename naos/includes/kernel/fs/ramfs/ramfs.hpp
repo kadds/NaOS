@@ -1,11 +1,11 @@
 #pragma once
+#include "../../util/hash_map.hpp"
+#include "../vfs/dentry.hpp"
+#include "../vfs/file.hpp"
+#include "../vfs/file_system.hpp"
+#include "../vfs/inode.hpp"
+#include "../vfs/super_block.hpp"
 #include "common.hpp"
-#include "kernel/fs/vfs/dentry.hpp"
-#include "kernel/fs/vfs/file.hpp"
-#include "kernel/fs/vfs/file_system.hpp"
-#include "kernel/fs/vfs/inode.hpp"
-#include "kernel/fs/vfs/super_block.hpp"
-#include "kernel/util/hash_map.hpp"
 
 namespace fs::ramfs
 {

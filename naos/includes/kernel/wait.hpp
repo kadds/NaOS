@@ -1,7 +1,7 @@
 #pragma once
-#include "kernel/mm/allocator.hpp"
-#include "kernel/util/linked_list.hpp"
 #include "lock.hpp"
+#include "mm/allocator.hpp"
+#include "util/linked_list.hpp"
 namespace task
 {
 enum class wait_context_type : u32

@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-#include "kernel/time.hpp"
+#include "time.hpp"
 namespace clock
 {
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "arch/idt.hpp"
 #include "common.hpp"
+#include "types.hpp"
 namespace irq
 {
 namespace hard_vector
@@ -28,15 +29,6 @@ enum soft_vector
     COUNT,
 };
 } // namespace soft_vector
-
-enum class request_result
-{
-    ok = 0,
-    no_handled = 1,
-};
-
-typedef request_result (*request_func)(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data);
-typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
 
 struct request_func_data
 {

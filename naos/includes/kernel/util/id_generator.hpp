@@ -1,9 +1,9 @@
 #pragma once
+#include "../lock.hpp"
+#include "../mm/new.hpp"
+#include "../ucontext.hpp"
 #include "bit_set.hpp"
 #include "common.hpp"
-#include "kernel/lock.hpp"
-#include "kernel/mm/new.hpp"
-#include "kernel/ucontext.hpp"
 namespace util
 {
 constexpr u64 null_id = (u64)(-1);

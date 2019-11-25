@@ -1,7 +1,7 @@
 #pragma once
+#include "../clock/clock_event.hpp"
+#include "../clock/clock_source.hpp"
 #include "common.hpp"
-#include "kernel/clock/clock_event.hpp"
-#include "kernel/clock/clock_source.hpp"
 
 namespace arch::TSC
 {

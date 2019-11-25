@@ -211,7 +211,7 @@ void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
 void local_post_IPI(u64 targes) {}
 
-irq::request_result _ctx_interrupt_ on_event(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u64 user_data)
 {
     auto event = (clock_event *)user_data;
 

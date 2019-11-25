@@ -8,7 +8,7 @@
 
 namespace task::builtin::idle
 {
-void main(const kernel_start_args *args)
+void main()
 {
     trace::info("idle task running.");
     auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read | fs::mode::bin,

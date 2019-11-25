@@ -1,7 +1,7 @@
 #pragma once
-#include "kernel/arch/idt.hpp"
-#include "kernel/lock.hpp"
-#include "kernel/preempt.hpp"
+#include "arch/idt.hpp"
+#include "lock.hpp"
+#include "preempt.hpp"
 namespace uctx
 {
 struct UnPreemptContextController

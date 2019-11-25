@@ -133,7 +133,7 @@ struct thread_t
 };
 
 void init();
-void start_task_idle(const kernel_start_args *args);
+void start_task_idle();
 void switch_thread(thread_t *old, thread_t *new_task);
 
 namespace create_thread_flags

@@ -1,8 +1,8 @@
 #pragma once
+#include "../lock.hpp"
+#include "../util/linked_list.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
-#include "kernel/lock.hpp"
-#include "kernel/util/linked_list.hpp"
 #include "list_node_cache.hpp"
 namespace fs::vfs
 {

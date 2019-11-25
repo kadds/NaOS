@@ -1,6 +1,6 @@
 #pragma once
+#include "../../../common/font/font.hpp"
 #include "common.hpp"
-#include "kernel/common/font/font.hpp"
 #include "vga.hpp"
 
 namespace arch::device::vga::graphics

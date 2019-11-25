@@ -1,6 +1,21 @@
 #pragma once
 #include "common.hpp"
 
+#ifdef OS_KERNEL
+namespace irq
+{
+enum class request_result
+{
+    ok = 0,
+    no_handled = 1,
+};
+
+typedef request_result (*request_func)(const void *regs, u64 extra_data, u64 user_data);
+typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
+
+} // namespace irq
+#endif
+
 using handle_t = u64;
 using thread_id = u64;
 using process_id = u64;

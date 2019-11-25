@@ -1,6 +1,6 @@
 #pragma once
 #include "common.hpp"
-#include "kernel/util/memory.hpp"
+#include "memory.hpp"
 namespace util
 {
 class ring_buffer

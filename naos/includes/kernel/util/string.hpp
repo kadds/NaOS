@@ -1,6 +1,6 @@
 #pragma once
+#include "../mm/allocator.hpp"
 #include "common.hpp"
-#include "kernel/mm/allocator.hpp"
 
 typedef u32 uchar;
 

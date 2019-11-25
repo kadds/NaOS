@@ -14,7 +14,7 @@ struct cursor_t
 };
 extern bool is_auto_flush;
 
-void init(const kernel_start_args *args);
+void init();
 
 byte *get_vram();
 void set_vram(byte *addr);

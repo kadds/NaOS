@@ -15,7 +15,7 @@ const io_port command_port = 0x43;
 // rate HZ
 const u32 rate = 1193182;
 
-irq::request_result _ctx_interrupt_ on_event(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u64 user_data)
 {
     clock_event *ev = (clock_event *)user_data;
     if (unlikely(ev == nullptr))

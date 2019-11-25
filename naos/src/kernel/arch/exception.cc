@@ -2,6 +2,7 @@
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 

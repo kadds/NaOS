@@ -63,6 +63,6 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     task::init();
     trace::info("kernel main");
     arch::last_init();
-    task::start_task_idle(args);
+    task::start_task_idle();
     trace::panic("Unreachable control flow in _kstart.");
 }

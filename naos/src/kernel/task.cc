@@ -385,14 +385,14 @@ void destroy_process(process_t *process)
     delete_process(process);
 }
 
-void start_task_idle(const kernel_start_args *args)
+void start_task_idle()
 {
     scheduler::time_span_scheduler *scheduler =
         memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
     scheduler::set_scheduler(scheduler);
 
     create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
-    task::builtin::idle::main(args);
+    task::builtin::idle::main();
 }
 
 bool wait_process_exit(u64 user_data)

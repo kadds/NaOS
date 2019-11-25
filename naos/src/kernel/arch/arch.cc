@@ -21,7 +21,7 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
 void init(const kernel_start_args *args)
 {
     trace::early_init();
-    device::vga::init(args);
+    device::vga::init();
     trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::ColorValue>(0xA0c000),
                  trace::Background<trace::Color::Black>(), " NaOS: Nano Operating System (arch X86_64)",
                  trace::PrintAttr::Reset(), '\n');

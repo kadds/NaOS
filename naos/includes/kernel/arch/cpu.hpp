@@ -1,7 +1,11 @@
 #pragma once
 #include "common.hpp"
-#include "kernel/task.hpp"
 #include <atomic>
+
+namespace task
+{
+struct thread_t;
+};
 namespace arch::cpu
 {
 constexpr u32 max_cpu_support = 32;

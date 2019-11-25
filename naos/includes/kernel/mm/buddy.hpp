@@ -1,6 +1,6 @@
 #pragma once
+#include "allocator.hpp"
 #include "common.hpp"
-#include "memory.hpp"
 
 namespace memory
 {

@@ -1,6 +1,5 @@
 #pragma once
-#include "common.hpp"
-#include "kernel/kernel.hpp"
+#include "../kernel.hpp"
 
 namespace arch::device::chip8259A
 {

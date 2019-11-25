@@ -1,13 +1,8 @@
 #pragma once
+#include "../clock/clock_event.hpp"
+#include "../clock/clock_source.hpp"
+#include "../types.hpp"
 #include "common.hpp"
-
-#include "kernel/clock/clock_event.hpp"
-#include "kernel/clock/clock_source.hpp"
-#include "kernel/irq.hpp"
-namespace arch::idt
-{
-struct regs_t;
-} // namespace arch::idt
 
 namespace arch::APIC
 {
@@ -38,7 +33,7 @@ class clock_source;
 class clock_event : public ::clock::clock_event
 {
   private:
-    friend irq::request_result on_event(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data);
+    friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
     friend class clock_source;
     volatile bool is_suspend;
     volatile u64 tick_count;

@@ -1,8 +1,8 @@
 #pragma once
+#include "../../mm/list_node_cache.hpp"
+#include "../../util/singly_linked_list.hpp"
 #include "common.hpp"
 #include "defines.hpp"
-#include "kernel/mm/list_node_cache.hpp"
-#include "kernel/util/singly_linked_list.hpp"
 
 namespace fs::vfs
 {

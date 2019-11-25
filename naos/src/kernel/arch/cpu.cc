@@ -5,6 +5,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 namespace arch::cpu

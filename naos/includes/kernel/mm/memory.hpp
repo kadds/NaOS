@@ -2,6 +2,7 @@
 #include "../kernel.hpp"
 #include "allocator.hpp"
 #include "common.hpp"
+#include "mm.hpp"
 #include <utility>
 
 namespace memory
@@ -35,8 +36,6 @@ struct zones_t
     int count;
 };
 
-extern const u64 linear_addr_offset;
-extern const u64 page_size;
 extern zones_t global_zones;
 
 template <typename Tptr> inline Tptr kernel_virtaddr_to_phyaddr(Tptr virt_addr)
@@ -114,6 +113,9 @@ void kfree(void *addr);
 
 void *vmalloc(u64 size, u64 align);
 void vfree(void *addr);
+
+void *malloc_page();
+void free_page(void *addr);
 
 void listen_page_fault();
 

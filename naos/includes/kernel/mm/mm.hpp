@@ -61,4 +61,8 @@ extern const int soft_irq_stack_page_count;
 
 extern const u64 max_memory_support;
 
+extern const u64 linear_addr_offset;
+
+extern const u64 page_size;
+
 } // namespace memory

@@ -1,5 +1,5 @@
 #pragma once
-#include "kernel/fs/ramfs/ramfs.hpp"
+#include "../ramfs/ramfs.hpp"
 
 namespace fs::rootfs
 {

@@ -1,5 +1,6 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/arch/video/vga/output_graphics.hpp"
+#include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
@@ -17,8 +18,9 @@ byte *backbuffer_addr;
 bool is_auto_flush = false;
 cursor_t cursor;
 
-void init(const kernel_start_args *args)
+void init()
 {
+    auto args = kernel_args;
     using namespace trace;
     bool is_graphics_mode = args->fb_type == 1;
     backbuffer_addr = nullptr;

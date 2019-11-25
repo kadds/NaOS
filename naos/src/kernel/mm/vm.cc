@@ -6,12 +6,14 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+
 namespace memory::vm
 {
-irq::request_result _ctx_interrupt_ page_fault_func(const arch::idt::regs_t *regs, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ page_fault_func(const void *regs, u64 extra_data, u64 user_data)
 {
     auto *thread = arch::cpu::current().get_task();
     if (thread != nullptr)
@@ -178,7 +180,7 @@ void mmu_paging::map_area(const vm_t *vm)
 
     for (char *start = (char *)vm->start; start < (char *)vm->end; start += arch::paging::frame_size::size_4kb)
     {
-        void *phy_addr = memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(1, 0));
+        void *phy_addr = memory::kernel_virtaddr_to_phyaddr(memory::malloc_page());
 
         arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, phy_addr,
                           arch::paging::frame_size::size_4kb, 1, attr);
@@ -224,7 +226,7 @@ void mmu_paging::unmap_area(const vm_t *vm)
             {
                 arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vir,
                                     arch::paging::frame_size::size_4kb, 1);
-                memory::KernelBuddyAllocatorV->deallocate(memory::kernel_phyaddr_to_virtaddr(phy));
+                memory::free_page(memory::kernel_phyaddr_to_virtaddr(phy));
             }
         }
     }
@@ -237,7 +239,7 @@ void mmu_paging::unmap_area(const vm_t *vm)
             void *phy;
             if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
             {
-                memory::KernelBuddyAllocatorV->deallocate(phy);
+                memory::free_page(memory::kernel_phyaddr_to_virtaddr(phy));
             }
             else
             {
@@ -324,7 +326,7 @@ bool head_expand_vm(u64 page_addr, const vm_t *item)
         vm_t vm = *item;
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
-        byte *ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
+        byte *ptr = (byte *)memory::malloc_page();
         info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
         return true;
     }
@@ -340,7 +342,7 @@ bool fill_expand_vm(u64 page_addr, const vm_t *item)
         vm_t vm = *item;
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
-        byte *ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
+        byte *ptr = (byte *)memory::malloc_page();
         info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
         return true;
     }
@@ -353,7 +355,7 @@ bool fill_file_vm(u64 page_addr, const vm_t *item)
     u64 page_start = (page_addr) & ~(memory::page_size - 1);
     u64 off = page_start - item->start;
     mt->file->move(mt->offset + off);
-    byte *ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
+    byte *ptr = (byte *)memory::malloc_page();
     u64 read_size = mt->length > memory::page_size ? memory::page_size : mt->length;
     auto ksize = mt->file->read(ptr, read_size);
     util::memzero(ptr + ksize, memory::page_size - ksize);

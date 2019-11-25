@@ -1,7 +1,7 @@
 #pragma once
 #include "../mm/allocator.hpp"
 #include "common.hpp"
-#include "kernel/util/memory.hpp"
+#include "memory.hpp"
 
 namespace util
 {

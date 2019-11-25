@@ -364,6 +364,10 @@ void zone_t::tag_used(u64 offset_start, u64 offset_end)
     buddies->buddies[e_buddy].tag_alloc(0, e_buddy_rest);
 }
 
+void *malloc_page() { return KernelBuddyAllocatorV->allocate(1, 0); }
+
+void free_page(void *addr) { KernelBuddyAllocatorV->deallocate(addr); }
+
 void *KernelCommonAllocator::allocate(u64 size, u64 align) { return kmalloc(size, align); }
 
 void KernelCommonAllocator::deallocate(void *p) { kfree(p); }
