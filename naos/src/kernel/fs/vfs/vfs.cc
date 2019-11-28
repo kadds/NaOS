@@ -149,23 +149,6 @@ i64 rest_file_name(nameidata &idata)
     return name_len + 1;
 }
 
-dentry *mkdir(dentry *parent, const char *name, u64 name_len)
-{
-    super_block *su_block = parent->get_inode()->get_super_block();
-    dentry *entry = su_block->alloc_dentry();
-    if (unlikely(name_len == 0))
-        name_len = util::strlen(name) + 1;
-
-    auto cname = (char *)memory::KernelCommonAllocatorV->allocate(name_len, 1);
-    util::memcopy(cname, (const void *)name, name_len);
-    entry->set_name(cname);
-    inode *node = su_block->alloc_inode();
-    node->mkdir(entry);
-    entry->set_parent(parent);
-    parent->add_child(entry);
-    return entry;
-}
-
 dentry *create_dentry(dentry *parent, const char *name, u64 name_len)
 {
     super_block *su_block = parent->get_inode()->get_super_block();
@@ -182,12 +165,21 @@ dentry *create_dentry(dentry *parent, const char *name, u64 name_len)
     return entry;
 }
 
+dentry *mkdir(dentry *parent, const char *name, u64 name_len)
+{
+    super_block *su_block = parent->get_inode()->get_super_block();
+    auto entry = create_dentry(parent, name, name_len);
+    inode *node = su_block->alloc_inode();
+    node->mkdir(entry);
+    return entry;
+}
+
 dentry *create_file(dentry *parent, const char *name, u64 name_len, nameidata *idata)
 {
     super_block *su_block = parent->get_inode()->get_super_block();
     auto entry = create_dentry(parent, name, name_len);
     inode *node = su_block->alloc_inode();
-    node->create(entry, idata);
+    node->create(entry);
     return entry;
 }
 
@@ -363,13 +355,24 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
         auto next_type = next_entry->get_inode()->get_type();
         if (next_type == fs::inode_type_t::symbolink)
         {
-            if (unlikely(flags & path_walk_flags::not_symbolic_link))
-                return nullptr;
+            if (unlikely(flags & path_walk_flags::not_resolve_symbolic_link))
+            {
+                if (*name == 0) // the last entry is symbolic link entry, return it
+                {
+                    return next_entry;
+                }
+                else // else don't resolve symbolic link, can't find file, return null
+                {
+                    return nullptr;
+                }
+            }
+            u64 old_deep = idata.deep;
 
             if (idata.symlink_deep++ > 15) // symbolic link deep overflow
                 return nullptr;
             next_entry = path_walk(next_entry->get_inode()->symbolink(), root, cur_dir,
                                    flags | path_walk_flags::continue_parse, idata);
+            idata.deep = old_deep;
             if (next_entry == nullptr || next_entry->get_inode()->get_link_count() == 0)
                 return nullptr;
         }
@@ -577,10 +580,11 @@ bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
-    dentry *entry = path_walk(pathname, root, cur_dir, 0, idata);
+    dentry *entry = path_walk(pathname, root, cur_dir, path_walk_flags::not_resolve_symbolic_link, idata);
     if (unlikely(entry == nullptr))
         return false;
 
+    entry->get_parent()->remove_child(entry);
     entry->get_inode()->unlink(entry);
 
     if (entry->get_inode()->get_link_count() == 0)

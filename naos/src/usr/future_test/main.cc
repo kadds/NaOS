@@ -61,15 +61,23 @@ void write_file(const char *file_path)
 
 void test_file(const char *file_path)
 {
-    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN, 0);
+    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
     char fc[sizeof(file_content)];
     lseek(fd, 0, LSEEK_MODE_BEGIN);
-    read(fd, fc, sizeof(file_content));
+    if (read(fd, fc, sizeof(file_content)) < sizeof(file_content))
+    {
+        print("syscall write/read failed! file:");
+        print(file_path);
+        print("\n");
+        exit_thread(-1);
+    }
     for (unsigned int i = 0; i < sizeof(file_content); i++)
     {
         if (file_content[i] != fc[i])
         {
-            print("syscall write/read failed!\n");
+            print("syscall write/read failed! file:");
+            print(file_path);
+            print("\n");
             exit_thread(-1);
         }
     }
@@ -102,9 +110,12 @@ void test_fs()
     rename("./text1", "./text");
     link("the_text", "./text");
     test_file("/future_test/the_text");
+    test_file("/ft/text");
     test_file("/ft/ft2/text.link");
     unlink("text");
     unlink("the_text");
+    unlink("/ft/ft2");
+    unlink("/ft");
 
     int fd = open("text", OPEN_MODE_READ, 0);
     if (fd >= 0)
@@ -114,7 +125,7 @@ void test_fs()
         exit_thread(1);
     }
 
-    chroot("../");
+    chroot("/../");
     chdir("/");
     umount("/tmp");
     print("file system tested\n");

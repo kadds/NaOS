@@ -59,7 +59,7 @@ enum path_walk_flags : flag_t
 {
     auto_create_file = 1,
     continue_parse = 4,
-    not_symbolic_link = 8,
+    not_resolve_symbolic_link = 8,
     directory = 16,
     file = 32,
     cross_root = 64,

@@ -27,7 +27,7 @@ class inode
     inode() = default;
     virtual ~inode() = default;
     // create file in disk
-    virtual void create(dentry *entry, nameidata *idata);
+    virtual void create(dentry *entry);
 
     virtual bool has_permission(flag_t pf, user_id uid, group_id gid);
 

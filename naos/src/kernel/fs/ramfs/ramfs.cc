@@ -106,6 +106,7 @@ void super_block::load()
     root->set_parent(nullptr);
 
     r->node = alloc_inode();
+    r->node->mkdir(root);
 }
 
 void super_block::save() {}

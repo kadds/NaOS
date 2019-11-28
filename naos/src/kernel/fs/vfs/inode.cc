@@ -5,7 +5,7 @@ namespace fs::vfs
 {
 bool inode::has_permission(flag_t pf, user_id uid, group_id gid) { return true; }
 
-void inode::create(vfs::dentry *entry, vfs::nameidata *idata)
+void inode::create(vfs::dentry *entry)
 {
     entry->set_inode(this);
     link_count = 1;
