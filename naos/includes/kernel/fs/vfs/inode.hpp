@@ -34,9 +34,11 @@ class inode
     virtual void mkdir(dentry *entry);
     virtual void rmdir();
 
-    virtual void rename(dentry *old_entry, dentry *new_entry);
+    virtual void rename(dentry *new_entry);
     virtual void link(dentry *old_entry, dentry *new_entry);
     virtual bool unlink(dentry *entry);
+    virtual bool create_symbolink(dentry *entry, const char *target);
+    virtual const char *symbolink() = 0;
 
     virtual u64 hash();
 

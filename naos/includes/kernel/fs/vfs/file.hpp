@@ -25,7 +25,7 @@ class file
     void remove_ref() { ref_count--; }
 
     virtual u64 read(byte *ptr, u64 max_size) = 0;
-    virtual u64 write(byte *ptr, u64 size) = 0;
+    virtual u64 write(const byte *ptr, u64 size) = 0;
 
     virtual void flush() = 0;
 

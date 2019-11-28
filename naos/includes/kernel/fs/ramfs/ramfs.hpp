@@ -27,6 +27,8 @@ class inode : public vfs::inode
     u64 ram_size;
 
   public:
+    bool create_symbolink(vfs::dentry *entry, const char *target) override;
+    const char *symbolink() override;
 };
 
 class file : public vfs::file
@@ -39,7 +41,7 @@ class file : public vfs::file
         return 0;
     };
     int close() override { return 0; };
-    u64 write(byte *buffer, u64 size) override;
+    u64 write(const byte *buffer, u64 size) override;
     u64 read(byte *buffer, u64 max_size) override;
     void flush() override{};
 };

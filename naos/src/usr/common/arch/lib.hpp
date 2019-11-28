@@ -18,7 +18,6 @@ SYS_CALL(1, void, print, const char *arg, bool normal = false)
 #define OPEN_MODE_APPEND 8
 
 #define OPEN_ATTR_AUTO_CREATE_FILE 1
-#define OPEN_ATTR_AUTO_CREATE_DIR 2
 
 SYS_CALL(10, int, open, const char *path, unsigned long mode, unsigned long attr)
 SYS_CALL(11, void, close, int fd);
@@ -30,6 +29,9 @@ SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len)
 #define LSEEK_MODE_END 2
 
 SYS_CALL(16, unsigned long, lseek, int fd, long offset, int mode)
+
+SYS_CALL(17, int, rename, const char *src, const char *target);
+SYS_CALL(18, int, symbolink, const char *src, const char *target, unsigned long flags);
 
 SYS_CALL(19, int, create, const char *filepath)
 

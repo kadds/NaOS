@@ -16,6 +16,26 @@ struct rootfs_head
     u64 file_count;
 };
 
+void mkdir(const char *path)
+{
+    memory::MemoryView<dir_entry_str> entry_str(memory::KernelCommonAllocatorV, sizeof(dir_entry_str),
+                                                alignof(dir_entry_str));
+    char *p = entry_str.get()->name;
+    while (*path != 0)
+    {
+        if (*path == '/')
+        {
+            while (*path == '/')
+            {
+                path++;
+            }
+            *p = 0;
+            vfs::mkdir(entry_str.get()->name, vfs::global_root, vfs::global_root, 0);
+        }
+        *p++ = *path++;
+    }
+}
+
 void init(byte *start_root_image, u64 size)
 {
     if (start_root_image == nullptr || size == 0)
@@ -35,13 +55,15 @@ void init(byte *start_root_image, u64 size)
         byte *start_of_file = start_root_image + sizeof(rootfs_head);
         for (u64 i = 0; i < head->file_count; i++)
         {
-            char *file_name = (char *)start_of_file;
-            int len = util::strlen(file_name);
+            char *path = (char *)start_of_file;
+            int len = util::strlen(path);
             u64 data_size = *(u64 *)(start_of_file + len + 1);
             byte *data = start_of_file + len + 1 + sizeof(u64);
-            auto file = vfs::open(file_name, vfs::global_root, vfs::global_root, mode::write | mode::bin,
-                                  path_walk_flags::auto_create_file | path_walk_flags::auto_create_dir_rescure |
-                                      path_walk_flags::file);
+
+            mkdir(path);
+
+            auto file = vfs::open(path, vfs::global_root, vfs::global_root, mode::write | mode::bin,
+                                  path_walk_flags::file | path_walk_flags::auto_create_file);
             file->write(data, data_size);
             vfs::close(file);
 

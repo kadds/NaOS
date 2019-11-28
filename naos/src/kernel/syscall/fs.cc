@@ -8,6 +8,37 @@
 namespace syscall
 {
 
+int rename(const char *src, const char *target)
+{
+    if (src == nullptr || !is_user_space_pointer(src))
+    {
+        return -1;
+    }
+    if (target == nullptr || !is_user_space_pointer(target))
+    {
+        return -1;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+
+    return !fs::vfs::rename(target, src, ft->root, ft->current);
+}
+
+int symbolink(const char *src_path, const char *target_path, flag_t flags)
+{
+    if (src_path == nullptr || !is_user_space_pointer(src_path))
+    {
+        return -1;
+    }
+    if (target_path == nullptr || !is_user_space_pointer(target_path))
+    {
+        return -1;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+    if (fs::vfs::symbolink(src_path, target_path, ft->root, ft->current, flags))
+        return 0;
+    return -1;
+}
+
 int create(const char *pathname)
 {
     if (pathname == nullptr || !is_user_space_pointer(pathname))
@@ -16,13 +47,7 @@ int create(const char *pathname)
     }
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
-    auto file = fs::vfs::open(pathname, ft->root, ft->current, 0, fs::path_walk_flags::auto_create_file);
-    if (file)
-    {
-        file->close();
-        return 0;
-    }
-    return 1;
+    return fs::vfs::create(pathname, ft->root, ft->current, 0);
 }
 
 int access(const char *filepathname, flag_t mode)
@@ -99,6 +124,7 @@ int chroot(const char *pathname)
         return -1;
     }
     auto ft = task::current_process()->res_table.get_file_table();
+
     auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current,
                                     fs::path_walk_flags::directory | fs::path_walk_flags::cross_root);
     if (entry != nullptr)
@@ -113,18 +139,18 @@ void set_attr(file_desc fd, const char *name, void *value, u64 size, u64 flags) 
 
 void get_attr(file_desc fd, const char *name, void *value, u64 max_size) {}
 
-int link(const char *src_filepath, const char *target_filepath)
+int link(const char *src, const char *target)
 {
-    if (src_filepath == nullptr || !is_user_space_pointer(src_filepath))
+    if (src == nullptr || !is_user_space_pointer(src))
     {
         return -1;
     }
-    if (target_filepath == nullptr || !is_user_space_pointer(target_filepath))
+    if (target == nullptr || !is_user_space_pointer(target))
     {
         return -1;
     }
     auto ft = task::current_process()->res_table.get_file_table();
-    if (fs::vfs::link(src_filepath, ft->get_path_root(src_filepath), target_filepath, ft->root, ft->current))
+    if (fs::vfs::link(src, target, ft->root, ft->current))
         return 0;
     return -1;
 }
@@ -190,7 +216,9 @@ int umount(const char *pathname)
 }
 
 BEGIN_SYSCALL
-SYSCALL(19, create)
+SYSCALL(17, rename);
+SYSCALL(18, symbolink);
+SYSCALL(19, create);
 SYSCALL(20, access);
 SYSCALL(21, mkdir);
 SYSCALL(22, rmdir);

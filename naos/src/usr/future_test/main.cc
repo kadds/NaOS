@@ -52,14 +52,19 @@ bool print_file(const char *file_path)
     return true;
 }
 
+void write_file(const char *file_path)
+{
+    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN, 0);
+    write(fd, file_content, sizeof(file_content));
+    close(fd);
+}
+
 void test_file(const char *file_path)
 {
-    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN,
-                  OPEN_ATTR_AUTO_CREATE_FILE | OPEN_ATTR_AUTO_CREATE_DIR);
-    write(fd, file_content, sizeof(file_content));
-    char fc[52];
-    lseek(fd, 0, 1);
-    read(fd, fc, 52);
+    int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN, 0);
+    char fc[sizeof(file_content)];
+    lseek(fd, 0, LSEEK_MODE_BEGIN);
+    read(fd, fc, sizeof(file_content));
     for (unsigned int i = 0; i < sizeof(file_content); i++)
     {
         if (file_content[i] != fc[i])
@@ -68,6 +73,7 @@ void test_file(const char *file_path)
             exit_thread(-1);
         }
     }
+    close(fd);
 }
 
 void test_fs()
@@ -85,10 +91,18 @@ void test_fs()
     mount("", "/tmp/", "ramfs", 0, nullptr, 0x10000);
     chroot("/tmp");
     mkdir("/future_test/");
+    mkdir("/future_test/ft2");
     chdir("/future_test");
-    create("./text");
-    link("./text", "the_text");
+    symbolink("/ft", "/future_test", 0);
+    symbolink("./ft2/text.link", "./text", 0);
+
+    create("./text1");
+    write_file("./text1");
+
+    rename("./text1", "./text");
+    link("the_text", "./text");
     test_file("/future_test/the_text");
+    test_file("/ft/ft2/text.link");
     unlink("text");
     unlink("the_text");
 

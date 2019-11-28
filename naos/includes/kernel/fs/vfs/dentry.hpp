@@ -21,16 +21,14 @@ class dentry
     bool loaded_child;
     bool mount_point;
 
-    dentry_list_t child_dir_list;
-    dentry_list_t child_file_list;
+    dentry_list_t child_list;
 
   public:
     dentry();
     virtual ~dentry() = default;
 
     virtual u64 hash() const;
-    dentry *find_child_dir(const char *name) const;
-    dentry *find_child_file(const char *name) const;
+    dentry *find_child(const char *name) const;
     void set_inode(inode *node);
     inode *get_inode() const;
 
@@ -49,10 +47,8 @@ class dentry
     virtual void load_child();
     virtual void save_child();
 
-    virtual void add_sub_dir(dentry *child);
-    virtual void add_sub_file(dentry *file);
-    virtual void remove_sub_dir(dentry *child);
-    virtual void remove_sub_file(dentry *file);
+    virtual void add_child(dentry *child);
+    virtual void remove_child(dentry *child);
 };
 
 } // namespace fs::vfs

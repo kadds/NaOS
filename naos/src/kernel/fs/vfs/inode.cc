@@ -31,7 +31,7 @@ void inode::mkdir(vfs::dentry *entry)
     set_type(inode_type_t::directory);
 }
 
-void inode::rename(vfs::dentry *old_entry, vfs::dentry *new_entry) {}
+void inode::rename(vfs::dentry *new_entry) {}
 
 void inode::rmdir() { link_count--; }
 
@@ -51,6 +51,20 @@ bool inode::unlink(dentry *entry)
         return true;
     }
     return false;
+}
+
+bool inode::create_symbolink(dentry *entry, const char *target)
+{
+    entry->set_inode(this);
+    link_count = 1;
+    ref_count = 0;
+    file_size = 0;
+    last_write_time = timer::get_high_resolution_time();
+    last_read_time = last_write_time;
+    last_attr_change_time = last_write_time;
+    birth_time = last_write_time;
+    set_type(inode_type_t::symbolink);
+    return true;
 }
 
 u64 inode::hash() { return ((u64)this) >> 5; }

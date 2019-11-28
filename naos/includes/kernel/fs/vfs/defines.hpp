@@ -44,17 +44,26 @@ enum mode : flag_t
 };
 } // namespace mode
 
+namespace create_flags
+{
+enum create_flags : flag_t
+{
+    directory = 1,
+    file = 2,
+};
+} // namespace create_flags
+
 namespace path_walk_flags
 {
 enum path_walk_flags : flag_t
 {
     auto_create_file = 1,
-    auto_create_dir_rescure = 2,
-    parent = 4,
-    not_symlink = 8,
+    continue_parse = 4,
+    not_symbolic_link = 8,
     directory = 16,
     file = 32,
     cross_root = 64,
+    symbolic_file = 128,
 };
 } // namespace path_walk_flags
 
@@ -62,10 +71,17 @@ enum class inode_type_t : u8
 {
     file,
     directory,
-    link,
-    device,
+    symbolink,
     other,
 };
+namespace symlink_flags
+{
+enum symlink_flags : flag_t
+{
+    directory = 1,
+
+};
+}
 namespace vfs
 {
 class inode;
@@ -89,5 +105,20 @@ enum : flag_t
 
 };
 } // namespace fs_flags
+
+constexpr u64 directory_maximum_entry_size = 512;
+constexpr u64 directory_maximum_path_size = 4096;
+
+struct dir_entry_str
+{
+    char name[directory_maximum_entry_size];
+    char *operator*() { return name; }
+};
+
+struct dir_path_str
+{
+    char name[directory_maximum_path_size];
+    char *operator*() { return name; }
+};
 
 } // namespace fs

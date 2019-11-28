@@ -9,29 +9,16 @@ namespace fs::vfs
 dentry::dentry()
     : loaded_child(false)
     , mount_point(false)
-    , child_dir_list(memory::KernelCommonAllocatorV)
-    , child_file_list(memory::KernelCommonAllocatorV)
+    , child_list(memory::KernelCommonAllocatorV)
 
 {
 }
 
 u64 dentry::hash() const { return 0; }
 
-dentry *dentry::find_child_dir(const char *name) const
+dentry *dentry::find_child(const char *name) const
 {
-    for (auto &d : child_dir_list)
-    {
-        if (util::strcmp(name, d->name) == 0)
-        {
-            return d;
-        }
-    }
-    return nullptr;
-}
-
-dentry *dentry::find_child_file(const char *name) const
-{
-    for (auto &d : child_file_list)
+    for (auto &d : child_list)
     {
         if (util::strcmp(name, d->name) == 0)
         {
@@ -57,11 +44,8 @@ void dentry::load_child() { node->get_super_block()->fill_dentry(this); }
 
 void dentry::save_child() { node->get_super_block()->save_dentry(this); }
 
-void dentry::add_sub_dir(dentry *child) { child_dir_list.push_back(child); }
+void dentry::add_child(dentry *child) { child_list.push_back(child); }
 
-void dentry::add_sub_file(dentry *file) { child_file_list.push_back(file); }
+void dentry::remove_child(dentry *child) { child_list.remove(child_list.find(child)); }
 
-void dentry::remove_sub_dir(dentry *child) { child_dir_list.remove(child_dir_list.find(child)); }
-
-void dentry::remove_sub_file(dentry *file) { child_file_list.remove(child_file_list.find(file)); }
 } // namespace fs::vfs

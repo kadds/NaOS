@@ -2,12 +2,29 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/util/memory.hpp"
+#include "kernel/util/str.hpp"
 namespace fs::ramfs
 {
 
 void init() { vfs::register_fs(memory::New<file_system>(memory::KernelCommonAllocatorV)); }
 
-u64 file::write(byte *buffer, u64 size)
+bool inode::create_symbolink(vfs::dentry *entry, const char *target)
+{
+    bool ok = vfs::inode::create_symbolink(entry, target);
+    /// TODO: save
+    if (ok)
+    {
+        file f;
+        f.open(entry, mode::write);
+        u64 len = util::strlen(target) + 1;
+        f.write((const byte *)target, len);
+    }
+    return ok;
+}
+
+const char *inode::symbolink() { return (const char *)start_ptr; }
+
+u64 file::write(const byte *buffer, u64 size)
 {
     inode *node = (inode *)entry->get_inode();
     super_block *sublock = (super_block *)node->su_block;
