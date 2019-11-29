@@ -16,6 +16,7 @@ Features / TODO
     - [ ] Scheduler
         - [x] Time span
         - [ ] CFS
+        - [ ] Load balancing
     - [ ] Thread
         - [x] Schedule
         - [ ] Synchronize
@@ -32,8 +33,11 @@ Features / TODO
 * - [ ] File subsystem
     - [ ] Virtual File system
         - [x] Read, Write, Seek
+        - [x] Hard link, Symbolic link
         - [ ] Authority identification
-    - [ ] Network File system
+    - [ ] NFS
+    - [ ] Ext2
+    - [ ] FAT
 * - [x] Interrupt subsystem
     - [x] Hard IRQ
     - [x] Soft IRQ
@@ -44,6 +48,7 @@ Features / TODO
 * - [ ] Drivers
     - [ ] ATA Disk driver
         - [ ] DMA
+        - [ ] POL
     - [ ] Native display driver
     - [ ] Network interface card driver
     - [ ] Mouse & Keyboard driver

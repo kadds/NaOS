@@ -2,7 +2,7 @@
 
 ## Nano Operating system
 A 64bit (x86-64) Simple Operating System Writing By C++.  (:sunglasses:)  
-NaOS running at Intel / AMD modern processors.  
+NaOS runs on Intel / AMD modern processors.  
 
 ![build passing](https://img.shields.io/badge/build-passing-green) ![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
 
@@ -13,8 +13,7 @@ View [Features](./FEATURES.MD) .
 ## Quick Start  
 
 ### **Requirement**  
-* A linux system
-* **GNU Binutils** *(version 2.32 tested)*
+* **GNU Binutils** *(version 2.33 tested)*
 * **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
@@ -40,7 +39,7 @@ cd build
 # USE_CLANG: OFF (Use GCC); ON (Use Clang)
 cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
 # Then make
-make -j4
+make -j
 ```
 
 ### 3. Make a raw disk
@@ -56,7 +55,6 @@ After ```make``` success, you will get these files
 build
 ├── bin # Binary executable files without debug info
 │   ├── loader
-│   │   └── loader-multiboot
 │   ├── rfsimage # root file system image files (root folder)
 │   └── system
 │       ├── rfsimg # root file system image
@@ -92,8 +90,7 @@ NaOS
 ├── build # generate directory
 ├── naos
 │   ├── includes
-│   │   ├── kernel
-│   │   └── loader
+│   │   └── kernel
 │   └── src
 │       ├── kernel
 │       │   ├── arch # arch x86_64 specification source code
@@ -104,9 +101,9 @@ NaOS
 │       │   ├── schedulers # time span scheduler and completely fair scheduler
 │       │   ├── task # elf file loader and built-in task
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
-│       └── loader
-│           ├── common # common loader libraries such as disk reader, ScreenPrinter
-│           └── multiboot # loader that conforms to the multiboot spec.
+│       └── usr
+│           ├── init # the userland init program 
+│           └── future_test # kernel test program 
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
 │   └── image
