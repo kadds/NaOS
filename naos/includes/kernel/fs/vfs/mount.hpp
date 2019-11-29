@@ -14,6 +14,7 @@ struct mount_t
         : mount_point(mount_point)
         , device_name(dev)
         , su_block(su_block)
-        , mount_entry(mount_entry){};
+        , mount_entry(mount_entry)
+        , count(0){};
 };
 } // namespace fs::vfs

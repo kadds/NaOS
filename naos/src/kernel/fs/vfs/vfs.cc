@@ -246,25 +246,20 @@ void rmdir(dentry *entry)
 dentry *rename(const char *new_path, dentry *old, dentry *root, dentry *cur_dir)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
-    dentry *new_entry;
+    dentry *new_entry = path_walk(new_path, root, cur_dir, 0, idata);
+    if (new_entry != nullptr)
+        return nullptr;
+
     i64 name_len;
-
-    if (old->get_inode()->get_type() == inode_type_t::directory)
+    if (old->get_inode()->get_type() != inode_type_t::directory)
     {
-        new_entry = path_walk(new_path, root, cur_dir, 0, idata);
-        if (new_entry != nullptr)
-            return nullptr;
-
-        name_len = rest_dir_name(idata);
-    }
-    else if (old->get_inode()->get_type() == inode_type_t::file)
-    {
-        new_entry = path_walk(new_path, root, cur_dir, 0, idata);
-        if (new_entry != nullptr)
-            return nullptr;
-
         name_len = rest_file_name(idata);
     }
+    else
+    {
+        name_len = rest_dir_name(idata);
+    }
+
     if (name_len <= 0)
         return nullptr;
     if (old->get_name() != nullptr)
