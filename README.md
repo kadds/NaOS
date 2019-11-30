@@ -46,7 +46,7 @@ make -j
 ```Bash
 cd /path/to/repo
 # Make a raw disk file for running
-python util/make_disk.py
+python util/disk.py create
 ```
 
 ### 4. Run
@@ -55,19 +55,16 @@ After ```make``` success, you will get these files
 build
 ├── bin # Binary executable files without debug info
 │   ├── loader
-│   ├── rfsimage # root file system image files (root folder)
+│   ├── rfsroot # root file system image files (root folder)
 │   └── system
 │       ├── rfsimg # root file system image
 │       └── kernel # kernel file
 └── debug # Binary executable files with debug info which can be used by debugger gdb/lldb ...
 ```
 
-**make sure you mount disk by ``` sudo python util/mount_disk.py ``` before run emulator**. then
+**make sure you mount disk by ``` sudo python util/disk.py mount``` before run emulator**. then
 ```Bash
 # Run emulator
-# qemu: python util/run.py q
-# qemu headless: python util/run.py qw
-# bochs: python util/run.py b
 sudo python util/run.py q
 ```
 

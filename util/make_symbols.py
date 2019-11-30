@@ -2,13 +2,35 @@
 import os
 import struct
 from mod import set_self_dir, run_shell
+import argparse
+import traceback
+import datetime
+
+cache_file_name = "ksybs_cache.log"
 
 
-def gen_symbols(file, target_file):
+def gen_symbols(file, target_file, force):
     try:
         os.makedirs(os.path.dirname(os.path.realpath(target_file)))
     except FileExistsError:
         pass
+
+    if os.path.exists(cache_file_name) and not force:
+        cache_file = open(cache_file_name, "r")
+        cache_line = cache_file.readlines()
+        if len(cache_line) == 1:
+            line = cache_line[0].split("?")
+            filename = line[0].strip()
+            if len(line) > 1:
+                time = line[1].strip()
+                if time == datetime.datetime.fromtimestamp(
+                        os.path.getmtime(filename)).strftime("%Y-%m-%d %H:%M:%S.%f"):
+                    print("ksybs is cached. do nothing.")
+                    cache_file.close()
+                    return None
+
+        cache_file.close()
+
     smps = run_shell("nm \"" + file +
                      "\" | cut -d ' ' -f 1,2,3 | c++filt | sort", None, False)
     lines = smps.splitlines(False)
@@ -38,10 +60,28 @@ def gen_symbols(file, target_file):
 
     output.close()
 
+    cache_file = open(cache_file_name, "w")
+    cache_file.write(target_file + "?" + datetime.datetime.fromtimestamp(
+        os.path.getmtime(target_file)).strftime("%Y-%m-%d %H:%M:%S.%f"))
+    cache_file.close()
+
     print("make %s success" % (os.path.realpath(target_file)))
 
 
 if __name__ == "__main__":
-    set_self_dir()
-    gen_symbols("../build/debug/system/kernel.dbg",
-                "../build/bin/rfsimage/data/ksybs")
+    parser = argparse.ArgumentParser(
+        description='symbol tools: generate kernel debug file (ksybs)')
+    parser.add_argument(
+        "-f", "--force",  action='store_true', help="force generation")
+    parser.add_argument("-o", "--output", type=str,
+                        default="../build/bin/rfsroot/data/ksybs", help="output ksybs file")
+    parser.add_argument("-i", "--input", type=str,
+                        default="../build/debug/system/kernel.dbg", help="kernel file with debug info")
+    args = parser.parse_args()
+    try:
+        set_self_dir()
+        gen_symbols(args.input, args.output, args.force)
+    except Exception:
+        traceback.print_exc()
+        parser.print_help()
+        exit(-1)

@@ -32,7 +32,7 @@ set(CXX_X64 "-mcmodel=large -m64")
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
 set(UTIL_STRIP ${UTILDIR}/strip.sh)
-set(UTIL_MKIMG ${UTILDIR}/make_rfs_image.py)
+set(UTIL_MKIMG ${UTILDIR}/pack.py)
 set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
 
 set(UEFI_BASE_INCLUDES "/usr/include/efi/;/usr/include/efi/x86_64/")
