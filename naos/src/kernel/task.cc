@@ -95,6 +95,7 @@ inline process_t *new_kernel_process()
     process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_map->insert(id, process);
+    process->signal_actions = nullptr;
     return process;
 }
 
@@ -112,6 +113,7 @@ inline process_t *new_process()
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_map->insert(id, process);
+    process->signal_actions = memory::New<signal_actions_t>(memory::KernelCommonAllocatorV);
 
     return process;
 }
@@ -124,6 +126,11 @@ inline void delete_process(process_t *p)
     if (p->res_table.get_console_attribute() != &trace::kernel_console_attribute)
     {
         memory::Delete<>(memory::KernelCommonAllocatorV, p->res_table.get_console_attribute());
+    }
+
+    if (p->signal_actions != nullptr)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, p->signal_actions);
     }
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
@@ -556,4 +563,5 @@ void schedule()
     current()->attributes |= thread_attributes::need_schedule;
     scheduler::schedule();
 }
+
 } // namespace task

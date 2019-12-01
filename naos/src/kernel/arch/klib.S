@@ -135,7 +135,6 @@ sys_call_label2:
 
     movabs $schedule, %rdx
 	callq *%rdx
-    cli
 .globl _sys_ret
 _sys_ret:
     popq %r15

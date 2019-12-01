@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
+#include "signal.hpp"
 #include "types.hpp"
 #include "wait.hpp"
 #include <atomic>
@@ -58,6 +59,7 @@ struct process_t
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
+    signal_actions_t *signal_actions;
     process_t();
 };
 
@@ -129,6 +131,7 @@ struct thread_t
     preempt_t preempt_data;
     wait_queue wait_que;
     std::atomic_int wait_counter;
+    signal_mask_t signal_masks;
     thread_t();
 };
 
@@ -192,4 +195,6 @@ inline process_t *current_process() { return current()->process; }
 inline process_t *current_process(void *stack) { return current(stack)->process; }
 
 void schedule();
+void user_schedule();
+
 } // namespace task
