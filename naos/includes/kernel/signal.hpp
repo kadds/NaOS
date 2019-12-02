@@ -1,6 +1,5 @@
 #pragma once
 #include "common.hpp"
-#include "util/array.hpp"
 #include "util/bit_set.hpp"
 namespace task
 {
@@ -42,25 +41,39 @@ enum signal : signal_num_t
 struct signal_mask_t
 {
   private:
-    util::bit_set_inplace<max_signal_count> bitmap;
+    util::bit_set_inplace<max_signal_count> block_bitmap, ignore_bitmap;
 
   public:
-    signal_mask_t() { bitmap.set_all(); }
+    signal_mask_t()
+    {
+        block_bitmap.clean_all();
+        ignore_bitmap.clean_all();
+    }
     /// mask signal from [start, start + count) set to mask
     ///
     /// \param start signal number start
     /// \param count signal number start to start + count
     /// \param mask set or clear signal mask
-    void mask(signal_num_t start, signal_num_t count, bool mask)
+    void block(signal_num_t start, signal_num_t count, bool mask)
     {
         kassert((u16)start + count > max_signal_count, "mask signal number out of range.");
         if (mask)
-            bitmap.set_all(start, count);
+            block_bitmap.set_all(start, count);
         else
-            bitmap.clean_all(start, count);
+            block_bitmap.clean_all(start, count);
     }
 
-    bool is_mask(signal_num_t num) { return bitmap.get(num); }
+    void ignore(signal_num_t start, signal_num_t count, bool mask)
+    {
+        kassert((u16)start + count > max_signal_count, "mask signal number out of range.");
+        if (mask)
+            ignore_bitmap.set_all(start, count);
+        else
+            ignore_bitmap.clean_all(start, count);
+    }
+
+    bool is_ignore(signal_num_t num) { return ignore_bitmap.get(num); }
+    bool is_block(signal_num_t num) { return block_bitmap.get(num); }
 };
 
 typedef void (*signal_func_t)(signal_num_t num);
@@ -87,16 +100,9 @@ struct signal_actions_t
         }
     };
 
-    using list_t = util::array<signal_pack>;
-
     struct action
     {
         signal_func_t handler;
-        list_t list;
-        action()
-            : list(memory::KernelCommonAllocatorV)
-        {
-        }
     };
 
     action actions[max_signal_count];
@@ -107,10 +113,21 @@ struct signal_actions_t
 
     signal_func_t get_action(signal_num_t num) { return actions[num].handler; }
 
-    void make(signal_num_t num, thread_t *from, u64 user_data);
-    void send_all(){};
-
     signal_actions_t();
+};
+
+struct signal_pack_t
+{
+  private:
+    util::bit_set_inplace<max_signal_count> pending;
+    signal_mask_t masks;
+
+  public:
+    void set(signal_num_t num);
+
+    void dispatch(signal_actions_t *actions);
+
+    signal_mask_t &get_mask() { return masks; }
 };
 
 ExportC void do_signal();

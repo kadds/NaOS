@@ -26,7 +26,7 @@ def pack_image(base_dir, target_file, force):
             basefile = dirs[0]
             for file in dirs[2]:
                 name = basefile.split(base_dir)[1] + "/" + file
-                full_path = basefile
+                full_path = basefile + "/" + file
                 time = datetime.datetime.fromtimestamp(
                     os.path.getmtime(full_path)).strftime("%Y-%m-%d %H:%M:%S.%f")
                 fileList[name] = time

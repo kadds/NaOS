@@ -133,7 +133,7 @@ sys_call_label2:
 	callq *(%rbx,%rax,8)
     movq %rax, 0x80(%rsp) # return value
 
-    movabs $schedule, %rdx
+    movabs $userland_return, %rdx
 	callq *%rdx
 .globl _sys_ret
 _sys_ret:

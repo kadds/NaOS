@@ -131,7 +131,7 @@ struct thread_t
     preempt_t preempt_data;
     wait_queue wait_que;
     std::atomic_int wait_counter;
-    signal_mask_t signal_masks;
+    signal_pack_t signal_pack;
     thread_t();
 };
 

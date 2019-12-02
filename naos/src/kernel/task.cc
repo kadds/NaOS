@@ -564,4 +564,8 @@ void schedule()
     scheduler::schedule();
 }
 
+ExportC void kernel_return() { yield_preempt(); }
+
+ExportC void userland_return() { scheduler::schedule(); }
+
 } // namespace task

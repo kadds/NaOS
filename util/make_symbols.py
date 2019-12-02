@@ -21,10 +21,10 @@ def gen_symbols(file, target_file, force):
         if len(cache_line) == 1:
             line = cache_line[0].split("?")
             filename = line[0].strip()
-            if len(line) > 1:
+            if len(line) > 1 and filename == file:
                 time = line[1].strip()
                 if time == datetime.datetime.fromtimestamp(
-                        os.path.getmtime(filename)).strftime("%Y-%m-%d %H:%M:%S.%f"):
+                        os.path.getmtime(file)).strftime("%Y-%m-%d %H:%M:%S.%f"):
                     print("ksybs is cached. do nothing.")
                     cache_file.close()
                     return None
@@ -61,8 +61,8 @@ def gen_symbols(file, target_file, force):
     output.close()
 
     cache_file = open(cache_file_name, "w")
-    cache_file.write(target_file + "?" + datetime.datetime.fromtimestamp(
-        os.path.getmtime(target_file)).strftime("%Y-%m-%d %H:%M:%S.%f"))
+    cache_file.write(file + "?" + datetime.datetime.fromtimestamp(
+        os.path.getmtime(file)).strftime("%Y-%m-%d %H:%M:%S.%f"))
     cache_file.close()
 
     print("make %s success" % (os.path.realpath(target_file)))

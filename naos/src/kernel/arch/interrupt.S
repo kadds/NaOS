@@ -38,11 +38,11 @@ call_code_interrupt:
 return_code_interrupt:
 	testb $3, 0xa8(%rsp)
 	je need_preempt
-    movabs $schedule, %rdx
+    movabs $userland_return, %rdx
 	callq *%rdx
 	jmp endjmp
  need_preempt:
-	movabs $yield_preempt_schedule, %rdx
+    movabs $kernel_return, %rdx
 	callq *%rdx
 endjmp:
     popq %r15
