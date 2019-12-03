@@ -119,10 +119,6 @@ template <int ElementCount> class bit_set_inplace
   public:
     bit_set_inplace() = default;
 
-    bit_set_inplace(const bit_set_inplace &v) = delete;
-
-    bit_set_inplace &operator=(const bit_set_inplace &v) = delete;
-
     ~bit_set_inplace() = default;
 
     void clean_all() { bit_set_opeartion::clean_all((byte *)data, ElementCount); }

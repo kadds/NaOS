@@ -299,7 +299,7 @@ void *kmalloc(u64 size, u64 align)
             left = mid + 1;
         }
     }
-
+    kassert(kmalloc_fixed_slab_size[mid].size >= size, "Kernel malloc check failed!");
     SlabObjectAllocator allocator(kmalloc_fixed_slab_size[mid].group);
     return allocator.allocate(size, align);
 }

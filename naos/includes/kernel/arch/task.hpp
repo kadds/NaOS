@@ -88,4 +88,29 @@ void init(::task::thread_t *thd, register_info_t *first_task_reg_info);
 
 u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3);
 u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg);
+
+void *copy_to_return_signal(void *stack, void *ptr, u64 size);
+
+struct userland_code_context
+{
+    u64 rsp;
+    u64 rip;
+    u64 data_rsp;
+    u64 param[4];
+    u64 current_param;
+
+    u64 old_rsp;
+    u64 old_rip;
+    u64 old_rflags;
+};
+
+bool make_signal_context(void *stack, void *func, userland_code_context *context);
+
+u64 copy_signal_param(userland_code_context *context, const void *ptr, u64 size);
+void set_signal_param(userland_code_context *context, int index, u64 val);
+
+u64 enter_signal_context(userland_code_context *context);
+
+u64 return_from_signal_context(u64 code);
+
 } // namespace arch::task

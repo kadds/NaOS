@@ -96,4 +96,87 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
     return 1;
 }
 
+bool make_signal_context(void *stack, void *func, userland_code_context *context)
+{
+    u64 rsp;
+    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=r"(rsp) : : "memory");
+
+    auto &cpu = arch::cpu::current();
+    if (cpu.is_in_exception_context((void *)rsp) || cpu.is_in_hard_irq_context((void *)rsp))
+    {
+        if (cpu.is_in_exception_context((void *)rsp))
+        {
+            rsp = (u64)cpu.get_exception_rsp();
+        }
+        else
+        {
+            rsp = (u64)cpu.get_interrupt_rsp();
+        }
+
+        idt::regs_t *regs = (idt::regs_t *)(rsp - sizeof(regs_t));
+        rsp = regs->rsp;
+        context->old_rsp = regs->rsp;
+        context->old_rip = regs->rip;
+        context->old_rflags = regs->rflags;
+    }
+    else if (cpu.is_in_kernel_context((void *)rsp))
+    {
+        rsp = (u64)cpu.get_kernel_rsp();
+        regs_t *regs = (regs_t *)(rsp - sizeof(regs_t));
+        rsp = regs->rsp;
+        context->old_rsp = regs->rsp;
+        context->old_rip = regs->rip;
+        context->old_rflags = regs->rflags;
+    }
+    else
+    {
+        trace::panic("Unknown rsp value");
+    }
+
+    if (stack == nullptr)
+    {
+        rsp -= 128;       // red zone
+        rsp = rsp & ~(7); // align
+    }
+    else // new stack
+    {
+        rsp = (u64)stack;
+    }
+
+    context->rsp = rsp;
+    context->rip = (u64)func;
+    context->data_rsp = context->rsp;
+
+    return true;
+}
+
+u64 copy_signal_param(userland_code_context *context, const void *ptr, u64 size)
+{
+    size = (size + 7) & ~(7); // align
+    context->data_rsp -= size;
+    util::memcopy((void *)context->data_rsp, ptr, size);
+    return context->data_rsp;
+}
+
+void set_signal_param(userland_code_context *context, int index, u64 val) { context->param[index] = val; }
+
+u64 enter_signal_context(userland_code_context *context)
+{
+    regs_t regs;
+    util::memzero(&regs, sizeof(regs));
+    regs.rcx = context->rip;
+    regs.r10 = context->data_rsp;
+    regs.r11 = (1 << 9); // rFLAGS: enable IF
+    regs.ds = gdt::gen_selector(gdt::selector_type::user_data, 3);
+    regs.es = regs.ds;
+    regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
+    regs.rdi = context->param[0];
+    regs.rsi = context->param[1];
+    regs.rdx = context->param[2];
+    regs.r12 = context->param[3];
+    uctx::UnInterruptableContext icu;
+    _call_sys_ret(&regs);
+    return 1;
+}
+
 } // namespace arch::task

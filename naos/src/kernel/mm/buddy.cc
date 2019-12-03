@@ -48,7 +48,7 @@ int buddy::alloc(u64 pages)
     }
     array[i] = 0;
     int index = i;
-    while (index >= 0) ///< Modify the value of it
+    while (index > 0) ///< Modify the value of it
     {
         index = ((index + 1) >> 1) - 1;
         auto a = array[index * 2 + 1];
@@ -74,7 +74,7 @@ void buddy::free(int offset)
     }
     array[index] = node_size;
 
-    while (index)
+    while (index > 0)
     {
         index = ((index + 1) >> 1) - 1;
         node_size *= 2;
@@ -189,10 +189,10 @@ void *BuddyAllocator::allocate(u64 size, u64 align)
         for (int j = 0; j < buddies->count; j++)
         {
             i64 offset = buddies->buddies[j].alloc(page);
-            if (offset >= 0)
+            if (offset >= 0 && offset < buddy_max_page)
             {
-                auto ptr = (char *)zone.start + offset * memory::page_size;
-                return memory::kernel_phyaddr_to_virtaddr((char *)ptr + buddy_max_page * page_size * j);
+                auto ptr = (byte *)zone.start + offset * memory::page_size;
+                return memory::kernel_phyaddr_to_virtaddr((byte *)ptr + buddy_max_page * page_size * j);
             }
         }
     }
@@ -213,12 +213,13 @@ void BuddyAllocator::deallocate(void *ptr)
         {
             auto buddies = (buddy_contanier *)zone.buddy_impl;
 
-            int buddy_index = (u64)((char *)ptr - (char *)zone.start + (memory::page_size * buddy_max_page) - 1) /
-                                  (memory::page_size * buddy_max_page) -
-                              1;
+            int buddy_index =
+                ((byte *)ptr - (byte *)zone.start + (memory::page_size * buddy_max_page) + memory::page_size) /
+                    (memory::page_size * buddy_max_page) -
+                1;
             i64 offset =
-                ((char *)ptr - buddy_max_page * page_size * buddy_index - (char *)zone.start) / memory::page_size;
-            kassert(offset >= 0 && offset <= buddy_max_page,
+                ((byte *)ptr - buddy_max_page * page_size * buddy_index - (byte *)zone.start) / memory::page_size;
+            kassert(offset >= 0 && offset < buddy_max_page,
                     "offset should not less than 0 or more than buddy max page");
 
             buddies->buddies[buddy_index].free(offset);
