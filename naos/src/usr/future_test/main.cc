@@ -153,8 +153,11 @@ void test_memory()
     print("memory tested.\n");
 }
 
+void sighandler(int sig, long error, long code, long status) { print("signal get it!"); }
+
 extern "C" void _start(char *args)
 {
+    sigaction(SIGINT, sighandler, 0, 0);
     // __asm__ __volatile__("INT $3  \n\t" : : : "memory");
     print("Begin tests.\n");
 
@@ -164,6 +167,7 @@ extern "C" void _start(char *args)
     long ret;
     print("join thread2\n");
     join(tid, &ret);
+    raise(SIGINT, 0, 0, 0);
     if (ret != 0)
     {
         print("Some test tests failed.\n");

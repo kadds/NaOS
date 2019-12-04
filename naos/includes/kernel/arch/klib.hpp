@@ -26,7 +26,7 @@ ExportC void _cpu_id(u64 param, u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *o
     _cpu_id((ecx) << 32 & (u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
 #define cpu_id(eax, o_eax, o_ebx, o_ecx, o_edx) _cpu_id((u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
 
-ExportC NoReturn void _kernel_thread(arch::task::regs_t *regs);
+ExportC NoReturn void _kernel_thread(regs_t *regs);
 ExportC void _switch_task(arch::task::register_info_t *prev, arch::task::register_info_t *next, ::task::thread_t *thd);
 
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
@@ -59,7 +59,7 @@ inline void _mfence() { __asm__ __volatile__("mfence\n\t" : : : "memory"); }
 ExportC volatile char _sys_call;
 ExportC volatile char _sys_ret;
 
-ExportC NoReturn void _call_sys_ret(arch::task::regs_t *regs);
+ExportC NoReturn void _call_sys_ret(regs_t *regs);
 ExportC void _switch_stack(u64 param1, u64 param2, u64 param3, u64 param4, void *func, void *rsp);
 
 inline static u64 get_stack()
@@ -69,7 +69,7 @@ inline static u64 get_stack()
     return v0;
 }
 
-void *print_stack(const arch::idt::regs_t *regs, int max_depth);
+void *print_stack(const regs_t *regs, int max_depth);
 
 constexpr u64 maximum_user_addr = 0x00007FFFFFFFFFFFUL;
 constexpr u64 minimum_user_addr = 0UL;

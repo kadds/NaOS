@@ -17,7 +17,6 @@ extern volatile char interrupt_code_end[], interrupt_code_start[];
 
 namespace arch::interrupt
 {
-using idt::regs_t;
 arch::idt::call_func global_call_func = 0;
 arch::idt::call_func global_soft_irq_func = 0;
 const int num_of_interrupt = 256 - 32;

@@ -1,4 +1,5 @@
 #pragma once
+#include "arch/task.hpp"
 #include "common.hpp"
 #include "types.hpp"
 #include "util/array.hpp"
@@ -37,6 +38,7 @@ enum signal : signal_num_t
     signone3,
     signone4,
     signone5,
+    sigio = 29,
     sigpower = 30,
     siglimit = 31,
 };
@@ -44,6 +46,11 @@ enum signal : signal_num_t
 struct signal_set_t
 {
     util::bit_set_inplace<max_signal_count> map;
+    signal_set_t(u64 mask)
+        : map(mask)
+    {
+    }
+    signal_set_t() {}
     signal_set_t &operator+=(signal_num_t num)
     {
         map.set(num);
@@ -184,6 +191,7 @@ struct signal_pack_t
     signal_num_t current_signal_sent;
     void *signal_stack = nullptr;
 
+    arch::task::userland_code_context context;
     /// 0 - 31 signal
     signal_set_t pending_bitmap;
 
@@ -200,13 +208,15 @@ struct signal_pack_t
 
     void dispatch(signal_actions_t *actions);
 
+    void user_return(u64 code);
+
     signal_mask_t &get_mask() { return masks; }
 
     bool is_set() { return sig_pending; }
     bool is_in_signal() { return in_signal; }
     void set_in_signal(bool in) { in_signal = in; }
 };
-
+void signal_return(u64 code);
 void do_signal();
 
 } // namespace task

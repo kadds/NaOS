@@ -325,7 +325,7 @@ int format_SGR(char *output, console_attribute &request_attribute)
     return cur - output;
 }
 
-NoReturn void keep_panic(const arch::idt::regs_t *regs)
+NoReturn void keep_panic(const regs_t *regs)
 {
     uctx::UnInterruptableContext uic;
     print_stack(regs, 30);

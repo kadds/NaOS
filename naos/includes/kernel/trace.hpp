@@ -1,5 +1,5 @@
 #pragma once
-#include "./arch/idt.hpp"
+#include "./arch/regs.hpp"
 #include "./util/formatter.hpp"
 #include "common.hpp"
 #include "ucontext.hpp"
@@ -445,7 +445,7 @@ template <typename... Args> void print(console_attribute &current_attribute, con
 }
 #pragma GCC diagnostic pop
 
-NoReturn void keep_panic(const arch::idt::regs_t *regs = 0);
+NoReturn void keep_panic(const regs_t *regs = 0);
 
 template <typename... Args> NoReturn void panic(const Args &... args)
 {
@@ -455,7 +455,7 @@ template <typename... Args> NoReturn void panic(const Args &... args)
     keep_panic();
 }
 
-template <typename... Args> NoReturn void panic_stack(const arch::idt::regs_t *regs, const Args &... args)
+template <typename... Args> NoReturn void panic_stack(const regs_t *regs, const Args &... args)
 {
     uctx::UnInterruptableContext icu;
     print(kernel_console_attribute, Foreground<Color::LightRed>(), "[panic]   ", PrintAttr::Reset(), args...);

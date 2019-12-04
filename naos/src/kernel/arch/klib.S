@@ -94,8 +94,11 @@ _sys_call:
     cld
     swapgs
     movq %gs:0x8, %rsp
-
-    pushq %rax
+    subq $0x8, %rsp # ss
+    pushq %r10 # rsp
+    subq $0x28, %rsp
+    pushq %rax 
+    subq $0x8, %rsp # func
 	movq %es,	%rax
 	pushq %rax
 	movq %ds,	%rax
@@ -115,7 +118,7 @@ _sys_call:
 	pushq %r14
 	pushq %r15
 
-	movq 0x80(%rsp), %rax
+	movq 0x88(%rsp), %rax
     cmp $128, %rax
     ja sys_call_setlabel
     jmp sys_call_label
@@ -131,7 +134,7 @@ sys_call_label2:
     movq %r12, %rcx 
     sti
 	callq *(%rbx,%rax,8)
-    movq %rax, 0x80(%rsp) # return value
+    movq %rax, 0x88(%rsp) # return value
 
     movabs $userland_return, %rdx
 	callq *%rdx
@@ -155,8 +158,10 @@ _sys_ret:
 	movq %rax, %ds	
 	popq %rax
 	movq %rax, %es
+    addq $0x8, %rsp # func
     popq %rax
-    movq %r10, %rsp
+    addq $0x28, %rsp
+    popq %rsp
     swapgs
     sysretq
 

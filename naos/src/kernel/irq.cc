@@ -33,7 +33,7 @@ task::wait_queue *wait_queue;
 
 const int irq_count = 256;
 
-bool _ctx_interrupt_ do_irq(const arch::idt::regs_t *regs, u64 extra_data)
+bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
 {
     task::disable_preempt();
 
@@ -88,7 +88,7 @@ void do_soft_irq()
     task::do_wake_up(wait_queue);
 }
 
-bool check_and_wakeup_soft_irq(const arch::idt::regs_t *regs, u64 extra_data)
+bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
 {
     auto &cpu = arch::cpu::current();
     if (cpu.has_task())

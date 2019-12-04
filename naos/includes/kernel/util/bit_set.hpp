@@ -118,6 +118,13 @@ template <int ElementCount> class bit_set_inplace
 
   public:
     bit_set_inplace() = default;
+    bit_set_inplace(u64 map)
+    {
+        if (ElementCount > sizeof(u64) * 8)
+        {
+            /// TODO: set mask
+        }
+    }
 
     ~bit_set_inplace() = default;
 

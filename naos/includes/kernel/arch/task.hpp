@@ -1,6 +1,7 @@
 #pragma once
 #include "../mm/mm.hpp"
 #include "common.hpp"
+#include "regs.hpp"
 namespace task
 {
 struct thread_t;
@@ -19,33 +20,6 @@ struct register_info_t
     void *cr2;
     u64 trap_vector;
     u64 error_code;
-};
-
-// registers in stack
-struct regs_t
-{
-    u64 r15;
-    u64 r14;
-    u64 r13;
-    u64 r12;
-    u64 r11;
-    u64 r10;
-    u64 r9;
-    u64 r8;
-    u64 rbx;
-    u64 rcx;
-    u64 rdx;
-    u64 rsi;
-    u64 rdi;
-    u64 rbp;
-    u64 ds;
-    u64 es;
-    u64 rax;
-    u64 rip;
-    u64 cs;
-    u64 rflags;
-    u64 rsp;
-    u64 ss;
 };
 
 struct thread_info_t
@@ -93,15 +67,12 @@ void *copy_to_return_signal(void *stack, void *ptr, u64 size);
 
 struct userland_code_context
 {
-    u64 rsp;
-    u64 rip;
-    u64 data_rsp;
-    u64 param[4];
-    u64 current_param;
+    u64 *rsp;
+    u64 data_stack_rsp;
+    u64 *param[4];
+    regs_t regs;
 
-    u64 old_rsp;
-    u64 old_rip;
-    u64 old_rflags;
+    u64 user_data;
 };
 
 bool make_signal_context(void *stack, void *func, userland_code_context *context);
@@ -109,7 +80,7 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
 u64 copy_signal_param(userland_code_context *context, const void *ptr, u64 size);
 void set_signal_param(userland_code_context *context, int index, u64 val);
 
-u64 enter_signal_context(userland_code_context *context);
+void set_signal_context(userland_code_context *context);
 
 u64 return_from_signal_context(u64 code);
 

@@ -1,7 +1,7 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/trace.hpp"
-void *print_stack(const arch::idt::regs_t *regs, int max_depth)
+void *print_stack(const regs_t *regs, int max_depth)
 {
     u64 *rbp;
     u64 *ret = (u64 *)&print_stack;

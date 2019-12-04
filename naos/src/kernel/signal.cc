@@ -47,28 +47,30 @@ void signal_pack_t::dispatch(signal_actions_t *actions)
             else
             {
                 in_signal = true;
-                arch::task::userland_code_context context;
                 arch::task::make_signal_context(signal_stack, (void *)act.handler, &context);
                 arch::task::set_signal_param(&context, 0, info.number);
                 if (act.flags & sig_action_flag_t::info)
                 {
                     arch::task::set_signal_param(&context, 1, arch::task::copy_signal_param(&context, &it, sizeof(it)));
                 }
-
-                arch::task::enter_signal_context(&context);
+                arch::task::set_signal_context(&context);
+                break;
             }
         }
     }
 
-    sig_pending = false;
+    sig_pending = events.size() == 0;
 }
 
-void signal_return()
+void signal_pack_t::user_return(u64 code) { in_signal = false; }
+
+void signal_return(u64 code)
 {
     auto thread = task::current();
     if (unlikely(thread == nullptr))
         return;
-    thread->signal_pack.set_in_signal(false);
+    if (thread->signal_pack.is_in_signal())
+        thread->signal_pack.user_return(code);
 }
 
 void do_signal()

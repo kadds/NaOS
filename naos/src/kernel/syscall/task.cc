@@ -103,6 +103,70 @@ long wait_process(process_id pid, u64 *ret)
 /// sleep current thread
 void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 
+int sigaction(task::signal_num_t num, task::signal_func_t handler, u64 mask, flag_t flags)
+{
+    if (!is_user_space_pointer(handler))
+        return -1;
+    task::current_process()->signal_actions->set_action(num, handler, mask, flags);
+    return 0;
+}
+
+int raise(task::signal_num_t num, u64 error, u64 code, u64 status)
+{
+    task::current()->signal_pack.set(num, error, code, status);
+    return 0;
+}
+
+int sigsend(thread_id tid, task::signal_num_t num, u64 error, u64 code, u64 status)
+{
+    auto t = task::find_tid(task::current_process(), tid);
+    if (t == nullptr)
+        return -2;
+    t->signal_pack.set(num, error, code, status);
+    return 0;
+}
+
+struct target
+{
+    process_id pid;
+    thread_id tid;
+    group_id gid;
+    flag_t flags;
+};
+
+enum target_flags : flag_t
+{
+    send_to_group = 1,
+    send_to_process = 2,
+    send_to_thread = 4,
+};
+
+int sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 status)
+{
+    if (!is_user_space_pointer(target))
+        return -1;
+    if (target->flags & send_to_process)
+    {
+        auto proc = task::find_pid(target->pid);
+        if (proc == nullptr)
+            return -2;
+    }
+    else if (target->flags & send_to_thread)
+    {
+        auto proc = task::find_pid(target->pid);
+        if (proc == nullptr)
+            proc = task::current_process();
+    }
+    else if (target->flags & send_to_group)
+    {
+        /// TODO: send group
+    }
+
+    return 0;
+}
+
+void sigreturn(u64 code) { task::signal_return(code); }
+
 BEGIN_SYSCALL
 SYSCALL(30, exit)
 SYSCALL(31, sleep)
@@ -114,6 +178,11 @@ SYSCALL(36, detach)
 SYSCALL(37, join)
 SYSCALL(38, wait_process)
 SYSCALL(39, exit_thread)
+SYSCALL(40, sigaction)
+SYSCALL(41, raise)
+SYSCALL(42, sigsend)
+SYSCALL(43, sigput)
+SYSCALL(44, sigreturn)
 END_SYSCALL
 
 } // namespace syscall

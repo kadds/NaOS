@@ -8,7 +8,7 @@
 
 namespace arch::exception
 {
-using idt::regs_t;
+
 arch::idt::call_func global_call_func = 0;
 arch::idt::call_func global_exit_call_func = 0;
 
@@ -55,9 +55,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         {
             cpu.get_task()->register_info->trap_vector = regs->vector;
         }
-
-        else if (cpu.is_in_kernel_context((void *)regs->rsp) || cpu.is_in_hard_irq_context((void *)regs->rsp) ||
-                 cpu.is_in_exception_context((void *)regs->rsp))
+        else
         {
             if (cpu.get_task() != nullptr)
             {

@@ -76,6 +76,34 @@ SYS_CALL(37, int, join, long tid, long *ret)
 SYS_CALL(38, long, wait_process, long pid, long *ret)
 SYS_CALL(39, void, exit_thread, long ret)
 
+#define SIGHUP 1
+#define SIGINT 2
+#define SIGQUIT 3
+#define SIGILL 4
+#define SIGTRAP 5
+#define SIGABRT 6
+#define SIGBUS 7
+#define SIGFPE 8
+#define SIGKILL 9
+#define SIGUSR1 10
+#define SIGSEGV 11
+#define SIGUSR2 12
+#define SIGPIPE 13
+#define SIGALRM 14
+#define SIGTERM 15
+#define SIGSTKFLT 16
+#define SIGCHILD 17
+#define SIGCOUT 18
+#define SIGSTOP 19
+#define SIGPWR 30
+#define SIGSYS 31
+// more ...
+
+SYS_CALL(40, int, sigaction, int signum, void (*handler)(int signum, long error, long code, long status),
+         unsigned long long mask, int flags)
+SYS_CALL(41, int, raise, int signum, int error, int code, int status)
+SYS_CALL(42, int, sigsend, int tid, int signum, int error, int code, int status)
+
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)
 
