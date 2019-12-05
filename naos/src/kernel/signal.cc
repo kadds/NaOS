@@ -5,18 +5,69 @@
 namespace task
 {
 
-enum class signal_type
+void sig_ignore(signal_num_t num, signal_info_t *info) {}
+
+void sig_kill(signal_num_t num, signal_info_t *info)
 {
+    trace::info("signal ", num, ": kill process ", task::current()->process->pid);
+    task::kill_thread(task::current(), task::thread_control_flags::process);
+}
 
-};
+void sig_kill_dump(signal_num_t num, signal_info_t *info)
+{
+    trace::info("signal ", num, ": dump process ", task::current()->process->pid);
+    task::kill_thread(task::current(), task::thread_control_flags::process);
+}
 
-void sig_ignore(signal_num_t num, signal_info_t *info){};
+void sig_stop(signal_num_t num, signal_info_t *info)
+{
+    trace::info("signal ", num, ": stop process ", task::current()->process->pid);
+    task::stop_thread(task::current(), task::thread_control_flags::process);
+}
 
-void sig_kill(signal_num_t num, signal_info_t *info) {}
+void sig_cont(signal_num_t num, signal_info_t *info)
+{
+    trace::info("signal ", num, ": continue process ", task::current()->process->pid);
+    task::continue_thread(task::current(), task::thread_control_flags::process);
+}
 
-signal_actions_t::signal_actions_t() {}
+#define IGRE sig_ignore,
+#define KILL sig_kill,
+#define DUMP sig_kill_dump,
+#define STOP sig_stop,
+#define CONT sig_cont,
 
-signal_func_t default_signal_handler[max_signal_count] = {sig_ignore, sig_ignore, sig_ignore, sig_ignore, sig_ignore};
+signal_func_t default_signal_handler[max_signal_count] = {
+    KILL KILL DUMP KILL DUMP DUMP DUMP DUMP KILL KILL DUMP KILL KILL KILL KILL KILL IGRE CONT STOP IGRE IGRE IGRE IGRE
+        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE};
+
+void signal_actions_t::set_action(signal_num_t num, signal_func_t handler, signal_set_t set, flag_t flags)
+{
+    if (handler == nullptr)
+    {
+        handler = default_signal_handler[num];
+    }
+    else if (num == signal::sigsegv || num == signal::sigill || num == signal::sigkill)
+    {
+        if ((u64)handler < minimum_kernel_addr)
+            return;
+    }
+
+    actions[num].handler = handler;
+    actions[num].ignore_bitmap = set;
+    actions[num].flags = flags;
+}
+
+void signal_actions_t::clean_all()
+{
+    for (u64 i = 0; i < max_signal_count; i++)
+    {
+        actions[i].handler = default_signal_handler[i];
+        actions[i].flags = 0;
+    }
+}
+
+signal_actions_t::signal_actions_t() { clean_all(); }
 
 void signal_pack_t::set(signal_num_t num, i64 error, i64 code, i64 status)
 {
@@ -47,7 +98,13 @@ void signal_pack_t::dispatch(signal_actions_t *actions)
             else
             {
                 in_signal = true;
-                arch::task::make_signal_context(signal_stack, (void *)act.handler, &context);
+                if (!arch::task::make_signal_context(signal_stack, (void *)act.handler, &context))
+                {
+                    // kill process
+                    trace::info("process ", current()->process->pid,
+                                " can't make signal context because userland stack is too small.");
+                    sig_kill_dump(signal::sigsegv, &it);
+                }
                 arch::task::set_signal_param(&context, 0, info.number);
                 if (act.flags & sig_action_flag_t::info)
                 {
@@ -59,10 +116,14 @@ void signal_pack_t::dispatch(signal_actions_t *actions)
         }
     }
 
-    sig_pending = events.size() == 0;
+    sig_pending = events.size() != 0;
 }
 
-void signal_pack_t::user_return(u64 code) { in_signal = false; }
+void signal_pack_t::user_return(u64 code)
+{
+    in_signal = false;
+    arch::task::return_from_signal_context(&context, code);
+}
 
 void signal_return(u64 code)
 {
@@ -78,7 +139,7 @@ void do_signal()
     auto thread = task::current();
     if (unlikely(thread == nullptr))
         return;
-    if (thread->signal_pack.is_set() && !thread->signal_pack.is_in_signal())
+    if (thread->signal_pack.is_set())
         thread->signal_pack.dispatch(thread->process->signal_actions);
 }
 

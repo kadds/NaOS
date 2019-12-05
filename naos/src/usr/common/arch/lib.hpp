@@ -103,6 +103,7 @@ SYS_CALL(40, int, sigaction, int signum, void (*handler)(int signum, long error,
          unsigned long long mask, int flags)
 SYS_CALL(41, int, raise, int signum, int error, int code, int status)
 SYS_CALL(42, int, sigsend, int tid, int signum, int error, int code, int status)
+SYS_CALL(44, void, sigreturn, int code)
 
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)

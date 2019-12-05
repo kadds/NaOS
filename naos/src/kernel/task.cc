@@ -530,6 +530,40 @@ u64 join_thread(thread_t *thd, u64 &ret)
     return 0;
 }
 
+void stop_thread(thread_t *thread, flag_t flags)
+{
+    thread->state = thread_state::uninterruptible;
+    scheduler::update(thread);
+}
+
+void continue_thread(thread_t *thread, flag_t flags)
+{
+    thread->state = thread_state::ready;
+    scheduler::update(thread);
+}
+
+void kill_thread(thread_t *thread, flag_t flags)
+{
+    {
+        uctx::UnInterruptableContext icu;
+        thread->user_stack_top = (void *)0;
+        thread->state = thread_state::stop;
+        scheduler::remove(thread);
+        if (thread->attributes & thread_attributes::detached)
+        {
+            thread->state = thread_state::destroy;
+            check_thread(thread);
+        }
+        else
+        {
+            do_wake_up(&thread->wait_que);
+        }
+    }
+    scheduler::force_schedule();
+
+    trace::panic("Unreachable control flow.");
+}
+
 process_t *find_pid(process_id pid)
 {
     process_t *process = nullptr;

@@ -2,6 +2,7 @@
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/signal.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
@@ -54,6 +55,69 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         if (cpu.has_task() && cpu.is_in_user_context((void *)regs->rsp))
         {
             cpu.get_task()->register_info->trap_vector = regs->vector;
+            auto &pack = cpu.get_task()->signal_pack;
+            switch (regs->vector)
+            {
+                case 0:
+                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    break;
+                case 1:
+                    pack.set(::task::signal::sigtrap, extra_data, regs->error_code, 0);
+                    break;
+                case 3:
+                    pack.set(::task::signal::sigtrap, extra_data, regs->error_code, 1);
+                    break;
+                case 4:
+                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 1);
+                    break;
+                case 5:
+                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    break;
+                case 6:
+                    pack.set(::task::signal::sigill, extra_data, regs->error_code, 0);
+                    break;
+                case 7:
+                    pack.set(::task::signal::sigbus, extra_data, regs->error_code, 0);
+                    break;
+                case 8:
+                    pack.set(::task::signal::sigbus, extra_data, regs->error_code, 0);
+                    break;
+                case 9:
+                    pack.set(::task::signal::sigstkflt, extra_data, regs->error_code, 0);
+                    break;
+                case 10:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    break;
+                case 11:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    break;
+                case 12:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    break;
+                case 13:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    break;
+                case 14:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 1);
+                    break;
+                case 16:
+                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    break;
+                case 17:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    break;
+                case 18:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    break;
+                case 19:
+                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 1);
+                    break;
+                case 20:
+                    break;
+                default:
+                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    break;
+            }
         }
         else
         {

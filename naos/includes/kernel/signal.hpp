@@ -12,6 +12,8 @@ struct thread_t;
 using signal_num_t = u8;
 constexpr u64 max_signal_count = 64;
 
+namespace signal
+{
 enum signal : signal_num_t
 {
     sighup = 1,
@@ -42,6 +44,7 @@ enum signal : signal_num_t
     sigpower = 30,
     siglimit = 31,
 };
+}
 
 struct signal_set_t
 {
@@ -168,12 +171,9 @@ struct signal_actions_t
     action actions[max_signal_count];
 
   public:
-    void set_action(signal_num_t num, signal_func_t handler, signal_set_t set, flag_t flags)
-    {
-        actions[num].handler = handler;
-        actions[num].ignore_bitmap = set;
-        actions[num].flags = flags;
-    }
+    void set_action(signal_num_t num, signal_func_t handler, signal_set_t set, flag_t flags);
+
+    void clean_all();
 
     void clean_action(signal_num_t num) { actions[num].handler = default_signal_handler[num]; }
 

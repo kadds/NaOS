@@ -184,6 +184,18 @@ NoReturn void exit_thread(u64 ret);
 u64 detach_thread(thread_t *thd);
 u64 join_thread(thread_t *thd, u64 &ret);
 
+namespace thread_control_flags
+{
+enum : flag_t
+{
+    process = 1,
+};
+}
+
+void stop_thread(thread_t *thread, flag_t flags);
+void continue_thread(thread_t *thread, flag_t flags);
+void kill_thread(thread_t *thread, flag_t flags);
+
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);
 

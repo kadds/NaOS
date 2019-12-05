@@ -116,7 +116,17 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
         }
         regs = (regs_t *)(rsp - sizeof(regs_t));
         rsp = regs->rsp;
-        context->regs = *regs;
+        rsp = rsp & ~(7); // align
+
+        if (rsp <= (u64)::task::current()->user_stack_bottom + 256)
+        {
+            // stack too small
+            return false;
+        }
+
+        context->regs = *regs; // convent to syscall stack frame
+        context->regs.rcx = regs->rip;
+
         regs->rip = (u64)func;
         context->data_stack_rsp = (u64)rsp;
         context->rsp = &regs->rsp;
@@ -129,7 +139,13 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
     {
         rsp = (u64)cpu.get_kernel_rsp();
         regs = (regs_t *)(rsp - sizeof(regs_t));
-        rsp = regs->rsp;
+        rsp = regs->rsp - 128; // red zone
+        rsp = rsp & ~(7);      // align
+        if (rsp <= (u64)::task::current()->user_stack_bottom + 256)
+        {
+            // stack too small
+            return false;
+        }
 
         context->regs = *regs;
         regs->rcx = (u64)func;
@@ -144,17 +160,6 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
     {
         trace::panic("Unknown rsp value");
     }
-
-    if (stack == nullptr)
-    {
-        rsp -= 128;       // red zone
-        rsp = rsp & ~(7); // align
-    }
-    else // new stack
-    {
-        rsp = (u64)stack;
-    }
-
     return true;
 }
 
@@ -170,4 +175,21 @@ void set_signal_param(userland_code_context *context, int index, u64 val) { *con
 
 void set_signal_context(userland_code_context *context) { *context->rsp = context->data_stack_rsp; }
 
+void return_from_signal_context(userland_code_context *context, u64 code)
+{
+    u64 rsp;
+    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=r"(rsp) : : "memory");
+    regs_t *regs;
+    auto &cpu = arch::cpu::current();
+    if (cpu.is_in_kernel_context((void *)rsp))
+    {
+        rsp = (u64)cpu.get_kernel_rsp();
+        regs = (regs_t *)(rsp - sizeof(regs_t));
+        *regs = context->regs;
+    }
+    else
+    {
+        trace::panic("Unknown rsp value");
+    }
+}
 } // namespace arch::task

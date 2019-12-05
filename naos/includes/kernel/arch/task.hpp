@@ -82,6 +82,6 @@ void set_signal_param(userland_code_context *context, int index, u64 val);
 
 void set_signal_context(userland_code_context *context);
 
-u64 return_from_signal_context(u64 code);
+void return_from_signal_context(userland_code_context *context, u64 code);
 
 } // namespace arch::task

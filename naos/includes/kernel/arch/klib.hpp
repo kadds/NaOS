@@ -73,8 +73,8 @@ void *print_stack(const regs_t *regs, int max_depth);
 
 constexpr u64 maximum_user_addr = 0x00007FFFFFFFFFFFUL;
 constexpr u64 minimum_user_addr = 0UL;
-constexpr u64 maximum_kernel_addr = 0xFFFF800000000000UL;
-constexpr u64 minimum_kernel_addr = 0xFFFFFFFFFFFFFFFFUL;
+constexpr u64 minimum_kernel_addr = 0xFFFF800000000000UL;
+constexpr u64 maximum_kernel_addr = 0xFFFFFFFFFFFFFFFFUL;
 
 template <typename T> static inline bool is_user_space_pointer(T ptr)
 {

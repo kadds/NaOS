@@ -153,7 +153,11 @@ void test_memory()
     print("memory tested.\n");
 }
 
-void sighandler(int sig, long error, long code, long status) { print("signal get it!"); }
+void sighandler(int sig, long error, long code, long status)
+{
+    print("signal handle\n");
+    sigreturn(0);
+}
 
 extern "C" void _start(char *args)
 {
