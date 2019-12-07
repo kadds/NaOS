@@ -186,6 +186,9 @@ void init_data(cpuid_t cpuid)
 #endif
 }
 
+/// TODO: identify bsp ap
+bool cpu_t::is_bsp() { return false; }
+
 cpu_t &get(cpuid_t cpuid) { return per_cpu_data[cpuid]; }
 
 cpu_t &current()

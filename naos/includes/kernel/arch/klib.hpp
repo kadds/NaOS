@@ -3,6 +3,8 @@
 #include "common.hpp"
 #include "idt.hpp"
 #include "task.hpp"
+extern volatile char base_ap_phy_addr[];
+
 extern volatile char base_virtual_addr[];
 extern volatile char base_phy_addr[];
 
@@ -18,6 +20,12 @@ extern volatile char _bss_end[];
 
 extern volatile char _bss_unpaged_start[];
 extern volatile char _bss_unpaged_end[];
+
+extern volatile char _ap_code_start[];
+extern volatile char _ap_code_end[];
+
+extern volatile char _ap_count[];
+extern volatile char _ap_stack[];
 
 ExportC void _reload_segment(u64 cs, u64 ss);
 

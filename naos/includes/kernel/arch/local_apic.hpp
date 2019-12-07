@@ -27,7 +27,9 @@ void local_enable(u8 vector);
 void local_irq_setup(u8 index, u8 vector, u8 flags);
 void local_disable(u8 vector);
 void local_EOI(u8 index);
-void local_post_PIP();
+void local_post_init_IPI();
+void local_post_start_up(u64 addr);
+
 class clock_source;
 
 class clock_event : public ::clock::clock_event

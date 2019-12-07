@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "kernel/arch/arch.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/smp.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
@@ -46,16 +47,26 @@ ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 
 ExportC NoReturn void _kstart(kernel_start_args *args)
 {
+    if (args == 0) // ap
+    {
+        arch::init(args);
+        while (1)
+        {
+        }
+    } // else bsp
+
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
     arch::init(args);
     irq::init();
     memory::listen_page_fault();
+    timer::init();
+    trace::debug("SMP init...");
+    arch::SMP::init();
     trace::debug("VFS init...");
     fs::vfs::init();
     trace::debug("Root file system init...");
-    timer::init();
     fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();

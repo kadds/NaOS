@@ -78,7 +78,19 @@ u32 read_register_MSR(u16 reg)
     return _rdmsr(reg);
 }
 
+u64 read_register_MSR_64(u16 reg)
+{
+    reg += 0x800;
+    return _rdmsr(reg);
+}
+
 void write_register_MSR(u16 reg, u32 v)
+{
+    reg += 0x800;
+    _wrmsr(reg, v);
+}
+
+void write_register_MSR_64(u16 reg, u64 v)
 {
     reg += 0x800;
     _wrmsr(reg, v);
@@ -92,6 +104,16 @@ u32 read_register_mm(u16 reg)
     return v;
 }
 
+u64 read_register_mm_64(u16 reg)
+{
+    reg <<= 4;
+    u64 v = *(u32 *)((byte *)apic_base_addr + reg);
+    _mfence();
+    v = v << 32;
+    v |= *(u32 *)((byte *)apic_base_addr + reg + 4);
+    return v;
+}
+
 void write_register_mm(u16 reg, u32 v)
 {
     reg <<= 4;
@@ -99,14 +121,27 @@ void write_register_mm(u16 reg, u32 v)
     _mfence();
 }
 
+void write_register_mm_64(u16 reg, u64 v)
+{
+    reg <<= 4;
+    *(u32 *)((byte *)apic_base_addr + reg + 4) = v >> 32;
+    *(u32 *)((byte *)apic_base_addr + reg) = v;
+    _mfence();
+}
+
 typedef u32 (*read_register_func)(u16);
 typedef void (*write_register_func)(u16, u32);
+
+typedef u64 (*read_register_func_64)(u16);
+typedef void (*write_register_func_64)(u16, u64);
 
 typedef u64 (*io_read_register_func)(u16);
 typedef void (*io_write_register_func)(u16, u64);
 
 read_register_func read_register;
 write_register_func write_register;
+read_register_func_64 read_register64;
+write_register_func_64 write_register64;
 
 u64 current_apic_id() { return _rdmsr(0x802); }
 
@@ -131,11 +166,15 @@ void local_init()
         v |= (1 << 10);
         read_register = read_register_MSR;
         write_register = write_register_MSR;
+        read_register64 = read_register_MSR_64;
+        write_register64 = write_register_MSR_64;
     }
     else
     {
         read_register = read_register_mm;
         write_register = write_register_mm;
+        read_register64 = read_register_mm_64;
+        write_register64 = write_register_mm_64;
     }
 
     trace::debug("Enable Local APIC...");
@@ -207,9 +246,16 @@ void local_enable(u8 index)
     write_register(lvt_index_array[index], read_register(lvt_index_array[index]) & ~(1 << 16));
 }
 
-void local_EOI(u8 index) { write_register(eoi_register, 0); }
+void local_post_init_IPI() { write_register64(icr_0, 0xc4500); }
 
-void local_post_IPI(u64 targes) {}
+void local_post_start_up(u64 addr)
+{
+    addr &= 0x100000 - 1;
+    addr >>= 12;
+    write_register64(icr_0, 0xc4600 | addr);
+}
+
+void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
 irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u64 user_data)
 {

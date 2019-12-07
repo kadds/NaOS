@@ -2,5 +2,6 @@
 
 namespace SMP
 {
+void init() {}
 
 } // namespace SMP

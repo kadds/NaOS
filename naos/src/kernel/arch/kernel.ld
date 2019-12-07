@@ -1,6 +1,7 @@
 OUTPUT_FORMAT("elf64-x86-64")
 OUTPUT_ARCH(i386:x86-64)
 ENTRY(_start)
+base_ap_phy_addr = 0x20000;
 base_virtual_addr = 0xffff800000000000;
 base_phy_addr = 0x100000;
 kernel_offset = base_virtual_addr;

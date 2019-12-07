@@ -78,6 +78,8 @@ struct cpu_t
 
     bool has_task() { return task != nullptr; }
 
+    bool is_bsp();
+
 }; // storeage in gs
 extern cpu_t pre_cpu_data[];
 
