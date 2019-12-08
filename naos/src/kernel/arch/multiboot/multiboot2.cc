@@ -70,7 +70,7 @@ NoReturn void Unpaged_Text_Section panic()
 {
     while (1)
     {
-        __asm__ __volatile__("hlt\n\t" : : : "memory");
+        __asm__ __volatile__("pause\n\t" : : : "memory");
     }
 }
 

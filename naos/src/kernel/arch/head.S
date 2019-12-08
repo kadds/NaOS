@@ -26,5 +26,5 @@ _start:
 jmp_kernel_ptr_x:
     .quad loop
 loop:
-    hlt
+    pause
     jmp loop

@@ -23,6 +23,6 @@ void main()
     trace::debug("idle hlt.");
     task::schedule();
     while (1)
-        __asm__ __volatile__("hlt\n\t" : : : "memory");
+        __asm__ __volatile__("pause\n\t" : : : "memory");
 }
 } // namespace task::builtin::idle

@@ -18,7 +18,7 @@ ap_boot:
     bts $0, %ax
     lmsw %ax
     ljmpl *(jump_code32 - _ap_code_start)
-    hlt
+    pause
 .balign 4
 jump_code32:
     .long	ap_code32 - _ap_code_start + base_ap_phy_addr
@@ -67,7 +67,7 @@ spin_lock_retry:
     calll *%eax
 
 hlt_code:
-    hlt
+    pause
     jmp hlt_code
 _ap_code_end:
 .globl _ap_code_end

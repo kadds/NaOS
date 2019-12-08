@@ -360,7 +360,7 @@ u64 clock_source::calibrate_apic(::clock::clock_source *cs)
     u64 start_count = ev->tick_count;
     while (cs->current() < t)
     {
-        __asm__ __volatile__("hlt\n\t" : : : "memory");
+        __asm__ __volatile__("pause\n\t" : : : "memory");
     }
     u64 end_count = ev->tick_count;
 

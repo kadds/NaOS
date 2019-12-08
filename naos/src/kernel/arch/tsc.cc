@@ -22,7 +22,7 @@ u64 clock_source::calibrate_tsc(::clock::clock_source *cs)
 
     while (cs->current() <= t)
     {
-        __asm__ __volatile__("hlt\n\t" : : : "memory");
+        __asm__ __volatile__("pause\n\t" : : : "memory");
     }
     u64 end_tsc = _rdtsc();
     t = cs->current() - t + test_time;
