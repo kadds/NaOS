@@ -147,8 +147,6 @@ void auto_flush()
 
 u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute)
 {
-    uctx::UnInterruptableContext uic;
-
     if (unlikely(vram_addr == nullptr))
     {
         u64 i = 0;

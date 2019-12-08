@@ -7,48 +7,68 @@
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
+
 namespace arch::SMP
 {
-volatile u32 time_tick = 0;
-void smp_watch(u64 pass, u64 data) { time_tick = 1; }
+volatile bool tick = false;
+void timer_tick(u64 pass, u64 user_data) { tick = true; }
 void init()
 {
+    if (!cpu::current().is_bsp())
+    {
+        return;
+    }
     byte *code_start = (byte *)_ap_code_start, *code_end = (byte *)_ap_code_end;
     util::memcopy(memory::kernel_phyaddr_to_virtaddr((void *)base_ap_phy_addr),
                   memory::kernel_phyaddr_to_virtaddr((void *)code_start), code_end - code_start);
     _mfence();
     u32 cpu_stack =
-        (u64)memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(memory::page_size * 4, 0));
+        (u64)memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0));
     u32 *ap_addr = (u32 *)_ap_stack;
     *memory::kernel_phyaddr_to_virtaddr(ap_addr) = cpu_stack;
     APIC::local_post_init_IPI();
-    __asm__ __volatile__("wbinvd	\n\t"
-                         "mfence			\n\t"
-                         :
-                         :
-                         : "memory");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
-    volatile u32 last_value = 0;
+
     trace::debug("Wait for ap startup.");
+    u32 count = 0;
+    volatile u32 *ap_count = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
+
     while (1)
     {
-        time_tick = 0;
-        timer::add_watcher(200000, smp_watch, 0);
-        while (time_tick == 0)
+        timer::add_watcher(100000, timer_tick, 0);
+        while (!tick)
         {
             __asm__ __volatile("pause ");
         }
-        u32 v = *(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
-        if (last_value == v)
+        if (*ap_count == count)
         {
-            last_value = v;
             break;
         }
-        last_value = v;
+        count = *ap_count;
+        tick = false;
     }
-    trace::debug("AP count: ", (u32)last_value);
+    trace::debug("AP count: ", count);
+    volatile u32 *v = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_stack));
+    volatile u32 *standby = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_standby));
 
-    memory::KernelBuddyAllocatorV->deallocate((void *)memory::kernel_phyaddr_to_virtaddr((u64)cpu_stack));
-    // send INIT IPI
+    for (u32 i = 0; i < count; i++)
+    {
+        cpu_stack = (u64)memory::kernel_virtaddr_to_phyaddr(
+            memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0));
+        *v = cpu_stack + memory::kernel_stack_size;
+        _mfence();
+        *standby = 0;
+        trace::debug("Wait startup ap ", i);
+        while (*v != 0)
+        {
+            __asm__ __volatile("pause ");
+        }
+    }
+}
+
+int count()
+{
+    volatile u32 *ap_count = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
+    return *ap_count;
 }
 } // namespace arch::SMP

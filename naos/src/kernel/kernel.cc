@@ -3,13 +3,14 @@
 #include "common.hpp"
 #include "kernel/arch/arch.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/arch/smp.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
@@ -40,7 +41,10 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
 {
-    bss_init((void *)_bss_unpaged_start, (void *)_bss_unpaged_end);
+    if (args != 0) // bsp
+    {
+        bss_init((void *)_bss_unpaged_start, (void *)_bss_unpaged_end);
+    }
     arch::temp_init(args);
     return (u64)&_kstart;
 }
@@ -50,20 +54,25 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     if (args == 0) // ap
     {
         arch::init(args);
-        while (1)
-        {
-        }
+        cpu::init();
+        irq::init();
+        timer::init();
+        SMP::init();
+        task::init();
+        task::start_task_idle();
+        trace::panic("Unreachable control flow in _kstart.");
     } // else bsp
 
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
     arch::init(args);
+    cpu::init();
     irq::init();
     memory::listen_page_fault();
     timer::init();
     trace::debug("SMP init...");
-    arch::SMP::init();
+    SMP::init();
     trace::debug("VFS init...");
     fs::vfs::init();
     trace::debug("Root file system init...");

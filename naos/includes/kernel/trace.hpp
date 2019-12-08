@@ -2,6 +2,7 @@
 #include "./arch/regs.hpp"
 #include "./util/formatter.hpp"
 #include "common.hpp"
+#include "lock.hpp"
 #include "ucontext.hpp"
 #include <initializer_list>
 #include <type_traits>

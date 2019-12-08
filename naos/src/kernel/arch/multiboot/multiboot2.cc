@@ -3,6 +3,8 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 Unpaged_Bss_Section u32 data_offset;
+Unpaged_Bss_Section void *max_boot_tag_ptr;
+
 void *Unpaged_Text_Section alloca_data(u32 size, u32 align)
 {
     u32 start = (data_offset + align - 1) & ~(align - 1);
@@ -46,7 +48,8 @@ Unpaged_Data_Section const char rfsimage[] = "rfsimg";
 
 bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *end)
 {
-    for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + ((tags->size + 7) & ~7)))
+    u32 next_size = ((tags->size + 7) & ~7);
+    for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + next_size))
     {
         if (tags->type == MULTIBOOT_TAG_TYPE_MODULE)
         {
@@ -58,6 +61,7 @@ bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *en
                 return true;
             }
         }
+        next_size = ((tags->size + 7) & ~7);
     }
     return false;
 }
@@ -126,7 +130,8 @@ void Unpaged_Text_Section set_args(kernel_start_args *args, multiboot_tag *tags)
     funcs[2] = set_args_boot;
     funcs[6] = set_args_mmap;
     funcs[8] = set_args_fb;
-    for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + ((tags->size + 7) & ~7)))
+    u32 next_size = ((tags->size + 7) & ~7);
+    for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + next_size))
     {
         if (tags->type < 9)
         {
@@ -135,6 +140,7 @@ void Unpaged_Text_Section set_args(kernel_start_args *args, multiboot_tag *tags)
                 funcs[tags->type](args, tags);
             }
         }
+        next_size = ((tags->size + 7) & ~7);
     }
 }
 
@@ -143,7 +149,7 @@ ExportC NoReturn void Unpaged_Text_Section _multiboot_main(void *header)
 {
     if (header == nullptr)
         panic();
-    u32 len = *(u32 *)header;
+    max_boot_tag_ptr = (void *)(*(u32 *)header + ((u8 *)header));
     multiboot_tag *tags = (multiboot_tag *)((byte *)header + 8);
     u32 start, end;
     if (!find_rfsimage(tags, &start, &end))
@@ -151,11 +157,12 @@ ExportC NoReturn void Unpaged_Text_Section _multiboot_main(void *header)
     u32 offset;
     if (end <= 0x1000000) // in lower 16 MB
     {
-        offset = end;
+        u32 p_end = (u32)(u64)max_boot_tag_ptr;
+        offset = end > p_end ? end : p_end;
     }
-    else if ((u64)header + len < start - 0x1000) // 1KB data
+    else if ((u32)(u64)max_boot_tag_ptr < start - 0x1000) // 1KB data
     {
-        offset = (u64)header + len;
+        offset = (u64)max_boot_tag_ptr;
     }
     else
         panic();

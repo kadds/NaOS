@@ -1,4 +1,5 @@
 #include "kernel/arch/apic.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/io_apic.hpp"
@@ -9,12 +10,11 @@ namespace arch::APIC
 {
 void init()
 {
-    idt::disable();
-
     local_init();
-    io_init();
-
-    idt::enable();
+    if (cpu::current().is_bsp())
+    {
+        io_init();
+    }
 }
 
 void EOI(u8 index)

@@ -36,17 +36,14 @@ const int kernel_stack_page_count = 4;
 // 16 kb irq stack size
 const int interrupt_stack_page_count = 4;
 // 8 kb exception stack size
-const int exception_stack_page_count = 4;
-// 8 kb exception extra stack size
-const int exception_ext_stack_page_count = 4;
-// 16 kb soft irq stack size
-const int soft_irq_stack_page_count = 4;
+const int exception_stack_page_count = 2;
+// 16 kb exception nmi stack size
+const int exception_nmi_stack_page_count = 4;
 
 const u64 kernel_stack_size = kernel_stack_page_count * memory::page_size;
 const u64 interrupt_stack_size = interrupt_stack_page_count * memory::page_size;
 const u64 exception_stack_size = exception_stack_page_count * memory::page_size;
-const u64 exception_ext_stack_size = exception_ext_stack_page_count * memory::page_size;
-const u64 soft_irq_stack_size = soft_irq_stack_page_count * memory::page_size;
+const u64 exception_nmi_stack_size = exception_nmi_stack_page_count * memory::page_size;
 const u64 max_memory_support = 0x100000000000ul;
 
 VirtBootAllocator *VirtBootAllocatorV;

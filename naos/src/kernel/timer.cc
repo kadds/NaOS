@@ -1,4 +1,5 @@
 #include "kernel/timer.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/arch/rtc.hpp"
@@ -88,6 +89,11 @@ void on_tick(u64 vector, u64 data)
 void init()
 {
     using namespace clock;
+    if (!arch::cpu::current().is_bsp())
+    {
+        return;
+    }
+
     {
         uctx::UnInterruptableContext ctx;
         watcher_list = memory::New<watcher_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
@@ -99,6 +105,7 @@ void init()
         current_clock_source = clock_sources->back();
         clock_sources->push_back(arch::APIC::make_clock());
     }
+
     u64 level = 10;
     for (auto cs : *clock_sources)
     {

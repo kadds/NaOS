@@ -30,14 +30,17 @@ ptr_t gdt_after_ptr = {sizeof(gdt_after_init) - 1, (u64)gdt_after_init};
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Waddress-of-packed-member"
-Unpaged_Text_Section void init_before_paging()
+Unpaged_Text_Section void init_before_paging(bool is_bsp)
 {
-    auto *temp_gdt = (u64 *)temp_gdt_init;
-    temp_gdt[0] = 0;
-    temp_gdt[1] = 0x0020980000000000;
-    temp_gdt[2] = 0x0000920000000000;
-    __asm__ __volatile__("lgdt	(%0)\n\t" : : "r"(&gdt_before_ptr) : "memory");
-    _unpaged_reload_segment(0x08, 0x10);
+    if (is_bsp)
+    {
+        auto *temp_gdt = (u64 *)temp_gdt_init;
+        temp_gdt[0] = 0;
+        temp_gdt[1] = 0x0020980000000000;
+        temp_gdt[2] = 0x0000920000000000;
+        __asm__ __volatile__("lgdt	(%0)\n\t" : : "r"(&gdt_before_ptr) : "memory");
+        _unpaged_reload_segment(0x08, 0x10);
+    }
 }
 #pragma GCC diagnostic pop
 

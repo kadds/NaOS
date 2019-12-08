@@ -178,7 +178,7 @@ BuddyAllocator::~BuddyAllocator() {}
 
 void *BuddyAllocator::allocate(u64 size, u64 align)
 {
-    uctx::SpinLockUnInterruptableContext ctx(buddy_lock);
+    uctx::RawSpinLockUnInterruptableContext ctx(buddy_lock);
 
     auto page = (size + 0x1000 - 1) / 0x1000;
     for (int i = 0; i < global_zones.count; i++)
@@ -203,7 +203,7 @@ void BuddyAllocator::deallocate(void *ptr)
 {
     ptr = memory::kernel_virtaddr_to_phyaddr(ptr);
 
-    uctx::SpinLockUnInterruptableContext ctx(buddy_lock);
+    uctx::RawSpinLockUnInterruptableContext ctx(buddy_lock);
 
     for (int i = 0; i < global_zones.count; i++)
     {

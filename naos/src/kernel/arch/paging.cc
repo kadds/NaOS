@@ -42,35 +42,38 @@ void base_entry::set_phy_addr(void *ptr) { data = (data & ~0xFFFFFFFFFF000UL) | 
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
-Unpaged_Text_Section void temp_init()
+Unpaged_Text_Section void temp_init(bool is_bsp)
 {
     // map 0x000000-0xffffffff->0x000000-0xffffffff,0-4GB->0-4GB
     // map 0xffff800000000000-0xffff8000ffffffff->0x000000-0xffffffff
     const u64 addr = 0x80000;
-
     void *temp_pml4_addr = (void *)addr;
-    u64 *page_temp_addr = (u64 *)addr;
-    for (int i = 0; i < 512; i++)
-        page_temp_addr[i] = 0;
-    page_temp_addr[0] = addr + 0x1003;
-    page_temp_addr[256] = page_temp_addr[0];
-    page_temp_addr = (u64 *)(addr + 0x1000);
-    for (int i = 0; i < 512; i++)
-        page_temp_addr[i] = 0;
-    page_temp_addr[0] = addr + 0x2003;
-    page_temp_addr[1] = addr + 0x3003;
-    page_temp_addr[2] = addr + 0x4003;
-    page_temp_addr[3] = addr + 0x5003;
-
-    page_temp_addr = (u64 *)(addr + 0x2000);
-
-    u64 v = 0x83;
-    // map 4GB
-    for (int i = 0; i < 512 * 4; i++)
+    if (is_bsp)
     {
-        *page_temp_addr++ = v;
-        v += 0x200000; // 2MB
+        u64 *page_temp_addr = (u64 *)addr;
+        for (int i = 0; i < 512; i++)
+            page_temp_addr[i] = 0;
+        page_temp_addr[0] = addr + 0x1003;
+        page_temp_addr[256] = page_temp_addr[0];
+        page_temp_addr = (u64 *)(addr + 0x1000);
+        for (int i = 0; i < 512; i++)
+            page_temp_addr[i] = 0;
+        page_temp_addr[0] = addr + 0x2003;
+        page_temp_addr[1] = addr + 0x3003;
+        page_temp_addr[2] = addr + 0x4003;
+        page_temp_addr[3] = addr + 0x5003;
+
+        page_temp_addr = (u64 *)(addr + 0x2000);
+
+        u64 v = 0x83;
+        // map 4GB
+        for (int i = 0; i < 512 * 4; i++)
+        {
+            *page_temp_addr++ = v;
+            v += 0x200000; // 2MB
+        }
     }
+
     __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
 }
 

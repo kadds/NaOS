@@ -1,6 +1,6 @@
 #include "kernel/schedulers/time_span_scheduler.hpp"
-#include "kernel/arch/cpu.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
@@ -87,7 +87,7 @@ void time_span_scheduler::remove(thread_t *thread)
             }
             else
             {
-                auto &cpu = arch::cpu::current();
+                auto &cpu = cpu::current();
                 if (cpu.get_task() != thread)
                 {
                     trace::panic("Can not remove task");

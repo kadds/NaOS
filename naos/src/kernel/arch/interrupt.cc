@@ -81,7 +81,7 @@ ExportC _ctx_interrupt_ void __do_irq(const regs_t *regs)
 {
     kassert(!idt::is_enable(), "Should never enable interrupt");
 
-    if (!cpu::current().is_in_hard_irq_context())
+    if (!cpu::current().is_in_kernel_context())
     {
         void *intr_stack = cpu::current().get_interrupt_rsp();
         _switch_stack((u64)regs, 0, 0, 0, (void *)do_irq, intr_stack);

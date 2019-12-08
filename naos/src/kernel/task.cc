@@ -1,5 +1,4 @@
 #include "kernel/task.hpp"
-#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
 
@@ -24,6 +23,7 @@
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 
+#include "kernel/cpu.hpp"
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
@@ -75,8 +75,6 @@ using thread_map_t = util::hash_map<process_id, process_t *, process_hash>;
 process_map_t *global_process_map;
 // process_list_t *global_process_list;
 lock::spinlock_t process_list_lock;
-
-thread_t *idle_task;
 
 inline void *new_kernel_stack() { return memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0); }
 
@@ -190,31 +188,40 @@ thread_t::thread_t()
 
 void init()
 {
-    uctx::UnInterruptableContext icu;
-    // process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-    thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-    global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
-    // global_process_list = memory::New<process_list_t>(memory::KernelCommonAllocatorV, process_list_cache_allocator);
+    process_t *process;
+    if (cpu::current().is_bsp())
+    {
+        uctx::UnInterruptableContext icu;
+        // process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
+        thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
+        global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
+        // global_process_list = memory::New<process_list_t>(memory::KernelCommonAllocatorV,
+        // process_list_cache_allocator);
 
-    thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
-        memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
+        thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
+            memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
 
-    process_t_allocator = memory::New<memory::SlabObjectAllocator>(
-        memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, process_t, 8, 0));
+        process_t_allocator = memory::New<memory::SlabObjectAllocator>(
+            memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, process_t, 8, 0));
 
-    mm_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
-        memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, mm_info_t, 8, 0));
+        mm_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
+            memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, mm_info_t, 8, 0));
 
-    using arch::task::register_info_t;
-    register_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
-        memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
+        using arch::task::register_info_t;
+        register_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
+            memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
 
-    process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, process_id_param);
-    // init for kernel process
-    process_t *process = new_kernel_process();
-    process->parent_pid = 0;
-    process->res_table.get_file_table()->root = fs::vfs::global_root;
-    process->res_table.get_file_table()->current = fs::vfs::global_root;
+        process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, process_id_param);
+        // init for kernel process
+        process = new_kernel_process();
+        process->parent_pid = 0;
+        process->res_table.get_file_table()->root = fs::vfs::global_root;
+        process->res_table.get_file_table()->current = fs::vfs::global_root;
+    }
+    else
+    {
+        process = find_pid(0);
+    }
 
     thread_t *thd = new_thread(process);
     thd->state = thread_state::running;
@@ -224,7 +231,8 @@ void init()
     thd->attributes |= thread_attributes::main;
 
     arch::task::init(thd, thd->register_info);
-    idle_task = thd;
+    cpu::current().set_task(thd);
+    cpu::current().set_idle_task(thd);
     trace::debug("idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init...");
     bin_handle::init();
 }
@@ -583,13 +591,14 @@ thread_t *find_tid(process_t *process, thread_id tid)
     return nullptr;
 }
 
-thread_t *get_idle_task() { return idle_task; }
+thread_t *get_idle_task() { return cpu::current().get_idle_task(); }
 
 void switch_thread(thread_t *old, thread_t *new_task)
 {
     if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
         ((mm_info_t *)new_task->process->mm_info)->mmu_paging.load_paging();
-    _switch_task(old->register_info, new_task->register_info, new_task);
+    cpu::current().set_task(new_task);
+    _switch_task(old->register_info, new_task->register_info);
 }
 
 void schedule()

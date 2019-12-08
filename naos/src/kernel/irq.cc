@@ -3,6 +3,7 @@
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/interrupt.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
@@ -90,18 +91,8 @@ void do_soft_irq()
 
 bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
 {
-    auto &cpu = arch::cpu::current();
-    if (cpu.has_task())
-    {
-        do_soft_irq();
-        return true;
-    }
-    else if (cpu.is_in_kernel_context((void *)regs->rsp))
-    {
-        do_soft_irq();
-        return true;
-    }
-    return false;
+    do_soft_irq();
+    return true;
 }
 
 bool wakeup_condition(u64 ud)
@@ -130,17 +121,19 @@ void raise_soft_irq(u64 soft_irq_number)
 
 void init()
 {
-    list_allocator = memory::New<request_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-    wait_queue = memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+    if (cpu::current().is_bsp())
+    {
 
-    uctx::UnInterruptableContext uic;
+        list_allocator = memory::New<request_list_node_allocator_t>(memory::KernelCommonAllocatorV);
+        wait_queue = memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
+        soft_irq_list =
+            memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
+    }
     arch::exception::set_callback(&do_irq);
     arch::interrupt::set_callback(&do_irq);
     arch::interrupt::set_soft_irq_callback(&check_and_wakeup_soft_irq);
-
-    irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
-    soft_irq_list =
-        memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
+    arch::idt::enable();
 }
 
 void insert_request_func(u32 vector, request_func func, u64 user_data)

@@ -23,9 +23,7 @@ extern const u64 interrupt_stack_size;
 
 extern const u64 exception_stack_size;
 
-extern const u64 exception_ext_stack_size;
-
-extern const u64 soft_irq_stack_size;
+extern const u64 exception_nmi_stack_size;
 
 // stack size: 4MB
 extern const u64 user_stack_size;

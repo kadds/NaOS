@@ -1,6 +1,8 @@
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/idt.hpp"
+#include "kernel/arch/klib.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/task.hpp"
@@ -52,10 +54,15 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     if (!handled)
     {
         auto &cpu = cpu::current();
-        if (cpu.has_task() && cpu.is_in_user_context((void *)regs->rsp))
+        if (cpu.get_user_data() == nullptr)
         {
-            cpu.get_task()->register_info->trap_vector = regs->vector;
-            auto &pack = cpu.get_task()->signal_pack;
+            trace::panic_stack(regs, "Startup Oops error");
+        }
+        ::task::thread_t *task = ::cpu::current().get_task();
+        if ((regs->cs & 0x3) != 0) // user space
+        {
+            task->register_info->trap_vector = regs->vector;
+            auto &pack = task->signal_pack;
             switch (regs->vector)
             {
                 case 0:
@@ -121,9 +128,9 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         }
         else
         {
-            if (cpu.get_task() != nullptr)
+            if (task != nullptr)
             {
-                cpu.get_task()->register_info->trap_vector = regs->vector;
+                task->register_info->trap_vector = regs->vector;
             }
             trace::panic_stack(regs, "Oops error");
         }

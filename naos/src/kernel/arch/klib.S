@@ -205,21 +205,3 @@ reload_unpaged_seg_x:
     movq %rsi, %gs
     movq %rsi, %ss
     ret
-
-.globl _unpaged_reload_kernel_virtual_address
-# rdi offset
-_unpaged_reload_kernel_virtual_address:
-    sub $16, %rsp
-    movq %cs, %rsi
-    movq %rsi, 8(%rsp)
-    movq reload_kernel_virtual_address_ptr_x(%rip), %rax
-    addq %rdi , %rax
-    addq %rdi, reload_kernel_virtual_address_ptr_x(%rip)
-    movq %rax, (%rsp)
-    retfq
-reload_kernel_virtual_address_ptr_x:
-    .quad reload_kernel_virtual_address_x
-reload_kernel_virtual_address_x:
-    addq %rdi, %rsp
-    ret
-    ret

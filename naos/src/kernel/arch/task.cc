@@ -13,17 +13,15 @@ namespace arch::task
 
 void init(::task::thread_t *thd, register_info_t *register_info)
 {
-    void *stack_low = (char *)current_stack();
-
+    u64 stack_low;
+    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack_low) : "0"(~(memory::kernel_stack_size - 1)));
     register_info->cr2 = 0;
     register_info->error_code = 0;
     register_info->fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
     register_info->gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
-    register_info->rsp = (void *)((u64)stack_low + memory::kernel_stack_size);
+    register_info->rsp = (void *)(stack_low + memory::kernel_stack_size);
     register_info->trap_vector = 0;
 
-    thread_info_t *thread_info = new (stack_low) thread_info_t();
-    thread_info->task = thd;
     thd->kernel_stack_top = (void *)register_info->rsp;
 
     _wrmsr(0xC0000080, _rdmsr(0xC0000080) | 1);
@@ -32,14 +30,9 @@ void init(::task::thread_t *thd, register_info_t *register_info)
     _wrmsr(0xC0000081, selector);
     _wrmsr(0xC0000082, (u64)&_sys_call);
     _wrmsr(0xC0000084, 0x200); // rFLAGS clean bits
-
-    cpu::current().set_context(thd);
 }
 
-ExportC void switch_task(register_info_t *prev, register_info_t *next, ::task::thread_t *thd)
-{
-    cpu::current().set_context(thd);
-}
+ExportC void switch_task(register_info_t *prev, register_info_t *next, ::task::thread_t *thd) {}
 
 ExportC void do_exit(u64 exit_code)
 {
@@ -71,9 +64,6 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     register_info.fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
     register_info.gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
 
-    thread_info_t *thread_info = new ((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size)) thread_info_t();
-    thread_info->task = thd;
-
     util::memcopy((void *)((u64)thd->kernel_stack_top - sizeof(regs)), &regs, sizeof(regs_t));
 
     return 0;
@@ -93,7 +83,6 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
     regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
     regs.rdi = arg;
     uctx::UnInterruptableContext icu;
-    cpu::current().set_context(thd);
     _call_sys_ret(&regs);
     return 1;
 }
@@ -104,7 +93,7 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
     __asm__ __volatile__("movq %%rsp, %0\n\t" : "=r"(rsp) : : "memory");
     regs_t *regs;
     auto &cpu = arch::cpu::current();
-    if (cpu.is_in_exception_context((void *)rsp) || cpu.is_in_hard_irq_context((void *)rsp))
+    if (cpu.is_in_exception_context((void *)rsp) || cpu.is_in_interrupt_context((void *)rsp))
     {
         if (cpu.is_in_exception_context((void *)rsp))
         {

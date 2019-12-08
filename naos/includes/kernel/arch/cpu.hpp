@@ -16,16 +16,14 @@ struct cpu_t
   private:
     cpuid_t id;
     void *volatile kernel_rsp;
+    void *user_data = nullptr;
 
     /// The interrupt context RSP value
     void *interrupt_rsp;
     void *exception_rsp;
-    void *exception_ext_rsp;
-    void *soft_irq_rsp;
+    void *exception_nmi_rsp;
     volatile std::atomic_bool is_in_soft_irq = false;
     volatile u64 soft_irq_pending = 0;
-
-    ::task::thread_t *volatile task = nullptr;
 
   public:
     cpu_t() = default;
@@ -47,7 +45,7 @@ struct cpu_t
 
     bool is_irq_pending(int index) { return soft_irq_pending & (1 << index); }
 
-    void set_context(::task::thread_t *task);
+    void set_context(void *stack);
 
     cpuid_t get_id() { return id; }
 
@@ -57,28 +55,20 @@ struct cpu_t
 
     void *get_exception_rsp() { return exception_rsp; }
 
-    void *get_exception_ext_rsp() { return exception_ext_rsp; }
-
-    void *get_soft_irq_rsp() { return soft_irq_rsp; }
-
-    ::task::thread_t *get_task() { return task; }
+    void *get_exception_nmi_rsp() { return exception_nmi_rsp; }
 
     bool is_in_exception_context();
-    bool is_in_hard_irq_context();
-    bool is_in_soft_irq_context();
-    bool is_in_irq_context();
+    bool is_in_interrupt_context();
     bool is_in_kernel_context();
 
     bool is_in_exception_context(void *rsp);
-    bool is_in_soft_irq_context(void *rsp);
-    bool is_in_hard_irq_context(void *rsp);
-    bool is_in_irq_context(void *rsp);
+    bool is_in_interrupt_context(void *rsp);
     bool is_in_kernel_context(void *rsp);
-    bool is_in_user_context(void *rsp);
-
-    bool has_task() { return task != nullptr; }
 
     bool is_bsp();
+
+    void *get_user_data() { return user_data; }
+    void set_user_data(void *ud) { user_data = ud; }
 
 }; // storeage in gs
 extern cpu_t pre_cpu_data[];
@@ -88,6 +78,7 @@ void init_data(cpuid_t id);
 
 cpu_t &get(cpuid_t cpuid);
 cpu_t &current();
+void *current_user_data();
 
 cpuid_t id();
 

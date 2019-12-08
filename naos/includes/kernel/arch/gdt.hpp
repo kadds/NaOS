@@ -41,7 +41,7 @@ enum class selector_type
 // generate a GDT selector
 u16 constexpr gen_selector(selector_type index, int dpl) { return (u16)index << 3 | (dpl & 0x3); }
 
-void init_before_paging();
+void init_before_paging(bool is_bsp);
 void init_after_paging();
 
 descriptor &get_gdt_descriptor(int index);

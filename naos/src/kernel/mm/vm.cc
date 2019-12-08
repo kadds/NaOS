@@ -1,8 +1,8 @@
 #include "kernel/mm/vm.hpp"
-#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/paging.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
@@ -15,7 +15,7 @@ namespace memory::vm
 {
 irq::request_result _ctx_interrupt_ page_fault_func(const void *regs, u64 extra_data, u64 user_data)
 {
-    auto *thread = arch::cpu::current().get_task();
+    auto *thread = cpu::current().get_task();
     if (thread != nullptr)
     {
         auto info = (info_t *)thread->process->mm_info;

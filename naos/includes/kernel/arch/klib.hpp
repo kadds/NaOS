@@ -25,6 +25,7 @@ extern volatile char _ap_code_start[];
 extern volatile char _ap_code_end[];
 
 extern volatile char _ap_count[];
+extern volatile char _ap_standby[];
 extern volatile char _ap_stack[];
 
 ExportC void _reload_segment(u64 cs, u64 ss);
@@ -35,10 +36,9 @@ ExportC void _cpu_id(u64 param, u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *o
 #define cpu_id(eax, o_eax, o_ebx, o_ecx, o_edx) _cpu_id((u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
 
 ExportC NoReturn void _kernel_thread(regs_t *regs);
-ExportC void _switch_task(arch::task::register_info_t *prev, arch::task::register_info_t *next, ::task::thread_t *thd);
+ExportC void _switch_task(arch::task::register_info_t *prev, arch::task::register_info_t *next);
 
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
-ExportC void _unpaged_reload_kernel_virtual_address(u64 offset);
 
 inline void _wrmsr(u64 address, u64 value)
 {

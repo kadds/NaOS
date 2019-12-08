@@ -22,42 +22,6 @@ struct register_info_t
     u64 error_code;
 };
 
-struct thread_info_t
-{
-    u64 magic_wall;
-    void *task;
-    u64 magic_end_wall;
-    // check for kernel stack overflow
-    bool is_valid() const { return magic_wall == 0xFFCCFFCCCCFFCCFF && magic_end_wall == 0x0AEEAAEEEEAAEE0A; }
-    thread_info_t()
-        : magic_wall(0xFFCCFFCCCCFFCCFF)
-        , magic_end_wall(0x0AEEAAEEEEAAEE0A)
-    {
-    }
-};
-
-inline void *current_stack()
-{
-    void *stack = nullptr;
-    __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack) : "0"(~(memory::kernel_stack_size - 1)));
-    return stack;
-}
-
-inline void *current_task()
-{
-    thread_info_t *current = (thread_info_t *)current_stack();
-    if (likely(current->is_valid()))
-        return current->task;
-    return nullptr;
-}
-
-inline void *get_task(void *stack)
-{
-    thread_info_t *current = (thread_info_t *)((u64)stack & (~(memory::kernel_stack_size - 1)));
-    if (likely(current->is_valid()))
-        return current->task;
-    return nullptr;
-}
 void init(::task::thread_t *thd, register_info_t *first_task_reg_info);
 
 u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3);

@@ -1,5 +1,6 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/8259A.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/interrupt.hpp"
@@ -21,15 +22,15 @@ Unpaged_Text_Section void init_before_paging() {}
 
 void init_after_paging()
 {
-    idt_after_ptr.limit = sizeof(entry) * 256 - 1;
-    idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 256);
-    exception::init();
-    interrupt::init();
-    device::chip8259A::init();
+    if (cpu::current().is_bsp())
+    {
+        idt_after_ptr.limit = sizeof(entry) * 256 - 1;
+        idt_after_ptr.addr = (u64)memory::NewArray<entry, 16>(memory::KernelBuddyAllocatorV, 256);
+        exception::init();
+        interrupt::init();
+        device::chip8259A::init();
+    }
     __asm__ __volatile__("lidt (%0)	\n\t" : : "r"(&idt_after_ptr) : "memory");
-    _mfence();
-    trace::debug("enable idt");
-    enable();
 }
 
 void enable() { __asm__ __volatile__("sti	\n\t" : : : "memory"); }

@@ -60,16 +60,20 @@ _header_multiboot_end:
 
 .code32
 .section .unpaged.text
+magic:
+    .long MULTIBOOT2_BOOTLOADER_MAGIC
 _multiboot_start:
-    cmpl %eax, MULTIBOOT2_BOOTLOADER_MAGIC
-    jz jmp_label
+    cmpl (magic), %eax
+    jnz jmp_label
     movl $0x8000, %esp
+    pushl   $0
+    popf
     movl $_multiboot_main, %edi
     movl %ebx, %esi
     push %esi
     push %edi
     call go_to_amd64
 jmp_label:
-    hlt
+    pause
     jmp  jmp_label
     

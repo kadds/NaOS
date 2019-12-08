@@ -1,6 +1,7 @@
 #pragma once
 #include "arch/task.hpp"
 #include "common.hpp"
+#include "cpu.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
 #include "signal.hpp"
@@ -201,10 +202,8 @@ thread_t *find_tid(process_t *process, thread_id tid);
 
 thread_t *get_idle_task();
 
-inline thread_t *current() { return (thread_t *)arch::task::current_task(); }
-inline thread_t *current(void *stack) { return (thread_t *)arch::task::get_task(stack); }
+inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
 inline process_t *current_process() { return current()->process; }
-inline process_t *current_process(void *stack) { return current(stack)->process; }
 
 void schedule();
 void user_schedule();

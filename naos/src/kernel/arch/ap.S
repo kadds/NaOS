@@ -13,6 +13,7 @@ ap_boot:
     mov %ax, %fs
     mov %ax, %gs
     lgdtl _gdt_ap_ptr - _ap_code_start
+    lidtl _idt_ptr - _ap_code_start
     smsw %ax
     bts $0, %ax
     lmsw %ax
@@ -37,6 +38,10 @@ _gdt_ap_ptr:
     .short (_gdt_ap_end - _gdt_ap_start - 1)
     .int _gdt_ap_start
 .balign 4
+_idt_ptr:
+    .short 0
+    .int 0
+.balign 4
 .code32
 ap_code32:
     mov $0x10, %ax
@@ -45,34 +50,40 @@ ap_code32:
     mov %ax, %ss
     mov %ax, %fs
     mov %ax, %gs
-
-    lock incl _ap_count
+    incl (_ap_count)
 spin_lock:
     xorl   %ecx, %ecx
     incl   %ecx
 spin_lock_retry:
     xorl   %eax, %eax
-    lock; cmpxchgl %ecx, (_ap_spinlock)
+    lock; cmpxchg %cx, (_ap_standby)
     jnz    spin_lock_retry
-    movl $_ap_stack, %esp
+    movl (_ap_stack), %esp
+    movl $0, (_ap_stack)
     pushl $0
-    pushl $0
-    call go_to_amd64_ap
+    pushl (_target)
+    xchg %bx, %bx
+    movl $go_to_amd64_ap, %eax
+    calll *%eax
 
 hlt_code:
     hlt
     jmp hlt_code
 _ap_code_end:
 .globl _ap_code_end
+
 .balign 4
+.globl _ap_standby
+_ap_standby:
+    .int 1
+.globl _ap_stack   
+_ap_stack:
+    .int 0
 .globl _ap_count
 _ap_count:
-    .word 0
-_ap_spinlock:
-    .word 0
-.globl _ap_stack
-_ap_stack:
-    .word 0
+    .int 0
+_target:
+    .quad _ap_64
 
 .balign 8
 .globl go_to_amd64_ap
@@ -132,3 +143,17 @@ _gdt_ptr:
     .short (_gdt_end - _gdt_start - 1)
     .int _gdt_start
     .int 0
+
+.code64
+_ap_64:
+    pushq $0
+    callq _init_unpaged
+    movabsq $base_virtual_addr, %rbx
+    xchg %bx, %bx
+    addq %rbx, %rsp
+    movq $0, %rdi
+    callq *%rax
+
+end_ap:
+    pause
+    jmp end_ap

@@ -66,6 +66,71 @@ struct SpinLockContextController
     }
 };
 
+struct RawSpinLockContextController
+{
+  private:
+    lock::spinlock_t &sl;
+
+  public:
+    RawSpinLockContextController(lock::spinlock_t &sl)
+        : sl(sl)
+    {
+    }
+    void begin() { sl.lock(); }
+    void end() { sl.unlock(); }
+};
+
+struct RawSpinLockContext
+{
+  private:
+    RawSpinLockContextController ctrl;
+
+  public:
+    RawSpinLockContext(lock::spinlock_t &sl)
+        : ctrl(sl)
+    {
+        ctrl.begin();
+    }
+    ~RawSpinLockContext() { ctrl.end(); }
+};
+
+struct RawSpinLockUnInterruptableContextController
+{
+  private:
+    lock::spinlock_t &sl;
+    UnInterruptableContextController ctrx;
+
+  public:
+    RawSpinLockUnInterruptableContextController(lock::spinlock_t &sl)
+        : sl(sl)
+    {
+    }
+    void begin()
+    {
+        ctrx.begin();
+        sl.lock();
+    }
+    void end()
+    {
+        sl.unlock();
+        ctrx.end();
+    }
+};
+
+struct RawSpinLockUnInterruptableContext
+{
+  private:
+    RawSpinLockUnInterruptableContextController ctrl;
+
+  public:
+    RawSpinLockUnInterruptableContext(lock::spinlock_t &sl)
+        : ctrl(sl)
+    {
+        ctrl.begin();
+    }
+    ~RawSpinLockUnInterruptableContext() { ctrl.end(); }
+};
+
 struct SpinLockContext
 {
   private:
