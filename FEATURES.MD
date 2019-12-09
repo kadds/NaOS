@@ -56,6 +56,7 @@ Features / TODO
     - [ ] UEFI boot loader
     - [ ] POSIX API
 * - [ ] Multi-core support (SMP)
+    - [x] AP Startup
     - [ ] Kernel preempt
 * - [ ] Extra
     - [ ] Kernel modules loader

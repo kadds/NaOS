@@ -11,7 +11,9 @@
 namespace arch::SMP
 {
 volatile bool tick = false;
+
 void timer_tick(u64 pass, u64 user_data) { tick = true; }
+
 void init()
 {
     if (!cpu::current().is_bsp())
@@ -29,7 +31,7 @@ void init()
     APIC::local_post_init_IPI();
     APIC::local_post_start_up((u64)base_ap_phy_addr);
 
-    trace::debug("Wait for ap startup.");
+    trace::debug("Wait for AP startup.");
     u32 count = 0;
     volatile u32 *ap_count = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
 
@@ -58,7 +60,7 @@ void init()
         *v = cpu_stack + memory::kernel_stack_size;
         _mfence();
         *standby = 0;
-        trace::debug("Wait startup ap ", i);
+        trace::debug("Wait AP ", i, ".");
         while (*v != 0)
         {
             __asm__ __volatile("pause ");
