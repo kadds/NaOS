@@ -56,10 +56,9 @@ void init()
     }
     if (unlikely(backbuffer_addr == nullptr))
     {
-        /// TODO: Report an error
-        for (;;)
-            ;
+        trace::panic("Video backing buffer size is insufficient.");
     }
+
     graphics::init(args->fb_width, args->fb_height, (byte *)backbuffer_addr, args->fb_pitch, args->fb_bbp);
     graphics::cls(cursor);
 

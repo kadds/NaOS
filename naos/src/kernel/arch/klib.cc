@@ -38,6 +38,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     u64 end = (u64)_file_end + (u64)base_virtual_addr;
     u64 start = (u64)_file_start + (u64)base_virtual_addr;
     trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack trace:\n");
+    trace::print<trace::PrintAttribute<trace::CBK::Default>>();
     int i = 0;
     while ((u64)rbp != 0)
     {
@@ -49,12 +50,12 @@ void *print_stack(const regs_t *regs, int max_depth)
         if (func != nullptr)
         {
             trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>("[", (void *)ret, "]");
-            trace::print<trace::PrintAttribute<trace::CBK::White>>("rbp:", (void *)rbp, "\n");
+            trace::print<trace::PrintAttribute<trace::CFG::White>>(" rbp:", (void *)rbp, "\n");
         }
         else
         {
-            trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Default>>((void *)ret,
-                                                                                        " rbp:", (void *)rbp, "\n");
+            trace::print<trace::PrintAttribute<trace::CBK::Default, trace::CFG::Default>>((void *)ret,
+                                                                                          " rbp:", (void *)rbp, "\n");
         }
         ret = (u64 *)*(rbp + 1);
         if ((u64)ret > end || (u64)ret < start)
