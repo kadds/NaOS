@@ -1,71 +1,46 @@
 #pragma once
+#include "../mm/new.hpp"
 #include "common.hpp"
-#include "memory.hpp"
 namespace util
 {
 class ring_buffer
 {
+  public:
+    struct trunk
+    {
+        byte *buffer;
+        u64 offset;
+        u64 size;
+        trunk *next;
+    };
+    enum class strategy
+    {
+        no_wait,
+        discard,
+        rewrite,
+    };
+
   private:
-    byte *buffer;
-    u64 capacity;
-    u64 position;
+    u64 trunk_size;
+    u64 max_trunk_count;
+    u64 count;
+
+    memory::IAllocator *node_allocator;
+    memory::IAllocator *allocator;
+    strategy full_strategy;
+
+    trunk *read_trunk, *write_trunk, *free_trunk;
 
   public:
-    ring_buffer(void *buffer, u64 capacity)
-        : buffer((byte *)buffer)
-        , capacity(capacity)
-        , position(0)
-    {
-    }
+    ring_buffer(u64 trunk_size, u64 max_trunk_count, strategy full_strategy, memory::IAllocator *list_node_allocator,
+                memory::IAllocator *trunk_allocator);
 
-    u64 write(const void *data, u64 size)
-    {
-        u64 s = size;
-        u64 rest = capacity - position;
-        byte *d = (byte *)data;
-        if (size < rest)
-        {
-            memcopy(buffer + position, d, size);
-            position += size;
-            return size;
-        }
-        else
-        {
-            memcopy(buffer + position, d, rest);
-            position = 0;
-            d += size;
-            size -= rest;
-        }
+    u64 write(const byte *buffer, u64 size);
 
-        u64 pice = size / capacity;
-        for (u64 i = 0; i < pice; i++, d += capacity, size -= capacity)
-            memcopy(buffer, d, capacity);
+    byte *read_buffer(u64 *read_size);
 
-        memcopy(buffer, d, size);
-        position += size;
-        return s;
-    }
-
-    u64 read(void *dst, u64 offset, u64 len) const
-    {
-        if (offset >= capacity)
-            return 0;
-        if (offset <= capacity - position)
-        {
-            u64 slen = capacity - offset - position;
-            if (slen > len)
-                slen = len;
-            memcopy(dst, buffer + position + offset, slen);
-            len -= slen;
-            dst = ((byte *)dst) + slen;
-        }
-        if (len > position)
-            len = position;
-
-        memcopy(dst, buffer, len);
-        return len;
-    }
-    u64 get_capacity() const { return capacity; }
-    const byte *get_buffer() const { return buffer; }
+  private:
+    trunk *new_trunk();
+    void delete_trunk(trunk *t);
 };
 } // namespace util

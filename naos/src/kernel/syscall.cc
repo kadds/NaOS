@@ -14,14 +14,7 @@ u64 none()
 
 /// print a string to stdio, which can replace by 'write'
 /// \param str the string to print
-/// \param normal set true if don't need SGR format casting
-void print(const char *str, bool normal)
-{ // trace::print(str);
-    if (!normal)
-        trace::print_SGR(str, trace::kernel_console_attribute);
-    else
-        trace::print_inner(str, trace::kernel_console_attribute);
-}
+void print(const char *str) { trace::print_inner(str); }
 
 void *system_call_table[128];
 

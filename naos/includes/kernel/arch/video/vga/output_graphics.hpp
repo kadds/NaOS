@@ -45,7 +45,7 @@ struct rectangle
 
 void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp);
 void cls(cursor_t &cur);
-void putchar(cursor_t &cur, char ch, const trace::console_attribute &attribute);
+void putchar(cursor_t &cur, char ch);
 
 void set_buffer(byte *buffer);
 

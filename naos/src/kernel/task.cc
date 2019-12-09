@@ -87,7 +87,6 @@ inline process_t *new_kernel_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
-    process->res_table.set_console_attribute(&trace::kernel_console_attribute);
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
     process->mm_info = memory::kernel_vm_info;
@@ -104,7 +103,6 @@ inline process_t *new_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
-    process->res_table.set_console_attribute(memory::New<trace::console_attribute>(memory::KernelCommonAllocatorV));
     process->attributes = 0;
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
@@ -121,10 +119,6 @@ inline void delete_process(process_t *p)
     uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
-    if (p->res_table.get_console_attribute() != &trace::kernel_console_attribute)
-    {
-        memory::Delete<>(memory::KernelCommonAllocatorV, p->res_table.get_console_attribute());
-    }
 
     if (p->signal_actions != nullptr)
     {

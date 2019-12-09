@@ -6,12 +6,6 @@
 #include "util/hash_map.hpp"
 #include "util/id_generator.hpp"
 #include <atomic>
-namespace trace
-{
-struct console_attribute;
-
-} // namespace trace
-
 namespace task
 {
 
@@ -37,7 +31,6 @@ struct file_table
 struct resource_table_t
 {
   private:
-    trace::console_attribute *console_attribute;
     file_table *f_table;
 
   public:
@@ -56,7 +49,5 @@ struct resource_table_t
     void delete_file_desc(file_desc fd);
     fs::vfs::file *get_file(file_desc fd);
     void set_file(file_desc fd, fs::vfs::file *file);
-    trace::console_attribute *get_console_attribute();
-    void set_console_attribute(trace::console_attribute *ca);
 };
 } // namespace task

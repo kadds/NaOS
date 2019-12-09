@@ -91,7 +91,7 @@ void move_pen(cursor_t &cur, i32 x, i32 y)
         scroll(cur, cur.py - text_count_vertical + 1);
 }
 
-void putchar(cursor_t &cur, char ch, const trace::console_attribute &attribute)
+void putchar(cursor_t &cur, char ch)
 {
     static u32 color_table[] = {0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
                                 0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF};
@@ -103,15 +103,9 @@ void putchar(cursor_t &cur, char ch, const trace::console_attribute &attribute)
         u32 fg;
         u32 bg;
 
-        if (attribute.is_fore_full_color())
-            fg = attribute.get_foreground();
-        else
-            fg = color_table[attribute.get_foreground()];
+        fg = color_table[15];
 
-        if (attribute.is_back_full_color())
-            bg = attribute.get_background();
-        else
-            bg = color_table[attribute.get_background()];
+        bg = color_table[0];
 
         u32 *v_start = (u32 *)video_addr + cur.py * (u64)width * (u64)font_height + cur.px * (u64)font_width;
 

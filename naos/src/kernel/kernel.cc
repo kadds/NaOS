@@ -53,6 +53,10 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
 {
     if (args == 0) // ap
     {
+        while (1)
+        {
+            __asm__("hlt");
+        }
         arch::init(args);
         cpu::init();
         irq::init();

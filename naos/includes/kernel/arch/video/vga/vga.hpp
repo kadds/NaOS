@@ -25,7 +25,7 @@ void set_backbuffer(byte *addr);
 void auto_flush();
 void flush();
 
-u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute);
+u64 putstring(const char *str, u64 max_len);
 void tag_memory();
 
 } // namespace arch::device::vga

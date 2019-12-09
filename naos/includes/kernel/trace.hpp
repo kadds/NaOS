@@ -1,6 +1,7 @@
 #pragma once
 #include "./arch/regs.hpp"
 #include "./util/formatter.hpp"
+#include "./util/ring_buffer.hpp"
 #include "common.hpp"
 #include "lock.hpp"
 #include "ucontext.hpp"
@@ -17,153 +18,208 @@ void early_init();
 //---------------start color definition------------------
 namespace Color
 {
+namespace Foreground
+{
 struct Black
 {
-    static const u32 color = 0x000000;
-    static const u8 index = 0;
+    static inline const char *t = "30";
 };
 
 struct Blue
 {
-    static const u32 color = 0x0000AA;
-    static const u8 index = 4;
+    static inline const char *t = "34";
 };
 
 struct Green
 {
-    static const u32 color = 0x00AA00;
-    static const u8 index = 2;
+    static inline const char *t = "32";
 };
 
 struct Cyan
 {
-    static const u32 color = 0x00AAAA;
-    static const u8 index = 6;
+    static inline const char *t = "36";
 };
 
 struct Red
 {
-    static const u32 color = 0xAA0000;
-    static const u8 index = 1;
+    static inline const char *t = "31";
 };
 
 struct Magenta
 {
-    static const u32 color = 0xAA00AA;
-    static const u8 index = 5;
+    static inline const char *t = "35";
 };
 
 struct Brown
 {
-    static const u32 color = 0xAA5500;
-    static const u8 index = 3;
+    static inline const char *t = "33";
 };
 
 struct LightGray
 {
-    static const u32 color = 0xAAAAAA;
-    static const u8 index = 7;
+    static inline const char *t = "37";
 };
 
 struct DarkGray
 {
-    static const u32 color = 0x555555;
-    static const u8 index = 8;
+    static inline const char *t = "90";
 };
 
 struct LightBlue
 {
-    static const u32 color = 0x5555FF;
-    static const u8 index = 12;
+    static inline const char *t = "94";
 };
 
 struct LightGreen
 {
-    static const u32 color = 0x55FF55;
-    static const u8 index = 10;
+    static inline const char *t = "92";
 };
 
 struct LightCyan
 {
-    static const u32 color = 0x55FFFF;
-    static const u8 index = 14;
+    static inline const char *t = "96";
 };
 
 struct LightRed
 {
-    static const u32 color = 0xFF5555;
-    static const u8 index = 9;
+    static inline const char *t = "91";
 };
 
 struct Pink
 {
-    static const u32 color = 0xFF55FF;
-    static const u8 index = 13;
+    static inline const char *t = "95";
 };
 
 struct Yellow
 {
-    static const u32 color = 0xFFFF55;
-    static const u8 index = 11;
+    static inline const char *t = "93";
 };
 
 struct White
 {
-    static const u32 color = 0xFFFFFF;
-    static const u8 index = 15;
+    static inline const char *t = "97";
 };
 
-struct ColorValue
+struct FullColor
 {
-    u32 color;
-    ColorValue(u32 color)
-        : color(color){};
+    static inline const char *t = "38;2";
 };
+
+struct Default
+{
+    static inline const char *t = "39";
+};
+
+} // namespace Foreground
+
+namespace Background
+{
+
+struct Black
+{
+    static inline const char *t = "40";
+};
+
+struct Blue
+{
+    static inline const char *t = "44";
+};
+
+struct Green
+{
+    static inline const char *t = "42";
+};
+
+struct Cyan
+{
+    static inline const char *t = "46";
+};
+
+struct Red
+{
+    static inline const char *t = "41";
+};
+
+struct Magenta
+{
+    static inline const char *t = "45";
+};
+
+struct Brown
+{
+    static inline const char *t = "43";
+};
+
+struct LightGray
+{
+    static inline const char *t = "47";
+};
+
+struct DarkGray
+{
+    static inline const char *t = "100";
+};
+
+struct LightBlue
+{
+    static inline const char *t = "104";
+};
+
+struct LightGreen
+{
+    static inline const char *t = "102";
+};
+
+struct LightCyan
+{
+    static inline const char *t = "106";
+};
+
+struct LightRed
+{
+    static inline const char *t = "101";
+};
+
+struct Pink
+{
+    static inline const char *t = "105";
+};
+
+struct Yellow
+{
+    static inline const char *t = "103";
+};
+
+struct White
+{
+    static inline const char *t = "107";
+};
+
+struct FullColor
+{
+    static inline const char *t = "48;2";
+};
+
+struct Default
+{
+    static inline const char *t = "49";
+};
+} // namespace Background
+namespace FG = Foreground;
+namespace BK = Background;
 } // namespace Color
+namespace CFG = Color::FG;
+namespace CBK = Color::BK;
+
 //---------------end of color definition-------------
 
-template <typename Color> struct Background
+template <typename... Args> struct PrintAttribute
 {
-    Color value;
-    template <typename... Args>
-    Background(const Args &... args)
-        : value(args...)
-    {
-    }
 };
 
-template <typename Color> struct Foreground
+template <typename T> struct has_member_t
 {
-    Color value;
-    template <typename... Args>
-    Foreground(const Args &... args)
-        : value(args...)
-    {
-    }
-};
-template <typename T> struct has_member_index
-{
-    template <typename U> static auto Check(U) -> typename std::decay<decltype(U::index)>::type;
-    static void Check(...);
-    using type = decltype(Check(std::declval<T>()));
-    enum
-    {
-        value = !std::is_void_v<type>
-    };
-};
-template <typename T> struct has_member_color
-{
-    template <typename U> static auto Check(U) -> typename std::decay<decltype(U::color)>::type;
-    static void Check(...);
-    using type = decltype(Check(std::declval<T>()));
-    enum
-    {
-        value = !std::is_void_v<type>
-    };
-};
-template <typename T> struct has_member_attr
-{
-    template <typename U> static auto Check(U) -> typename std::decay<decltype(U::attr)>::type;
+    template <typename U> static auto Check(U) -> typename std::decay<decltype(U::t)>::type;
     static void Check(...);
     using type = decltype(Check(std::declval<T>()));
     enum
@@ -172,18 +228,7 @@ template <typename T> struct has_member_attr
     };
 };
 
-template <typename T> struct has_member_flag
-{
-    template <typename U> static auto Check(U) -> typename std::decay<decltype(U::flag)>::type;
-    static void Check(...);
-    using type = decltype(Check(std::declval<T>()));
-    enum
-    {
-        value = !std::is_void_v<type>
-    };
-};
-
-namespace PrintAttr
+namespace TextAttribute
 {
 enum text_attribute
 {
@@ -194,131 +239,56 @@ enum text_attribute
     blink = 5,
     reverse = 7,
     hide = 8,
-    default_foreground = 39,
-    default_background = 49,
     framed = 51,
 };
+
 struct Reset
 {
+    static inline const char *t = "0";
     static const u8 flag = 0;
-};
-struct DefaultForeground
-{
-    static const u8 flag = 1;
-};
-struct DefaultBackground
-{
-    static const u8 flag = 2;
 };
 
 struct Bold
 {
+    static inline const char *t = "1";
     static const u8 attr = 1;
 };
 struct Italic
 {
+    static inline const char *t = "3";
     static const u8 attr = 3;
 };
 struct UnderLine
 {
+    static inline const char *t = "4";
     static const u8 attr = 4;
 };
 struct Blink
 {
+    static inline const char *t = "5";
     static const u8 attr = 5;
 };
 struct Reverse
 {
+    static inline const char *t = "7";
     static const u8 attr = 7;
 };
 struct Hide
 {
+    static inline const char *t = "8";
     static const u8 attr = 8;
 };
 struct Framed
 {
+    static inline const char *t = "51";
     static const u8 attr = 51;
 };
 
-} // namespace PrintAttr
+} // namespace TextAttribute
 
-struct console_attribute
+struct NoneAttr
 {
-    /// color index or color value
-    u64 color;
-    u64 attr;
-    char sgr_string[64];
-    char temp_format_str[128];
-    console_attribute()
-        : color(0)
-        , attr(0)
-    {
-        set_changed();
-    }
-
-    console_attribute(u64 c, u64 attr)
-        : color(c)
-        , attr(attr)
-    {
-    }
-    void set_foreground(u32 color)
-    {
-        this->color = (this->color & 0xFFFFFFFFFF000000) | (color & 0xFFFFFFUL);
-        set_changed();
-    };
-    void set_background(u32 color)
-    {
-        this->color = (this->color & 0xFF000000FFFFFFFF) | ((color & 0xFFFFFFUL) << 32);
-        set_changed();
-    };
-    u32 get_foreground() const { return this->color & 0xFFFFFF; }
-    u32 get_background() const { return (this->color >> 32) & 0xFFFFFF; }
-
-    bool has_attribute(u8 attr_index) const { return attr & (1ul << attr_index); }
-    void set_attribute(u8 attr_index)
-    {
-        attr |= (1ul << attr_index);
-        set_changed();
-    }
-    void clean_attribute(u8 attr_index)
-    {
-        attr &= ~(1ul << attr_index);
-        set_changed();
-    }
-    bool has_any_attribute() const { return attr != 0; }
-
-    bool is_back_full_color() const { return color & (1ul << 63); }
-    void set_back_full_color()
-    {
-        color |= (1ul << 63);
-        set_changed();
-    }
-    void clean_back_full_color()
-    {
-        color &= ~(1ul << 63);
-        set_changed();
-    }
-
-    bool is_fore_full_color() const { return color & (1ul << 62); }
-    void set_fore_full_color()
-    {
-        color |= (1ul << 62);
-        set_changed();
-    }
-    void clean_fore_full_color()
-    {
-        color &= ~(1ul << 62);
-        set_changed();
-    }
-
-    bool has_changed() const { return color & (1ul << 61); }
-    void set_changed() { color |= (1ul << 61); }
-    void clean_changed() { color &= ~(1ul << 61); }
 };
-extern const console_attribute default_console_attribute;
-extern console_attribute kernel_console_attribute;
-/// print escape sequences
-void print_SGR(const char *str, console_attribute &current_attribute);
 
 // -------------------- help function------------------
 template <typename T> struct remove_extent
@@ -347,103 +317,56 @@ template <typename T, std::size_t N> struct remove_extent<const T[N]>
 };
 // ---------------------end of help function-------------
 
-template <typename TColor, typename std::enable_if_t<has_member_index<TColor>::value> * = nullptr>
-void set_font_color_attr(console_attribute &attribute, const Foreground<TColor> &cv)
-{
-    attribute.set_foreground(TColor::index);
-    attribute.clean_attribute(PrintAttr::default_foreground);
-    attribute.clean_fore_full_color();
-}
-template <typename TColor, typename std::enable_if_t<has_member_index<TColor>::value> * = nullptr>
-void set_font_color_attr(console_attribute &attribute, const Background<TColor> &cv)
-{
-    attribute.set_background(TColor::index);
-    attribute.clean_attribute(PrintAttr::default_background);
-    attribute.clean_back_full_color();
-}
+/// print string directly
+void print_inner(const char *str);
 
-template <typename TColor, typename std::enable_if_t<!has_member_index<TColor>::value> * = nullptr>
-void set_font_color_attr(console_attribute &attribute, const Foreground<TColor> &cv)
-{
-    attribute.set_foreground(cv.value.color);
-    attribute.clean_attribute(PrintAttr::default_foreground);
-    attribute.set_fore_full_color();
-}
+util::ring_buffer &get_kernel_log_buffer();
 
-template <typename TColor, typename std::enable_if_t<!has_member_index<TColor>::value> * = nullptr>
-void set_font_color_attr(console_attribute &attribute, const Background<TColor> &cv)
-{
-    attribute.set_background(cv.value.color);
-    attribute.clean_attribute(PrintAttr::default_background);
-    attribute.set_back_full_color();
-}
-
-/// print string directly with console attribute context
-void print_inner(const char *str, console_attribute &current_attribute);
-
-template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::Reset>> * = nullptr>
-void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
-{
-    attribute = default_console_attribute;
-    attribute.set_attribute(PrintAttr::reset);
-    print_inner("\0", attribute);
-}
-
-template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::DefaultBackground>> * = nullptr>
-void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
-{
-    attribute.set_background(default_console_attribute.get_background());
-    attribute.set_attribute(PrintAttr::default_background);
-}
-
-template <typename AttrClass, std::enable_if_t<std::is_same_v<AttrClass, PrintAttr::DefaultForeground>> * = nullptr>
-void set_font_text_flag(console_attribute &attribute, const AttrClass &cv)
-{
-    attribute.set_foreground(default_console_attribute.get_foreground());
-    attribute.set_attribute(PrintAttr::default_foreground);
-}
-
-template <typename Head> void print_fmt_text(console_attribute &attribute, const Head &head)
+template <typename Head> void dispatch(const Head &head)
 {
     using RealType = typename remove_extent<std::decay_t<decltype(head)>>::type;
     util::formatter::format<RealType> fmt;
-    print_inner(fmt(head, attribute.temp_format_str, 128), attribute);
+    char fmt_str[128];
+    print_inner(fmt(head, fmt_str, 128));
 }
 
-template <typename Head,
-          typename std::enable_if_t<!has_member_attr<Head>::value & !has_member_flag<Head>::value> * = nullptr>
-auto dispatch(console_attribute &attribute, const Head &head)
+template <typename Head> void cast_fmt()
 {
-    return print_fmt_text(attribute, head);
+    print_inner(Head::t);
+    print_inner("m");
 }
 
-template <template <typename S> typename Head, typename S>
-auto dispatch(console_attribute &attribute, const Head<S> &head)
+template <typename Head, typename Second, typename... Args, std::enable_if_t<has_member_t<Head>::value> * = nullptr>
+void cast_fmt()
 {
-    return set_font_color_attr(attribute, head);
+    print_inner(Head::t);
+    print_inner(";");
+    cast_fmt<Second, Args...>();
 }
-
-template <typename Head, typename std::enable_if_t<has_member_attr<Head>::value> * = nullptr>
-auto dispatch(console_attribute &attribute, const Head &head)
-{
-    return set_font_text_attr(attribute, head);
-}
-
-template <typename Head, typename std::enable_if_t<has_member_flag<Head>::value> * = nullptr>
-auto dispatch(console_attribute &attribute, const Head &head)
-{
-    return set_font_text_flag(attribute, head);
-}
-
-template <typename Head> void print_fmt(console_attribute &attribute, const Head &head) { dispatch(attribute, head); }
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
-template <typename... Args> void print(console_attribute &current_attribute, const Args &... args)
+
+template <typename... Args> void print_fmt(PrintAttribute<Args...>)
 {
-    auto i = std::initializer_list<int>{(print_fmt(current_attribute, args), 0)...};
+    if constexpr (sizeof...(Args) != 0)
+    {
+        print_inner("\e[");
+        cast_fmt<Args...>();
+    }
+    else
+    {
+        return;
+    }
 }
+
+template <typename TPrintAttribute = PrintAttribute<>, typename... Args> void print(const Args &... args)
+{
+    print_fmt<>(TPrintAttribute());
+    auto i = std::initializer_list<int>{(dispatch(args), 0)...};
+}
+
 #pragma GCC diagnostic pop
 
 NoReturn void keep_panic(const regs_t *regs = 0);
@@ -451,44 +374,55 @@ NoReturn void keep_panic(const regs_t *regs = 0);
 template <typename... Args> NoReturn void panic(const Args &... args)
 {
     uctx::UnInterruptableContext icu;
-    print(kernel_console_attribute, Foreground<Color::LightRed>(), "[panic]   ", PrintAttr::Reset(), args...);
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<>(args...);
+    print<>('\n');
     keep_panic();
 }
 
 template <typename... Args> NoReturn void panic_stack(const regs_t *regs, const Args &... args)
 {
     uctx::UnInterruptableContext icu;
-    print(kernel_console_attribute, Foreground<Color::LightRed>(), "[panic]   ", PrintAttr::Reset(), args...);
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<>(args...);
+    print<>('\n');
     keep_panic(regs);
 }
 
 template <typename... Args> void warning(const Args &... args)
 {
-    print(kernel_console_attribute, Foreground<Color::LightCyan>(), "[warning] ", PrintAttr::Reset(), args...);
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<Color::Foreground::LightCyan>>("[warning] ");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<>(args...);
+    print<>('\n');
 }
 
 template <typename... Args> void info(const Args &... args)
 {
-    print(kernel_console_attribute, Foreground<Color::Green>(), "[info]    ", PrintAttr::Reset(), args...);
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<Color::Foreground::Green>>("[info]    ");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<>(args...);
+    print<>('\n');
 }
 
 template <typename... Args> void debug(const Args &... args)
 {
     if (!output_debug)
         return;
-    print(kernel_console_attribute, Foreground<Color::Brown>(), "[debug]   ", PrintAttr::Reset(), args...);
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<Color::Foreground::Brown>>("[debug]   ");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<>(args...);
+    print<>('\n');
 }
 
 template <typename... Args> void assert_runtime(const char *exp, const char *file, int line, const Args &... args)
 {
-    print(kernel_console_attribute, Foreground<Color::LightRed>(), "[assert]  ", Foreground<Color::Red>(),
-          "runtime assert failed: at: ", file, ':', line, "\n    assert expr: ", exp, '\n');
-    panic("from assert failed. ", args...);
+    print<PrintAttribute<Color::Foreground::LightRed>>("[assert]  ");
+    print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed: at: ", file, ':', line,
+                                                  "\n    assert expr: ", exp, '\n');
+    panic<>("from assert failed. ", args...);
 }
 
 } // namespace trace

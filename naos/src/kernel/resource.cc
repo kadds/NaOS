@@ -17,7 +17,6 @@ fs::vfs::dentry *file_table::get_path_root(const char *path)
 }
 
 resource_table_t::resource_table_t(file_table *ft)
-    : console_attribute(nullptr)
 
 {
     if (ft != nullptr)
@@ -71,7 +70,4 @@ void resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
     }
 }
 
-trace::console_attribute *resource_table_t::get_console_attribute() { return console_attribute; }
-
-void resource_table_t::set_console_attribute(trace::console_attribute *ca) { console_attribute = ca; }
 } // namespace task

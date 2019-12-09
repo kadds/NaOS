@@ -63,8 +63,8 @@ void init()
     graphics::init(args->fb_width, args->fb_height, (byte *)backbuffer_addr, args->fb_pitch, args->fb_bbp);
     graphics::cls(cursor);
 
-    print(kernel_console_attribute, Foreground<Color::LightGreen>(), "VGA graphics mode. ", args->fb_width, "X",
-          args->fb_height, ". bit ", args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
+    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", args->fb_width, "X", args->fb_height, ". bit ",
+                                           args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
 
     test();
 
@@ -76,27 +76,26 @@ void init()
 void test()
 {
     using namespace trace;
-    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test Begin",
-          PrintAttr::Reset());
-    print(kernel_console_attribute, Foreground<Color::Black>(), "\n Black ");
-    print(kernel_console_attribute, Foreground<Color::Blue>(), " Blue ");
-    print(kernel_console_attribute, Foreground<Color::Green>(), " Green ");
-    print(kernel_console_attribute, Foreground<Color::Cyan>(), " Cyan ");
-    print(kernel_console_attribute, Foreground<Color::Red>(), " Red ");
-    print(kernel_console_attribute, Foreground<Color::Magenta>(), " Magenta ");
-    print(kernel_console_attribute, Foreground<Color::Brown>(), " Brown ");
-    print(kernel_console_attribute, Foreground<Color::LightGray>(), " LightGray ");
-    print(kernel_console_attribute, Foreground<Color::DarkGray>(), " DarkGray ");
-    print(kernel_console_attribute, Foreground<Color::LightBlue>(), " LightBlue ");
-    print(kernel_console_attribute, Foreground<Color::LightGreen>(), " LightGreen ");
-    print(kernel_console_attribute, Foreground<Color::LightCyan>(), " LightCyan ");
-    print(kernel_console_attribute, Foreground<Color::LightRed>(), " LightRed ");
-    print(kernel_console_attribute, Foreground<Color::Pink>(), " Pink ");
-    print(kernel_console_attribute, Foreground<Color::Yellow>(), " Yellow ");
-    print(kernel_console_attribute, Foreground<Color::White>(), " White \n");
-    print(kernel_console_attribute, Background<Color::LightGray>(), Foreground<Color::Black>(), "VGA Test End",
-          PrintAttr::Reset());
-    print(kernel_console_attribute, '\n');
+    print<PrintAttribute<CBK::LightGray, CFG::Black>>("VGA Test Begin");
+    print<PrintAttribute<TextAttribute::Reset>>();
+    print<PrintAttribute<CFG::Black>>("\n Black ");
+    print<PrintAttribute<CFG::Blue>>(" Blue ");
+    print<PrintAttribute<CFG::Green>>(" Green ");
+    print<PrintAttribute<CFG::Cyan>>(" Cyan ");
+    print<PrintAttribute<CFG::Red>>(" Red ");
+    print<PrintAttribute<CFG::Magenta>>(" Magenta ");
+    print<PrintAttribute<CFG::Brown>>(" Brown ");
+    print<PrintAttribute<CFG::LightGray>>(" LightGray ");
+    print<PrintAttribute<CFG::DarkGray>>(" DarkGray ");
+    print<PrintAttribute<CFG::LightBlue>>(" LightBlue ");
+    print<PrintAttribute<CFG::LightGreen>>(" LightGreen ");
+    print<PrintAttribute<CFG::LightCyan>>(" LightCyan ");
+    print<PrintAttribute<CFG::LightRed>>(" LightRed ");
+    print<PrintAttribute<CFG::Pink>>(" Pink ");
+    print<PrintAttribute<CFG::Yellow>>(" Yellow ");
+    print<PrintAttribute<CFG::White>>(" White \n");
+    print<PrintAttribute<CBK::LightGray, CFG::Black>>("VGA Test End\n");
+    print<PrintAttribute<TextAttribute::Reset>>();
 }
 
 byte *get_vram() { return vram_addr; }
@@ -129,6 +128,15 @@ void flush_timer(u64 dt, u64 ud)
     if (likely(vram_addr != nullptr))
     {
         uctx::UnInterruptableContext icu;
+        u64 size;
+        byte *buffer = trace::get_kernel_log_buffer().read_buffer(&size);
+
+        while (size != 0)
+        {
+            putstring((const char *)buffer, size);
+            trace::get_kernel_log_buffer().read_buffer(&size);
+        }
+
         flush();
         timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
@@ -145,7 +153,7 @@ void auto_flush()
     }
 }
 
-u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attribute)
+u64 putstring(const char *str, u64 max_len)
 {
     if (unlikely(vram_addr == nullptr))
     {
@@ -160,7 +168,7 @@ u64 putstring(const char *str, u64 max_len, const trace::console_attribute &attr
     u64 i = 0;
     while (*str != '\0' && i < max_len)
     {
-        graphics::putchar(cursor, *str++, attribute);
+        graphics::putchar(cursor, *str++);
         i++;
     }
 

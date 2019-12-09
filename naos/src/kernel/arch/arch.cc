@@ -24,9 +24,9 @@ void init(const kernel_start_args *args)
     {
         trace::early_init();
         device::vga::init();
-        trace::print(trace::kernel_console_attribute, trace::Foreground<trace::Color::ColorValue>(0xA0c000),
-                     trace::Background<trace::Color::Black>(), " NaOS: Nano Operating System (arch X86_64)",
-                     trace::PrintAttr::Reset(), '\n');
+        trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
+            " NaOS: Nano Operating System (arch X86_64)\n");
+        trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
 
         trace::debug("Boot from ", (const char *)args->boot_loader_name);
         if (sizeof(kernel_start_args) != args->size_of_struct)
