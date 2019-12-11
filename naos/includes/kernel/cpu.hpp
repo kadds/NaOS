@@ -26,4 +26,5 @@ class cpu_data_t
 };
 cpu_data_t &current();
 void init();
+u64 count();
 } // namespace cpu

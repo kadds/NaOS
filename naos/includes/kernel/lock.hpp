@@ -1,12 +1,29 @@
 #pragma once
-#include "common.hpp"
-#ifdef _DEBUG
 #include "arch/klib.hpp"
-#endif
+#include "common.hpp"
 #include <atomic>
 
 namespace lock
 {
+struct semaphore_t
+{
+    std::atomic_long lock_res;
+    semaphore_t(u64 count)
+        : lock_res(count)
+    {
+    }
+
+    void down()
+    {
+        lock_res--;
+        while (lock_res < 0)
+        {
+            cpu_pause();
+        }
+    }
+
+    void up() { lock_res++; }
+};
 struct spinlock_t
 {
   private:
@@ -21,15 +38,14 @@ struct spinlock_t
     spinlock_t &operator=(const spinlock_t &) = delete;
     void lock()
     {
-        while (lock_m.test_and_set(std::memory_order_acquire))
+        do
         {
+            while (lock_m._M_i)
+                cpu_pause();
 #ifdef _DEBUG
             wait_times++;
-            if (wait_times > 1000000ul)
-            {
-            }
 #endif
-        }
+        } while (lock_m.test_and_set(std::memory_order_acquire));
 #ifdef _DEBUG
         last_stack_pointer = get_stack();
         wait_times = 0;

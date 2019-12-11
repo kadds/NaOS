@@ -13,6 +13,7 @@ namespace trace
 bool output_debug = true;
 
 util::ring_buffer *ring_buffer = nullptr;
+byte *line_buffer;
 
 arch::device::com::serial serial_device;
 
@@ -23,20 +24,34 @@ void init()
     ring_buffer = memory::New<util::ring_buffer>(memory::KernelCommonAllocatorV, memory::page_size, 8,
                                                  util::ring_buffer::strategy::discard, memory::KernelCommonAllocatorV,
                                                  memory::KernelBuddyAllocatorV);
+    line_buffer = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
 }
 util::ring_buffer &get_kernel_log_buffer() { return *ring_buffer; }
 
+lock::spinlock_t spinlock;
+bool last_IF;
+
+void begin_print()
+{
+    last_IF = arch::idt::save_and_disable();
+    spinlock.lock();
+}
+
+void end_print()
+{
+    spinlock.unlock();
+    if (last_IF)
+    {
+        arch::idt::enable();
+    }
+    else
+    {
+        arch::idt::disable();
+    }
+}
+
 void print_inner(const char *str)
 {
-    // if (current_attribute.has_changed())
-    // {
-    //     format_SGR(current_attribute.sgr_string, current_attribute);
-    //     current_attribute.clean_changed();
-    //     char *p = current_attribute.sgr_string;
-    //     while (*p != '\0')
-    //         arch::device::com::write((byte)*p++);
-    // }
-
     if (unlikely(ring_buffer != nullptr))
     {
         u64 len = util::strlen(str);
@@ -55,12 +70,16 @@ void print_inner(const char *str)
 NoReturn void keep_panic(const regs_t *regs)
 {
     uctx::UnInterruptableContext uic;
+    trace::begin_print();
     print_stack(regs, 30);
     trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
+    trace::end_print();
     arch::device::vga::flush();
     for (;;)
-        ;
+    {
+        cpu_pause();
+    }
 }
 
 ExportC NoReturn void panic_once(const char *string) { trace::panic(string); }

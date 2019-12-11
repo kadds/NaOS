@@ -29,4 +29,5 @@ void init()
                  " interrupt rsp:", (void *)c.get_interrupt_rsp(), " kernel rsp:", (void *)c.get_kernel_rsp());
 #endif
 }
+u64 count() { return arch::cpu::count(); }
 } // namespace cpu

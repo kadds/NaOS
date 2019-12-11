@@ -228,7 +228,11 @@ void init()
     cpu::current().set_task(thd);
     cpu::current().set_idle_task(thd);
     trace::debug("idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init...");
-    bin_handle::init();
+
+    if (cpu::current().is_bsp())
+    {
+        bin_handle::init();
+    }
 }
 
 thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags)
@@ -396,11 +400,15 @@ void destroy_process(process_t *process)
 
 void start_task_idle()
 {
-    scheduler::time_span_scheduler *scheduler =
-        memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
-    scheduler::set_scheduler(scheduler);
+    if (cpu::current().is_bsp())
+    {
 
-    create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
+        scheduler::time_span_scheduler *scheduler =
+            memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
+        scheduler::set_scheduler(scheduler);
+        create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
+    }
+
     task::builtin::idle::main();
 }
 
@@ -568,6 +576,7 @@ void kill_thread(thread_t *thread, flag_t flags)
 
 process_t *find_pid(process_id pid)
 {
+    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
     process_t *process = nullptr;
     global_process_map->get(pid, &process);
     return process;

@@ -80,6 +80,8 @@ cpu_t &get(cpuid_t cpuid);
 cpu_t &current();
 void *current_user_data();
 
+u64 count();
+
 cpuid_t id();
 
 } // namespace arch::cpu

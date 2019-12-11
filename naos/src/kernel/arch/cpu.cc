@@ -138,6 +138,8 @@ void *current_user_data()
     return (void *)u;
 }
 
+u64 count() { return last_cpuid; }
+
 cpuid_t id() { return current().get_id(); }
 
 } // namespace arch::cpu

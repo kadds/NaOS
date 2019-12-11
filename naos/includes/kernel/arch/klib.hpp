@@ -77,6 +77,12 @@ inline static u64 get_stack()
     return v0;
 }
 
+inline static void cpu_pause()
+{
+    __asm__ __volatile__("pause \n\t" : : : "memory");
+    return;
+}
+
 void *print_stack(const regs_t *regs, int max_depth);
 
 constexpr u64 maximum_user_addr = 0x00007FFFFFFFFFFFUL;

@@ -53,15 +53,12 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
 {
     if (args == 0) // ap
     {
-        while (1)
-        {
-            __asm__("hlt");
-        }
         arch::init(args);
         cpu::init();
         irq::init();
         timer::init();
         SMP::init();
+        SMP::wait_sync();
         task::init();
         task::start_task_idle();
         trace::panic("Unreachable control flow in _kstart.");
@@ -85,6 +82,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     ksybs::init();
 
     task::init();
+    SMP::wait_sync();
     trace::info("kernel main");
     arch::last_init();
     task::start_task_idle();
