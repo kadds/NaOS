@@ -104,21 +104,127 @@ u32 *get_video_line_start(cursor_t &cur)
     return (u32 *)((byte *)video_addr + line_bytes * get_py(cur) * (u64)font_height);
 }
 
+struct font_state
+{
+    u32 foreground, background;
+    u64 flags;
+};
+
+font_state global_state;
+font_state current_esc_state;
+u64 current_num;
+int esc_state;
+static u32 color_table[] = {0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
+                            0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF};
+
+void set_attr()
+{
+    if (current_num == 0)
+    {
+        current_esc_state.foreground = color_table[7];
+        current_esc_state.background = color_table[0];
+    }
+    else if (current_num >= 30 && current_num <= 39)
+    {
+        if (current_num < 38)
+        {
+            current_esc_state.foreground = color_table[current_num - 30];
+        }
+        else if (current_num == 39)
+        {
+            current_esc_state.foreground = color_table[7];
+        }
+        else
+        {
+            /// TODO: when num == 38 next num == 2
+        }
+    }
+    else if (current_num >= 40 && current_num <= 49)
+    {
+        if (current_num < 48)
+        {
+            current_esc_state.background = color_table[current_num - 40];
+        }
+        else if (current_num == 49)
+        {
+            current_esc_state.background = color_table[0];
+        }
+        else
+        {
+            /// TODO: when num == 38 next num == 2
+        }
+    }
+    else if (current_num >= 90 && current_num <= 97)
+    {
+        current_esc_state.foreground = color_table[current_num - 90 + 8];
+    }
+    else if (current_num >= 100 && current_num <= 107)
+    {
+        current_esc_state.background = color_table[current_num - 100 + 8];
+    }
+}
+
+bool set_state(char ch)
+{
+    if (ch == '\e')
+    {
+        if (esc_state == 0)
+            esc_state = 1;
+        else
+            esc_state = 0;
+        return true;
+    }
+    else if (ch == '[')
+    {
+        if (esc_state == 1)
+        {
+            current_num = 0;
+            esc_state = 2;
+            return true;
+        }
+        else
+            esc_state = 0;
+    }
+    else if (esc_state == 2 || esc_state == 3)
+    {
+        if (ch >= '0' && ch <= '9')
+        {
+            esc_state = 3;
+            current_num = current_num * 10 + ch - '0';
+        }
+        else if (ch == ';' || ch == ':')
+        {
+            set_attr();
+            esc_state = 2;
+            current_num = 0;
+        }
+        else if (ch == 'm')
+        {
+            set_attr();
+            current_num = 0;
+            esc_state = 0;
+            global_state = current_esc_state;
+        }
+        return true;
+    }
+    else
+    {
+        esc_state = 0;
+    }
+    return false;
+}
+
 void putchar(cursor_t &cur, char ch)
 {
-    static u32 color_table[] = {0x000000, 0xAA0000, 0x00AA00, 0xAA5500, 0x0000AA, 0xAA00AA, 0x00AAAA, 0xAAAAAA,
-                                0x555555, 0xFF5555, 0x55FF55, 0xFFFF55, 0x5555FF, 0xFF55FF, 0x55FFFF, 0xFFFFFF};
 
     if (ch != '\t' && ch != '\n')
     {
         void *font_data = cur_font->get_unicode(ch);
+        if (set_state(ch))
+            return;
 
-        u32 fg;
-        u32 bg;
-
-        fg = color_table[15];
-
-        bg = color_table[0];
+        u32 fg = global_state.foreground;
+        u32 bg = global_state.background;
 
         u32 *v_start = get_video_line_start(cur) + cur.px * (u64)font_width;
 
