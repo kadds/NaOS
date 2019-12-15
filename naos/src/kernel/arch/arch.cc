@@ -71,7 +71,7 @@ void init(const kernel_start_args *args)
         gdt::init_after_paging();
 
         trace::debug("TSS init...");
-        tss::init((void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x10000));
+        tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x10000));
         cpu::init_data(cpuid);
         trace::debug("IDT init...");
         idt::init_after_paging();
@@ -82,8 +82,9 @@ void init(const kernel_start_args *args)
         return;
     }
     auto cpuid = cpu::init();
+    paging::init();
     gdt::init_after_paging();
-    tss::init((void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x10000));
+    tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x10000));
     cpu::init_data(cpuid);
     idt::init_after_paging();
     APIC::init();

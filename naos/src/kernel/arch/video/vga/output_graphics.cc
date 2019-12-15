@@ -265,14 +265,13 @@ void flush(byte *vraw)
     {
         u64 top_bytes = window_height * width * sizeof(u32);
         u64 bottom_bytes = width * height * sizeof(u32) - top_bytes;
-        util::memcopy(vraw, (void *)video_addr + top_bytes, bottom_bytes);
+        util::memcopy(vraw, (byte *)video_addr + top_bytes, bottom_bytes);
         util::memcopy(vraw + bottom_bytes, (void *)video_addr, top_bytes);
     }
     else
     {
         u32 bytes = (right - left) * sizeof(u32);
         u32 l = left * sizeof(u32);
-        u32 len = right * sizeof(u32) - l;
 
         for (u32 y = top; y < window_height; y++)
         {

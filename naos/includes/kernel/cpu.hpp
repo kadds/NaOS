@@ -23,6 +23,10 @@ class cpu_data_t
     task::thread_t *get_idle_task() { return idle_task; }
 
     bool has_task() { return current_task != nullptr; }
+
+    void set_schedule_data(void *data) { schedule_data = data; }
+
+    void *get_schedule_data() { return schedule_data; }
 };
 cpu_data_t &current();
 void init();

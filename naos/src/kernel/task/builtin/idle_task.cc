@@ -10,7 +10,7 @@ namespace task::builtin::idle
 {
 void main()
 {
-    trace::info("idle task running.");
+    trace::debug("idle task running.");
     if (cpu::current().is_bsp())
     {
         auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root,
@@ -21,7 +21,6 @@ void main()
         }
         task::create_process(file, init::main, 0, 0, 0, 0);
         // fs::vfs::close(file);
-        trace::debug("init task has forked.");
     }
 
     task::schedule();

@@ -84,4 +84,6 @@ u64 count();
 
 cpuid_t id();
 
+bool is_init();
+
 } // namespace arch::cpu

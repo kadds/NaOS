@@ -49,7 +49,8 @@ void *print_stack(const regs_t *regs, int max_depth)
         const char *func = ksybs::get_symbol_name(ret);
         if (func != nullptr)
         {
-            trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>("[", (void *)ret, "]");
+            trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>(func);
+            trace::print<trace::PrintAttribute<trace::CFG::Default>>(" [", (void *)ret, "]");
             trace::print<trace::PrintAttribute<trace::CFG::White>>(" rbp:", (void *)rbp, "\n");
         }
         else

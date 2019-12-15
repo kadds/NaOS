@@ -34,7 +34,7 @@ void gen_priority(task::thread_t *t)
     get_schedule_data(t)->priority = (t->static_priority * 10ul + t->dynamic_priority) / 10;
 }
 
-time_span_scheduler::time_span_scheduler()
+cpu_task_list_t::cpu_task_list_t()
     : runable_list(&list_node_allocator)
     , expired_list(&list_node_allocator)
     , block_list(&list_node_allocator)
@@ -42,48 +42,65 @@ time_span_scheduler::time_span_scheduler()
 {
 }
 
+time_span_scheduler::time_span_scheduler() {}
+
 void time_span_scheduler::init()
 {
     uctx::UnInterruptableContext icu;
     timer::add_watcher(5000, timer_tick, (u64)this);
     last_time_millisecond = timer::get_high_resolution_time();
-    task::get_idle_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
-    get_schedule_data(task::get_idle_task())->rest_time = 0;
 }
 
 void time_span_scheduler::destroy() { timer::remove_watcher(timer_tick); }
 
+void time_span_scheduler::init_cpu()
+{
+    cpu_task_list_t *task_list = memory::New<cpu_task_list_t>(memory::KernelCommonAllocatorV);
+    cpu::current().set_schedule_data(task_list);
+    task::get_idle_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
+    get_schedule_data(task::get_idle_task())->rest_time = 0;
+}
+
+void time_span_scheduler::destroy_cpu()
+{
+    memory::Delete<>(memory::KernelCommonAllocatorV, (cpu_task_list_t *)cpu::current().get_schedule_data());
+}
+
 void time_span_scheduler::add(thread_t *thread)
 {
-    uctx::SpinLockUnInterruptableContext uic(list_spinlock);
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
     thread->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
     gen_priority(thread);
-    get_schedule_data(thread)->rest_time =
-        runable_list.size() * 1000 / (runable_list.size() + expired_list.size() + 1) / 1000;
+    get_schedule_data(thread)->rest_time = task_list->runable_list.size() * 1000 /
+                                           (task_list->runable_list.size() + task_list->expired_list.size() + 1) / 1000;
     insert_to_runable_list(thread);
 }
 
 void time_span_scheduler::remove(thread_t *thread)
 {
-    uctx::SpinLockUnInterruptableContext uic(list_spinlock);
-    auto node = block_list.find(thread);
-    if (node != block_list.end())
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
+    auto node = task_list->block_list.find(thread);
+    if (node != task_list->block_list.end())
     {
-        block_list.remove(node);
+        task_list->block_list.remove(node);
     }
     else
     {
-        node = expired_list.find(thread);
-        if (node != expired_list.end())
+        node = task_list->expired_list.find(thread);
+        if (node != task_list->expired_list.end())
         {
-            expired_list.remove(node);
+            task_list->expired_list.remove(node);
         }
         else
         {
-            node = runable_list.find(thread);
-            if (node != runable_list.end())
+            node = task_list->runable_list.find(thread);
+            if (node != task_list->runable_list.end())
             {
-                runable_list.remove(node);
+                task_list->runable_list.remove(node);
             }
             else
             {
@@ -101,14 +118,16 @@ void time_span_scheduler::remove(thread_t *thread)
 
 void time_span_scheduler::update(thread_t *thread)
 {
-    uctx::SpinLockUnInterruptableContext uic(list_spinlock);
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
 
     if (thread->state == task::thread_state::ready)
     {
-        auto node = block_list.find(thread);
-        if (node != block_list.end())
+        auto node = task_list->block_list.find(thread);
+        if (node != task_list->block_list.end())
         {
-            block_list.remove(node);
+            task_list->block_list.remove(node);
             thread->attributes &= ~thread_attributes::block;
             insert_to_runable_list(thread);
         }
@@ -121,18 +140,18 @@ void time_span_scheduler::update(thread_t *thread)
         {
             return;
         }
-        auto node = runable_list.find(thread);
-        if (node != runable_list.end())
+        auto node = task_list->runable_list.find(thread);
+        if (node != task_list->runable_list.end())
         {
-            runable_list.remove(node);
-            block_list.push_back(thread);
+            task_list->runable_list.remove(node);
+            task_list->block_list.push_back(thread);
             return;
         }
-        node = expired_list.find(thread);
-        if (node != expired_list.end())
+        node = task_list->expired_list.find(thread);
+        if (node != task_list->expired_list.end())
         {
-            expired_list.remove(node);
-            block_list.push_back(thread);
+            task_list->expired_list.remove(node);
+            task_list->block_list.push_back(thread);
             return;
         }
     }
@@ -142,37 +161,41 @@ void time_span_scheduler::update(thread_t *thread)
 
 void time_span_scheduler::insert_to_runable_list(thread_t *t)
 {
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
     auto p = priority(t);
-    for (auto it = runable_list.begin(); it != runable_list.end(); ++it)
+    for (auto it = task_list->runable_list.begin(); it != task_list->runable_list.end(); ++it)
     {
         if (priority(*it) > p)
         {
-            runable_list.insert(it, t);
+            task_list->runable_list.insert(it, t);
             return;
         }
     }
-    runable_list.push_back(t);
+    task_list->runable_list.push_back(t);
 }
 
 void time_span_scheduler::epoch()
 {
-    uctx::SpinLockUnInterruptableContext uic(list_spinlock);
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
 
-    u64 count = expired_list.size();
+    u64 count = task_list->expired_list.size();
     if (count == 0)
         return;
     u64 full_priority = 1;
     // 1ms
     u64 epoch_time = 1000000;
-    for (auto it : expired_list)
+    for (auto it : task_list->expired_list)
     {
         gen_priority(it);
         full_priority += get_schedule_data(it)->priority;
         insert_to_runable_list(it);
     }
-    expired_list.clean();
+    task_list->expired_list.clean();
 
-    for (auto it : runable_list)
+    for (auto it : task_list->runable_list)
     {
         // 1000
         get_schedule_data(it)->rest_time +=
@@ -182,12 +205,14 @@ void time_span_scheduler::epoch()
 
 thread_t *time_span_scheduler::pick_available_task()
 {
-    if (runable_list.empty())
+    auto &u = cpu::current();
+    cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+    if (task_list->runable_list.empty())
     {
         return task::get_idle_task();
     }
-    thread_t *t = runable_list.front();
-    runable_list.remove(runable_list.begin());
+    thread_t *t = task_list->runable_list.front();
+    task_list->runable_list.remove(task_list->runable_list.begin());
     return t;
 }
 
@@ -198,14 +223,16 @@ void time_span_scheduler::schedule(flag_t flag)
         return;
     }
     thread_t *cur = current();
+
     if (flag & schedule_flags::current_remove)
     {
         uctx::UnInterruptableContext icu;
-
-        uctx::SpinLockContextController ctr(list_spinlock);
-        list_spinlock.lock();
+        auto &u = cpu::current();
+        cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
+        uctx::SpinLockContextController ctr(task_list->list_spinlock);
+        task_list->list_spinlock.lock();
         thread_t *next = pick_available_task();
-        list_spinlock.unlock();
+        task_list->list_spinlock.unlock();
         next->state = task::thread_state::running;
         task::switch_thread(cur, next);
     }
@@ -214,24 +241,25 @@ void time_span_scheduler::schedule(flag_t flag)
         while (cur->attributes & task::thread_attributes::need_schedule)
         {
             uctx::UnInterruptableContext icu;
-
+            auto &u = cpu::current();
+            cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
             if (cur->attributes & task::thread_attributes::block)
             {
-                block_list.push_back(cur);
+                task_list->block_list.push_back(cur);
             }
             else if (get_schedule_data(cur)->rest_time <= 0 && cur != task::get_idle_task())
             {
-                expired_list.push_back(cur);
+                task_list->expired_list.push_back(cur);
             }
             cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
-            if (runable_list.empty())
+            if (task_list->runable_list.empty())
                 epoch();
 
-            uctx::SpinLockContextController ctr(list_spinlock);
-            list_spinlock.lock();
+            uctx::SpinLockContextController ctr(task_list->list_spinlock);
+            task_list->list_spinlock.lock();
             thread_t *next = pick_available_task();
-            list_spinlock.unlock();
+            task_list->list_spinlock.unlock();
 
             if (cur != next)
             {

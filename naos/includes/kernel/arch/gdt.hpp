@@ -20,6 +20,7 @@ struct descriptor
     descriptor(u64 gdte) { *((u64 *)this) = gdte; }
     descriptor() {}
 } PackStruct;
+static_assert(sizeof(descriptor) == 8);
 
 struct ptr_t
 {

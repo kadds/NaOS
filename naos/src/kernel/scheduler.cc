@@ -37,4 +37,7 @@ u64 get_attribute(const char *attr_name, thread_t *target)
 }
 
 void force_schedule() { global_scheduler->schedule(schedule_flags::current_remove); }
+
+void init_cpu_data() { global_scheduler->init_cpu(); }
+void destroy_cpu_data() { global_scheduler->destroy_cpu(); }
 } // namespace task::scheduler

@@ -12,7 +12,7 @@ namespace arch::paging
 {
 struct flags
 {
-    enum : u16
+    enum : u32
     {
         present = 1,
         writable = 2,
@@ -24,6 +24,10 @@ struct flags
         attribute_ext = 128,
         big_page = 128,
         global = 256,
+
+        // arch flags
+        uncacheable = 24,
+
     };
 };
 

@@ -24,6 +24,7 @@
 #include "kernel/ucontext.hpp"
 
 #include "kernel/cpu.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
@@ -402,13 +403,17 @@ void start_task_idle()
 {
     if (cpu::current().is_bsp())
     {
-
         scheduler::time_span_scheduler *scheduler =
             memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
         scheduler::set_scheduler(scheduler);
-        create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
+        SMP::wait_sync();
     }
-
+    else
+    {
+        SMP::wait_sync();
+    }
+    scheduler::init_cpu_data();
+    create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
     task::builtin::idle::main();
 }
 

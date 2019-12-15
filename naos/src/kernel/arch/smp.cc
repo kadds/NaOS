@@ -28,7 +28,9 @@ void init()
         (u64)memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0));
     u32 *ap_addr = (u32 *)_ap_stack;
     *memory::kernel_phyaddr_to_virtaddr(ap_addr) = cpu_stack;
+    trace::debug("Send INIT-IPI");
     APIC::local_post_init_IPI();
+    trace::debug("Send StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
 
     trace::debug("Wait for AP startup.");

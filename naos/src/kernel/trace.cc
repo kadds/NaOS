@@ -13,7 +13,6 @@ namespace trace
 bool output_debug = true;
 
 util::ring_buffer *ring_buffer = nullptr;
-byte *line_buffer;
 
 arch::device::com::serial serial_device;
 
@@ -24,7 +23,6 @@ void init()
     ring_buffer = memory::New<util::ring_buffer>(memory::KernelCommonAllocatorV, memory::page_size, 8,
                                                  util::ring_buffer::strategy::discard, memory::KernelCommonAllocatorV,
                                                  memory::KernelBuddyAllocatorV);
-    line_buffer = (byte *)memory::KernelBuddyAllocatorV->allocate(1, 0);
 }
 util::ring_buffer &get_kernel_log_buffer() { return *ring_buffer; }
 
@@ -75,7 +73,7 @@ NoReturn void keep_panic(const regs_t *regs)
     trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
     trace::end_print();
-    arch::device::vga::flush();
+    arch::device::vga::flush_kbuffer();
     for (;;)
     {
         cpu_pause();

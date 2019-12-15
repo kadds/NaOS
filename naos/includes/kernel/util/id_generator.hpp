@@ -135,8 +135,11 @@ template <u8 levels> class id_level_generator
             return index;
         }
         auto index = current_pack->bitmap->scan_zero();
-        current_pack->bitmap->set(index);
-        current_pack->rest--;
+        if (likely(index < current_pack->max))
+        {
+            current_pack->bitmap->set(index);
+            current_pack->rest--;
+        }
         return index;
     };
 

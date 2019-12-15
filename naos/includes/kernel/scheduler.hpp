@@ -32,6 +32,9 @@ class scheduler
     virtual void init() = 0;
     virtual void destroy() = 0;
 
+    virtual void init_cpu() = 0;
+    virtual void destroy_cpu() = 0;
+
     virtual void set_attribute(const char *attr_name, thread_t *target, u64 value) = 0;
     virtual u64 get_attribute(const char *attr_name, thread_t *target) = 0;
 
@@ -49,5 +52,8 @@ void schedule_tick();
 void set_attribute(const char *attr_name, thread_t *target, u64 value);
 u64 get_attribute(const char *attr_name, thread_t *target);
 void force_schedule();
+
+void init_cpu_data();
+void destroy_cpu_data();
 
 } // namespace task::scheduler

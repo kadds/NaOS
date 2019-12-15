@@ -122,7 +122,7 @@ void flush()
     }
 }
 
-void flush_timer(u64 dt, u64 ud)
+void flush_kbuffer()
 {
     if (likely(vram_addr != nullptr))
     {
@@ -137,6 +137,14 @@ void flush_timer(u64 dt, u64 ud)
         }
 
         flush();
+    }
+}
+
+void flush_timer(u64 dt, u64 ud)
+{
+    if (likely(vram_addr != nullptr))
+    {
+        flush_kbuffer();
         timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
 }

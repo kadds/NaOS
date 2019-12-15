@@ -39,10 +39,9 @@ ExportC void _machine_check_wrapper();
 ExportC void _SIMD_exception_wrapper();
 ExportC void _virtualization_exception_wrapper();
 
-void print_dst(regs_t *regs) { trace::debug("exception at: ", (void *)regs->rip, ", error code: ", regs->error_code); }
-
 void _ctx_interrupt_ dispatch_exception(regs_t *regs)
 {
+    trace::debug("exception at: ", (void *)regs->rip, ", error code: ", regs->error_code);
     u64 extra_data = 0;
     if (regs->vector == 14)
     {
@@ -51,15 +50,19 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     bool handled = false;
     if (likely(global_call_func))
         handled = global_call_func(regs, extra_data);
-    if (!handled)
+    if (unlikely(!handled))
     {
+        if (unlikely(!cpu::is_init()))
+        {
+            trace::panic_stack(regs, "Startup Oops error");
+        }
         auto &cpu = cpu::current();
-        if (cpu.get_user_data() == nullptr)
+        if (unlikely(cpu.get_user_data() == nullptr))
         {
             trace::panic_stack(regs, "Startup Oops error");
         }
         ::task::thread_t *task = ::cpu::current().get_task();
-        if ((regs->cs & 0x3) != 0) // user space
+        if (likely((regs->cs & 0x3) != 0)) // user space : DPL 3
         {
             task->register_info->trap_vector = regs->vector;
             auto &pack = task->signal_pack;
@@ -149,7 +152,6 @@ ExportC _ctx_interrupt_ void entry_debug(regs_t *regs) { trace::debug("debug tra
 ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs)
 {
     trace::debug("nmi interrupt! ");
-    print_dst(regs);
     dispatch_exception(regs);
 }
 

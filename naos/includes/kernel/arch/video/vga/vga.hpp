@@ -24,6 +24,7 @@ void set_backbuffer(byte *addr);
 
 void auto_flush();
 void flush();
+void flush_kbuffer();
 
 u64 putstring(const char *str, u64 max_len);
 void tag_memory();

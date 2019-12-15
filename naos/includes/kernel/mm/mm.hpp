@@ -11,10 +11,14 @@
 /* Kernel space memory zone
 0xFFFF,8000,0000,0000 - 0xFFFF,8000,FFFF,FFFF: fixed phycal memory map
 0xFFFF,a000,0000,0000 - 0xFFFF,a000,0FFF,FFFF: vga map (64MB)
+0xFFFF,a000,1000,0000 - 0xFFFF,a000,1FFF,FFFF: IO map address (UC)
 0xFFFF,b000,0000,0000 - 0xFFFF,cFFF,FFFF,FFFF: kernel mmap zone (32T)
 */
 namespace memory
 {
+
+constexpr u64 io_map_start_address = 0xFFFFa00010000000UL;
+constexpr u64 io_map_end_address = 0xFFFFa00020000000UL;
 
 // kernel stack size in task
 extern const u64 kernel_stack_size;

@@ -25,7 +25,7 @@ void *get_rsp()
 void cpu_t::set_context(void *stack)
 {
     kernel_rsp = stack;
-    tss::set_rsp(0, (void *)kernel_rsp);
+    tss::set_rsp(cpu::current().get_id(), 0, (void *)kernel_rsp);
 }
 
 bool cpu_t::is_in_exception_context()
@@ -94,6 +94,8 @@ cpuid_t init()
     return cpuid;
 }
 
+bool is_init() { return last_cpuid >= 1; }
+
 void init_data(cpuid_t cpuid)
 {
     _wrmsr(0xC0000101, (u64)&per_cpu_data[cpuid]);
@@ -112,9 +114,9 @@ void init_data(cpuid_t cpuid)
     auto kernel_rsp = (void *)(krsp + memory::kernel_stack_size);
     data.kernel_rsp = kernel_rsp;
 
-    tss::set_ist(1, data.interrupt_rsp);
-    tss::set_ist(3, data.exception_rsp);
-    tss::set_ist(4, data.exception_nmi_rsp);
+    tss::set_ist(cpuid, 1, data.interrupt_rsp);
+    tss::set_ist(cpuid, 3, data.exception_rsp);
+    tss::set_ist(cpuid, 4, data.exception_nmi_rsp);
 }
 
 bool cpu_t::is_bsp() { return id == 0; }

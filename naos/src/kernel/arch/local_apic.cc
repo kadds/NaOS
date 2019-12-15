@@ -1,11 +1,14 @@
 #include "kernel/arch/local_apic.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/interrupt.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
@@ -110,7 +113,7 @@ u64 read_register_mm_64(u16 reg)
     u64 v = *(u32 *)((byte *)apic_base_addr + reg);
     _mfence();
     v = v << 32;
-    v |= *(u32 *)((byte *)apic_base_addr + reg + 4);
+    v |= *(u32 *)((byte *)apic_base_addr + reg + 0x10);
     return v;
 }
 
@@ -124,7 +127,7 @@ void write_register_mm(u16 reg, u32 v)
 void write_register_mm_64(u16 reg, u64 v)
 {
     reg <<= 4;
-    *(u32 *)((byte *)apic_base_addr + reg + 4) = v >> 32;
+    *(u32 *)((byte *)apic_base_addr + reg + 0x10) = v >> 32;
     *(u32 *)((byte *)apic_base_addr + reg) = v;
     _mfence();
 }
@@ -160,33 +163,45 @@ void local_init()
 {
     u32 id;
     u64 v = (1 << 11);
+    if (arch::cpu::current().is_bsp())
+    {
+        if (cpu_info::has_future(cpu_info::future::x2apic))
+        {
+            trace::debug("x2APIC is supported");
+            read_register = read_register_MSR;
+            write_register = write_register_MSR;
+            read_register64 = read_register_MSR_64;
+            write_register64 = write_register_MSR_64;
+        }
+        else
+        {
+            read_register = read_register_mm;
+            write_register = write_register_mm;
+            read_register64 = read_register_mm_64;
+            write_register64 = write_register_mm_64;
+
+            void *local_apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
+            local_apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
+            trace::debug("APIC base ", local_apic_base_addr);
+
+            paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr(),
+                        (void *)memory::io_map_start_address, local_apic_base_addr, paging::frame_size::size_2mb, 1,
+                        paging::flags::uncacheable | paging::flags::writable);
+            paging::reload();
+
+            apic_base_addr = (void *)memory::io_map_start_address;
+        }
+
+        trace::debug("Enable Local APIC...");
+    }
+
     if (cpu_info::has_future(cpu_info::future::x2apic))
     {
-        trace::debug("x2APIC is supported");
         v |= (1 << 10);
-        read_register = read_register_MSR;
-        write_register = write_register_MSR;
-        read_register64 = read_register_MSR_64;
-        write_register64 = write_register_MSR_64;
     }
-    else
-    {
-        read_register = read_register_mm;
-        write_register = write_register_mm;
-        read_register64 = read_register_mm_64;
-        write_register64 = write_register_mm_64;
-    }
-
-    trace::debug("Enable Local APIC...");
-    apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
-    apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
 
     _wrmsr(0x1B, _rdmsr(0x1B) | v);
-    trace::debug("APIC base ", apic_base_addr);
-
     kassert((_rdmsr(0x1B) & v) == v, "Can't enable (IA32_APIC_BASE) APIC value ", (void *)_rdmsr(0x1B));
-
-    apic_base_addr = memory::kernel_phyaddr_to_virtaddr(apic_base_addr);
 
     u64 version_value = read_register(version_register);
     v = (1 << 8);

@@ -6,18 +6,24 @@
 
 namespace task::scheduler
 {
-class time_span_scheduler : public scheduler
+struct cpu_task_list_t
 {
-  private:
     using thread_list_t = util::linked_list<task::thread_t *>;
     using thread_list_cache_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
 
-  private:
     thread_list_cache_allocator_t list_node_allocator;
     thread_list_t runable_list;
     thread_list_t expired_list;
     thread_list_t block_list;
     lock::spinlock_t list_spinlock;
+
+    cpu_task_list_t();
+};
+
+class time_span_scheduler : public scheduler
+{
+  private:
+  private:
     u64 last_time_millisecond;
 
   public:
@@ -30,6 +36,9 @@ class time_span_scheduler : public scheduler
 
     void init() override;
     void destroy() override;
+
+    void init_cpu() override;
+    void destroy_cpu() override;
 
     void epoch();
 

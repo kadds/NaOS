@@ -18,6 +18,7 @@ struct descriptor
     u8 : 0;
     u8 offset2;
     u32 offset3;
+    u32 none;
     descriptor()
     {
         *((u64 *)this) = 0;
@@ -42,6 +43,7 @@ struct descriptor
     void set_dpl(u8 dpl) { this->DPL = dpl; }
     void set_valid(bool p) { this->P = p; }
 } PackStruct;
+static_assert(sizeof(descriptor) == 16);
 
 struct tss_t
 {
@@ -74,11 +76,11 @@ struct tss_t
 
 static_assert(sizeof(tss_t) == 104, "sizeof(tss_t) must == 104");
 
-void init(void *baseAddr, void *ist);
+void init(int core_index, void *baseAddr, void *ist);
 
-void set_ist(int index, void *ist);
-void *get_ist(int index);
+void set_ist(int core_index, int index, void *ist);
+void *get_ist(int core_index, int index);
 
-void set_rsp(int index, void *rsp0);
-void *get_rsp(int index);
+void set_rsp(int core_index, int index, void *rsp0);
+void *get_rsp(int core_index, int index);
 } // namespace arch::tss

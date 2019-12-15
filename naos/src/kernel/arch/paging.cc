@@ -1,4 +1,5 @@
 #include "kernel/arch/paging.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
@@ -7,7 +8,6 @@
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
-
 namespace arch::paging
 {
 
@@ -80,6 +80,11 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
 void init()
 {
     auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr();
+    if (!cpu::current().is_bsp())
+    {
+        load(base_kernel_page_addr);
+        return;
+    }
     u64 max_maped_memory = memory::get_max_maped_memory();
     if (max_maped_memory > memory::max_memory_support)
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
