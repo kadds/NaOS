@@ -15,7 +15,9 @@ extern bool output_debug;
 void init();
 void early_init();
 
-//---------------start color definition------------------
+///
+/// \brief color namespace includes normal color
+///
 namespace Color
 {
 namespace Foreground
@@ -205,13 +207,14 @@ struct Default
     static inline const char *t = "49";
 };
 } // namespace Background
+
 namespace FG = Foreground;
 namespace BK = Background;
+
 } // namespace Color
+
 namespace CFG = Color::FG;
 namespace CBK = Color::BK;
-
-//---------------end of color definition-------------
 
 template <typename... Args> struct PrintAttribute
 {
@@ -350,6 +353,11 @@ void cast_fmt()
 #pragma GCC diagnostic ignored "-Wunused-variable"
 #pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 
+///
+/// \brief print format characters
+///
+/// \tparam Args
+///
 template <typename... Args> void print_fmt(PrintAttribute<Args...>)
 {
     if constexpr (sizeof...(Args) != 0)
@@ -362,7 +370,15 @@ template <typename... Args> void print_fmt(PrintAttribute<Args...>)
         return;
     }
 }
-
+///
+/// \brief kernel print string
+///
+/// \tparam PrintAttribute<> the print attribute: color, bold, etc..
+/// \tparam Args
+/// \param args strings to print
+/// \note call begin_print() before print<>() and call end_print() after print<>(), if not, race conditions may occur in
+/// the print<>()
+///
 template <typename TPrintAttribute = PrintAttribute<>, typename... Args> void print(const Args &... args)
 {
     print_fmt<>(TPrintAttribute());

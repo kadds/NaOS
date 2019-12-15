@@ -1,5 +1,10 @@
 #pragma once
 #include "common.hpp"
+
+///
+/// \brief interrupt/syscall regs
+///
+///
 struct regs_t
 {
     u64 r15;

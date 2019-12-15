@@ -24,7 +24,7 @@ Features / TODO
             - [x] Sleep
             - [ ] Locks
     - [ ] IPC
-    - [ ] Signal
+    - [x] Signal
     - [x] Memory map
         - [ ] Memory shared
     - [ ] Elf loader

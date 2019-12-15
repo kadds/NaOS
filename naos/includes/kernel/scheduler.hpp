@@ -17,16 +17,34 @@ enum : flag_t
 };
 } // namespace schedule_flags
 
-/// Interface of all scheduler
+///
+/// \brief interface of all schedulers
+///
+///
 class scheduler
 {
   public:
+    ///
+    /// \brief add task to scheduler
+    ///
+    /// \param thread the task thread to add
+    ///
     virtual void add(thread_t *thread) = 0;
     virtual void remove(thread_t *thread) = 0;
-    /// called when priority is updated
+    ///
+    /// \brief update task
+    ///
+    /// \param thread
+    /// \note called when priority or state is updated
+    ///
     virtual void update(thread_t *thread) = 0;
 
     virtual void schedule(flag_t flag) = 0;
+
+    ///
+    /// \brief timer tick schedule calc
+    ///
+    ///
     virtual void schedule_tick() = 0;
 
     virtual void init() = 0;

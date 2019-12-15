@@ -3,6 +3,7 @@
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/kernel.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"

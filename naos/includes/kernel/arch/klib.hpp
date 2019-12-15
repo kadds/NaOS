@@ -1,8 +1,7 @@
 #pragma once
-#include "../kernel.hpp"
 #include "common.hpp"
-#include "idt.hpp"
-#include "task.hpp"
+#include "regs.hpp"
+
 extern volatile char base_ap_phy_addr[];
 
 extern volatile char base_virtual_addr[];
@@ -36,7 +35,7 @@ ExportC void _cpu_id(u64 param, u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *o
 #define cpu_id(eax, o_eax, o_ebx, o_ecx, o_edx) _cpu_id((u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
 
 ExportC NoReturn void _kernel_thread(regs_t *regs);
-ExportC void _switch_task(arch::task::register_info_t *prev, arch::task::register_info_t *next);
+ExportC void _switch_task(void *prev, void *next);
 
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
 

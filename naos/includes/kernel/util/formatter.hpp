@@ -2,12 +2,36 @@
 #include "common.hpp"
 #include <type_traits>
 
-// Format system type to string
-
 namespace util::formatter
 {
+///
+/// \brief cast intger to string
+///
+/// \param in the intger to cast
+/// \param buffer the string buffer to write
+/// \param buffer_len maximum number of characters in the string buffer
+/// \note if the buffer is not large enough, the result is unknown
+///
 void int2str(i64 in, char *buffer, int buffer_len);
+
+///
+/// \brief cast unsigned intger to string
+///
+/// \param in the intger to cast
+/// \param buffer the string buffer to write
+/// \param buffer_len maximum number of characters in the string buffer
+/// \note if the buffer is not large enough, the result is unknown
+///
 void uint2str(u64 in, char *buffer, int buffer_len);
+
+///
+/// \brief cast pointer address to string (hex)
+///
+/// \param in the intger to cast
+/// \param buffer the string buffer to write
+/// \param buffer_len maximum number of characters in the string buffer
+/// \note if the buffer is not large enough, the result is unknown
+///
 void pointer2str(const void *in, char *buffer, int buffer_len);
 
 template <typename In> struct format

@@ -10,7 +10,7 @@ struct thread_t;
 namespace arch::task
 {
 
-// register info in task
+/// register info in task
 struct register_info_t
 {
     void *rip;
