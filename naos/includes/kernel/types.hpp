@@ -23,6 +23,8 @@ using group_id = u64;
 using file_desc = i32;
 using user_id = u64;
 using group_id = u64;
+using dev_t = u64;
+
 struct dirent
 {
     const char *filename;

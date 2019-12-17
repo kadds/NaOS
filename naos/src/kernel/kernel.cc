@@ -5,6 +5,8 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/cpu.hpp"
+#include "kernel/dev/device.hpp"
+#include "kernel/dev/driver.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
@@ -80,7 +82,8 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();
-
+    dev::init();
+    dev::init_driver();
     task::init();
     SMP::wait_sync();
     trace::info("kernel main");
