@@ -25,6 +25,8 @@ struct cpu_t
     volatile std::atomic_bool is_in_soft_irq = false;
     volatile u64 soft_irq_pending = 0;
 
+    u64 apic_id;
+
   public:
     cpu_t() = default;
     cpu_t(const cpu_t &) = delete;
@@ -49,6 +51,8 @@ struct cpu_t
 
     cpuid_t get_id() { return id; }
 
+    u64 get_apic_id() { return apic_id; }
+
     void *get_kernel_rsp() { return kernel_rsp; }
 
     void *get_interrupt_rsp() { return interrupt_rsp; }
@@ -69,6 +73,7 @@ struct cpu_t
 
     void *get_user_data() { return user_data; }
     void set_user_data(void *ud) { user_data = ud; }
+    void set_apic_id(u64 id) { apic_id = id; }
 
 }; // storeage in gs
 extern cpu_t pre_cpu_data[];

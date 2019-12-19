@@ -211,6 +211,7 @@ void local_init()
 
     id = read_register(id_register) >> 24;
     trace::debug("Local APIC ID ", id);
+    cpu::current().set_apic_id(id);
 
     if (version > 0xf)
     {
@@ -233,6 +234,8 @@ void local_init()
 
     disable_all_lvt();
 }
+
+u64 local_ID() { return cpu::current().get_apic_id(); }
 
 void local_software_enable()
 {

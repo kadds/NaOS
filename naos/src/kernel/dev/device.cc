@@ -1,4 +1,5 @@
 #include "kernel/dev/device.hpp"
+#include "kernel/dev/driver.hpp"
 #include "kernel/mm/new.hpp"
 namespace dev
 {
@@ -11,6 +12,7 @@ void init()
     id_gen = memory::New<device_id_gen_t>(memory::KernelCommonAllocatorV, 4096);
     device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     unbinding_device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+    init_driver();
 }
 
 int enum_device(device_class *clazz)
@@ -27,8 +29,12 @@ int enum_device(device_class *clazz)
                 trace::panic("Too many device register to system");
             }
             dev->id = id;
-            device_map->insert(id, dev);
+            unbinding_device_map->insert(id, dev);
             dev_index++;
+        }
+        else
+        {
+            break;
         }
     }
     return dev_index;

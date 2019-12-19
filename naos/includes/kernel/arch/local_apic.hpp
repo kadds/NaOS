@@ -30,6 +30,8 @@ void local_EOI(u8 index);
 void local_post_init_IPI();
 void local_post_start_up(u64 addr);
 
+u64 local_ID();
+
 class clock_source;
 
 class clock_event : public ::clock::clock_event

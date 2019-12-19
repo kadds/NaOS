@@ -2,6 +2,7 @@
 #include "kernel/arch/apic.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
+#include "kernel/arch/dev/serial/8042.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/paging.hpp"
@@ -91,4 +92,6 @@ void init(const kernel_start_args *args)
 }
 
 void last_init() { device::vga::auto_flush(); }
+
+void init_drivers() { device::chip8042::init(); }
 } // namespace arch

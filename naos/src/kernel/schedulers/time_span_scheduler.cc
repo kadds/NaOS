@@ -238,9 +238,14 @@ void time_span_scheduler::schedule(flag_t flag)
     }
     else
     {
+        if (!cur->preempt_data.preemptible())
+        {
+            return;
+        }
+        uctx::UnInterruptableContext icu;
+
         while (cur->attributes & task::thread_attributes::need_schedule)
         {
-            uctx::UnInterruptableContext icu;
             auto &u = cpu::current();
             cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
             if (cur->attributes & task::thread_attributes::block)

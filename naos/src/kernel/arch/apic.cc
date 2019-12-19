@@ -19,8 +19,8 @@ void init()
 
 void EOI(u8 index)
 {
-    // if (index >= 0x0)
-
     local_EOI(index);
+    if (index < 0x80)
+        io_EOI(index);
 }
 } // namespace arch::APIC

@@ -8,7 +8,7 @@ namespace hard_vector
 {
 enum hard_vector
 {
-    pit_timer = 32,
+    pit_timer = 34,
     HEPT = 56,
     local_apic_timer = 128,
     IPI = 255,

@@ -401,19 +401,25 @@ void destroy_process(process_t *process)
 
 void start_task_idle()
 {
-    if (cpu::current().is_bsp())
     {
-        scheduler::time_span_scheduler *scheduler =
-            memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
-        scheduler::set_scheduler(scheduler);
-        SMP::wait_sync();
+        task::current()->preempt_data.disable_preempt();
+        uctx::UnInterruptableContext icu;
+        if (cpu::current().is_bsp())
+        {
+            scheduler::time_span_scheduler *scheduler =
+                memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
+            scheduler::set_scheduler(scheduler);
+            SMP::wait_sync();
+        }
+        else
+        {
+            SMP::wait_sync();
+        }
     }
-    else
-    {
-        SMP::wait_sync();
-    }
+
     scheduler::init_cpu_data();
     create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
+    task::current()->preempt_data.enable_preempt();
     task::builtin::idle::main();
 }
 
