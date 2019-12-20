@@ -12,10 +12,12 @@ std::atomic_int wait_counter;
 
 void wait_sync()
 {
-    int cpu_count = cpu::count();
+    int cpu_count = cpu::count() - 1;
     int exp = 0;
-    wait_counter.compare_exchange_strong(exp, cpu_count);
-    wait_counter--;
+    if (!wait_counter.compare_exchange_strong(exp, cpu_count))
+    {
+        wait_counter--;
+    }
 
     while (wait_counter != 0)
     {

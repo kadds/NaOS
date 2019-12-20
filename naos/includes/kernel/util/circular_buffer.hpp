@@ -9,7 +9,6 @@ template <typename T> class circular_buffer
     T *buffer;
     u64 length;
     u64 read_off;
-    u64 data_valied;
     u64 write_off;
     memory::IAllocator *allocator;
 
@@ -38,22 +37,14 @@ template <typename T> class circular_buffer
             {
                 cb->write_off = 0;
             }
-            if (unlikely(cb->data_valied == cb->read_off))
-            {
-                cb->data_valied++;
-                if (unlikely(cb->data_valied >= cb->length))
-                {
-                    cb->data_valied = 0;
-                }
-            }
         }
     };
 
     circular_buffer(memory::IAllocator *allocator, u64 count)
         : length(count)
-        , read_off(0)
-        , data_valied(0)
+        , read_off(count - 1)
         , write_off(0)
+        , allocator(allocator)
     {
         buffer = (T *)allocator->allocate(count * sizeof(T), alignof(T));
     }
@@ -71,7 +62,7 @@ template <typename T> class circular_buffer
 
     bool read(T *t)
     {
-        if (unlikely(read_off == data_valied))
+        if (unlikely((read_off + 1) % length == write_off))
         {
             return false;
         }

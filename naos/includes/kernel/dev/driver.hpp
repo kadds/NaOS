@@ -1,7 +1,11 @@
 #pragma once
-#include "../io/pkg.hpp"
+
 #include "common.hpp"
 #include "device.hpp"
+namespace io
+{
+struct request_t;
+} // namespace io
 
 namespace dev
 {
@@ -25,7 +29,7 @@ class driver
     virtual ~driver() {}
     virtual bool setup(device *dev) = 0;
     virtual void cleanup(device *dev) = 0;
-    virtual void on_io_request(io::request_t *request) = 0;
+    virtual void on_io_request(::io::request_t *request) = 0;
 
     num_t get_id() { return id; }
     const char *get_name() { return name; }
@@ -40,5 +44,7 @@ using driver_map_t = util::hash_map<num_t, driver *, hash_func>;
 using driver_id_gen_t = util::id_generator;
 
 void init_driver();
+
+driver *get_driver(num_t dri);
 
 } // namespace dev

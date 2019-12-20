@@ -46,8 +46,11 @@ u64 ring_buffer::write(const byte *buffer, u64 size)
             if (free_trunk == nullptr)
             {
                 free_trunk = new_trunk();
-                free_trunk->next = nullptr;
             }
+
+            free_trunk->next = nullptr;
+            free_trunk->size = 0;
+            free_trunk->offset = 0;
             write_trunk->next = free_trunk;
             free_trunk = free_trunk->next;
             write_trunk = write_trunk->next;
@@ -68,7 +71,7 @@ byte *ring_buffer::read_buffer(u64 *size)
 {
     if (unlikely(read_trunk == nullptr))
     {
-        size = 0;
+        *size = 0;
         return nullptr;
     }
     byte *buffer;

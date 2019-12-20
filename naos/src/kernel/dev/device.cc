@@ -10,6 +10,8 @@ device_map_t *unbinding_device_map;
 void init()
 {
     id_gen = memory::New<device_id_gen_t>(memory::KernelCommonAllocatorV, 4096);
+    // alloc 0
+    id_gen->next();
     device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     unbinding_device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     init_driver();
@@ -38,6 +40,13 @@ int enum_device(device_class *clazz)
         }
     }
     return dev_index;
+}
+
+device *get_device(num_t dev)
+{
+    device *pdev = nullptr;
+    device_map->get(dev, &pdev);
+    return pdev;
 }
 
 } // namespace dev

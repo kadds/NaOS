@@ -168,6 +168,8 @@ template <typename E> class array
         recapcity(element_count);
     }
 
+    E *data() { return buffer; }
+
     array(memory::IAllocator *allocator)
         : buffer(nullptr)
         , allocator(allocator)

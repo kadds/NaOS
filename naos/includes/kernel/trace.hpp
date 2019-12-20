@@ -451,8 +451,8 @@ template <typename... Args> void assert_runtime(const char *exp, const char *fil
     print<PrintAttribute<Color::Foreground::LightRed>>("[assert]  ");
     print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed: at: ", file, ':', line,
                                                   "\n    assert expr: ", exp, '\n');
-    panic<>("from assert failed. ", args...);
     end_print();
+    panic<>("from assert failed. ", args...);
 }
 
 } // namespace trace

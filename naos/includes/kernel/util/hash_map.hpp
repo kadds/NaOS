@@ -11,6 +11,26 @@ template <typename T> struct member_hash
     u64 operator()(const T &t) { return t.hash(); }
 };
 
+template <> struct member_hash<unsigned long>
+{
+    u64 operator()(const unsigned long &t) { return t; }
+};
+
+template <> struct member_hash<unsigned int>
+{
+    u64 operator()(const unsigned int &t) { return (u64)t; }
+};
+
+template <> struct member_hash<long>
+{
+    u64 operator()(const long &t) { return (u64)t; }
+};
+
+template <> struct member_hash<int>
+{
+    u64 operator()(const int &t) { return (u64)t; }
+};
+
 template <typename K, typename V, typename hash_func = member_hash<K>> class hash_map
 {
   public:
@@ -135,9 +155,11 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
   public:
     hash_map(memory::IAllocator *allocator, u64 capacity, u64 factor)
-        : load_factor(factor)
+        : count(0)
+        , load_factor(factor)
         , capacity(capacity)
         , allocator(allocator)
+
     {
         threshold = load_factor * capacity / 100;
         table = (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * capacity, alignof(entry));
@@ -155,7 +177,8 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
     }
 
     hash_map(const hash_map &map)
-        : allocator(map.allocator)
+        : count(0)
+        , allocator(map.allocator)
         , capacity(map.capacity)
         , load_factor(map.load_factor)
     {

@@ -8,6 +8,7 @@
 #include "kernel/dev/device.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/io/io_manager.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/mm/memory.hpp"
@@ -81,6 +82,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     ksybs::init();
+    io::init();
     dev::init();
     task::init();
     arch::init_drivers();

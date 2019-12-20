@@ -135,7 +135,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             {
                 task->register_info->trap_vector = regs->vector;
             }
-            trace::panic_stack(regs, "Oops error");
+            trace::panic_stack(regs, "Oops error at cpu ", cpu.get_id());
         }
     }
 

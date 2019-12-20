@@ -1,4 +1,5 @@
 #include "kernel/task/builtin/idle_task.hpp"
+#include "kernel/arch/idt.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/scheduler.hpp"
@@ -25,6 +26,9 @@ void main()
 
     task::schedule();
     while (1)
+    {
+        kassert(arch::idt::is_enable(), "No");
         __asm__ __volatile__("pause\n\t" : : : "memory");
+    }
 }
 } // namespace task::builtin::idle

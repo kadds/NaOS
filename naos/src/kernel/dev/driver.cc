@@ -8,6 +8,7 @@ driver_map_t *driver_map;
 void init_driver()
 {
     driver_id_gen = memory::New<driver_id_gen_t>(memory::KernelCommonAllocatorV, 4096);
+    driver_id_gen->next();
     driver_map = memory::New<driver_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 }
 
@@ -25,7 +26,7 @@ num_t add_driver(driver *driver)
             driver->id = id;
             unbinding_device_map->remove(it.key);
             device_map->insert(it.key, it.value);
-            return id;
+            return it.value->get_dev_id();
         }
     }
     return null_num;
@@ -33,4 +34,10 @@ num_t add_driver(driver *driver)
 
 void remove_driver(driver *driver) {}
 
+driver *get_driver(num_t dri)
+{
+    driver *pdri = nullptr;
+    driver_map->get(dri, &pdri);
+    return pdri;
+}
 } // namespace dev

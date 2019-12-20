@@ -415,9 +415,9 @@ void start_task_idle()
         {
             SMP::wait_sync();
         }
+        scheduler::init_cpu_data();
     }
 
-    scheduler::init_cpu_data();
     create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
     task::current()->preempt_data.enable_preempt();
     task::builtin::idle::main();
