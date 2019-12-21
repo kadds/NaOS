@@ -24,7 +24,8 @@ struct kb_data_t
 
     u64 get_timestamp(u64 current_timestamp)
     {
-        return ~((u64)timestamp_low | ((u64)(timestamp_mid) << 8) | ((u64)(timestamp_high) << 16)) & current_timestamp;
+        return ((u64(timestamp_low)) | ((u64(timestamp_mid)) << 8) | ((u64(timestamp_high)) << 16)) |
+               current_timestamp & ~0xFFFFFF;
     }
 
     u8 get_key() { return data; }
@@ -88,7 +89,8 @@ struct mouse_data_t
 
     u64 get_timestamp(u64 current_timestamp)
     {
-        return ~((u64)timestamp_low | ((u64)(timestamp_mid) << 8) | ((u64)(timestamp_high) << 16)) & current_timestamp;
+        return ((u64(timestamp_low)) | ((u64(timestamp_mid)) << 8) | ((u64(timestamp_high)) << 16)) |
+               current_timestamp & ~0xFFFFFF;
     }
 
     void set(u64 timestamp, u8 x, u8 y, u8 z)

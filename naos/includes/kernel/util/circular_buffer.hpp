@@ -32,6 +32,10 @@ template <typename T> class circular_buffer
 
         ~write_helper()
         {
+            if (unlikely((cb->write_off + 1) == cb->read_off || cb->write_off == cb->read_off - 1))
+            {
+                cb->read_off++;
+            }
             cb->write_off++;
             if (unlikely(cb->write_off >= cb->length))
             {
@@ -42,7 +46,7 @@ template <typename T> class circular_buffer
 
     circular_buffer(memory::IAllocator *allocator, u64 count)
         : length(count)
-        , read_off(count - 1)
+        , read_off(0)
         , write_off(0)
         , allocator(allocator)
     {
@@ -62,7 +66,7 @@ template <typename T> class circular_buffer
 
     bool read(T *t)
     {
-        if (unlikely((read_off + 1) % length == write_off))
+        if (unlikely(read_off == write_off))
         {
             return false;
         }

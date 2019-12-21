@@ -47,7 +47,6 @@ u64 ring_buffer::write(const byte *buffer, u64 size)
             {
                 free_trunk = new_trunk();
             }
-
             free_trunk->next = nullptr;
             free_trunk->size = 0;
             free_trunk->offset = 0;
@@ -94,8 +93,6 @@ ring_buffer::trunk *ring_buffer::new_trunk()
 {
     trunk *tk = (trunk *)node_allocator->allocate(sizeof(trunk), alignof(trunk));
     tk->buffer = (byte *)allocator->allocate(trunk_size, 1);
-    tk->size = 0;
-    tk->offset = 0;
     count++;
     return tk;
 }

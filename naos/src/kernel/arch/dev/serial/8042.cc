@@ -20,7 +20,7 @@ void init()
     kb_device_class dc;
     if (dev::enum_device(&dc))
     {
-        trace::debug("Find 8042 keyboard device. Loading driver.");
+        trace::info("Find 8042 keyboard device. Loading driver.");
         auto driver = memory::New<kb_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
@@ -34,7 +34,7 @@ void init()
     mouse_device_class ds;
     if (dev::enum_device(&ds) > 0)
     {
-        trace::debug("Find 8042 mouse device. Loading driver.");
+        trace::info("Find 8042 mouse device. Loading driver.");
         auto driver = memory::New<mouse_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
@@ -147,9 +147,81 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
     return irq::request_result::ok;
 }
 
+bool set_led(u8 s)
+{
+    wait_for_write();
+    io_out8(cmd_port, 0x60);
+    wait_for_write();
+    io_out8(data_port, 0xED);
+
+    delay();
+    if (io_in8(data_port) == 0xFA)
+    {
+        // ACK
+        wait_for_write();
+        io_out8(data_port, s);
+        delay();
+        if (io_in8(data_port) == 0xFA)
+        {
+            io_out8(data_port, 0b1000000);
+            return true;
+        }
+    }
+    return false;
+}
+
 bool kb_driver::setup(::dev::device *dev)
 {
     kb_buffer_t &buffer = ((kb_device *)dev)->buffer;
+    uctx::UnInterruptableContext icu;
+    wait_for_write();
+    io_out8(cmd_port, 0x20);
+    delay();
+    u8 old_status = io_in8(data_port);
+    old_status &= ~0b00010000;
+    old_status |= 0b01000001;
+
+    wait_for_write();
+    io_out8(cmd_port, 0xAE);
+    wait_for_write();
+
+    io_out8(data_port, 0xF2);
+
+    delay();
+
+    auto f1 = io_in8(data_port);
+    if (f1 != 0xFA) // ACK
+    {
+        trace::warning("Unable to get keyboard id.");
+    }
+    delay();
+
+    auto id = io_in8(data_port); // 0xAB
+    trace::debug("keyboard id = ", (void *)(u64)id);
+    delay();
+    io_in8(data_port); // 0x83
+
+    ((kb_device *)dev)->id = id;
+
+    // reset led
+    set_led(0);
+
+    ((kb_device *)dev)->led_status = 0;
+
+    wait_for_write();
+    io_out8(cmd_port, 0x60);
+
+    wait_for_write();
+    io_out8(data_port, old_status);
+
+    // clean output
+    wait_for_write();
+    io_out8(cmd_port, 0xAE);
+    wait_for_write();
+    io_out8(data_port, 0xF4);
+    delay();
+    io_in8(data_port); // ACK
+
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
     entry.is_level_trigger_mode = false;
@@ -160,56 +232,6 @@ bool kb_driver::setup(::dev::device *dev)
 
     auto intr = APIC::io_irq_setup(0x1, &entry);
     irq::insert_request_func(intr, kb_interrupt, (u64)&buffer);
-
-    uctx::UnInterruptableContext icu;
-    wait_for_write();
-    io_out8(cmd_port, 0x20);
-
-    delay();
-
-    u8 old_status = io_in8(data_port);
-    old_status &= ~0b00010000;
-    old_status |= 0b01000001;
-    wait_for_write();
-    io_out8(cmd_port, 0xAE);
-    wait_for_write();
-
-    io_out8(data_port, 0xF2);
-
-    delay();
-
-    auto f1 = io_in8(data_port);
-    if (f1 != 0xFA)
-    {
-        trace::warning("Unable to get keyboard id.");
-    }
-    delay();
-
-    auto id = io_in8(data_port); // 0xab
-    trace::debug("keyboard id = ", (void *)(u64)id);
-    delay();
-
-    io_in8(data_port); // 0x83
-
-    ((kb_device *)dev)->id = id;
-
-    // reset led
-    wait_for_write();
-    io_out8(cmd_port, 0x60);
-    wait_for_write();
-    io_out8(data_port, 0xED);
-    wait_for_write();
-    io_out8(data_port, 0b000);
-
-    ((kb_device *)dev)->led_status = 0;
-
-    wait_for_write();
-    io_out8(cmd_port, 0x60);
-
-    wait_for_write();
-    io_out8(data_port, old_status);
-
-    delay();
 
     APIC::io_enable(0x1);
     return true;
@@ -251,7 +273,7 @@ bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestam
             }
             else
             {
-                trace::warning("Unknow scan code.");
+                trace::warning("Unknow scan code. ", (void *)(u64)k);
             }
         }
         else if (last_prefix_count == 1)
@@ -278,7 +300,7 @@ bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestam
             }
             else
             {
-                trace::warning("Unknow scan code.");
+                trace::warning("Unknow scan code.", (void *)(u64)last_prefix[0], ",", (void *)(u64)k);
             }
         }
         else if (last_prefix_count == 2)
@@ -293,13 +315,14 @@ bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestam
             }
             else
             {
-                trace::warning("Unknow scan code.");
+                trace::warning("Unknow scan code.", (void *)(u64)last_prefix[0], ",", (void *)(u64)last_prefix[1], ",",
+                               (void *)(u64)k);
                 last_prefix_count = 0;
             }
         }
         else
         {
-            trace::warning("Unknow scan code.");
+            trace::warning("Unknow scan code. Unknow prefix. ", last_prefix_count);
         }
     }
     return false;
@@ -433,42 +456,23 @@ void mouse_get(u64 vector, u64 user_data)
 bool mouse_driver::setup(::dev::device *dev)
 {
     mouse_buffer_t &buffer = ((mouse_device *)dev)->buffer;
-    APIC::io_entry entry;
-    entry.dest_apic_id = APIC::local_ID();
-    entry.is_level_trigger_mode = false;
-    entry.is_logic_mode = false;
-    entry.is_disable = true;
-    entry.low_level_polarity = false;
-    entry.delivery_mode = APIC::io_entry::mode_t::fixed;
-
-    auto intr = APIC::io_irq_setup(12, &entry);
-    irq::insert_request_func(intr, mouse_interrupt, (u64)&buffer);
 
     wait_for_write();
     io_out8(cmd_port, 0xA8);
 
     wait_for_write();
-    io_out8(cmd_port, 0xD4);
-
-    wait_for_write();
-    io_out8(data_port, 0xF4);
-
-    wait_for_write();
     io_out8(cmd_port, 0x20);
-
     delay();
-
     u8 old_status = io_in8(data_port);
     old_status &= ~0b00100000;
     old_status |= 0b00000010;
 
     wait_for_write();
     io_out8(cmd_port, 0xD4);
-
     wait_for_write();
     io_out8(data_port, 0xF2);
-    delay();
 
+    delay();
     auto id = io_in8(data_port);
     if (id != 0xFA)
     {
@@ -484,13 +488,29 @@ bool mouse_driver::setup(::dev::device *dev)
 
     wait_for_write();
     io_out8(cmd_port, 0x60);
-
     wait_for_write();
     io_out8(data_port, old_status);
 
     delay();
 
+    APIC::io_entry entry;
+    entry.dest_apic_id = APIC::local_ID();
+    entry.is_level_trigger_mode = false;
+    entry.is_logic_mode = false;
+    entry.is_disable = true;
+    entry.low_level_polarity = false;
+    entry.delivery_mode = APIC::io_entry::mode_t::fixed;
+
+    auto intr = APIC::io_irq_setup(12, &entry);
+    irq::insert_request_func(intr, mouse_interrupt, (u64)&buffer);
+
     APIC::io_enable(12);
+
+    wait_for_write();
+    io_out8(cmd_port, 0xD4);
+
+    wait_for_write();
+    io_out8(data_port, 0xF4);
 
     return true;
 }

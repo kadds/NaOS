@@ -1,4 +1,5 @@
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/trace.hpp"
 void *print_stack(const regs_t *regs, int max_depth)
@@ -122,6 +123,8 @@ void *print_stack(const regs_t *regs, int max_depth)
 
     trace::print("current control registers: cr0=", (void *)cr0, ", cr2=", (void *)cr2, ", cr3=", (void *)cr3,
                  ", cr4=", (void *)cr4, ", cr8=", (void *)cr8, '\n');
+
+    trace::print("cpu id=", arch::cpu::current().get_id(), " apic id = ", arch::cpu::current().get_apic_id(), " \n");
 
     trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of registers.", '\n');
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();

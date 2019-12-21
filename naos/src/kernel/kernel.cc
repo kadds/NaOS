@@ -85,8 +85,8 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     io::init();
     dev::init();
     task::init();
-    arch::init_drivers();
     SMP::wait_sync();
+    arch::init_drivers();
     trace::info("kernel main");
     arch::last_init();
     task::start_task_idle();

@@ -5,11 +5,11 @@ namespace task::builtin::input
 {
 void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
+    io::keyboard_request_t request;
+    request.type = io::chain_number::keyboard;
+    request.cmd_type = io::keyboard_request_t::command::get_key;
     while (1)
     {
-        io::keyboard_request_t request;
-        request.type = io::chain_number::keyboard;
-        request.cmd_type = io::keyboard_request_t::command::get_key;
         if (!io::send_io_request(&request))
         {
             trace::warning("error when send io request");
@@ -18,11 +18,13 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
         {
             if (request.result.cmd_type.get.release)
             {
-                trace::debug("key ", (void *)request.result.cmd_type.get.key, " release");
+                trace::debug("key ", (void *)request.result.cmd_type.get.key, " release at ",
+                             request.result.cmd_type.get.timestamp);
             }
             else
             {
-                trace::debug("key ", (void *)request.result.cmd_type.get.key, " press");
+                trace::debug("key ", (void *)request.result.cmd_type.get.key, " press at ",
+                             request.result.cmd_type.get.timestamp);
             }
         }
 
