@@ -24,9 +24,9 @@ struct result_t
     u64 poll_status;
 };
 
-struct mouse_result_t : result_t
+struct mouse_data
 {
-    u16 movement_x, movement_y, movement_z;
+    i16 movement_x, movement_y, movement_z;
     struct
     {
         bool down_x : 1;
@@ -36,6 +36,18 @@ struct mouse_result_t : result_t
         bool down_b : 1;
     };
     u64 timestamp;
+};
+struct mouse_result_t : result_t
+{
+    union
+    {
+        mouse_data get;
+
+        struct
+        {
+            bool ok;
+        } set;
+    } cmd_type;
 };
 
 struct request_t

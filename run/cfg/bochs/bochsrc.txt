@@ -481,7 +481,7 @@ vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
 #   keyboard: keymap=gui/keymaps/x11-pc-de.map
 #   keyboard: user_shortcut=ctrl-alt-del
 #=======================================================================
-#keyboard: type=mf, serial_delay=250
+keyboard: type=mf, serial_delay=250
 
 #=======================================================================
 # MOUSE:
@@ -515,7 +515,7 @@ vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
 #   mouse: type=serial, enabled=1
 #   mouse: enabled=0, toggle=ctrl+f10
 #=======================================================================
-mouse: enabled=0
+mouse: enabled=1, type=imps2
 
 #=======================================================================
 # PCI:
@@ -810,7 +810,7 @@ panic: action=ask
 error: action=report
 info: action=report
 # http://bochs.sourceforge.net/doc/docbook/user/howto.html#LOGOPTS-BY-DEVICE
-debug: action=ignore #,cpu0=report # report BX_DEBUG from module 'pci'
+debug: action=ignore, keyboard=report #,cpu0=report # report BX_DEBUG from module 'pci'
 
 #=======================================================================
 # DEBUGGER_LOG:

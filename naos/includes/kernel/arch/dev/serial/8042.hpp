@@ -75,17 +75,7 @@ struct mouse_data_t
     u8 timestamp_low;
     u8 timestamp_mid;
     u8 timestamp_high;
-    u8 x, y, z;
-    struct
-    {
-        bool x_down : 1;
-        bool y_down : 1;
-        bool z_down : 1;
-        bool a_down : 1;
-        bool b_down : 1;
-        bool x_positive : 1;
-        bool y_positive : 1;
-    };
+    u8 data;
 
     u64 get_timestamp(u64 current_timestamp)
     {
@@ -93,18 +83,16 @@ struct mouse_data_t
                current_timestamp & ~0xFFFFFF;
     }
 
-    void set(u64 timestamp, u8 x, u8 y, u8 z)
+    void set(u64 timestamp, u8 data)
     {
         timestamp_low = timestamp & 0xFF;
         timestamp_mid = (timestamp >> 8) & 0xFF;
         timestamp_high = (timestamp >> 16) & 0xFF;
-        this->x = x;
-        this->y = y;
-        this->z = z;
+        this->data = data;
     }
 };
 
-using mouse_buffer_t = util::circular_buffer<u8>;
+using mouse_buffer_t = util::circular_buffer<mouse_data_t>;
 
 class mouse_device : public ::dev::device
 {

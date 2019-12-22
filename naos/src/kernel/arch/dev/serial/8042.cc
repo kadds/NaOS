@@ -46,54 +46,82 @@ void init()
     }
 }
 
+void delay()
+{
+    u64 target = 80 + timer::get_high_resolution_time();
+    while (target > timer::get_high_resolution_time())
+    {
+        for (int i = 0; i < 1000; i++)
+        {
+        }
+    }
+}
+
+void flush()
+{
+    uctx::UnInterruptableContext icu;
+    int i = 0;
+    while ((io_in8(cmd_status_port) & 0x1) && i < 100)
+    {
+        delay();
+        auto d = io_in8(data_port);
+        trace::debug("8042 flush: read ", (void *)(u64)d);
+        i++;
+    }
+}
+
 void wait_for_write()
 {
-    while (io_in8(cmd_status_port) & 0x2)
+    int i = 0;
+    while ((io_in8(cmd_status_port) & 0x2) && i < 100)
     {
+        delay();
+        i++;
     }
 }
 
 void wait_for_read()
 {
-    while (io_in8(cmd_status_port) & 0x1)
+    int i = 0;
+
+    while (!((io_in8(cmd_status_port)) & 0x1) && i < 100)
     {
+        delay();
+        i++;
     }
 }
 
-void wait_for_mouse_read()
-{
-    while (io_in8(cmd_status_port) & 0b100000)
-    {
-    }
-}
-
-void delay()
-{
-    u64 us = timer::get_high_resolution_time() + 100;
-    while (timer::get_high_resolution_time() < us)
-    {
-    }
-}
+// void delay()
+// {
+//     u64 us = timer::get_high_resolution_time() + 100;
+//     while (timer::get_high_resolution_time() < us)
+//     {
+//     }
+// }
 
 ::dev::device *kb_device_class::try_scan(int index)
 {
     if (index == 0)
     {
+        flush();
         // self check failed
-        if (!(io_in8(cmd_status_port) & 0x4))
+        if (!(io_in8(cmd_status_port) & 0b100))
         {
-            return nullptr;
+            wait_for_write();
+            io_out8(cmd_port, 0xAA);
+            wait_for_read();
+            if (io_in8(data_port) != 0x55)
+            {
+                trace::debug("8042 self check failed.");
+                return nullptr;
+            }
         }
-        io_out8(cmd_port, 0xAA);
-        delay();
-        if (io_in8(data_port) != 0x55)
-        {
-            return nullptr;
-        }
+        wait_for_write();
         io_out8(cmd_port, 0xAB);
-        delay();
+        wait_for_read();
         if (io_in8(data_port) != 0x00)
         {
+            trace::debug("keyboard self check failed.");
             return nullptr;
         }
         return memory::New<kb_device>(memory::KernelCommonAllocatorV);
@@ -105,20 +133,22 @@ void delay()
 {
     if (index == 0)
     {
+        flush();
         // self check failed
-        if (!(io_in8(cmd_status_port) & 0x4))
+        if (!(io_in8(cmd_status_port) & 0b100))
         {
-            return nullptr;
+            wait_for_write();
+            io_out8(cmd_port, 0xAA);
+            wait_for_read();
+            if (io_in8(data_port) != 0x55)
+            {
+                trace::debug("8042 self check failed.");
+                return nullptr;
+            }
         }
-        io_out8(cmd_port, 0xAA);
-        delay();
-
-        if (io_in8(data_port) != 0x55)
-        {
-            return nullptr;
-        }
+        wait_for_write();
         io_out8(cmd_port, 0xA9);
-        delay();
+        wait_for_read();
 
         if (io_in8(data_port) != 0x00)
         {
@@ -135,14 +165,11 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
     if (unlikely(buffer == nullptr))
         return irq::request_result::no_handled;
 
-    if ((io_in8(cmd_status_port) & 0x1))
-    {
-        u8 data;
-        data = io_in8(data_port);
-        kb_data_t kdata;
-        kdata.set(timer::get_high_resolution_time(), data);
-        buffer->write_with() = kdata;
-    }
+    u8 data;
+    data = io_in8(data_port);
+    kb_data_t kdata;
+    kdata.set(timer::get_high_resolution_time(), data);
+    buffer->write_with() = kdata;
 
     return irq::request_result::ok;
 }
@@ -150,77 +177,94 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
 bool set_led(u8 s)
 {
     wait_for_write();
-    io_out8(cmd_port, 0x60);
-    wait_for_write();
     io_out8(data_port, 0xED);
 
-    delay();
-    if (io_in8(data_port) == 0xFA)
+    wait_for_read();
+    if (io_in8(data_port) != 0xFA)
     {
-        // ACK
-        wait_for_write();
-        io_out8(data_port, s);
-        delay();
-        if (io_in8(data_port) == 0xFA)
-        {
-            io_out8(data_port, 0b1000000);
-            return true;
-        }
+        trace::warning("Can't set led (no ACK)");
+        return false;
     }
-    return false;
+
+    wait_for_write();
+    io_out8(data_port, s);
+
+    wait_for_read();
+    if (io_in8(data_port) != 0xFA)
+    {
+        trace::warning("Can't set led (no ACK)");
+        return false;
+    }
+    return true;
+}
+
+void blink_led()
+{
+    set_led(0b111);
+    delay();
+    set_led(0b000);
+    delay();
+    set_led(0b111);
+    delay();
+    set_led(0b000);
+}
+
+u8 get_keyboard_id()
+{
+    wait_for_write();
+    io_out8(data_port, 0xF2);
+
+    wait_for_read();
+    if (io_in8(data_port) != 0xFA) // ACK
+    {
+        trace::warning("Unable to get keyboard id.");
+        return 0;
+    }
+    wait_for_read();
+
+    auto id = io_in8(data_port);
+    int i = 0;
+
+    while (((io_in8(cmd_status_port)) & 0x1) && i < 100)
+    {
+        wait_for_read();
+        io_in8(data_port);
+        delay();
+        i++;
+    }
+
+    return id;
 }
 
 bool kb_driver::setup(::dev::device *dev)
 {
     kb_buffer_t &buffer = ((kb_device *)dev)->buffer;
     uctx::UnInterruptableContext icu;
-    wait_for_write();
+
     io_out8(cmd_port, 0x20);
-    delay();
+    wait_for_read();
     u8 old_status = io_in8(data_port);
     old_status &= ~0b00010000;
     old_status |= 0b01000001;
 
-    wait_for_write();
-    io_out8(cmd_port, 0xAE);
-    wait_for_write();
-
-    io_out8(data_port, 0xF2);
-
-    delay();
-
-    auto f1 = io_in8(data_port);
-    if (f1 != 0xFA) // ACK
-    {
-        trace::warning("Unable to get keyboard id.");
-    }
-    delay();
-
-    auto id = io_in8(data_port); // 0xAB
+    auto id = get_keyboard_id();
     trace::debug("keyboard id = ", (void *)(u64)id);
-    delay();
-    io_in8(data_port); // 0x83
 
     ((kb_device *)dev)->id = id;
+
+    blink_led();
 
     // reset led
     set_led(0);
 
     ((kb_device *)dev)->led_status = 0;
 
-    wait_for_write();
     io_out8(cmd_port, 0x60);
 
     wait_for_write();
     io_out8(data_port, old_status);
 
-    // clean output
-    wait_for_write();
-    io_out8(cmd_port, 0xAE);
-    wait_for_write();
-    io_out8(data_port, 0xF4);
-    delay();
-    io_in8(data_port); // ACK
+    flush();
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -232,7 +276,6 @@ bool kb_driver::setup(::dev::device *dev)
 
     auto intr = APIC::io_irq_setup(0x1, &entry);
     irq::insert_request_func(intr, kb_interrupt, (u64)&buffer);
-
     APIC::io_enable(0x1);
     return true;
 }
@@ -353,48 +396,32 @@ void kb_driver::on_io_request(io::request_t *request)
         }
         case io::keyboard_request_t::command::set_led_cas: {
             uctx::UnInterruptableContext icu;
-            wait_for_write();
-            io_out8(cmd_port, 0x60);
-            wait_for_write();
-            io_out8(data_port, 0xED);
-            wait_for_write();
+
             if (req->cmd_param)
                 dev->led_status |= 0b100;
             else
                 dev->led_status &= ~(0b100);
-            io_out8(data_port, dev->led_status);
+            set_led(dev->led_status);
             ret.cmd_type.set.ok = true;
             break;
         }
         case io::keyboard_request_t::command::set_led_scroll: {
             uctx::UnInterruptableContext icu;
-
-            wait_for_write();
-            io_out8(cmd_port, 0x60);
-            wait_for_write();
-            io_out8(data_port, 0xED);
-            wait_for_write();
             if (req->cmd_param)
                 dev->led_status |= 0b001;
             else
                 dev->led_status &= ~(0b001);
-            io_out8(data_port, dev->led_status);
+            set_led(dev->led_status);
             ret.cmd_type.set.ok = true;
             break;
         }
         case io::keyboard_request_t::command::set_led_num: {
             uctx::UnInterruptableContext icu;
-
-            wait_for_write();
-            io_out8(cmd_port, 0x60);
-            wait_for_write();
-            io_out8(data_port, 0xED);
-            wait_for_write();
             if (req->cmd_param)
                 dev->led_status |= 0b010;
             else
                 dev->led_status &= ~(0b010);
-            io_out8(data_port, dev->led_status);
+            set_led(dev->led_status);
             ret.cmd_type.set.ok = true;
             break;
         }
@@ -408,71 +435,46 @@ irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_d
     mouse_buffer_t *buffer = (mouse_buffer_t *)user_data;
     if (unlikely(buffer == nullptr))
         return irq::request_result::no_handled;
+
     auto data = io_in8(data_port);
-    buffer->write_with() = data;
+    mouse_data_t md;
+    md.set(timer::get_high_resolution_time(), data);
+    buffer->write_with() = md;
     return irq::request_result::ok;
 }
 
-void mouse_get(u64 vector, u64 user_data)
+bool set_mouse_rate(u8 rate)
 {
-    mouse_buffer_t *buffer = (mouse_buffer_t *)user_data;
-    u8 data;
-    static u8 last_index = 0;
-    static u8 last_package[4];
-    while (buffer->read(&data))
+    wait_for_write();
+    io_out8(cmd_port, 0xD4);
+    wait_for_write();
+    io_out8(data_port, 0xF3);
+    wait_for_read();
+    if (io_in8(data_port) != 0xFA)
     {
-        switch (last_index)
-        {
-            case 0:
-                last_index++;
-                break;
-
-            default:
-                break;
-        }
-        timer::get_high_resolution_time();
+        trace::warning("Can't set mouse rate (no ACK)");
+        return false;
     }
-
-    // if (io_in8(cmd_status_port) & 0b100000)
-    // {
-    //     data[3] = io_in8(data_port);
-    // }
-
-    // mouse_data_t mdata;
-    // mdata.set(timer::get_high_resolution_time(), data[1], data[2], data[3]);
-
-    // if (data[0] & (0b10000))
-    // {
-    //     x = -x;
-    // }
-    // if (data[1] & (0b100000))
-    // {
-    //     y = -y;
-    // }
-
-    // trace::debug("mouse to (", x, ",", y, ")");
+    wait_for_write();
+    io_out8(cmd_port, 0xD4);
+    wait_for_write();
+    io_out8(data_port, rate);
+    wait_for_read();
+    if (io_in8(data_port) != 0xFA)
+    {
+        trace::warning("Can't set mouse rate (no ACK)");
+        return false;
+    }
+    return true;
 }
 
-bool mouse_driver::setup(::dev::device *dev)
+u8 get_mouse_id()
 {
-    mouse_buffer_t &buffer = ((mouse_device *)dev)->buffer;
-
-    wait_for_write();
-    io_out8(cmd_port, 0xA8);
-
-    wait_for_write();
-    io_out8(cmd_port, 0x20);
-    delay();
-    u8 old_status = io_in8(data_port);
-    old_status &= ~0b00100000;
-    old_status |= 0b00000010;
-
     wait_for_write();
     io_out8(cmd_port, 0xD4);
     wait_for_write();
     io_out8(data_port, 0xF2);
-
-    delay();
+    wait_for_read();
     auto id = io_in8(data_port);
     if (id != 0xFA)
     {
@@ -480,18 +482,54 @@ bool mouse_driver::setup(::dev::device *dev)
     }
     else
     {
-        delay();
+        wait_for_read();
         id = io_in8(data_port);
-        trace::debug("mouse id = ", id);
-        ((mouse_device *)dev)->id = id;
+        int i = 0;
+        while (((io_in8(cmd_status_port)) & 0x1) && i < 100)
+        {
+            wait_for_read();
+            io_in8(data_port);
+            delay();
+            i++;
+        }
+        return id;
     }
+    return 0;
+}
+
+bool mouse_driver::setup(::dev::device *dev)
+{
+    mouse_buffer_t &buffer = ((mouse_device *)dev)->buffer;
+    wait_for_write();
+    io_out8(cmd_port, 0xA8);
+
+    wait_for_write();
+    io_out8(cmd_port, 0x20);
+    wait_for_read();
+    u8 old_status = io_in8(data_port);
+    old_status &= ~0b00100000;
+    old_status |= 0b00000010;
+
+    // try to enable extensions
+    set_mouse_rate(200);
+    set_mouse_rate(100);
+    set_mouse_rate(80);
+    auto id = get_mouse_id();
+
+    if (id == 3)
+    {
+        set_mouse_rate(200);
+        set_mouse_rate(200);
+        set_mouse_rate(80);
+        id = get_mouse_id();
+    }
+    ((mouse_device *)dev)->id = id;
+    trace::debug("mouse id = ", id);
 
     wait_for_write();
     io_out8(cmd_port, 0x60);
     wait_for_write();
     io_out8(data_port, old_status);
-
-    delay();
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -504,13 +542,17 @@ bool mouse_driver::setup(::dev::device *dev)
     auto intr = APIC::io_irq_setup(12, &entry);
     irq::insert_request_func(intr, mouse_interrupt, (u64)&buffer);
 
-    APIC::io_enable(12);
-
     wait_for_write();
     io_out8(cmd_port, 0xD4);
 
     wait_for_write();
     io_out8(data_port, 0xF4);
+
+    wait_for_read();
+    io_in8(data_port); // ACK
+
+    flush();
+    APIC::io_enable(12);
 
     return true;
 }
@@ -520,6 +562,94 @@ void mouse_driver::cleanup(::dev::device *dev)
     memory::Delete<>(memory::KernelCommonAllocatorV, (mouse_buffer_t *)(dev->get_user_data()));
 }
 
-void mouse_driver::on_io_request(io::request_t *request) {}
+bool mouse_get(mouse_buffer_t &buffer, io::mouse_data *data, bool type3)
+{
+    static u8 last_index = 0;
+    static u8 last_data[4];
+    mouse_data_t dt;
+    while (buffer.read(&dt))
+    {
+        switch (last_index)
+        {
+            case 0:
+                last_data[last_index++] = dt.data;
+                if (!(dt.data & 0b1000))
+                {
+                    trace::warning("Unkown mouse data.");
+                    last_index = 0;
+                }
+                break;
+            case 1:
+                last_data[last_index++] = dt.data;
+                break;
+            case 2:
+                last_data[last_index++] = dt.data;
+                if (type3)
+                {
+                    data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
+                    data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
+
+                    data->down_x = last_data[0] & 0b1;
+                    data->down_y = last_data[0] & 0b10;
+                    data->down_z = last_data[0] & 0b100;
+                    data->movement_z = 0;
+
+                    data->timestamp = dt.get_timestamp(timer::get_high_resolution_time());
+                    last_index = 0;
+                    return true;
+                }
+                break;
+            case 3:
+                last_data[last_index] = dt.data;
+                last_index = 0;
+
+                data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
+                data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
+                data->movement_z = 8 - (8 - last_data[3] & 0xF);
+
+                data->down_x = last_data[0] & 0b1;
+                data->down_y = last_data[0] & 0b10;
+                data->down_z = last_data[0] & 0b100;
+                data->down_a = last_data[3] & 0b10000;
+                data->down_b = last_data[3] & 0b100000;
+
+                data->timestamp = dt.get_timestamp(timer::get_high_resolution_time());
+                last_index = 0;
+                return true;
+        }
+    }
+    return false;
+}
+
+void mouse_driver::on_io_request(io::request_t *request)
+{
+    kassert(request->type == io::chain_number::mouse, "Error driver state.");
+    io::mouse_request_t *req = (io::mouse_request_t *)request;
+    io::mouse_result_t &ret = req->result;
+    mouse_device *dev = (mouse_device *)req->get_current_device();
+
+    mouse_buffer_t &buffer = dev->buffer;
+    switch (req->cmd_type)
+    {
+        case io::mouse_request_t::command::get: {
+            if (mouse_get(buffer, &ret.cmd_type.get, dev->id == 0))
+            {
+                ret.poll_status = 0;
+            }
+            else
+            {
+                ret.poll_status = 1;
+            }
+        }
+        break;
+        case io::mouse_request_t::command::set_speed: {
+            /// TODO: set speed for mouse
+            ret.cmd_type.set.ok = true;
+            break;
+        }
+        default:
+            break;
+    }
+}
 
 } // namespace arch::device::chip8042
