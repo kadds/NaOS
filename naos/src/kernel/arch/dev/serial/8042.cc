@@ -159,17 +159,34 @@ void wait_for_read()
     return nullptr;
 }
 
+bool get_key(kb_device *dev, io::keyboard_data *data);
+
 irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data)
 {
-    kb_buffer_t *buffer = (kb_buffer_t *)user_data;
-    if (unlikely(buffer == nullptr))
+    kb_device *dev = (kb_device *)user_data;
+
+    if (unlikely(dev == nullptr))
         return irq::request_result::no_handled;
 
     u8 data;
     data = io_in8(data_port);
     kb_data_t kdata;
     kdata.set(timer::get_high_resolution_time(), data);
-    buffer->write_with() = kdata;
+    dev->buffer.write_with() = kdata;
+
+    io::keyboard_data kbdata;
+    if (get_key(dev, &kbdata))
+    {
+        uctx::RawSpinLockContext ctx(dev->io_list_lock);
+        for (io::keyboard_request_t *it : dev->io_list)
+        {
+            it->result.get = kbdata;
+            it->status.failed_code = 0;
+            it->status.io_is_completion = true;
+            io::completion(it);
+        }
+        dev->io_list.clean();
+    }
 
     return irq::request_result::ok;
 }
@@ -275,7 +292,7 @@ bool kb_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(0x1, &entry);
-    irq::insert_request_func(intr, kb_interrupt, (u64)&buffer);
+    irq::insert_request_func(intr, kb_interrupt, (u64)dev);
     APIC::io_enable(0x1);
     return true;
 }
@@ -285,16 +302,17 @@ void kb_driver::cleanup(::dev::device *dev)
     memory::Delete<>(memory::KernelCommonAllocatorV, (kb_buffer_t *)(dev->get_user_data()));
 }
 
-bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestamp, bool *release)
+bool get_key(kb_device *dev, io::keyboard_data *data)
 {
     kb_data_t kb_data;
-    static u8 last_prefix_count = 0;
-    static u8 last_prefix[2];
+    u8 *key = &data->key;
+    u64 *timestamp = &data->timestamp;
+    bool *release = &data->release;
 
     while (dev->buffer.read(&kb_data))
     {
         u8 k = kb_data.get_key();
-        if (last_prefix_count == 0)
+        if (dev->last_prefix_count == 0)
         {
             if (k < 0x59)
             {
@@ -312,16 +330,16 @@ bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestam
             }
             else if (k == 0xE0 || k == 0xE1)
             {
-                last_prefix[last_prefix_count++] = k;
+                dev->last_prefix[dev->last_prefix_count++] = k;
             }
             else
             {
                 trace::warning("Unknow scan code. ", (void *)(u64)k);
             }
         }
-        else if (last_prefix_count == 1)
+        else if (dev->last_prefix_count == 1)
         {
-            if (last_prefix[0] == 0xE0)
+            if (dev->last_prefix[0] == 0xE0)
             {
                 if (k >= 0x90)
                 {
@@ -334,38 +352,38 @@ bool get_key(io::keyboard_request_t *req, kb_device *dev, u8 *key, u64 *timestam
                 }
                 *key = k + 0x50;
                 *timestamp = kb_data.get_timestamp(timer::get_high_resolution_time());
-                last_prefix_count = 0;
+                dev->last_prefix_count = 0;
                 return true;
             }
-            else if (last_prefix[0] == 0xE1)
+            else if (dev->last_prefix[0] == 0xE1)
             {
-                last_prefix[last_prefix_count++] = k;
+                dev->last_prefix[dev->last_prefix_count++] = k;
             }
             else
             {
-                trace::warning("Unknow scan code.", (void *)(u64)last_prefix[0], ",", (void *)(u64)k);
+                trace::warning("Unknow scan code.", (void *)(u64)dev->last_prefix[0], ",", (void *)(u64)k);
             }
         }
-        else if (last_prefix_count == 2)
+        else if (dev->last_prefix_count == 2)
         {
-            if ((k == 0x45 && last_prefix[1] == 0x1D) || (k == 0xC5 && last_prefix[1] == 0x9D))
+            if ((k == 0x45 && dev->last_prefix[1] == 0x1D) || (k == 0xC5 && dev->last_prefix[1] == 0x9D))
             {
                 *key = (u8)input::key::pause;
                 *release = false;
                 *timestamp = kb_data.get_timestamp(timer::get_high_resolution_time());
-                last_prefix_count = 0;
+                dev->last_prefix_count = 0;
                 return true;
             }
             else
             {
-                trace::warning("Unknow scan code.", (void *)(u64)last_prefix[0], ",", (void *)(u64)last_prefix[1], ",",
-                               (void *)(u64)k);
-                last_prefix_count = 0;
+                trace::warning("Unknow scan code.", (void *)(u64)dev->last_prefix[0], ",",
+                               (void *)(u64)dev->last_prefix[1], ",", (void *)(u64)k);
+                dev->last_prefix_count = 0;
             }
         }
         else
         {
-            trace::warning("Unknow scan code. Unknow prefix. ", last_prefix_count);
+            trace::warning("Unknow scan code. Unknow prefix. ", dev->last_prefix_count);
         }
     }
     return false;
@@ -375,18 +393,38 @@ void kb_driver::on_io_request(io::request_t *request)
 {
     kassert(request->type == io::chain_number::keyboard, "Error driver state.");
     io::keyboard_request_t *req = (io::keyboard_request_t *)request;
-    io::keyboard_result_t &ret = req->result;
+    io::status_t &status = req->status;
+
     kb_device *dev = (kb_device *)req->get_current_device();
     switch (req->cmd_type)
     {
         case io::keyboard_request_t::command::get_key: {
-            if (get_key(req, dev, &ret.cmd_type.get.key, &ret.cmd_type.get.timestamp, &ret.cmd_type.get.release))
+            if (get_key(dev, &req->result.get))
             {
-                ret.poll_status = 0;
+                if (request->poll)
+                {
+                    status.poll_status = 0;
+                }
+                else
+                {
+                    status.io_is_completion = true;
+                    status.failed_code = 0;
+                }
             }
             else
             {
-                ret.poll_status = 1;
+                {
+                    uctx::RawSpinLockContext ctx(dev->io_list_lock);
+                    dev->io_list.push_back(req);
+                }
+                if (request->poll)
+                {
+                    status.poll_status = 1;
+                }
+                else
+                {
+                    status.io_is_completion = false;
+                }
             }
             break;
         }
@@ -402,7 +440,7 @@ void kb_driver::on_io_request(io::request_t *request)
             else
                 dev->led_status &= ~(0b100);
             set_led(dev->led_status);
-            ret.cmd_type.set.ok = true;
+            status.failed_code = 0;
             break;
         }
         case io::keyboard_request_t::command::set_led_scroll: {
@@ -412,7 +450,7 @@ void kb_driver::on_io_request(io::request_t *request)
             else
                 dev->led_status &= ~(0b001);
             set_led(dev->led_status);
-            ret.cmd_type.set.ok = true;
+            status.failed_code = 0;
             break;
         }
         case io::keyboard_request_t::command::set_led_num: {
@@ -422,24 +460,41 @@ void kb_driver::on_io_request(io::request_t *request)
             else
                 dev->led_status &= ~(0b010);
             set_led(dev->led_status);
-            ret.cmd_type.set.ok = true;
+            status.failed_code = 0;
             break;
         }
     }
 }
 
 //===============================
+bool mouse_get(mouse_device *dev, io::mouse_data *data);
 
 irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_data)
 {
-    mouse_buffer_t *buffer = (mouse_buffer_t *)user_data;
-    if (unlikely(buffer == nullptr))
+    auto dev = (mouse_device *)user_data;
+    if (unlikely(dev == nullptr))
         return irq::request_result::no_handled;
 
     auto data = io_in8(data_port);
     mouse_data_t md;
     md.set(timer::get_high_resolution_time(), data);
-    buffer->write_with() = md;
+
+    dev->buffer.write_with() = md;
+
+    io::mouse_data io_mouse_data;
+    if (mouse_get(dev, &io_mouse_data))
+    {
+        uctx::RawSpinLockContext ctx(dev->io_list_lock);
+        for (io::mouse_request_t *it : dev->io_list)
+        {
+            it->result.get = io_mouse_data;
+            it->status.failed_code = 0;
+            it->status.io_is_completion = true;
+            io::completion(it);
+        }
+        dev->io_list.clean();
+    }
+
     return irq::request_result::ok;
 }
 
@@ -540,7 +595,7 @@ bool mouse_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(12, &entry);
-    irq::insert_request_func(intr, mouse_interrupt, (u64)&buffer);
+    irq::insert_request_func(intr, mouse_interrupt, (u64)dev);
 
     wait_for_write();
     io_out8(cmd_port, 0xD4);
@@ -562,11 +617,13 @@ void mouse_driver::cleanup(::dev::device *dev)
     memory::Delete<>(memory::KernelCommonAllocatorV, (mouse_buffer_t *)(dev->get_user_data()));
 }
 
-bool mouse_get(mouse_buffer_t &buffer, io::mouse_data *data, bool type3)
+bool mouse_get(mouse_device *dev, io::mouse_data *data)
 {
-    static u8 last_index = 0;
-    static u8 last_data[4];
     mouse_data_t dt;
+    auto &buffer = dev->buffer;
+    auto &last_data = dev->last_data;
+    auto &last_index = dev->last_index;
+
     while (buffer.read(&dt))
     {
         switch (last_index)
@@ -584,7 +641,7 @@ bool mouse_get(mouse_buffer_t &buffer, io::mouse_data *data, bool type3)
                 break;
             case 2:
                 last_data[last_index++] = dt.data;
-                if (type3)
+                if (dev->id == 0)
                 {
                     data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
                     data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
@@ -625,26 +682,45 @@ void mouse_driver::on_io_request(io::request_t *request)
 {
     kassert(request->type == io::chain_number::mouse, "Error driver state.");
     io::mouse_request_t *req = (io::mouse_request_t *)request;
-    io::mouse_result_t &ret = req->result;
+    io::status_t &status = req->status;
+
     mouse_device *dev = (mouse_device *)req->get_current_device();
 
-    mouse_buffer_t &buffer = dev->buffer;
     switch (req->cmd_type)
     {
         case io::mouse_request_t::command::get: {
-            if (mouse_get(buffer, &ret.cmd_type.get, dev->id == 0))
+            if (mouse_get(dev, &req->result.get))
             {
-                ret.poll_status = 0;
+                if (request->poll)
+                {
+                    status.poll_status = 0;
+                }
+                else
+                {
+                    status.failed_code = 0;
+                    status.io_is_completion = true;
+                }
             }
             else
             {
-                ret.poll_status = 1;
+                {
+                    uctx::RawSpinLockContext ctx(dev->io_list_lock);
+                    dev->io_list.push_back(req);
+                }
+                if (request->poll)
+                {
+                    status.poll_status = 1;
+                }
+                else
+                {
+                    status.io_is_completion = false;
+                }
             }
         }
         break;
         case io::mouse_request_t::command::set_speed: {
             /// TODO: set speed for mouse
-            ret.cmd_type.set.ok = true;
+            status.failed_code = 0;
             break;
         }
         default:

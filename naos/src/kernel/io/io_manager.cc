@@ -26,24 +26,39 @@ bool send_io_request(request_t *request)
     if (request_map->get(request->type, &chain))
     {
         u64 size = chain->size();
-        request->dev_stack = memory::NewArray<u32>(memory::KernelCommonAllocatorV, size);
-        util::memcopy(request->dev_stack, chain->data(), size * sizeof(dev::num_t));
-        auto dev = request->dev_stack[request->cur_stack_index];
+        auto stack = memory::NewArray<io_stack_t>(memory::KernelCommonAllocatorV, size);
+        request->inner.stack_size = (u32)size;
+        request->inner.cur_stack_index = 0;
+        request->inner.io_stack = stack;
+        for (u64 i = 0; i < size; i++)
+        {
+            request->inner.io_stack[i].dev_num = (*chain)[i];
+            request->inner.io_stack[i].completion_callback = nullptr;
+        }
+
+        auto dev = chain->at(0);
         auto device = ::dev::get_device(dev);
         if (unlikely(device == nullptr))
         {
-            memory::DeleteArray<u32>(memory::KernelCommonAllocatorV, request->dev_stack, size);
+            memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
             return false;
         }
 
         auto driver = device->get_driver();
         if (unlikely(driver == nullptr))
         {
-            memory::DeleteArray<u32>(memory::KernelCommonAllocatorV, request->dev_stack, size);
+            memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
             return false;
         }
         driver->on_io_request(request);
-        memory::DeleteArray<u32>(memory::KernelCommonAllocatorV, request->dev_stack, size);
+        if (request->poll)
+        {
+            memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+        }
+        else if (request->status.io_is_completion)
+        {
+            memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+        }
         return true;
     }
     return false;
@@ -51,7 +66,7 @@ bool send_io_request(request_t *request)
 
 void call_next_io_request_chain(request_t *request)
 {
-    auto dev = request->dev_stack[++request->cur_stack_index];
+    auto dev = request->inner.io_stack[++request->inner.cur_stack_index].dev_num;
     auto device = ::dev::get_device(dev);
     kassert(unlikely(device != nullptr), "Device is deleted when request.");
     auto driver = device->get_driver();
@@ -91,5 +106,32 @@ bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_n
 }
 
 void remove_request_chain_device(u32 device) {}
+
+void completion(request_t *request)
+{
+    auto &inner_data = request->inner;
+    inner_data.cur_stack_index = inner_data.stack_size - 1;
+    bool inter = false;
+    while (inner_data.cur_stack_index-- != 0)
+    {
+        auto &io_stack = inner_data.io_stack;
+        auto cur_io = io_stack[inner_data.cur_stack_index];
+        if (cur_io.completion_callback != 0)
+        {
+            if (cur_io.completion_callback(request, cur_io.completion_user_data) == completion_result_t::inter)
+            {
+                inter = true;
+                break;
+            }
+        }
+    }
+
+    if (request->final_completion_func != nullptr)
+    {
+        request->final_completion_func(request, inter, request->completion_user_data);
+    }
+
+    memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, inner_data.io_stack, inner_data.stack_size);
+}
 
 } // namespace io

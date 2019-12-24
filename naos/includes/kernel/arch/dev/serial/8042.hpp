@@ -1,6 +1,9 @@
 #pragma once
 #include "../../../dev/device.hpp"
 #include "../../../dev/driver.hpp"
+#include "../../../io/pkg.hpp"
+#include "../../../lock.hpp"
+#include "../../../util/array.hpp"
 #include "../../../util/circular_buffer.hpp"
 #include "../../../wait.hpp"
 namespace arch::device::chip8042
@@ -42,15 +45,25 @@ struct kb_data_t
 constexpr u64 kb_cache_count = 32;
 using kb_buffer_t = util::circular_buffer<kb_data_t>;
 
+using keyboard_io_list_t = util::array<io::keyboard_request_t *>;
+
 class kb_device : public ::dev::device
 {
   public:
     kb_buffer_t buffer;
+    lock::spinlock_t buffer_lock;
     u8 id;
     u8 led_status;
+    keyboard_io_list_t io_list;
+    lock::spinlock_t io_list_lock;
+
+    u8 last_prefix_count;
+    u8 last_prefix[2];
     kb_device()
         : device(::dev::type::chr, "8042keyboard")
         , buffer(memory::KernelCommonAllocatorV, kb_cache_count)
+        , io_list(memory::KernelCommonAllocatorV)
+        , last_prefix_count(0)
     {
     }
 };
@@ -94,15 +107,24 @@ struct mouse_data_t
 
 using mouse_buffer_t = util::circular_buffer<mouse_data_t>;
 
+using mouse_io_list_t = util::array<io::mouse_request_t *>;
+
 class mouse_device : public ::dev::device
 {
   public:
     mouse_buffer_t buffer;
-    u8 id;
+    lock::spinlock_t buffer_lock;
 
+    u8 id;
+    mouse_io_list_t io_list;
+    lock::spinlock_t io_list_lock;
+
+    u8 last_index = 0;
+    u8 last_data[4];
     mouse_device()
         : device(::dev::type::chr, "8042mouse")
         , buffer(memory::KernelCommonAllocatorV, mouse_cache_count)
+        , io_list(memory::KernelCommonAllocatorV)
     {
     }
 };

@@ -11,6 +11,8 @@ namespace task::builtin::idle
 {
 void main()
 {
+    kassert(arch::idt::is_enable(), "Disable IF");
+
     trace::debug("idle task running.");
     if (cpu::current().is_bsp())
     {

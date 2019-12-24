@@ -64,6 +64,14 @@ template <typename T> class circular_buffer
 
     write_helper write_with() { return write_helper(this); }
 
+    u64 data_size()
+    {
+        if (write_off > read_off)
+            return write_off - read_off;
+        else
+            return length - read_off + write_off;
+    }
+
     bool read(T *t)
     {
         if (unlikely(read_off == write_off))
