@@ -605,13 +605,15 @@ thread_t *find_tid(process_t *process, thread_id tid)
     return nullptr;
 }
 
-thread_t *get_idle_task() { return cpu::current().get_idle_task(); }
-
 void switch_thread(thread_t *old, thread_t *new_task)
 {
+    kassert(!arch::idt::is_enable(), "expect failed");
+
+    cpu::current().set_task(new_task);
+
     if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
         ((mm_info_t *)new_task->process->mm_info)->mmu_paging.load_paging();
-    cpu::current().set_task(new_task);
+
     _switch_task(old->register_info, new_task->register_info);
 }
 

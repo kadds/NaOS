@@ -17,10 +17,9 @@ void init(::task::thread_t *thd, register_info_t *register_info)
     __asm__ __volatile__("andq %%rsp,%0	\n\t" : "=r"(stack_low) : "0"(~(memory::kernel_stack_size - 1)));
     register_info->cr2 = 0;
     register_info->error_code = 0;
-    register_info->fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
-    register_info->gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
     register_info->rsp = (void *)(stack_low + memory::kernel_stack_size);
     register_info->trap_vector = 0;
+    register_info->task = thd;
 
     thd->kernel_stack_top = (void *)register_info->rsp;
 
@@ -32,7 +31,7 @@ void init(::task::thread_t *thd, register_info_t *register_info)
     _wrmsr(0xC0000084, 0x200); // rFLAGS clean bits
 }
 
-ExportC void switch_task(register_info_t *prev, register_info_t *next, ::task::thread_t *thd) {}
+ExportC void switch_task(register_info_t *prev, register_info_t *next) {}
 
 ExportC void do_exit(u64 exit_code)
 {
@@ -61,8 +60,7 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     auto &register_info = *thd->register_info;
     register_info.rip = (void *)regs.rip;
     register_info.rsp = (void *)((u64)thd->kernel_stack_top - sizeof(regs));
-    register_info.fs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
-    register_info.gs = gdt::gen_selector(arch::gdt::selector_type::kernel_data, 0);
+    register_info.task = thd;
 
     util::memcopy((void *)((u64)thd->kernel_stack_top - sizeof(regs)), &regs, sizeof(regs_t));
 
@@ -74,6 +72,7 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
     regs_t regs;
     util::memzero(&regs, sizeof(regs));
     thd->register_info->rip = (void *)&_sys_ret;
+    thd->register_info->task = thd;
     regs.rcx = (u64)entry;
     regs.r10 = (u64)thd->user_stack_top;
     regs.rsp = regs.r10;

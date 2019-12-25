@@ -24,6 +24,7 @@ void main()
         }
         task::create_process(file, init::main, 0, 0, 0, 0);
         // fs::vfs::close(file);
+        kassert(arch::idt::is_enable(), "BSP IF ");
     }
 
     task::schedule();

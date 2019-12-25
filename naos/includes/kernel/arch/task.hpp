@@ -15,8 +15,7 @@ struct register_info_t
 {
     void *rip;
     void *rsp;
-    u64 fs;
-    u64 gs;
+    void *task;
     void *cr2;
     u64 trap_vector;
     u64 error_code;

@@ -200,8 +200,6 @@ void kill_thread(thread_t *thread, flag_t flags);
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);
 
-thread_t *get_idle_task();
-
 inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
 inline process_t *current_process() { return current()->process; }
 

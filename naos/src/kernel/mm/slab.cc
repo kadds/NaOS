@@ -49,25 +49,25 @@ slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name
                 if (obj_align_size > restsize)
                 {
                     page_pre_slab = 16;
-                    node_pre_slab = restsize / obj_align_size + memory::page_size * 15 / obj_align_size;
+                    node_pre_slab = (restsize + memory::page_size * 15) / obj_align_size;
                 }
                 else
                 {
                     page_pre_slab = 8;
-                    node_pre_slab = restsize / obj_align_size + memory::page_size * 7 / obj_align_size;
+                    node_pre_slab = (restsize + memory::page_size * 7) / obj_align_size;
                 }
             }
             else
             {
                 page_pre_slab = 4;
-                node_pre_slab = restsize / obj_align_size + memory::page_size * 2 / obj_align_size;
+                node_pre_slab = (restsize + memory::page_size * 3) / obj_align_size;
             }
         }
         else
         {
             // 63 - 251
             page_pre_slab = 2;
-            node_pre_slab = restsize / obj_align_size + memory::page_size / obj_align_size;
+            node_pre_slab = (restsize + memory::page_size) / obj_align_size;
         }
     }
     else
@@ -92,10 +92,13 @@ void *slab_group::alloc()
     slab *slab = list_partial.back();
     auto &bitmap = slab->bitmap;
     u64 i = bitmap.scan_zero();
-    kassert(i < bitmap.count(), "Memory leacorruption in slab");
+    kassert(i < bitmap.count() && i < node_pre_slab, "Memory leacorruption in slab");
     bitmap.set(i);
+    kassert(bitmap.get(i), "Can't allocate an addresss. index: ", i);
+
     slab->rest--;
     all_obj_used++;
+
     if (slab->rest == 0)
     {
         list_full.push_back(list_partial.pop_back());
@@ -107,16 +110,19 @@ void slab_group::free(void *ptr)
 {
     uctx::RawSpinLockUnInterruptableContext ctx(slab_lock);
 
-    char *page_addr = (char *)((u64)ptr & ~(memory::page_size - 1));
+    char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
 
     for (auto it = list_partial.begin(); it != list_partial.end(); ++it)
     {
         if (page_addr == (char *)*it)
         {
             auto &e = **it;
-            e.bitmap.clean(((char *)ptr - e.data_ptr) / obj_align_size);
+            u64 index = ((char *)ptr - e.data_ptr) / obj_align_size;
+            kassert(e.bitmap.get(index), "Not an assigned address.");
+            e.bitmap.clean(index);
             e.rest++;
             all_obj_used--;
+
             if (e.rest == node_pre_slab)
             {
                 list_empty.push_back(*it);
@@ -145,13 +151,14 @@ void slab_group::free(void *ptr)
             return;
         }
     }
+    trace::panic("Unreachable control flow.");
 }
 
 bool slab_group::include_address(void *ptr)
 {
     uctx::RawSpinLockUnInterruptableContext ctx(slab_lock);
 
-    char *page_addr = (char *)((u64)ptr & ~(memory::page_size - 1));
+    char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
     for (auto e : list_full)
     {
         if (page_addr == (char *)e)

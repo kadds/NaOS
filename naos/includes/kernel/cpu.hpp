@@ -9,9 +9,10 @@ namespace cpu
 {
 class cpu_data_t
 {
-    task::thread_t *current_task;
-    task::thread_t *idle_task;
-    void *schedule_data;
+    task::thread_t *current_task = nullptr;
+    task::thread_t *idle_task = nullptr;
+    void *schedule_data = nullptr;
+    void *tasklet_queue = nullptr;
 
   public:
     bool is_bsp();
@@ -27,6 +28,10 @@ class cpu_data_t
     void set_schedule_data(void *data) { schedule_data = data; }
 
     void *get_schedule_data() { return schedule_data; }
+
+    void *get_tasklet_queue() { return tasklet_queue; }
+
+    void set_tasklet_queue(void *queue) { tasklet_queue = queue; }
 };
 cpu_data_t &current();
 void init();

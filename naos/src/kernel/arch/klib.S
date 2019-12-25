@@ -36,6 +36,7 @@ _cpu_id:
     ret
 .globl _switch_task
 _switch_task:
+    pushf
     pushq %rbp
     pushq %rax
     movq %rsp, 0x8(%rdi) # save rsp
@@ -43,16 +44,11 @@ _switch_task:
     leaq end_task(%rip), %rax 
     movq %rax, 0x0(%rdi) # prev rip
     pushq 0x0(%rsi) # push new rip
-
-    # movq 0x18(%rsi), %rax
-    # movq %rax, %fs
-    # movq 0x20(%rsi), %rax
-    # movq %rax, %gs
-
     jmp switch_task
 end_task:
     popq %rax
     popq %rbp
+    popf
     retq
 
 .globl _kernel_thread

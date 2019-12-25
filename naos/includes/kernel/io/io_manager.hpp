@@ -6,7 +6,7 @@ namespace io
 void init();
 
 bool send_io_request(request_t *request);
-void remove_io_request(request_t *request);
+void finish_io_request(request_t *request);
 
 void call_next_io_request_chain(request_t *request);
 

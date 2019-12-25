@@ -13,11 +13,10 @@ void complation(io::request_t *req, bool intr, u64 user_data)
     task::do_wake_up(q);
 }
 
-void print_keyboard(io::keyboard_result_t &res, io::status_t &status)
+void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req)
 {
     if (status.io_is_completion)
     {
-        status.io_is_completion = false;
         if (res.get.release)
         {
             key_state.clean(res.get.key);
@@ -28,14 +27,14 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status)
             key_state.set(res.get.key);
             trace::debug("key ", (void *)res.get.key, " press at ", res.get.timestamp);
         }
+        io::finish_io_request(req);
     }
 }
 
-void print_mouse(io::mouse_result_t &res, io::status_t &status)
+void print_mouse(io::mouse_result_t &res, io::status_t &status, io::request_t *req)
 {
     if (status.io_is_completion)
     {
-        status.io_is_completion = false;
         trace::debug("mouse x:", res.get.movement_x, " y:", res.get.movement_y, " at ", res.get.timestamp);
         if (res.get.down_x)
         {
@@ -53,6 +52,7 @@ void print_mouse(io::mouse_result_t &res, io::status_t &status)
         {
             trace::debug("scroll ", res.get.movement_z);
         }
+        io::finish_io_request(req);
     }
 }
 
@@ -77,19 +77,28 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     mreq.final_completion_func = complation;
     mreq.completion_user_data = (u64)&input_wait_queue;
     mreq.poll = false;
-    request.status.io_is_completion = false;
-    mreq.status.io_is_completion = false;
+    request.status.io_is_completion = true;
+    mreq.status.io_is_completion = true;
 
     while (1)
     {
-        if (!io::send_io_request(&request))
+        if (request.status.io_is_completion)
         {
-            trace::warning("error when send io request");
+            request.status.io_is_completion = false;
+            if (!io::send_io_request(&request))
+            {
+                trace::warning("error when send io request");
+            }
         }
-        if (!io::send_io_request(&mreq))
+        if (mreq.status.io_is_completion)
         {
-            trace::warning("error when send io request");
+            mreq.status.io_is_completion = false;
+            if (!io::send_io_request(&mreq))
+            {
+                trace::warning("error when send io request");
+            }
         }
+
         if (request.status.io_is_completion || mreq.status.io_is_completion)
         {
         }
@@ -97,9 +106,8 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
         {
             task::do_wait(&input_wait_queue, wait_condition, 0, task::wait_context_type::uninterruptible);
         }
-        print_keyboard(request.result, request.status);
-        print_mouse(mreq.result, mreq.status);
-        trace::debug("next io request");
+        print_keyboard(request.result, request.status, &request);
+        print_mouse(mreq.result, mreq.status, &mreq);
     };
 }
 } // namespace task::builtin::input

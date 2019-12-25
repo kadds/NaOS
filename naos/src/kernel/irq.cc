@@ -7,6 +7,7 @@
 #include "kernel/lock.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/tasklet.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/linked_list.hpp"
 #include "kernel/wait.hpp"
@@ -133,6 +134,7 @@ void init()
     arch::exception::set_callback(&do_irq);
     arch::interrupt::set_callback(&do_irq);
     arch::interrupt::set_soft_irq_callback(&check_and_wakeup_soft_irq);
+    init_tasklet();
     arch::idt::enable();
 }
 

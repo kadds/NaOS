@@ -23,21 +23,22 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
 
     uctx::UnInterruptableContext icu;
     {
-        uctx::SpinLockContext ctx(queue->lock);
+        uctx::RawSpinLockContext ctx(queue->lock);
         queue->list.emplace_back(current(), condition, user_data);
     }
 
     for (;;)
     {
-        current()->attributes |= task::thread_attributes::need_schedule;
-        current()->state = state;
-        scheduler::update(current());
+        auto thd = current();
+        thd->attributes |= task::thread_attributes::need_schedule;
+        thd->state = state;
+        scheduler::update(thd);
         scheduler::schedule();
         if (condition(user_data))
             break;
     }
     {
-        uctx::SpinLockContext ctx(queue->lock);
+        uctx::RawSpinLockContext ctx(queue->lock);
         queue->list.remove(queue->list.find(wait_context_t(current(), condition, user_data)));
     }
 }

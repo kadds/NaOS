@@ -9,23 +9,23 @@ namespace bit_set_opeartion
 {
 using BaseType = u64;
 
-bool get(byte *data, u64 index);
+bool get(BaseType *data, u64 index);
 
-void set(byte *data, u64 index);
+void set(BaseType *data, u64 index);
 /// set [0, element_count) to 1
-void set_all(byte *data, u64 element_count);
+void set_all(BaseType *data, u64 element_count);
 /// set [start, start+element_count) to 1
-void set_all(byte *data, u64 start, u64 element_count);
+void set_all(BaseType *data, u64 start, u64 element_count);
 
-void clean(byte *data, u64 index);
+void clean(BaseType *data, u64 index);
 /// set [0, element_count) to 0
-void clean_all(byte *data, u64 element_count);
+void clean_all(BaseType *data, u64 element_count);
 /// set [start, start+element_count) to 0
-void clean_all(byte *data, u64 start, u64 element_count);
+void clean_all(BaseType *data, u64 start, u64 element_count);
 /// scan [offset, offset+max_len)
-u64 scan_zero(byte *data, u64 offset, u64 max_len);
+u64 scan_zero(BaseType *data, u64 offset, u64 max_len);
 
-u64 scan_set(byte *data, u64 offset, u64 max_len);
+u64 scan_set(BaseType *data, u64 offset, u64 max_len);
 
 }; // namespace bit_set_opeartion
 class bit_set
@@ -33,7 +33,7 @@ class bit_set
   private:
     memory::IAllocator *allocator;
     // data pointer
-    byte *data;
+    u64 *data;
     u64 element_count;
 
   public:
@@ -43,7 +43,7 @@ class bit_set
     {
 
         u64 bytes = (element_count + 7) / 8;
-        data = (byte *)allocator->allocate(bytes, 1);
+        data = (u64 *)allocator->allocate(bytes, 1);
     }
 
     bit_set(const bit_set &v) = delete;
@@ -114,7 +114,7 @@ class bit_set
 
 template <int ElementCount> class bit_set_inplace
 {
-    u8 data[(ElementCount + 7) / 8];
+    u64 data[(ElementCount + 63) / 64];
 
   public:
     bit_set_inplace() = default;
@@ -128,20 +128,20 @@ template <int ElementCount> class bit_set_inplace
 
     ~bit_set_inplace() = default;
 
-    void clean_all() { bit_set_opeartion::clean_all((byte *)data, ElementCount); }
+    void clean_all() { bit_set_opeartion::clean_all(data, ElementCount); }
 
-    void set_all() { bit_set_opeartion::set_all((byte *)data, ElementCount); }
+    void set_all() { bit_set_opeartion::set_all(data, ElementCount); }
 
     bool get(u64 index)
     {
         kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
-        return bit_set_opeartion::get((byte *)data, index);
+        return bit_set_opeartion::get(data, index);
     }
 
     void set(u64 index)
     {
         kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
-        bit_set_opeartion::set((byte *)data, index);
+        bit_set_opeartion::set(data, index);
     }
 
     void set_all(u64 index, u64 count)
@@ -149,13 +149,13 @@ template <int ElementCount> class bit_set_inplace
         kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
         kassert(index + count < ElementCount, "Index + Count is out of range:", index, "+", count,
                 " maximum:", ElementCount);
-        bit_set_opeartion::set_all((byte *)data, index, count);
+        bit_set_opeartion::set_all(data, index, count);
     }
 
     void clean(u64 index)
     {
         kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
-        bit_set_opeartion::clean((byte *)data, index);
+        bit_set_opeartion::clean(data, index);
     }
 
     void clean_all(u64 index, u64 count)
@@ -163,7 +163,7 @@ template <int ElementCount> class bit_set_inplace
         kassert(index < ElementCount, "Index is out of range. index:", index, " maximum:", ElementCount);
         kassert(index + count < ElementCount, "Index + Count is out of range:", index, "+", count,
                 " maximum:", ElementCount);
-        bit_set_opeartion::clean_all((byte *)data, index, count);
+        bit_set_opeartion::clean_all(data, index, count);
     }
 
     u64 scan_zero(u64 offset, u64 max_len)
@@ -171,20 +171,20 @@ template <int ElementCount> class bit_set_inplace
         kassert(offset < ElementCount, "Offset is out of range. offset:", offset, " maximum:", ElementCount);
         kassert(offset + max_len < ElementCount, "Offset + Count is out of range:", offset, "+", max_len,
                 " maximum:", ElementCount);
-        return bit_set_opeartion::scan_zero((byte *)data, offset, max_len);
+        return bit_set_opeartion::scan_zero(data, offset, max_len);
     }
 
-    u64 scan_zero() { return bit_set_opeartion::scan_zero((byte *)data, 0, ElementCount); }
+    u64 scan_zero() { return bit_set_opeartion::scan_zero(data, 0, ElementCount); }
 
     u64 scan_set(u64 offset, u64 max_len)
     {
         kassert(offset < ElementCount, "Offset is out of range. offset:", offset, " maximum:", ElementCount);
         kassert(offset + max_len < ElementCount, "Offset + Count is out of range:", offset, "+", max_len,
                 " maximum:", ElementCount);
-        return bit_set_opeartion::scan_set((byte *)data, offset, max_len);
+        return bit_set_opeartion::scan_set(data, offset, max_len);
     }
 
-    u64 scan_set() { return bit_set_opeartion::scan_set((byte *)data, 0, ElementCount); }
+    u64 scan_set() { return bit_set_opeartion::scan_set(data, 0, ElementCount); }
 
     u64 count() const { return ElementCount; }
 };

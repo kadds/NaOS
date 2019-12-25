@@ -57,8 +57,8 @@ void time_span_scheduler::init_cpu()
 {
     cpu_task_list_t *task_list = memory::New<cpu_task_list_t>(memory::KernelCommonAllocatorV);
     cpu::current().set_schedule_data(task_list);
-    task::get_idle_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
-    get_schedule_data(task::get_idle_task())->rest_time = 0;
+    cpu::current().get_task()->schedule_data = memory::New<thread_time>(memory::KernelCommonAllocatorV);
+    get_schedule_data(cpu::current().get_task())->rest_time = 0;
 }
 
 void time_span_scheduler::destroy_cpu()
@@ -134,10 +134,10 @@ void time_span_scheduler::update(thread_t *thread)
     }
     else if (thread->state == task::thread_state::interruptable || thread->state == task::thread_state::uninterruptible)
     {
-        thread->attributes |= thread_attributes::block;
 
         if (current() == thread)
         {
+            thread->attributes |= thread_attributes::block;
             return;
         }
         auto node = task_list->runable_list.find(thread);
@@ -209,7 +209,7 @@ thread_t *time_span_scheduler::pick_available_task()
     cpu_task_list_t *task_list = (cpu_task_list_t *)u.get_schedule_data();
     if (task_list->runable_list.empty())
     {
-        return task::get_idle_task();
+        return cpu::current().get_idle_task();
     }
     thread_t *t = task_list->runable_list.front();
     task_list->runable_list.remove(task_list->runable_list.begin());
@@ -238,10 +238,6 @@ void time_span_scheduler::schedule(flag_t flag)
     }
     else
     {
-        if (!cur->preempt_data.preemptible())
-        {
-            return;
-        }
         uctx::UnInterruptableContext icu;
 
         while (cur->attributes & task::thread_attributes::need_schedule)
@@ -252,7 +248,7 @@ void time_span_scheduler::schedule(flag_t flag)
             {
                 task_list->block_list.push_back(cur);
             }
-            else if (get_schedule_data(cur)->rest_time <= 0 && cur != task::get_idle_task())
+            else if (get_schedule_data(cur)->rest_time <= 0 && cur != cpu::current().get_idle_task())
             {
                 task_list->expired_list.push_back(cur);
             }
@@ -274,6 +270,7 @@ void time_span_scheduler::schedule(flag_t flag)
                     cur->state = task::thread_state::ready; ///< return state to ready
                 }
                 task::switch_thread(cur, next);
+                cur = cpu::current().get_task();
             }
             else
             {
@@ -281,7 +278,10 @@ void time_span_scheduler::schedule(flag_t flag)
             }
         }
     }
-
+    if (cur->tid == 3)
+    {
+        trace::debug("ok");
+    }
     return;
 }
 

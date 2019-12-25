@@ -174,10 +174,20 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
     kdata.set(timer::get_high_resolution_time(), data);
     dev->buffer.write_with() = kdata;
 
+    irq::raise_tasklet(&dev->tasklet);
+
+    return irq::request_result::ok;
+}
+
+void kb_tasklet_func(u64 user_data)
+{
+    kb_device *dev = (kb_device *)user_data;
+    if (dev->io_list.size() == 0)
+        return;
     io::keyboard_data kbdata;
     if (get_key(dev, &kbdata))
     {
-        uctx::RawSpinLockContext ctx(dev->io_list_lock);
+        uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
         for (io::keyboard_request_t *it : dev->io_list)
         {
             it->result.get = kbdata;
@@ -187,8 +197,6 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
         }
         dev->io_list.clean();
     }
-
-    return irq::request_result::ok;
 }
 
 bool set_led(u8 s)
@@ -255,7 +263,7 @@ u8 get_keyboard_id()
 
 bool kb_driver::setup(::dev::device *dev)
 {
-    kb_buffer_t &buffer = ((kb_device *)dev)->buffer;
+    kb_device *kbdev = ((kb_device *)dev);
     uctx::UnInterruptableContext icu;
 
     io_out8(cmd_port, 0x20);
@@ -267,14 +275,14 @@ bool kb_driver::setup(::dev::device *dev)
     auto id = get_keyboard_id();
     trace::debug("keyboard id = ", (void *)(u64)id);
 
-    ((kb_device *)dev)->id = id;
+    kbdev->id = id;
 
     blink_led();
 
     // reset led
     set_led(0);
 
-    ((kb_device *)dev)->led_status = 0;
+    kbdev->led_status = 0;
 
     io_out8(cmd_port, 0x60);
 
@@ -282,6 +290,10 @@ bool kb_driver::setup(::dev::device *dev)
     io_out8(data_port, old_status);
 
     flush();
+
+    kbdev->tasklet.func = kb_tasklet_func;
+    kbdev->tasklet.user_data = (u64)kbdev;
+    irq::add_tasklet(&kbdev->tasklet);
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -407,24 +419,21 @@ void kb_driver::on_io_request(io::request_t *request)
                 }
                 else
                 {
-                    status.io_is_completion = true;
                     status.failed_code = 0;
                 }
+                status.io_is_completion = true;
             }
             else
             {
                 {
-                    uctx::RawSpinLockContext ctx(dev->io_list_lock);
+                    uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
                     dev->io_list.push_back(req);
                 }
                 if (request->poll)
                 {
                     status.poll_status = 1;
                 }
-                else
-                {
-                    status.io_is_completion = false;
-                }
+                status.io_is_completion = false;
             }
             break;
         }
@@ -480,11 +489,20 @@ irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_d
     md.set(timer::get_high_resolution_time(), data);
 
     dev->buffer.write_with() = md;
+    irq::raise_tasklet(&dev->tasklet);
 
+    return irq::request_result::ok;
+}
+
+void mouse_tasklet_func(u64 user_data)
+{
+    auto dev = (mouse_device *)user_data;
+    if (dev->io_list.size() == 0)
+        return;
     io::mouse_data io_mouse_data;
     if (mouse_get(dev, &io_mouse_data))
     {
-        uctx::RawSpinLockContext ctx(dev->io_list_lock);
+        uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
         for (io::mouse_request_t *it : dev->io_list)
         {
             it->result.get = io_mouse_data;
@@ -494,8 +512,6 @@ irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_d
         }
         dev->io_list.clean();
     }
-
-    return irq::request_result::ok;
 }
 
 bool set_mouse_rate(u8 rate)
@@ -554,7 +570,7 @@ u8 get_mouse_id()
 
 bool mouse_driver::setup(::dev::device *dev)
 {
-    mouse_buffer_t &buffer = ((mouse_device *)dev)->buffer;
+    mouse_device *msdev = (mouse_device *)dev;
     wait_for_write();
     io_out8(cmd_port, 0xA8);
 
@@ -578,13 +594,17 @@ bool mouse_driver::setup(::dev::device *dev)
         set_mouse_rate(80);
         id = get_mouse_id();
     }
-    ((mouse_device *)dev)->id = id;
+    msdev->id = id;
     trace::debug("mouse id = ", id);
 
     wait_for_write();
     io_out8(cmd_port, 0x60);
     wait_for_write();
     io_out8(data_port, old_status);
+
+    msdev->tasklet.func = mouse_tasklet_func;
+    msdev->tasklet.user_data = (u64)msdev;
+    irq::add_tasklet(&msdev->tasklet);
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -662,7 +682,7 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
 
                 data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
                 data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
-                data->movement_z = 8 - (8 - last_data[3] & 0xF);
+                data->movement_z = 8 - (8 - (last_data[3] & 0xF));
 
                 data->down_x = last_data[0] & 0b1;
                 data->down_y = last_data[0] & 0b10;
@@ -698,23 +718,20 @@ void mouse_driver::on_io_request(io::request_t *request)
                 else
                 {
                     status.failed_code = 0;
-                    status.io_is_completion = true;
                 }
+                status.io_is_completion = true;
             }
             else
             {
                 {
-                    uctx::RawSpinLockContext ctx(dev->io_list_lock);
+                    uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
                     dev->io_list.push_back(req);
                 }
                 if (request->poll)
                 {
                     status.poll_status = 1;
                 }
-                else
-                {
-                    status.io_is_completion = false;
-                }
+                status.io_is_completion = false;
             }
         }
         break;

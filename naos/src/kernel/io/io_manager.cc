@@ -41,6 +41,7 @@ bool send_io_request(request_t *request)
         if (unlikely(device == nullptr))
         {
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+            request->inner.io_stack = nullptr;
             return false;
         }
 
@@ -48,20 +49,36 @@ bool send_io_request(request_t *request)
         if (unlikely(driver == nullptr))
         {
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+            request->inner.io_stack = nullptr;
+
             return false;
         }
         driver->on_io_request(request);
         if (request->poll)
         {
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+            request->inner.io_stack = nullptr;
         }
         else if (request->status.io_is_completion)
         {
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, stack, size);
+            request->inner.io_stack = nullptr;
         }
         return true;
     }
     return false;
+}
+
+void finish_io_request(request_t *request)
+{
+    request_chain_t *chain;
+
+    if (request_map->get(request->type, &chain))
+    {
+        if (request->inner.io_stack != nullptr)
+            memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, request->inner.io_stack,
+                                            request->inner.stack_size);
+    }
 }
 
 void call_next_io_request_chain(request_t *request)
@@ -130,8 +147,6 @@ void completion(request_t *request)
     {
         request->final_completion_func(request, inter, request->completion_user_data);
     }
-
-    memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, inner_data.io_stack, inner_data.stack_size);
 }
 
 } // namespace io

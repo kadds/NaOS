@@ -113,6 +113,7 @@ void init_data(cpuid_t cpuid)
     __asm__("andq %%rsp, %0\n\t" : "=r"(krsp)::"memory");
     auto kernel_rsp = (void *)(krsp + memory::kernel_stack_size);
     data.kernel_rsp = kernel_rsp;
+    tss::set_rsp(cpuid, 0, (void *)kernel_rsp);
 
     tss::set_ist(cpuid, 1, data.interrupt_rsp);
     tss::set_ist(cpuid, 3, data.exception_rsp);

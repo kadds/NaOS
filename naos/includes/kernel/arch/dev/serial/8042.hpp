@@ -3,9 +3,11 @@
 #include "../../../dev/driver.hpp"
 #include "../../../io/pkg.hpp"
 #include "../../../lock.hpp"
+#include "../../../tasklet.hpp"
 #include "../../../util/array.hpp"
 #include "../../../util/circular_buffer.hpp"
 #include "../../../wait.hpp"
+
 namespace arch::device::chip8042
 {
 struct kb_device_class : public ::dev::device_class
@@ -28,7 +30,7 @@ struct kb_data_t
     u64 get_timestamp(u64 current_timestamp)
     {
         return ((u64(timestamp_low)) | ((u64(timestamp_mid)) << 8) | ((u64(timestamp_high)) << 16)) |
-               current_timestamp & ~0xFFFFFF;
+               (current_timestamp & ~0xFFFFFF);
     }
 
     u8 get_key() { return data; }
@@ -56,6 +58,7 @@ class kb_device : public ::dev::device
     u8 led_status;
     keyboard_io_list_t io_list;
     lock::spinlock_t io_list_lock;
+    irq::tasklet_t tasklet;
 
     u8 last_prefix_count;
     u8 last_prefix[2];
@@ -93,7 +96,7 @@ struct mouse_data_t
     u64 get_timestamp(u64 current_timestamp)
     {
         return ((u64(timestamp_low)) | ((u64(timestamp_mid)) << 8) | ((u64(timestamp_high)) << 16)) |
-               current_timestamp & ~0xFFFFFF;
+               (current_timestamp & ~0xFFFFFF);
     }
 
     void set(u64 timestamp, u8 data)
@@ -118,6 +121,7 @@ class mouse_device : public ::dev::device
     u8 id;
     mouse_io_list_t io_list;
     lock::spinlock_t io_list_lock;
+    irq::tasklet_t tasklet;
 
     u8 last_index = 0;
     u8 last_data[4];
