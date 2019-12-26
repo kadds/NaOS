@@ -61,9 +61,11 @@ void init()
 
     graphics::init(args->fb_width, args->fb_height, (byte *)backbuffer_addr, args->fb_pitch, args->fb_bbp);
     graphics::cls(cursor);
-
-    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", args->fb_width, "X", args->fb_height, ". bit ",
-                                           args->fb_bbp, ". frame size ", frame_size >> 10, "kb.\n");
+    auto fb_width = args->fb_width;
+    auto fb_height = args->fb_height;
+    auto fb_bbp = args->fb_bbp;
+    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", fb_width, "X", fb_height, ". bit ", fb_bbp,
+                                           ". frame size ", frame_size >> 10, "kb.\n");
 
     test();
 

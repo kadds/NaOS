@@ -682,7 +682,7 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
 
                 data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
                 data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
-                data->movement_z = 8 - (8 - (last_data[3] & 0xF));
+                data->movement_z = 8 - ((8 - last_data[3]) & 0xF);
 
                 data->down_x = last_data[0] & 0b1;
                 data->down_y = last_data[0] & 0b10;

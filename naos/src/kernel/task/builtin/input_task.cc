@@ -7,6 +7,8 @@ namespace task::builtin::input
 {
 util::bit_set_inplace<256> key_state;
 
+io::mouse_data current_mouse_data;
+
 void complation(io::request_t *req, bool intr, u64 user_data)
 {
     wait_queue *q = (wait_queue *)user_data;
@@ -36,22 +38,43 @@ void print_mouse(io::mouse_result_t &res, io::status_t &status, io::request_t *r
     if (status.io_is_completion)
     {
         trace::debug("mouse x:", res.get.movement_x, " y:", res.get.movement_y, " at ", res.get.timestamp);
-        if (res.get.down_x)
+
+        if (res.get.down_x ^ current_mouse_data.down_x)
         {
-            trace::debug("left down");
+            trace::debug(res.get.down_x ? "left button down" : "left button up");
+            current_mouse_data.down_x = res.get.down_x;
         }
-        if (res.get.down_y)
+
+        if (res.get.down_y ^ current_mouse_data.down_y)
         {
-            trace::debug("right down");
+            trace::debug(res.get.down_y ? "right button down" : "right button up");
+            current_mouse_data.down_y = res.get.down_y;
         }
-        if (res.get.down_z)
+
+        if (res.get.down_z ^ current_mouse_data.down_z)
         {
-            trace::debug("mid down");
+            trace::debug(res.get.down_z ? "mid button down" : "mid button up");
+            current_mouse_data.down_z = res.get.down_z;
         }
+
+        if (res.get.down_a ^ current_mouse_data.down_a)
+        {
+            trace::debug(res.get.down_a ? "button 4 down" : "button 4 up");
+            current_mouse_data.down_a = res.get.down_a;
+        }
+
+        if (res.get.down_b ^ current_mouse_data.down_b)
+        {
+            trace::debug(res.get.down_b ? "button 5 down" : "button 5 up");
+            current_mouse_data.down_b = res.get.down_b;
+        }
+
         if (res.get.movement_z)
         {
             trace::debug("scroll ", res.get.movement_z);
+            current_mouse_data.movement_z = res.get.movement_z;
         }
+
         io::finish_io_request(req);
     }
 }
@@ -64,6 +87,14 @@ bool wait_condition(u64 user_data) { return request.status.io_is_completion || m
 void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     key_state.clean_all();
+    current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
+        current_mouse_data.down_b = false;
+
+    current_mouse_data.movement_x = 0;
+    current_mouse_data.movement_y = 0;
+    current_mouse_data.movement_z = 0;
+    current_mouse_data.timestamp = 0;
+
     wait_queue input_wait_queue(memory::KernelCommonAllocatorV);
 
     request.type = io::chain_number::keyboard;

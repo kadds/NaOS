@@ -1,5 +1,6 @@
 #pragma once
 #include "./arch/regs.hpp"
+#include "./kernel.hpp"
 #include "./util/formatter.hpp"
 #include "./util/ring_buffer.hpp"
 #include "common.hpp"
@@ -327,7 +328,7 @@ void end_print();
 
 util::ring_buffer &get_kernel_log_buffer();
 
-template <typename Head> void dispatch(const Head &head)
+template <typename Head> Trace_Section void dispatch(const Head &head)
 {
     using RealType = typename remove_extent<std::decay_t<decltype(head)>>::type;
     util::formatter::format<RealType> fmt;
@@ -335,14 +336,13 @@ template <typename Head> void dispatch(const Head &head)
     print_inner(fmt(head, fmt_str, 128));
 }
 
-template <typename Head> void cast_fmt()
+template <typename Head> Trace_Section void cast_fmt()
 {
     print_inner(Head::t);
     print_inner("m");
 }
 
-template <typename Head, typename Second, typename... Args, std::enable_if_t<has_member_t<Head>::value> * = nullptr>
-void cast_fmt()
+template <typename Head, typename Second, typename... Args> Trace_Section void cast_fmt()
 {
     print_inner(Head::t);
     print_inner(";");
@@ -358,16 +358,12 @@ void cast_fmt()
 ///
 /// \tparam Args
 ///
-template <typename... Args> void print_fmt(PrintAttribute<Args...>)
+template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>)
 {
     if constexpr (sizeof...(Args) != 0)
     {
         print_inner("\e[");
         cast_fmt<Args...>();
-    }
-    else
-    {
-        return;
     }
 }
 ///
@@ -379,7 +375,7 @@ template <typename... Args> void print_fmt(PrintAttribute<Args...>)
 /// \note call begin_print() before print<>() and call end_print() after print<>(), if not, race conditions may occur in
 /// the print<>()
 ///
-template <typename TPrintAttribute = PrintAttribute<>, typename... Args> void print(const Args &... args)
+template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_Section void print(Args &&... args)
 {
     print_fmt<>(TPrintAttribute());
     auto i = std::initializer_list<int>{(dispatch(args), 0)...};
@@ -389,70 +385,71 @@ template <typename TPrintAttribute = PrintAttribute<>, typename... Args> void pr
 
 NoReturn void keep_panic(const regs_t *regs = 0);
 
-template <typename... Args> NoReturn void panic(const Args &... args)
+template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
     uctx::UnInterruptableContext icu;
     begin_print();
     print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(args...);
+    print<>(std::forward<Args>(args)...);
     print<>('\n');
     end_print();
     keep_panic();
 }
 
-template <typename... Args> NoReturn void panic_stack(const regs_t *regs, const Args &... args)
+template <typename... Args> NoReturn Trace_Section void panic_stack(const regs_t *regs, Args &&... args)
 {
     uctx::UnInterruptableContext icu;
     begin_print();
     print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(args...);
+    print<>(std::forward<Args>(args)...);
     print<>('\n');
     end_print();
     keep_panic(regs);
 }
 
-template <typename... Args> void warning(const Args &... args)
+template <typename... Args> Trace_Section void warning(Args &&... args)
 {
     begin_print();
     print<PrintAttribute<Color::Foreground::LightCyan>>("[warning] ");
     print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(args...);
+    print<>(std::forward<Args>(args)...);
     print<>('\n');
     end_print();
 }
 
-template <typename... Args> void info(const Args &... args)
+template <typename... Args> Trace_Section void info(Args &&... args)
 {
     begin_print();
     print<PrintAttribute<Color::Foreground::Green>>("[info]    ");
     print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(args...);
+    print<>(std::forward<Args>(args)...);
     print<>('\n');
     end_print();
 }
 
-template <typename... Args> void debug(const Args &... args)
+template <typename... Args> Trace_Section void debug(Args &&... args)
 {
     if (!output_debug)
         return;
     begin_print();
     print<PrintAttribute<Color::Foreground::Brown>>("[debug]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(args...);
+    print<>(std::forward<Args>(args)...);
     print<>('\n');
     end_print();
 }
 
-template <typename... Args> void assert_runtime(const char *exp, const char *file, int line, const Args &... args)
+template <typename... Args>
+Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&... args)
 {
     begin_print();
     print<PrintAttribute<Color::Foreground::LightRed>>("[assert]  ");
     print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed: at: ", file, ':', line,
                                                   "\n    assert expr: ", exp, '\n');
     end_print();
-    panic<>("from assert failed. ", args...);
+    panic<>("from assert failed. ", std::forward<Args>(args)...);
 }
 
 } // namespace trace
