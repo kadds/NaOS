@@ -5,9 +5,6 @@ import argparse
 import traceback
 from mod import set_self_dir, run_shell
 
-detail_cmd = "objdump -d --section=.text -C -l -m"
-sp_cmd = "objdump -d --section=.text -C -m"
-
 if __name__ == "__main__":
     try:
         targets = []
@@ -29,13 +26,20 @@ if __name__ == "__main__":
             description='debug tools: generate kernel debug file (ksybs)')
         parser.add_argument(
             "-d", "--detail",  action='store_true', help="show source file and line information")
+        parser.add_argument(
+            "-s", "--source",  action='store_true', help="show source code")
         parser.add_argument("component", type=str, nargs="+",
                             choices=choices,  help="the component want to decompile")
         args = parser.parse_args()
 
-        cmd = sp_cmd
+        cmd = "objdump "
+
         if args.detail:
-            cmd = detail_cmd
+            cmd += "-l "
+        if args.source:
+            cmd += "-S "
+        cmd += "-d --section=.text -C -l -m"   
+
         targets = args.component
         for target in targets:
             tp = fileMap.get(target, "")
