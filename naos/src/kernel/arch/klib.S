@@ -37,7 +37,12 @@ _cpu_id:
 .globl _switch_task
 _switch_task:
     pushf
-    pushq %rbp
+    pushq %rbp # save registers callee saves
+    pushq %rbx
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
     pushq %rax
     movq %rsp, 0x8(%rdi) # save rsp
     movq 0x8(%rsi), %rsp # new rsp
@@ -47,6 +52,11 @@ _switch_task:
     jmp switch_task
 end_task:
     popq %rax
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %rbx
     popq %rbp
     popf
     retq

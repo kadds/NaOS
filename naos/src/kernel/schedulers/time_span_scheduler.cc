@@ -278,10 +278,6 @@ void time_span_scheduler::schedule(flag_t flag)
             }
         }
     }
-    if (cur->tid == 3)
-    {
-        trace::debug("ok");
-    }
     return;
 }
 
