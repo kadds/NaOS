@@ -37,8 +37,6 @@ def run_shell_input(shell_params, input=None, print_command=False):
 def set_self_dir():
     check_version()
     os.chdir(os.path.abspath(os.path.dirname(sys.argv[0])))
-    print('working dir: %s' %
-          os.path.abspath(os.path.dirname(sys.argv[0])))
 
 
 def check_version():

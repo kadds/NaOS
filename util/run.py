@@ -3,7 +3,7 @@ import sys
 import os
 import argparse
 import traceback
-
+from disk import mount_point
 from mod import set_self_dir, run_shell, run_shell_input
 # -monitor stdio
 qemu = 'qemu-system-x86_64 -hda ../run/image/disk.img -m 24 -s -smp 2,sockets=1,cores=2 -serial file:kernel_out.log'
@@ -22,13 +22,15 @@ if __name__ == "__main__":
     parser.add_argument("emulator_name", type=str,
                         choices=["q", "b", "v"],  help="q: run qemu\nb: run bochs\nv: run virtual box")
 
+    base_mnt = mount_point("../run/image/disk.img", 2)
+
     args = parser.parse_args()
-    if os.path.exists("../run/image/mnt/boot/grub/grub.cfg") == False:
-        print("Can't run kernel at 'run/image/mnt/'. The directory isn't mount. Mount disk before run.\n    try 'sudo python disk.py mount'")
+    if base_mnt == "" or base_mnt == None:
+        print("Mount disk before run.\n    try 'python disk.py mount'")
         exit(-1)
 
     try:
-        run_shell('cp -R ../build/bin/system/ ../run/image/mnt/disk')
+        run_shell('cp -R ../build/bin/system/ ' + base_mnt)
         run_shell('sync')
         tp = args.emulator_name
         if tp == 'q':

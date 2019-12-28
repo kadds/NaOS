@@ -14,11 +14,11 @@ View [Features](./FEATURES.MD) .
 
 ### **Requirement**  
 * **GNU Binutils** *(version 2.33 tested)*
-* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.0.4)*
+* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.1.0)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
 * An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
-* **Grub**, **gdisk** *(Often exist, for making runnable raw disk file)*
+* **Grub**, **fdisk**, **udisks2** *(For making runnable raw disk file and mounting disk without root privilege)*
  
 ### **Recommend**  
 
@@ -43,11 +43,23 @@ make -j
 ```
 
 ### 3. Make a raw disk
-```Bash
-cd /path/to/repo
-# Make a raw disk file for running
-python util/disk.py create
+[arch wiki fdisk](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
+[arch wiki grub](https://wiki.archlinux.org/index.php/GRUB) Install grub
+
+The grub menu like 
 ```
+root=(hd0,msdos2)
+set default=0
+set timeout=1
+menuentry "NaOS multiboot2" {
+    multiboot2 /system/kernel
+    module2 /system/rfsimg rfsimg
+    boot
+}
+```
+
+Then move raw disk to *run/disk.img*   
+
 
 ### 4. Run
 After ```make``` success, you will get these files
@@ -62,10 +74,10 @@ build
 └── debug # Binary executable files with debug info which can be used by debugger gdb/lldb ...
 ```
 
-**make sure you mount disk by ``` sudo python util/disk.py mount``` before run emulator**. then
+**make sure you mount disk by ``` python util/disk.py mount``` before run emulator**. then
 ```Bash
 # Run emulator
-sudo python util/run.py q
+python util/run.py q
 ```
 
 The kernel log will be generated in *util/kernel_out.log*, just ```cat util/kernel_out.log```.
