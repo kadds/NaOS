@@ -51,7 +51,7 @@ Features / TODO
         - [ ] POL
     - [ ] Native display driver
     - [ ] Network interface card driver
-    - [ ] Mouse & Keyboard driver
+    - [X] Mouse & Keyboard driver
 * - [ ] Compatibility layer
     - [ ] UEFI boot loader
     - [ ] POSIX API

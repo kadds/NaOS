@@ -136,6 +136,8 @@ target/
 *.dSYM/
 
 run/image/*.img
+run/image/*.vmdk
+
 build/
 doc/html
 .vscode/settings.json
