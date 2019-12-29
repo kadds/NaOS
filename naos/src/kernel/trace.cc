@@ -2,6 +2,7 @@
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -28,26 +29,6 @@ void init()
 util::ring_buffer &get_kernel_log_buffer() { return *ring_buffer; }
 
 lock::spinlock_t spinlock;
-bool last_IF;
-
-void begin_print()
-{
-    last_IF = arch::idt::save_and_disable();
-    spinlock.lock();
-}
-
-void end_print()
-{
-    spinlock.unlock();
-    if (last_IF)
-    {
-        arch::idt::enable();
-    }
-    else
-    {
-        arch::idt::disable();
-    }
-}
 
 void print_inner(const char *str)
 {
@@ -69,11 +50,9 @@ void print_inner(const char *str)
 NoReturn void keep_panic(const regs_t *regs)
 {
     uctx::UnInterruptableContext uic;
-    trace::begin_print();
     print_stack(regs, 30);
     trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-    trace::end_print();
     arch::device::vga::flush_kbuffer();
     for (;;)
     {
