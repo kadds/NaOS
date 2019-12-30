@@ -36,7 +36,7 @@ void init()
     u64 size = fs::vfs::size(f);
     file_header = (header *)memory::KernelVirtualAllocatorV->allocate(size, 8);
 
-    if (unlikely(f->read((byte *)file_header, size) != size))
+    if (unlikely(f->read((byte *)file_header, size, 0) != size))
     {
         memory::KernelVirtualAllocatorV->deallocate(file_header);
         trace::info("Can't read kernel symbols file.");

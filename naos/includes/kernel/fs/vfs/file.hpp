@@ -24,8 +24,8 @@ class file
     void add_ref() { ref_count++; }
     void remove_ref() { ref_count--; }
 
-    virtual u64 read(byte *ptr, u64 max_size) = 0;
-    virtual u64 write(const byte *ptr, u64 size) = 0;
+    u64 read(byte *ptr, u64 max_size, flag_t flags);
+    u64 write(const byte *ptr, u64 size, flag_t flags);
 
     virtual void flush() = 0;
 
@@ -35,5 +35,9 @@ class file
 
     u64 size() const;
     dentry *get_entry() const;
+
+  protected:
+    virtual u64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;
+    virtual u64 iwrite(const byte *ptr, u64 size, flag_t flags) = 0;
 };
 } // namespace fs::vfs

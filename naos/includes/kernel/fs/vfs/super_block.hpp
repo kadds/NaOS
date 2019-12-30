@@ -9,13 +9,13 @@ class super_block
   protected:
     u64 magic;
     const char *name;
-    u64 block_size;
     dentry *root;
     file_system *fs;
 
   public:
     super_block(file_system *fs)
-        : fs(fs){};
+        : root(nullptr)
+        , fs(fs){};
 
     virtual ~super_block() = default;
     dentry *get_root() { return root; };

@@ -357,7 +357,7 @@ bool fill_file_vm(u64 page_addr, const vm_t *item)
     mt->file->move(mt->offset + off);
     byte *ptr = (byte *)memory::malloc_page();
     u64 read_size = mt->length > memory::page_size ? memory::page_size : mt->length;
-    auto ksize = mt->file->read(ptr, read_size);
+    auto ksize = mt->file->read(ptr, read_size, 0);
     util::memzero(ptr + ksize, memory::page_size - ksize);
     vm_t vm = *item;
     vm.start = page_start;

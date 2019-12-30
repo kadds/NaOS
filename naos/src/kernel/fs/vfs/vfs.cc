@@ -6,6 +6,7 @@
 #include "kernel/fs/vfs/mm.hpp"
 #include "kernel/fs/vfs/mount.hpp"
 #include "kernel/fs/vfs/nameidata.hpp"
+#include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
@@ -183,6 +184,15 @@ dentry *create_file(dentry *parent, const char *name, u64 name_len, nameidata *i
     return entry;
 }
 
+dentry *create_pseudo(inode_type_t type, dentry *parent, const char *name, u64 name_len)
+{
+    super_block *su_block = parent->get_inode()->get_super_block();
+    auto entry = create_dentry(parent, name, name_len);
+    inode *node = su_block->alloc_inode();
+    node->create_pseudo(entry, type, 0);
+    return entry;
+}
+
 bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
@@ -192,7 +202,7 @@ bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
         return false; // file exist
     }
 
-    if (!(flags & create_flags::directory || flags & create_flags::file))
+    if (flags == 0)
     {
         flags |= create_flags::file;
         // check if path is a directory
@@ -207,22 +217,35 @@ bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
             p++;
         }
     }
+    i64 name_len = rest_file_name(idata);
+    if (name_len <= 0)
+        return false; // null name
 
     if (flags & create_flags::directory)
     {
-        i64 name_len = rest_file_name(idata);
-        if (name_len <= 0)
-            return false; // null name
-
-        entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
+        entry = mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
     }
-
     else if (flags & create_flags::file)
     {
-        i64 name_len = rest_file_name(idata);
-        if (name_len <= 0)
-            return false; // null name
-        entry = mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
+    }
+    else if (flags & create_flags::chr)
+    {
+        entry = create_pseudo(inode_type_t::chr, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+    }
+    else if (flags & create_flags::block)
+    {
+        entry =
+            create_pseudo(inode_type_t::block, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+    }
+    else if (flags & create_flags::pipe)
+    {
+        entry = create_pseudo(inode_type_t::pipe, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+    }
+    else if (flags & create_flags::socket)
+    {
+        entry =
+            create_pseudo(inode_type_t::socket, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
     }
 
     if (entry == nullptr)
@@ -645,5 +668,94 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
 }
 
 u64 size(file *f) { return f->get_entry()->get_inode()->get_size(); }
+
+bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
+{
+    auto inode = f->get_entry()->get_inode();
+    if (unlikely(size < sizeof(u64)))
+        return false;
+    if (operator_type == fctl_type::get)
+    {
+        switch (attr)
+        {
+            case fctl_attr::mtime:
+                *value = inode->get_last_write_time();
+                break;
+            case fctl_attr::ctime:
+                *value = inode->get_last_attr_change_time();
+                break;
+            case fctl_attr::atime:
+                *value = inode->get_last_read_time();
+                break;
+            case fctl_attr::btime:
+                *value = inode->get_birth_time();
+                break;
+            case fctl_attr::uid:
+                *value = inode->get_owner();
+                break;
+            case fctl_attr::gid:
+                *value = inode->get_group();
+                break;
+            case fctl_attr::link_count:
+                *value = inode->get_link_count();
+                break;
+            case fctl_attr::inode_number:
+                *value = inode->get_index();
+                break;
+            case fctl_attr::permission:
+                *value = inode->get_permission();
+                break;
+            case fctl_attr::type:
+                *value = (u8)inode->get_type();
+                break;
+            case fctl_attr::pseudo_func:
+                *value = (u64)inode->get_pseudo_data();
+                break;
+            default:
+                return false;
+        }
+        return true;
+    }
+    else if (operator_type == fctl_type::set)
+    {
+        switch (attr)
+        {
+            case fctl_attr::mtime:
+                inode->set_last_write_time(*value);
+                break;
+            case fctl_attr::ctime:
+                inode->set_last_attr_change_time(*value);
+                break;
+            case fctl_attr::atime:
+                inode->set_last_read_time(*value);
+                break;
+            case fctl_attr::btime:
+                inode->set_birth_time(*value);
+                break;
+            case fctl_attr::uid:
+                inode->set_owner(*value);
+                break;
+            case fctl_attr::gid:
+                inode->set_group(*value);
+                break;
+            case fctl_attr::link_count:
+                return false;
+            case fctl_attr::inode_number:
+                return false;
+            case fctl_attr::permission:
+                inode->set_permission(*value);
+                break;
+            case fctl_attr::type:
+                return false;
+            case fctl_attr::pseudo_func:
+                inode->set_pseudo_data((pseudo_t *)*value);
+                break;
+            default:
+                return false;
+        }
+        return true;
+    }
+    return false;
+}
 
 } // namespace fs::vfs

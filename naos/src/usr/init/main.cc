@@ -22,7 +22,9 @@ extern "C" void _start(char *args)
 
     while (1)
     {
-        sleep(1000);
-        print("init second \n");
+        char str[11];
+        str[read(0, str, 10, 0)] = 0;
+        write(1, str, 10, 0);
+        print(str);
     }
 }

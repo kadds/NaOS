@@ -15,6 +15,7 @@
 
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 
 #include "kernel/scheduler.hpp"
@@ -181,17 +182,38 @@ thread_t::thread_t()
 {
 }
 
+void create_devs()
+{
+    fs::vfs::create("/dev", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
+
+    fs::vfs::create("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
+    auto *f = fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+    auto ps = memory::New<fs::vfs::pseudo_pipe_t>(memory::KernelCommonAllocatorV, memory::page_size);
+    fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
+
+    fs::vfs::close(f);
+
+    fs::vfs::create("/dev/tty", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
+
+    char fname[] = "/dev/tty/x";
+    for (int i = 0; i < 8; i++)
+    {
+        fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
+        fs::vfs::create(fname, fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
+        auto *f = fs::vfs::open(fname, fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
+        fs::vfs::close(f);
+    }
+}
+
 void init()
 {
     process_t *process;
     if (cpu::current().is_bsp())
     {
         uctx::UnInterruptableContext icu;
-        // process_list_cache_allocator = memory::New<process_list_node_allocator_t>(memory::KernelCommonAllocatorV);
         thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
         global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
-        // global_process_list = memory::New<process_list_t>(memory::KernelCommonAllocatorV,
-        // process_list_cache_allocator);
 
         thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
             memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
@@ -232,6 +254,10 @@ void init()
 
     if (cpu::current().is_bsp())
     {
+
+        auto ft = current_process()->res_table.get_file_table();
+        create_devs();
+        ft->file_map[0] = fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
         bin_handle::init();
     }
 }
@@ -270,30 +296,35 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
         return nullptr;
 
     process->parent_pid = current_process()->pid;
+
+    auto old_ft = current_process()->res_table.get_file_table();
+    auto new_ft = process->res_table.get_file_table();
+
     if (unlikely(flags & create_process_flags::no_shared_root))
-    {
-        process->res_table.get_file_table()->root = fs::vfs::global_root;
-    }
+        new_ft->root = fs::vfs::global_root;
     else
-    {
-        process->res_table.get_file_table()->root = current_process()->res_table.get_file_table()->root;
-    }
+        new_ft->root = old_ft->root;
 
     if (unlikely(flags & create_process_flags::shared_work_dir))
-    {
-        process->res_table.get_file_table()->current = current_process()->res_table.get_file_table()->current;
-    }
+        new_ft->current = old_ft->current;
     else
-    {
-        process->res_table.get_file_table()->current = file->get_entry()->get_parent();
-    }
+        new_ft->current = file->get_entry()->get_parent();
+
+    if (!(flags & create_process_flags::no_shared_stdin))
+        new_ft->file_map[0] = old_ft->file_map[0];
+
+    if (!(flags & create_process_flags::no_shared_stdout))
+        new_ft->file_map[1] = old_ft->file_map[1];
+
+    if (!(flags & create_process_flags::no_shared_stderror))
+        new_ft->file_map[2] = old_ft->file_map[2];
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
     // read executeable file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
     file->move(0);
-    file->read(header, 128);
+    file->read(header, 128, 0);
     bin_handle::execute_info exec_info;
     if (flags & create_process_flags::binary_file)
     {

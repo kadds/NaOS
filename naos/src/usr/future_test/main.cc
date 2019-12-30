@@ -37,7 +37,7 @@ bool print_file(const char *file_path)
         char buffer[33];
         while (1)
         {
-            unsigned long pos = read(fd, buffer, 32);
+            unsigned long pos = read(fd, buffer, 32, 0);
             if (pos > 0)
             {
                 buffer[pos] = 0;
@@ -55,7 +55,7 @@ bool print_file(const char *file_path)
 void write_file(const char *file_path)
 {
     int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_WRITE | OPEN_MODE_BIN, 0);
-    write(fd, file_content, sizeof(file_content));
+    write(fd, file_content, sizeof(file_content), 0);
     close(fd);
 }
 
@@ -64,7 +64,7 @@ void test_file(const char *file_path)
     int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
     char fc[sizeof(file_content)];
     lseek(fd, 0, LSEEK_MODE_BEGIN);
-    if (read(fd, fc, sizeof(file_content)) < sizeof(file_content))
+    if (read(fd, fc, sizeof(file_content), 0) < sizeof(file_content))
     {
         print("syscall write/read failed! file:");
         print(file_path);

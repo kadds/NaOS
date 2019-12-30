@@ -36,7 +36,7 @@ bool close(file_desc fd)
     return false;
 }
 
-u64 write(file_desc fd, byte *buffer, u64 max_len)
+u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
@@ -46,12 +46,12 @@ u64 write(file_desc fd, byte *buffer, u64 max_len)
     auto file = res.get_file(fd);
     if (file)
     {
-        return file->write(buffer, max_len);
+        return file->write(buffer, max_len, flags);
     }
     return 0;
 }
 
-u64 read(file_desc fd, byte *buffer, u64 max_len)
+u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
@@ -62,7 +62,7 @@ u64 read(file_desc fd, byte *buffer, u64 max_len)
     auto file = res.get_file(fd);
     if (file)
     {
-        return file->read(buffer, max_len);
+        return file->read(buffer, max_len, flags);
     }
     return 0;
 }
@@ -74,7 +74,7 @@ u64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
     if (file)
     {
         file->move(offset);
-        return file->write(buffer, max_len);
+        return file->write(buffer, max_len, flags);
     }
     return 0;
 }
@@ -86,7 +86,7 @@ u64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
     if (file)
     {
         file->move(offset);
-        return file->read(buffer, max_len);
+        return file->read(buffer, max_len, flags);
     }
     return 0;
 }

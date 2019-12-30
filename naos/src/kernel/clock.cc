@@ -23,8 +23,8 @@ void print_tick(time::microsecond_t expires, u64 user_data)
 {
     time::time_t t;
     time2time_t(current_time_microsecond, &t);
-    trace::debug("current time: ", t.year, ".", t.month, ".", t.day, " ", t.hour, ":", t.minute, ":", t.second, ":",
-                 t.millisecond);
+    // trace::debug("current time: ", t.year, ".", t.month, ".", t.day, " ", t.hour, ":", t.minute, ":", t.second, ":",
+    //             t.millisecond);
     timer::add_watcher(10000000, print_tick, 0);
     return;
 }

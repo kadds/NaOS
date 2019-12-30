@@ -63,6 +63,10 @@ u64 ring_buffer::write(const byte *buffer, u64 size)
         write_trunk->size += rest;
         cur_write += rest;
     }
+    if (read_trunk == nullptr)
+    {
+        read_trunk = write_trunk;
+    }
     return cur_write;
 }
 

@@ -71,6 +71,11 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             e->content.value = v;
             return *this;
         }
+        map_helper &operator=(const map_helper &v)
+        {
+            e->content.value = v.e->content.value;
+            return *this;
+        }
     };
 
     struct iterator

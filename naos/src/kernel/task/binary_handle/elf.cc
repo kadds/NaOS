@@ -163,7 +163,7 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
     if (!p)
         return (program_64 *)p;
     file->move(start);
-    file->read(p, len);
+    file->read(p, len, 0);
     return (program_64 *)p;
 }
 

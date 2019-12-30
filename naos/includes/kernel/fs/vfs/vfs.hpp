@@ -34,6 +34,8 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
            u64 max_len);
 bool umount(const char *path, dentry *path_root, dentry *cur_dir);
 
+bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size);
+
 u64 size(file *f);
 
 } // namespace fs::vfs

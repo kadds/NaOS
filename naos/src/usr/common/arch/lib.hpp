@@ -21,8 +21,12 @@ SYS_CALL(1, void, print, const char *text)
 
 SYS_CALL(10, int, open, const char *path, unsigned long mode, unsigned long attr)
 SYS_CALL(11, void, close, int fd);
-SYS_CALL(12, unsigned long, write, int fd, const char *buffer, unsigned long len)
-SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len)
+#define EOF -1
+#define RWFLAGS_NO_BLOCK 1
+#define RWFLAGS_OVERRIDE 2
+
+SYS_CALL(12, unsigned long, write, int fd, const char *buffer, unsigned long len, unsigned long flags)
+SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len, unsigned long flags)
 
 #define LSEEK_MODE_CURRENT 0
 #define LSEEK_MODE_BEGIN 1

@@ -17,14 +17,14 @@ bool inode::create_symbolink(vfs::dentry *entry, const char *target)
         file f;
         f.open(entry, mode::write);
         u64 len = util::strlen(target) + 1;
-        f.write((const byte *)target, len);
+        f.write((const byte *)target, len, 0);
     }
     return ok;
 }
 
 const char *inode::symbolink() { return (const char *)start_ptr; }
 
-u64 file::write(const byte *buffer, u64 size)
+u64 file::iwrite(const byte *buffer, u64 size, flag_t flags)
 {
     inode *node = (inode *)entry->get_inode();
     super_block *sublock = (super_block *)node->su_block;
@@ -57,7 +57,7 @@ u64 file::write(const byte *buffer, u64 size)
     return size;
 }
 
-u64 file::read(byte *buffer, u64 max_size)
+u64 file::iread(byte *buffer, u64 max_size, flag_t flags)
 {
     inode *node = (inode *)entry->get_inode();
     if (max_size > node->file_size - pointer_offset)

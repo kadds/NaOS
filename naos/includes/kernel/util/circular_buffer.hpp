@@ -1,5 +1,6 @@
 #include "../mm/new.hpp"
 #include "common.hpp"
+#include "memory.hpp"
 namespace util
 {
 
@@ -50,7 +51,10 @@ template <typename T> class circular_buffer
         , write_off(0)
         , allocator(allocator)
     {
-        buffer = (T *)allocator->allocate(count * sizeof(T), alignof(T));
+        if (count > 0)
+            buffer = (T *)allocator->allocate(count * sizeof(T), alignof(T));
+        else
+            buffer = nullptr;
     }
 
     ~circular_buffer()
@@ -66,10 +70,37 @@ template <typename T> class circular_buffer
 
     u64 data_size()
     {
-        if (write_off > read_off)
+        if (write_off >= read_off)
             return write_off - read_off;
         else
             return length - read_off + write_off;
+    }
+
+    u64 size() { return length; }
+
+    bool is_full() { return (write_off + 1) % length == read_off; }
+
+    void resize(u64 size)
+    {
+        /// TODO: when size < length
+        if (size < length)
+            return;
+        T *new_buf;
+        if (size > 0)
+            new_buf = (T *)allocator->allocate(size * sizeof(T), alignof(T));
+        else
+            new_buf = nullptr;
+
+        if (buffer != nullptr)
+        {
+            if (new_buf != nullptr)
+            {
+                memcopy(new_buf, buffer, length * sizeof(T));
+            }
+            allocator->deallocate(buffer);
+        }
+        buffer = new_buf;
+        length = size;
     }
 
     bool read(T *t)

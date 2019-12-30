@@ -64,7 +64,7 @@ void init(byte *start_root_image, u64 size)
 
             auto file = vfs::open(path, vfs::global_root, vfs::global_root, mode::write | mode::bin,
                                   path_walk_flags::file | path_walk_flags::auto_create_file);
-            file->write(data, data_size);
+            file->write(data, data_size, 0);
             vfs::close(file);
 
             start_of_file = data + data_size;

@@ -1,13 +1,33 @@
 #include "kernel/task/builtin/input_task.hpp"
+#include "kernel/fs/vfs/file.hpp"
+#include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/input/key.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/util/bit_set.hpp"
 #include "kernel/wait.hpp"
+
 namespace task::builtin::input
 {
-util::bit_set_inplace<256> key_state;
+util::bit_set_inplace<256> key_down_state;
 
 io::mouse_data current_mouse_data;
+
+util::bit_set_inplace<32> key_switch_state;
+
+char key_char_table[256] = {
+    0,   0,   '1', '2', '3', '4', '5',  '6', '7', '8', '9', '0', '-', '=', 0,   0,   'q', 'w', 'e',  'r', 't',  'y',
+    'u', 'i', 'o', 'p', '[', ']', '\n', 0,   'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,    '\\',
+    'z', 'x', 'c', 'v', 'b', 'n', 'm',  ',', '.', '/', 0,   '*', 0,   ' ', 0,   0,   0,   0,   0,    0,   0,    0,
+    0,   0,   0,   0,   0,   '7', '8',  '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.', 0,    0,   0,    0,
+    0,   0,   0,   0,   0,   0,   0,    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,    0,   '\n', 0};
+
+char key_char_table2[256] = {
+    0,   0,   '!', '@', '#', '$', '%',  '^', '&', '*', '(', ')', '_', '+', 0,   0,   'Q', 'W', 'E', 'R', 'T',  'Y',
+    'U', 'I', 'O', 'P', '{', '}', '\n', 0,   'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':', '"', '~', 0,    '|',
+    'Z', 'X', 'C', 'V', 'B', 'N', 'M',  '<', '>', '?', 0,   '*', 0,   ' ', 0,   0,   0,   0,   0,   0,   0,    0,
+    0,   0,   0,   0,   0,   '7', '8',  '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.', 0,   0,   0,    0,
+    0,   0,   0,   0,   0,   0,   0,    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   '\n', 0};
 
 void complation(io::request_t *req, bool intr, u64 user_data)
 {
@@ -15,25 +35,79 @@ void complation(io::request_t *req, bool intr, u64 user_data)
     task::do_wake_up(q);
 }
 
-void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req)
+enum class switchable_key
+{
+    caps = 0,
+    scroll,
+    numlock,
+};
+using ::input::key;
+
+bool get_key_switch_state(switchable_key k) { return key_switch_state.get((u8)k); }
+
+void set_key_switch_state(switchable_key k, bool enable)
+{
+    if (enable)
+        key_switch_state.set((u8)k);
+    else
+        key_switch_state.clean((i8)k);
+}
+
+bool is_key_down(key k) { return key_down_state.get((u64)k); }
+
+void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req, fs::vfs::file *f)
 {
     if (status.io_is_completion)
     {
         if (res.get.release)
         {
-            key_state.clean(res.get.key);
-            trace::debug("key ", (void *)res.get.key, " release at ", res.get.timestamp);
+            key_down_state.clean(res.get.key);
         }
         else
         {
-            key_state.set(res.get.key);
-            trace::debug("key ", (void *)res.get.key, " press at ", res.get.timestamp);
+            key k = (key)res.get.key;
+            if (k == key::capslock)
+            {
+                set_key_switch_state(switchable_key::caps, !get_key_switch_state(switchable_key::caps));
+            }
+            else if (k == key::scrolllock)
+            {
+                set_key_switch_state(switchable_key::scroll, !get_key_switch_state(switchable_key::scroll));
+            }
+            else if (k == key::numlock)
+            {
+                set_key_switch_state(switchable_key::numlock, !get_key_switch_state(switchable_key::numlock));
+            }
+            else
+            {
+                if (is_key_down(key::left_shift) && is_key_down(key::right_shift))
+                {
+                    if (is_key_down(key::left_control) || is_key_down(key::right_control))
+                    {
+                    }
+                }
+            }
+            if (key_char_table[(u8)k] != 0)
+            {
+                byte d;
+                if (is_key_down(key::left_shift) || is_key_down(key::right_shift))
+                {
+                    d = (byte)key_char_table2[(u8)k];
+                }
+                else
+                {
+                    d = (byte)key_char_table[(u8)k];
+                }
+                f->write(&d, 1, fs::rw_flags::override);
+            }
+
+            key_down_state.set(res.get.key);
         }
         io::finish_io_request(req);
     }
 }
 
-void print_mouse(io::mouse_result_t &res, io::status_t &status, io::request_t *req)
+void print_mouse(io::mouse_result_t &res, io::status_t &status, io::request_t *req, fs::vfs::file *f)
 {
     if (status.io_is_completion)
     {
@@ -86,7 +160,16 @@ bool wait_condition(u64 user_data) { return request.status.io_is_completion || m
 
 void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
-    key_state.clean_all();
+    fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
+    fs::vfs::file *input_file =
+        fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+
+    fs::vfs::file *mouse_file =
+        fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+
+    key_down_state.clean_all();
+    key_switch_state = 0;
+
     current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
         current_mouse_data.down_b = false;
 
@@ -130,15 +213,12 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
             }
         }
 
-        if (request.status.io_is_completion || mreq.status.io_is_completion)
-        {
-        }
-        else
+        if (!request.status.io_is_completion && !mreq.status.io_is_completion)
         {
             task::do_wait(&input_wait_queue, wait_condition, 0, task::wait_context_type::uninterruptible);
         }
-        print_keyboard(request.result, request.status, &request);
-        print_mouse(mreq.result, mreq.status, &mreq);
+        print_keyboard(request.result, request.status, &request, input_file);
+        print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
     };
 }
 } // namespace task::builtin::input

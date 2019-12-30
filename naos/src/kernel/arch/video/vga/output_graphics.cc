@@ -235,8 +235,8 @@ void putchar(cursor_t &cur, char ch)
                 *(v_start + x + y * (u64)width) = cur_font->hit(font_data, x, y) ? fg : bg;
             }
         }
-        dirty_rectangle += rectangle(cur.px * font_width, get_py(cur) * font_height, cur.px * font_width + font_width,
-                                     get_py(cur) * font_height + font_height);
+        dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height, cur.px * font_width + font_width,
+                                     cur.py * font_height + font_height);
 
         move_pen(cur, 1, 0);
     }
@@ -263,8 +263,8 @@ void flush(byte *vraw)
         return;
     if (unlikely(left == 0 && top == 0 && right == width && bottom == height))
     {
-        u64 top_bytes = window_height * width * sizeof(u32);
-        u64 bottom_bytes = width * height * sizeof(u32) - top_bytes;
+        u64 top_bytes = window_height * line_bytes;
+        u64 bottom_bytes = line_bytes * height - top_bytes;
         util::memcopy(vraw, (byte *)video_addr + top_bytes, bottom_bytes);
         util::memcopy(vraw + bottom_bytes, (void *)video_addr, top_bytes);
     }
@@ -272,15 +272,15 @@ void flush(byte *vraw)
     {
         u32 bytes = (right - left) * sizeof(u32);
         u32 l = left * sizeof(u32);
+        i64 off = (top + window_height) % height;
 
-        for (u32 y = top; y < window_height; y++)
+        for (u32 y = top, i = off; y < bottom; y++, i++)
         {
-            util::memcopy((char *)vraw + y * line_bytes + l, (char *)video_addr + y * line_bytes + l, bytes);
-        }
-
-        for (u32 y = window_height; y < bottom; y++)
-        {
-            util::memcopy((char *)vraw + y * line_bytes + l, (char *)video_addr + y * line_bytes + l, bytes);
+            if (unlikely(i >= height))
+            {
+                i = 0;
+            }
+            util::memcopy((char *)vraw + y * line_bytes + l, (char *)video_addr + i * line_bytes + l, bytes);
         }
     }
     dirty_rectangle.clean();

@@ -135,7 +135,7 @@ void flush_kbuffer()
         while (size != 0)
         {
             putstring((const char *)buffer, size);
-            trace::get_kernel_log_buffer().read_buffer(&size);
+            buffer = trace::get_kernel_log_buffer().read_buffer(&size);
         }
 
         flush();

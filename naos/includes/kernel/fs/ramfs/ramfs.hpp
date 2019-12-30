@@ -23,6 +23,7 @@ class inode : public vfs::inode
 {
     friend class super_block;
     friend class file;
+
     byte *start_ptr;
     u64 ram_size;
 
@@ -41,9 +42,11 @@ class file : public vfs::file
         return 0;
     };
     int close() override { return 0; };
-    u64 write(const byte *buffer, u64 size) override;
-    u64 read(byte *buffer, u64 max_size) override;
     void flush() override{};
+
+  protected:
+    u64 iwrite(const byte *buffer, u64 size, flag_t flags) override;
+    u64 iread(byte *buffer, u64 max_size, flag_t flags) override;
 };
 
 class file_system : public vfs::file_system

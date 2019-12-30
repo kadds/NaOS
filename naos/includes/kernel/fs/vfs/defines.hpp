@@ -41,6 +41,7 @@ enum mode : flag_t
     write = 2,
     bin = 4,
     append = 8,
+    no_block = 16,
 };
 } // namespace mode
 
@@ -50,6 +51,10 @@ enum create_flags : flag_t
 {
     directory = 1,
     file = 2,
+    chr = 4,
+    block = 8,
+    pipe = 16,
+    socket = 32,
 };
 } // namespace create_flags
 
@@ -72,8 +77,12 @@ enum class inode_type_t : u8
     file,
     directory,
     symbolink,
-    other,
+    socket,
+    block,
+    chr,
+    pipe,
 };
+
 namespace symlink_flags
 {
 enum symlink_flags : flag_t
@@ -120,5 +129,41 @@ struct dir_path_str
     char name[directory_maximum_path_size];
     char *operator*() { return name; }
 };
+
+namespace fctl_type
+{
+enum
+{
+    set,
+    get,
+};
+}
+
+namespace fctl_attr
+{
+enum
+{
+    mtime,
+    ctime,
+    atime,
+    btime,
+    uid,
+    gid,
+    link_count,
+    inode_number,
+    permission,
+    type,
+    pseudo_func,
+};
+}
+
+namespace rw_flags
+{
+enum
+{
+    no_block = 1,
+    override = 2,
+};
+}
 
 } // namespace fs

@@ -3,6 +3,7 @@
 #include "defines.hpp"
 namespace fs::vfs
 {
+class pseudo_t;
 
 class inode
 {
@@ -22,6 +23,8 @@ class inode
     time::microsecond_t birth_time;
     user_id owner;
     group_id group;
+    u64 permission;
+    pseudo_t *pseudo_data;
 
   public:
     inode() = default;
@@ -40,6 +43,8 @@ class inode
     virtual bool create_symbolink(dentry *entry, const char *target);
     virtual const char *symbolink() = 0;
 
+    bool create_pseudo(dentry *entry, inode_type_t t, u64 size);
+
     virtual u64 hash();
 
     void set_type(inode_type_t t) { info = (info & 0xFFFFFFFFFFFFFFF0) | (u64)t; }
@@ -56,8 +61,12 @@ class inode
     time::microsecond_t get_last_read_time() { return last_read_time; }
     time::microsecond_t get_last_write_time() { return last_write_time; }
     time::microsecond_t get_last_attr_change_time() { return last_attr_change_time; }
-
     time::microsecond_t get_birth_time() { return birth_time; }
+
+    void set_last_read_time(time::microsecond_t t) { last_read_time = t; }
+    void set_last_write_time(time::microsecond_t t) { last_write_time = t; }
+    void set_last_attr_change_time(time::microsecond_t t) { last_attr_change_time = t; }
+    void set_birth_time(time::microsecond_t t) { birth_time = t; }
 
     void update_last_read_time();
     void update_last_write_time();
@@ -74,7 +83,14 @@ class inode
         this->group = gid;
     }
 
+    void set_permission(u64 p) { permission = p; }
+
     u64 get_link_count() { return link_count; }
     u64 get_ref_count() { return ref_count; }
+
+    pseudo_t *get_pseudo_data() { return pseudo_data; }
+    void set_pseudo_data(pseudo_t *f) { pseudo_data = f; }
+
+    u64 get_permission() { return permission; }
 };
 } // namespace fs::vfs

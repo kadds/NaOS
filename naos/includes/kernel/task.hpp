@@ -162,6 +162,9 @@ enum create_process_flags : flag_t
     no_shared_root = 16,
     shared_work_dir = 32,
     shared_file_table = 64,
+    no_shared_stdin = 128,
+    no_shared_stderror = 256,
+    no_shared_stdout = 512,
 };
 } // namespace create_process_flags
 
