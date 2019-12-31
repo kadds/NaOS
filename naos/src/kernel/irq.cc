@@ -57,6 +57,8 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
     return false;
 }
 
+bool wakeup_condition(u64 ud);
+
 void do_soft_irq()
 {
     task::disable_preempt();
@@ -87,7 +89,8 @@ void do_soft_irq()
         }
     }
     task::enable_preempt();
-    task::do_wake_up(wait_queue);
+    if (unlikely(wakeup_condition(0)))
+        task::do_wake_up(wait_queue);
 }
 
 bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)

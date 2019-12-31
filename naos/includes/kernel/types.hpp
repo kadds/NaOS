@@ -43,9 +43,10 @@ struct time_t
     u8 second;       ///< 0 - 59
     u8 minute;       ///< 0 - 59
     u8 hour;         ///< 0 - 23
-    u8 day;          ///< 0 - 30
+    u8 mday;         ///< 0 - 30
     u8 month;        ///< 0 - 11
-    u8 weak;         ///< 0 - 6
+    u8 wday;         ///< 0 - ?
+    u16 yday;        ///< 0 - 364(365)
     u16 year;        ///< 2000 - ?
 };
 

@@ -77,7 +77,7 @@ u64 get_current_time_microsecond()
     s += dt.second;
     s += dt.minute * 60;
     s += dt.hour * 60 * 60;
-    s += (dt.day + cv_monthy_table[dt.month] + dt.year / 4 + 1) * 24 * 60 * 60;
+    s += (dt.day + cv_monthy_table[dt.month - 1] + dt.year / 4) * 24 * 60 * 60;
     s += dt.year * 365 * 24 * 60 * 60;
 
     return s * 1000 * 1000;
