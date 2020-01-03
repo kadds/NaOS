@@ -25,6 +25,5 @@ void wait_sync()
     }
 
     wait_counter = 0;
-    trace::debug("cpu sync.");
 }
 } // namespace SMP

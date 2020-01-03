@@ -1,21 +1,23 @@
 #pragma once
 #include "common.hpp"
-
-namespace task
-{
-struct thread_t;
-struct process_t;
-}; // namespace task
+#include "kernel/util/linked_list.hpp"
+#include "task.hpp"
 
 namespace task::scheduler
 {
+using thread_list_t = util::linked_list<task::thread_t *>;
 namespace schedule_flags
 {
 enum : flag_t
 {
-    current_remove = 1,
 };
 } // namespace schedule_flags
+
+enum class scheduler_class : flag_t
+{
+    round_robin,
+    cfs,
+};
 
 ///
 /// \brief interface of all schedulers
@@ -30,48 +32,58 @@ class scheduler
     /// \param thread the task thread to add
     ///
     virtual void add(thread_t *thread) = 0;
+    ///
+    /// \brief remove task from scheduler
+    ///
+    /// \param thread the task to remove
+    ///
     virtual void remove(thread_t *thread) = 0;
     ///
-    /// \brief update task
+    /// \brief update task state
     ///
     /// \param thread
-    /// \note called when priority or state is updated
+    /// \param state state to switch
+    /// \note called when state is updated
     ///
-    virtual void update(thread_t *thread) = 0;
+    virtual void update_state(thread_t *thread, thread_state state) = 0;
 
-    virtual void schedule(flag_t flag) = 0;
+    virtual void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) = 0;
+
+    ///
+    /// \brief try if switch task
+    ///
+    /// \return return has switch thread
+    ///
+    virtual bool schedule() = 0;
 
     ///
     /// \brief timer tick schedule calc
     ///
-    ///
     virtual void schedule_tick() = 0;
 
-    virtual void init() = 0;
-    virtual void destroy() = 0;
+    virtual bool has_task_to_schedule() = 0;
 
     virtual void init_cpu() = 0;
     virtual void destroy_cpu() = 0;
 
-    virtual void set_attribute(const char *attr_name, thread_t *target, u64 value) = 0;
-    virtual u64 get_attribute(const char *attr_name, thread_t *target) = 0;
+    virtual u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) = 0;
 
     scheduler() = default;
     scheduler(const scheduler &) = delete;
     scheduler &operator=(const scheduler &) = delete;
+    virtual ~scheduler(){};
 };
 
-void set_scheduler(scheduler *scher);
-void add(thread_t *thread);
-void remove(thread_t *thread);
-void update(thread_t *thread);
-ExportC void schedule();
-void schedule_tick();
-void set_attribute(const char *attr_name, thread_t *target, u64 value);
-u64 get_attribute(const char *attr_name, thread_t *target);
-void force_schedule();
+void init();
+void init_cpu();
 
-void init_cpu_data();
-void destroy_cpu_data();
+void add(thread_t *thread, scheduler_class scher);
+void remove(thread_t *thread);
+void update_state(thread_t *thread, thread_state state);
+void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority);
+
+u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size);
+
+ExportC void schedule();
 
 } // namespace task::scheduler

@@ -19,7 +19,6 @@
 #include "kernel/fs/vfs/vfs.hpp"
 
 #include "kernel/scheduler.hpp"
-#include "kernel/schedulers/time_span_scheduler.hpp"
 
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
@@ -273,7 +272,6 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
 
     if (process->mm_info != memory::kernel_vm_info)
     {
-
         auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                          memory::vm::flags::readable | memory::vm::flags::writeable |
                                              memory::vm::flags::expand | memory::vm::flags::user_mode,
@@ -284,7 +282,12 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
     }
 
     arch::task::create_thread(thd, (void *)start_func, arg0, arg1, arg2, 0);
-    scheduler::add(thd);
+
+    if (flags & create_thread_flags::real_time_rr)
+        scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    else
+        scheduler::add(thd, scheduler::scheduler_class::cfs);
+
     return thd;
 }
 
@@ -358,7 +361,63 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     thd->user_stack_bottom = exec_info.stack_bottom;
     vm_paging.sync_kernel();
 
-    scheduler::add(thd);
+    if (flags & create_process_flags::real_time_rr)
+        scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    else
+        scheduler::add(thd, scheduler::scheduler_class::cfs);
+
+    return process;
+}
+
+process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t flags)
+{
+    auto process = new_kernel_process();
+    if (!process)
+        return nullptr;
+
+    process->parent_pid = current_process()->pid;
+
+    auto old_ft = current_process()->res_table.get_file_table();
+    auto new_ft = process->res_table.get_file_table();
+
+    if (unlikely(flags & create_process_flags::no_shared_root))
+        new_ft->root = fs::vfs::global_root;
+    else
+        new_ft->root = old_ft->root;
+
+    new_ft->current = old_ft->current;
+
+    if (!(flags & create_process_flags::no_shared_stdin))
+        new_ft->file_map[0] = old_ft->file_map[0];
+
+    if (!(flags & create_process_flags::no_shared_stdout))
+        new_ft->file_map[1] = old_ft->file_map[1];
+
+    if (!(flags & create_process_flags::no_shared_stderror))
+        new_ft->file_map[2] = old_ft->file_map[2];
+
+    auto mm_info = (mm_info_t *)process->mm_info;
+    auto &vm_paging = mm_info->mmu_paging;
+    /// create thread
+    thread_t *thd = new_thread(process);
+    if (!thd)
+        return nullptr;
+    process->main_thread = thd;
+    thd->attributes |= thread_attributes::main;
+    thd->state = thread_state::ready;
+    void *stack = new_kernel_stack();
+    void *stack_top = (char *)stack + memory::kernel_stack_size;
+    thd->kernel_stack_top = stack_top;
+
+    arch::task::create_thread(thd, (void *)start_func, arg0, 0, 0, 0);
+
+    thd->user_stack_top = 0;
+    thd->user_stack_bottom = 0;
+
+    if (flags & create_process_flags::real_time_rr)
+        scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    else
+        scheduler::add(thd, scheduler::scheduler_class::cfs);
 
     return process;
 }
@@ -369,8 +428,7 @@ void sleep_callback_func(u64 pass, u64 data)
     if (thd != nullptr)
     {
         uctx::UnInterruptableContext icu;
-        thd->state = thread_state::ready;
-        scheduler::update(thd);
+        scheduler::update_state(thd, thread_state::ready);
         return;
     }
     return;
@@ -383,9 +441,8 @@ void do_sleep(u64 milliseconds)
 
     if (milliseconds != 0)
     {
-        current()->state = thread_state::interruptable;
         timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
-        scheduler::update(current());
+        scheduler::update_state(current(), thread_state::interruptable);
     }
 }
 
@@ -418,7 +475,7 @@ void do_exit(u64 ret)
         {
         }
     }
-    scheduler::force_schedule();
+    thread_yield();
     trace::panic("Unreachable control flow.");
 }
 
@@ -435,21 +492,11 @@ void start_task_idle()
     {
         task::current()->preempt_data.disable_preempt();
         uctx::UnInterruptableContext icu;
-        if (cpu::current().is_bsp())
-        {
-            scheduler::time_span_scheduler *scheduler =
-                memory::New<scheduler::time_span_scheduler>(memory::KernelCommonAllocatorV);
-            scheduler::set_scheduler(scheduler);
-            SMP::wait_sync();
-        }
-        else
-        {
-            SMP::wait_sync();
-        }
-        scheduler::init_cpu_data();
+        scheduler::init();
+        SMP::wait_sync();
+        scheduler::init_cpu();
     }
 
-    create_thread(current_process(), builtin::softirq::main, 0, 0, 0, 0);
     task::current()->preempt_data.enable_preempt();
     task::builtin::idle::main();
 }
@@ -541,7 +588,7 @@ void exit_thread(u64 ret)
         }
     }
 
-    scheduler::force_schedule();
+    thread_yield();
     trace::panic("Unreachable control flow.");
 }
 
@@ -582,17 +629,9 @@ u64 join_thread(thread_t *thd, u64 &ret)
     return 0;
 }
 
-void stop_thread(thread_t *thread, flag_t flags)
-{
-    thread->state = thread_state::uninterruptible;
-    scheduler::update(thread);
-}
+void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::uninterruptible); }
 
-void continue_thread(thread_t *thread, flag_t flags)
-{
-    thread->state = thread_state::ready;
-    scheduler::update(thread);
-}
+void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
 
 void kill_thread(thread_t *thread, flag_t flags)
 {
@@ -611,7 +650,7 @@ void kill_thread(thread_t *thread, flag_t flags)
             do_wake_up(&thread->wait_que);
         }
     }
-    scheduler::force_schedule();
+    thread_yield();
 
     trace::panic("Unreachable control flow.");
 }
@@ -648,7 +687,7 @@ void switch_thread(thread_t *old, thread_t *new_task)
     _switch_task(old->register_info, new_task->register_info);
 }
 
-void schedule()
+void thread_yield()
 {
     current()->attributes |= thread_attributes::need_schedule;
     scheduler::schedule();

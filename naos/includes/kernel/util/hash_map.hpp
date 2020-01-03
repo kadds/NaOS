@@ -80,10 +80,11 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
     struct iterator
     {
-        entry *table;
+        entry *table, *end_table;
         node_t *node;
-        iterator(entry *table, node_t *node)
+        iterator(entry *table, entry *end_table, node_t *node)
             : table(table)
+            , end_table(end_table)
             , node(node)
         {
         }
@@ -95,23 +96,35 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
             if (!node->next)
             {
-                while (!table->next)
+                node = node->next;
+                while (!node)
+                {
                     table++;
-                node = table->next;
+                    if (table >= end_table)
+                        return end();
+                    else
+                        node = table->next;
+                }
             }
             else
                 node = node->next;
 
-            return iterator(table, node);
+            return iterator(table, end_table, node);
         }
 
         iterator &operator++()
         {
             if (!node->next)
             {
-                while (!table->next)
+                node = node->next;
+                while (!node)
+                {
                     table++;
-                node = table->next;
+                    if (table >= end_table)
+                        break;
+                    else
+                        node = table->next;
+                }
             }
             else
                 node = node->next;
@@ -216,7 +229,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         auto next_node = table[hash].next;
         table[hash].next = memory::New<node_t>(allocator, key, value, next_node);
         count++;
-        return iterator(&table[hash], table[hash].next);
+        return iterator(&table[hash], table + capacity, table[hash].next);
     }
 
     bool insert_once(const K &key, const V &value)
@@ -251,7 +264,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
             if (it->content.key == key)
-                return false;
+                return true;
         }
         return false;
     }
@@ -395,10 +408,10 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             }
             node = table->next;
         }
-        return iterator(table, node);
+        return iterator(table, this->table + capacity, node);
     }
 
-    iterator end() { return iterator(table + capacity, nullptr); }
+    iterator end() { return iterator(table + capacity, table + capacity, nullptr); }
 };
 
 // template <typename K> using hash_set = hash_map<K, std::void_t>;

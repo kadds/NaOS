@@ -14,8 +14,8 @@ Features / TODO
     - [x] Virtual address allocator
 * - [ ] Process subsystem
     - [ ] Scheduler
-        - [x] Time span
-        - [ ] CFS
+        - [x] Round Robin
+        - [x] CFS
         - [ ] Load balancing
     - [ ] Thread
         - [x] Schedule

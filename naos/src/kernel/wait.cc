@@ -31,8 +31,7 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
     {
         auto thd = current();
         thd->attributes |= task::thread_attributes::need_schedule;
-        thd->state = state;
-        scheduler::update(thd);
+        scheduler::update_state(thd, state);
         scheduler::schedule();
         if (condition(user_data))
             break;
@@ -50,8 +49,7 @@ void do_wake_up(wait_queue *queue)
     {
         if (it->condition(it->user_data))
         {
-            it->thd->state = thread_state::ready;
-            scheduler::update(it->thd);
+            scheduler::update_state(it->thd, thread_state::ready);
             it = queue->list.remove(it);
         }
         else

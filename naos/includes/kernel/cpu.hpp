@@ -7,11 +7,12 @@ struct thread_t;
 
 namespace cpu
 {
+
 class cpu_data_t
 {
     task::thread_t *current_task = nullptr;
     task::thread_t *idle_task = nullptr;
-    void *schedule_data = nullptr;
+    void *schedule_data[2];
     void *tasklet_queue = nullptr;
 
   public:
@@ -25,9 +26,9 @@ class cpu_data_t
 
     bool has_task() { return current_task != nullptr; }
 
-    void set_schedule_data(void *data) { schedule_data = data; }
+    void set_schedule_data(u64 index, void *data) { schedule_data[index] = data; }
 
-    void *get_schedule_data() { return schedule_data; }
+    void *get_schedule_data(u64 index) { return schedule_data[index]; }
 
     void *get_tasklet_queue() { return tasklet_queue; }
 

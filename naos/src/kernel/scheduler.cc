@@ -1,43 +1,92 @@
 #include "kernel/scheduler.hpp"
+#include "kernel/schedulers/completely_fair.hpp"
+#include "kernel/schedulers/round_robin.hpp"
+#include "kernel/timer.hpp"
+#include "kernel/util/hash_map.hpp"
+
 namespace task::scheduler
 {
-scheduler *global_scheduler = nullptr;
-
-void set_scheduler(scheduler *scher)
+struct hash_func
 {
-    scher->init();
-    if (global_scheduler != nullptr)
+    u64 operator()(scheduler_class sc) { return (u64)sc; }
+};
+
+scheduler *real_time_schedulers;
+scheduler *normal_schedulers;
+bool is_init = false;
+
+void timer_tick(u64 pass, u64 user_data);
+
+void init()
+{
+    if (cpu::current().is_bsp())
     {
-        global_scheduler->destroy();
+        real_time_schedulers = memory::New<round_robin_scheduler>(memory::KernelCommonAllocatorV);
+        normal_schedulers = memory::New<completely_fair_scheduler>(memory::KernelCommonAllocatorV);
+
+        is_init = true;
+
+        timer::add_watcher(5000, timer_tick, 0);
     }
-    global_scheduler = scher;
 }
 
-void add(thread_t *thread) { global_scheduler->add(thread); }
+void init_cpu()
+{
+    real_time_schedulers->init_cpu();
+    normal_schedulers->init_cpu();
+}
 
-void remove(thread_t *thread) { global_scheduler->remove(thread); }
-void update(thread_t *thread) { global_scheduler->update(thread); }
+void add(thread_t *thread, scheduler_class scher)
+{
+    if (scher == scheduler_class::round_robin)
+    {
+        thread->scheduler = real_time_schedulers;
+        thread->attributes |= thread_attributes::real_time;
+    }
+    else
+    {
+        thread->scheduler = normal_schedulers;
+    }
+
+    thread->scheduler->add(thread);
+}
+
+void remove(thread_t *thread) { thread->attributes |= thread_attributes::remove; }
+
+void update_state(thread_t *thread, thread_state state) { thread->scheduler->update_state(thread, state); }
 
 void schedule()
 {
-    if (likely(global_scheduler != nullptr))
-        global_scheduler->schedule(0);
+    if (unlikely(!is_init))
+        return;
+    thread_t *thd = current();
+    scheduler *scher;
+    if (!real_time_schedulers->schedule())
+    {
+        normal_schedulers->schedule();
+    }
 }
 
-void schedule_tick() { global_scheduler->schedule_tick(); }
-
-void set_attribute(const char *attr_name, thread_t *target, u64 value)
+u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size)
 {
-    global_scheduler->set_attribute(attr_name, target, value);
+    return target->scheduler->sctl(operator_type, target, attr, value, size);
 }
 
-u64 get_attribute(const char *attr_name, thread_t *target)
+void timer_tick(u64 pass, u64 user_data)
 {
-    return global_scheduler->get_attribute(attr_name, target);
+    timer::add_watcher(5000, timer_tick, user_data);
+    thread_t *thd = current();
+
+    if (thd->attributes & thread_attributes::real_time)
+        real_time_schedulers->schedule_tick();
+    else
+    {
+        if (real_time_schedulers->has_task_to_schedule())
+        {
+            thd->attributes |= thread_attributes::need_schedule;
+        }
+        normal_schedulers->schedule_tick();
+    }
+    return;
 }
-
-void force_schedule() { global_scheduler->schedule(schedule_flags::current_remove); }
-
-void init_cpu_data() { global_scheduler->init_cpu(); }
-void destroy_cpu_data() { global_scheduler->destroy_cpu(); }
 } // namespace task::scheduler

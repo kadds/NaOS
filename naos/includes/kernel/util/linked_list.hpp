@@ -132,6 +132,7 @@ template <typename E> class linked_list
         list_node *node = head->next;
         node->next->prev = (list_node *)head;
         tail->next = node->prev;
+        head->next = head->next->next;
         memory::Delete<>(allocator, node);
         node_count--;
         return e;

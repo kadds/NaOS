@@ -62,30 +62,28 @@ bool wakeup_condition(u64 ud);
 void do_soft_irq()
 {
     task::disable_preempt();
-    for (int x = 0; x < 3; x++)
+    auto &cpu = arch::cpu::current();
+    for (int i = 0; i < soft_vector::COUNT; i++)
     {
-        for (int i = 0; i < soft_vector::COUNT; i++)
+        if (cpu.is_irq_pending(i))
         {
-            if (arch::cpu::current().is_irq_pending(i))
+            request_list_t &list = *soft_irq_list[i].list;
+
+            uctx::SpinLockUnInterruptableContextController ctr(soft_irq_list[i].spinlock);
+            ctr.begin();
+            if (cpu.is_irq_pending(i))
             {
-                request_list_t &list = *soft_irq_list[i].list;
+                cpu.clean_irq_pending(i);
 
-                uctx::SpinLockUnInterruptableContextController ctr(soft_irq_list[i].spinlock);
-                ctr.begin();
-                if (arch::cpu::current().is_irq_pending(i))
+                for (auto &it : list)
                 {
-                    arch::cpu::current().clean_irq_pending(i);
-
-                    for (auto &it : list)
-                    {
-                        request_func_data fd = it;
-                        ctr.end();
-                        fd.soft_func(i, fd.user_data);
-                        ctr.begin();
-                    }
+                    request_func_data fd = it;
+                    ctr.end();
+                    fd.soft_func(i, fd.user_data);
+                    ctr.begin();
                 }
-                ctr.end();
             }
+            ctr.end();
         }
     }
     task::enable_preempt();
@@ -99,14 +97,13 @@ bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
     return true;
 }
 
-bool wakeup_condition(u64 ud)
+bool wakeup_condition(u64 user_data)
 {
+    auto &cpu = arch::cpu::current();
     for (int i = 0; i < soft_vector::COUNT; i++)
     {
-        if (arch::cpu::current().is_irq_pending(i))
-        {
+        if (cpu.is_irq_pending(i))
             return true;
-        }
     }
     return false;
 }

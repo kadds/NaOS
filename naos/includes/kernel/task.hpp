@@ -12,6 +12,11 @@ namespace fs::vfs
 {
 class file;
 }
+namespace task::scheduler
+{
+class scheduler;
+}
+
 namespace task
 {
 
@@ -72,6 +77,7 @@ enum class thread_state : u8
     uninterruptible, ///< Uninterruptible sleep
     stop,            ///< Can't reschedule
     destroy,
+    sched_switch_to_ready, ///< the task is interrupted by realtime task or switch to next scheduler
 };
 
 namespace thread_attributes
@@ -79,9 +85,12 @@ namespace thread_attributes
 enum attributes : flag_t
 {
     need_schedule = 1,
-    block = 2,
+    block_unintr = 2,
+    block_intr = 4,
     detached = 8,
     main = 16,
+    real_time = 32,
+    remove = 64,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -109,9 +118,10 @@ struct statistics_t
 struct thread_t
 {
     volatile thread_state state;
-    volatile flag_t attributes;
+    std::atomic_ulong attributes;
     thread_id tid;
     process_t *process;
+    scheduler::scheduler *scheduler;
     void *schedule_data;
     ::arch::task::register_info_t *register_info;
     /// The kernel context RSP value
@@ -123,7 +133,7 @@ struct thread_t
     u8 static_priority;
     /// dynamic priority
     ///
-    /// -128 - 128, miniumu value means a CPU bound thread, maximum value means a IO
+    /// -128 - 128, minimum value means a CPU bound thread, maximum value means a IO
     /// bound thread, the default value is 0.
     i8 dynamic_priority;
     /// run in cpu core
@@ -145,8 +155,9 @@ namespace create_thread_flags
 enum create_thread_flags : flag_t
 {
     immediately = 1,
-
     noreturn = 4,
+
+    real_time_rr = 4096,
 };
 } // namespace create_thread_flags
 
@@ -156,7 +167,6 @@ enum create_process_flags : flag_t
 {
     noreturn = 1,
     binary_file = 2,
-    kernel_process = 4,
 
     shared_files = 8,
     no_shared_root = 16,
@@ -165,12 +175,17 @@ enum create_process_flags : flag_t
     no_shared_stdin = 128,
     no_shared_stderror = 256,
     no_shared_stdout = 512,
+
+    real_time_rr = 4096,
+
 };
 } // namespace create_process_flags
 
 thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags);
 process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64 arg0, const char *args,
                           const char *env, flag_t flags);
+
+process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t flags);
 
 void do_sleep(u64 milliseconds);
 
@@ -206,7 +221,7 @@ thread_t *find_tid(process_t *process, thread_id tid);
 inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
 inline process_t *current_process() { return current()->process; }
 
-void schedule();
+void thread_yield();
 void user_schedule();
 
 } // namespace task

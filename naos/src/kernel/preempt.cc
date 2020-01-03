@@ -10,7 +10,7 @@ void yield_preempt()
     thread_t *thd = current();
     if (likely(thd != nullptr))
     {
-        if (thd->preempt_data.preemptible() && thd->attributes & thread_attributes::need_schedule)
+        if (thd->preempt_data.preemptible() && (thd->attributes & thread_attributes::need_schedule))
         {
             scheduler::schedule();
         }
