@@ -11,8 +11,8 @@ struct date_time
     u8 second; // 0 -59
     u8 minute; // 0 - 59
     u8 hour;   // 0 - 24
-    u8 day;    // 0 - 31
-    u8 month;  // 0 - 12
+    u8 day;    // 1 - 31
+    u8 month;  // 1 - 12
     u8 year;   // 0 - 255
 };
 
@@ -77,7 +77,7 @@ u64 get_current_time_microsecond()
     s += dt.second;
     s += dt.minute * 60;
     s += dt.hour * 60 * 60;
-    s += (dt.day + cv_monthy_table[dt.month - 1] + dt.year / 4) * 24 * 60 * 60;
+    s += (dt.day + cv_monthy_table[dt.month - 1] + ((u32)dt.year - 1) / 4) * 24 * 60 * 60;
     s += dt.year * 365 * 24 * 60 * 60;
 
     return s * 1000 * 1000;
