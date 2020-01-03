@@ -59,8 +59,6 @@ void schedule()
 {
     if (unlikely(!is_init))
         return;
-    thread_t *thd = current();
-    scheduler *scher;
     if (!real_time_schedulers->schedule())
     {
         normal_schedulers->schedule();

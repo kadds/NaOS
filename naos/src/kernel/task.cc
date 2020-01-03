@@ -396,8 +396,6 @@ process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t 
     if (!(flags & create_process_flags::no_shared_stderror))
         new_ft->file_map[2] = old_ft->file_map[2];
 
-    auto mm_info = (mm_info_t *)process->mm_info;
-    auto &vm_paging = mm_info->mmu_paging;
     /// create thread
     thread_t *thd = new_thread(process);
     if (!thd)

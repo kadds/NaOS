@@ -6,12 +6,6 @@
 namespace task::scheduler
 {
 using thread_list_t = util::linked_list<task::thread_t *>;
-namespace schedule_flags
-{
-enum : flag_t
-{
-};
-} // namespace schedule_flags
 
 enum class scheduler_class : flag_t
 {

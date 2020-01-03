@@ -101,7 +101,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
                 {
                     table++;
                     if (table >= end_table)
-                        return end();
+                        return iterator(end_table, end_table, nullptr);
                     else
                         node = table->next;
                 }
