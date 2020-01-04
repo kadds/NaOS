@@ -14,7 +14,7 @@ enum class type
     network = 2,
 };
 using num_t = u32;
-constexpr num_t null_num = (-1);
+inline constexpr num_t null_num = (-1);
 struct device_class;
 class device
 {

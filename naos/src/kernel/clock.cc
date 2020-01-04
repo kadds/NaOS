@@ -59,7 +59,6 @@ int cv_leap_monthy_table[] = {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 
 
 void time2time_t(time::microsecond_t ms, time::time_t *t)
 {
-    auto rms = ms;
     t->microsecond = ms % 1000;
     ms /= 1000;
 

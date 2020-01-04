@@ -44,7 +44,7 @@ struct kb_data_t
     }
 };
 
-constexpr u64 kb_cache_count = 32;
+inline constexpr u64 kb_cache_count = 32;
 using kb_buffer_t = util::circular_buffer<kb_data_t>;
 
 using keyboard_io_list_t = util::array<io::keyboard_request_t *>;
@@ -84,7 +84,7 @@ class kb_driver : public ::dev::driver
     void on_io_request(io::request_t *request) override;
 };
 
-constexpr u64 mouse_cache_count = 128;
+inline constexpr u64 mouse_cache_count = 128;
 
 struct mouse_data_t
 {

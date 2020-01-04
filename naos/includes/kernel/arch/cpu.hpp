@@ -8,7 +8,7 @@ struct thread_t;
 };
 namespace arch::cpu
 {
-constexpr u32 max_cpu_support = 32;
+inline constexpr u32 max_cpu_support = 32;
 using cpuid_t = u32;
 
 struct cpu_t

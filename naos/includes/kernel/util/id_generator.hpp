@@ -6,7 +6,7 @@
 #include "common.hpp"
 namespace util
 {
-constexpr u64 null_id = (u64)(-1);
+inline constexpr u64 null_id = (u64)(-1);
 /// TODO cache line sync
 class id_generator
 {

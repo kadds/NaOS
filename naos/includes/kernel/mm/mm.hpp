@@ -17,8 +17,8 @@
 namespace memory
 {
 
-constexpr u64 io_map_start_address = 0xFFFFa00010000000UL;
-constexpr u64 io_map_end_address = 0xFFFFa00020000000UL;
+inline constexpr u64 io_map_start_address = 0xFFFFa00010000000UL;
+inline constexpr u64 io_map_end_address = 0xFFFFa00020000000UL;
 
 // kernel stack size in task
 extern const u64 kernel_stack_size;

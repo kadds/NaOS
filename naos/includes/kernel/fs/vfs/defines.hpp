@@ -115,8 +115,8 @@ enum : flag_t
 };
 } // namespace fs_flags
 
-constexpr u64 directory_maximum_entry_size = 512;
-constexpr u64 directory_maximum_path_size = 4096;
+inline constexpr u64 directory_maximum_entry_size = 512;
+inline constexpr u64 directory_maximum_path_size = 4096;
 
 struct dir_entry_str
 {

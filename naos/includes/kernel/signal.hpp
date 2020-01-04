@@ -10,7 +10,7 @@ namespace task
 struct thread_t;
 
 using signal_num_t = u8;
-constexpr u64 max_signal_count = 64;
+inline constexpr u64 max_signal_count = 64;
 
 namespace signal
 {

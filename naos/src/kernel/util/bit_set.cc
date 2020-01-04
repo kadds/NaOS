@@ -2,7 +2,7 @@
 
 namespace util::bit_set_opeartion
 {
-constexpr u64 bits = sizeof(BaseType) * 8;
+inline constexpr u64 bits = sizeof(BaseType) * 8;
 
 bool get(BaseType *data, u64 index)
 {
