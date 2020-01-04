@@ -103,12 +103,14 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         else
         {
             if (thread->state == thread_state::running)
+            {
                 thread->state = thread_state::ready;
-            l->runable_list.push_back(thread);
+                l->runable_list.push_back(thread);
+            }
         }
         return;
     }
-    trace::panic("Unreachable control flow.", "thread state:", (int)thread->state, ", to state: ", (int)state);
+    trace::panic("Unreachable control flow.", " RR thread state:", (int)thread->state, ", to state: ", (int)state);
 }
 
 i64 calc_span(thread_t *thread) { return ((u64)thread->static_priority + 1000) / 100; }
@@ -122,10 +124,11 @@ bool round_robin_scheduler::schedule()
     auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
     while (cur->attributes & thread_attributes::need_schedule)
     {
-        uctx::UnInterruptableContext icu;
 
         if (!l->runable_list.empty())
         {
+            uctx::UnInterruptableContext icu;
+
             has_task = true;
 
             cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
@@ -156,7 +159,6 @@ bool round_robin_scheduler::schedule()
                 if (rr->rest_span <= 0)
                 {
                     rr->rest_span = calc_span(cur);
-                    l->runable_list.push_back(cur);
                 }
                 if (cur->attributes & thread_attributes::block_unintr ||
                     cur->attributes & thread_attributes::block_intr)

@@ -31,8 +31,8 @@ def gen_symbols(file, target_file, force):
 
         cache_file.close()
 
-    smps = run_shell("nm -C \"" + file +
-                     "\" | cut -d ' ' -f 1,2,3 | sort | uniq", None, False)
+    smps = run_shell("nm \"" + file +
+                     "\" | cut -d ' ' -f 1,2,3 | c++filt |sort | uniq", None, False)
     lines = smps.splitlines(False)
     output = open(target_file, 'wb')
     output.write(struct.pack("Q", 0xF0EAEACC))  # magic
