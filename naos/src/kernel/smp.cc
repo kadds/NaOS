@@ -6,7 +6,6 @@
 #include "kernel/ucontext.hpp"
 namespace SMP
 {
-std::atomic_int wait_counter = 0;
 
 void init() { arch::SMP::init(); }
 
