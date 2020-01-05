@@ -12,9 +12,10 @@
 
 namespace task::builtin::idle
 {
+std::atomic_bool is_init = false;
 void main()
 {
-    trace::debug("idle task running.");
+    trace::debug("idle task running at cpu ", cpu::current().id());
     if (cpu::current().is_bsp())
     {
         auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root,
@@ -23,8 +24,9 @@ void main()
         {
             trace::panic("Can't open init");
         }
-        task::create_kernel_process(builtin::softirq::main, 0, create_thread_flags::real_time_rr);
-        SMP::wait_sync();
+        auto p = task::create_kernel_process(builtin::softirq::main, 0, create_thread_flags::real_time_rr);
+        trace::debug("softirqd created tid=", p->main_thread->tid);
+        is_init = true;
         task::create_kernel_process(builtin::input::main, 0, create_thread_flags::real_time_rr);
 
         task::create_process(file, init::main, 0, 0, 0, 0);
@@ -33,8 +35,13 @@ void main()
     }
     else
     {
-        SMP::wait_sync();
-        task::create_thread(task::find_pid(1), builtin::softirq::main, 0, 0, 0, create_thread_flags::real_time_rr);
+        while (!is_init)
+        {
+            cpu_pause();
+        }
+        auto t =
+            task::create_thread(task::find_pid(1), builtin::softirq::main, 0, 0, 0, create_thread_flags::real_time_rr);
+        trace::debug("softirqd created tid=", t->tid);
     }
 
     task::thread_yield();

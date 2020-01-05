@@ -6,7 +6,7 @@ import traceback
 from disk import mount_point
 from mod import set_self_dir, run_shell, run_shell_input
 # -monitor stdio
-qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 24 -s -smp 2,sockets=1,cores=2 -serial file:kernel_out.log'
+qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 24 -s -smp 4,sockets=1,cores=4 -serial file:kernel_out.log'
 qemu_headless = qemu + ' -nographic -vnc :0'
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
 vbox_image = 'VBoxManage internalcommands createrawvmdk -filename ../run/image/disk.vmdk -rawdisk /dev/loop0'

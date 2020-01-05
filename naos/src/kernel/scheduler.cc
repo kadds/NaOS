@@ -13,9 +13,10 @@ struct hash_func
 
 scheduler *real_time_schedulers;
 scheduler *normal_schedulers;
-bool is_init = false;
 
 void timer_tick(u64 pass, u64 user_data);
+
+std::atomic_bool is_init = false;
 
 void init()
 {
@@ -32,6 +33,10 @@ void init()
 
 void init_cpu()
 {
+    while (!is_init)
+    {
+        cpu_pause();
+    }
     real_time_schedulers->init_cpu();
     normal_schedulers->init_cpu();
 }

@@ -22,7 +22,7 @@ struct cpu_t
     void *interrupt_rsp;
     void *exception_rsp;
     void *exception_nmi_rsp;
-    volatile std::atomic_bool is_in_soft_irq = false;
+    std::atomic_bool is_in_soft_irq = false;
     volatile u64 soft_irq_pending = 0;
 
     u64 apic_id;

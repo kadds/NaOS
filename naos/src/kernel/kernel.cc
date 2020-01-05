@@ -60,7 +60,6 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
         irq::init();
         timer::init();
         SMP::init();
-        SMP::wait_sync();
         task::init();
         task::start_task_idle();
         trace::panic("Unreachable control flow in _kstart.");
@@ -85,7 +84,6 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     io::init();
     dev::init();
     task::init();
-    SMP::wait_sync();
     arch::init_drivers();
     trace::info("kernel main");
     arch::last_init();

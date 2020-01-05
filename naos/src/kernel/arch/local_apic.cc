@@ -205,21 +205,22 @@ void local_init()
 
     u64 version_value = read_register(version_register);
     v = (1 << 8);
-    u16 lvtCount = ((version_value & 0xFF0000) >> 16) + 1;
+    // u16 lvtCount = ((version_value & 0xFF0000) >> 16) + 1;
     u8 version = version_value & 0xFF;
-    trace::debug("Local APIC version ", version, ", LVT count ", lvtCount);
 
     id = read_register(id_register) >> 24;
-    trace::debug("Local APIC ID ", id);
-    cpu::current().set_apic_id(id);
 
-    if (version > 0xf)
+    cpu::current().set_apic_id(id);
+    if (arch::cpu::current().is_bsp())
     {
-        trace::debug("Use Intergrated APIC");
-    }
-    else
-    {
-        trace::debug("Use 82489DX");
+        if (version > 0xf)
+        {
+            trace::debug("Use Intergrated APIC");
+        }
+        else
+        {
+            trace::debug("Use 82489DX");
+        }
     }
 
     if ((version_value & (1 << 24)) != 0)

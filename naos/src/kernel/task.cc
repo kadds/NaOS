@@ -205,6 +205,7 @@ void create_devs()
     }
 }
 
+std::atomic_bool is_init = false;
 void init()
 {
     process_t *process;
@@ -236,6 +237,10 @@ void init()
     }
     else
     {
+        while (!is_init)
+        {
+            cpu_pause();
+        }
         process = find_pid(0);
     }
 
@@ -253,7 +258,7 @@ void init()
 
     if (cpu::current().is_bsp())
     {
-
+        is_init = true;
         auto ft = current_process()->res_table.get_file_table();
         create_devs();
         ft->file_map[0] = fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
@@ -491,7 +496,6 @@ void start_task_idle()
         task::current()->preempt_data.disable_preempt();
         uctx::UnInterruptableContext icu;
         scheduler::init();
-        SMP::wait_sync();
         scheduler::init_cpu();
     }
 
