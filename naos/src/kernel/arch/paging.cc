@@ -46,7 +46,7 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
 {
     // map 0x000000-0xffffffff->0x000000-0xffffffff,0-4GB->0-4GB
     // map 0xffff800000000000-0xffff8000ffffffff->0x000000-0xffffffff
-    const u64 addr = 0x80000;
+    const u64 addr = 0x94000;
     void *temp_pml4_addr = (void *)addr;
     if (is_bsp)
     {

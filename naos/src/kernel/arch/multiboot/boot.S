@@ -42,8 +42,8 @@ _frame_buffer_start:
 .short MULTIBOOT_HEADER_TAG_FRAMEBUFFER
 .short 0
 .long _frame_buffer_end-_frame_buffer_start
-.long 1024
-.long 768
+.long 1920
+.long 1080
 .long 32
 _frame_buffer_end:
 .align 8
@@ -64,8 +64,8 @@ magic:
     .long MULTIBOOT2_BOOTLOADER_MAGIC
 _multiboot_start:
     cmpl (magic), %eax
-    jnz jmp_label
-    movl $0x8000, %esp
+    jnz jmp_label    
+    movl $0x90000, %esp
     pushl   $0
     popf
     movl $_multiboot_main, %edi

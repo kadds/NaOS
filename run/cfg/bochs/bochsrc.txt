@@ -760,7 +760,7 @@ floppy_bootsig_check: disabled=0
 #   log: /dev/tty
 #=======================================================================
 #log: /dev/null
-log: bochsout.txt
+log: ../run/bochsout.txt
 
 #=======================================================================
 # LOGPREFIX:
@@ -858,7 +858,7 @@ debugger_log: -
 #   com4: enabled=1, mode=pipe-client, dev=\\.\pipe\mypipe
 #   com4: enabled=1, mode=pipe-server, dev=\\.\pipe\mypipe
 #=======================================================================
-com1: enabled=1, mode=file, dev=kernel_out.log
+com1: enabled=1, mode=file, dev=../run/kernel_out.log
 
 
 #=======================================================================

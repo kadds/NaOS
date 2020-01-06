@@ -1,7 +1,9 @@
 #include "kernel/arch/io_apic.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
 namespace arch::APIC
 {
@@ -55,10 +57,20 @@ void io_init()
 {
 
     io_map.base_addr = (void *)(u64)0xfec00000;
-    io_map.index_address = memory::kernel_phyaddr_to_virtaddr(io_map.base_addr);
+
+    u64 start = memory::io_map_start_address + 0x200000; // 2mb
+
+    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr(), (void *)start,
+                io_map.base_addr, paging::frame_size::size_2mb, 1,
+                paging::flags::uncacheable | paging::flags::writable);
+
+    paging::reload();
+
+    io_map.base_addr = (void *)start;
+
+    io_map.index_address = io_map.base_addr;
     io_map.data_address = (char *)io_map.index_address + 0x10;
     io_map.EOI_address = (char *)io_map.index_address + 0x40;
-
     // ID
     io_write_register_32(0, 0x0f000000);
     u8 rte = (io_read_register_32(0x1) >> 16) & 0xFF;
@@ -89,18 +101,26 @@ void io_init()
     _mfence();
     u32 rcba = io_in32(0xcfc);
     u32 rcba_address = rcba & 0xFFFFC000;
-    u16 *oic = (u16 *)((u64)rcba_address + 0x31fe);
+    u64 base_addr = rcba_address & ~(paging::frame_size::size_2mb - 1);
 
-    trace::debug("RCBA register value ", (void *)(u64)rcba, ", Base address ", (void *)(u64)rcba_address,
-                 ", OIC address ", (void *)oic);
-    oic = memory::kernel_phyaddr_to_virtaddr(oic);
-    u16 v = ((*oic) & 0x7FF) | (1 << 8);
-    _mfence();
+    start += 0x200000; // 2mb
+    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr(), (void *)start,
+                (void *)base_addr, paging::frame_size::size_2mb, 1,
+                paging::flags::uncacheable | paging::flags::writable);
+
+    paging::reload();
+
+    trace::debug("RCBA register value ", (void *)(u64)rcba, ", Base address ", (void *)(u64)rcba_address);
+    if (!(rcba & 0x1))
+    {
+        trace::panic("RCBA isn't an enable address");
+    }
+
+    u8 *oic = (u8 *)(start + 0x31FF + rcba_address - base_addr);
+    u8 v = *oic;
+    v |= 1;
     *oic = v;
-    _mfence();
-
-    // kassert(*oic == v, "OIC register can't write value ", (void *)(u64)v, ", old value", (void *)(u64)((*oic) &
-    // 0x7FF));
+    // kassert(*oic == v, "OIC register can't write value ", (void *)(u64)v, ", old value", (void *)(u64)(*oic));
 }
 
 void io_disable(u8 index) { io_write_register(0x10 + index * 2, io_read_register(0x10 + index * 2) | (1 << 16)); }

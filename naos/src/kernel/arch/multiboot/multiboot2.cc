@@ -155,10 +155,13 @@ ExportC NoReturn void Unpaged_Text_Section _multiboot_main(void *header)
     if (!find_rfsimage(tags, &start, &end))
         panic();
     u32 offset;
-    if (end <= 0x1000000) // in lower 16 MB
+    if (end <= 0x100000) // lower 1MB
     {
-        u32 p_end = (u32)(u64)max_boot_tag_ptr;
-        offset = end > p_end ? end : p_end;
+        if (end >= 0x80000) // page table and stack
+        {
+            panic();
+        }
+        offset = (u64)_bss_end;
     }
     else if ((u32)(u64)max_boot_tag_ptr < start - 0x1000) // 1KB data
     {

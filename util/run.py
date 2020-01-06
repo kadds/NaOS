@@ -5,11 +5,18 @@ import argparse
 import traceback
 from disk import mount_point
 from mod import set_self_dir, run_shell, run_shell_input
-# -monitor stdio
-qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 24 -s -smp 4,sockets=1,cores=4 -serial file:kernel_out.log'
+
+'''
+How to build VMbox image?
+VBoxManage internalcommands createrawvmdk -filename run/image/disk.vmdk -rawdisk run/image/disk.img
+'''
+
+ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
+
+
+qemu = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 4,sockets=1,cores=4 -serial file:../run/kernel_out.log'
 qemu_headless = qemu + ' -nographic -vnc :0'
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
-vbox_image = 'VBoxManage internalcommands createrawvmdk -filename ../run/image/disk.vmdk -rawdisk /dev/loop0'
 vbox = 'VBoxManage startvm boot'
 
 if __name__ == "__main__":
@@ -30,7 +37,7 @@ if __name__ == "__main__":
         exit(-1)
 
     try:
-        run_shell('cp -R ../build/bin/system/ ' + base_mnt)
+        run_shell('cp -R ../build/bin/system/* ' + base_mnt + '/boot/')
         run_shell('sync')
         tp = args.emulator_name
         if tp == 'q':

@@ -18,8 +18,9 @@ View [Features](./FEATURES.MD) .
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
 * An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
-* **Grub**, **fdisk**, **udisks2** *(For making runnable raw disk file and mounting disk without root privilege)*
- 
+* **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting disk without root privilege)*
+* **OVMF** UEFI firmware for QEMU
+  
 ### **Recommend**  
 
 * **clang-format**: Code formatter 
@@ -43,22 +44,43 @@ make -j
 ```
 
 ### 3. Make a raw disk
-[arch wiki fdisk](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
-[arch wiki grub](https://wiki.archlinux.org/index.php/GRUB) Install grub
+[Arch wiki](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
+[Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
+  
+NaOS only support GPT disk and UEFI boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
+For QEMU, install [OVMF](https://sourceforge.net/projects/tianocore/), edit OVMF_CODE.fd path at *util/run.py*.  
 
-The grub menu like 
+Example of disk partition:  
+| Partition number |  Type | FS | Content | Size |
+| :----: | ------ | ---------- | ------- | :-----: |
+| 1 | ESP   | FAT32 | Grub EFI loader    |  80Mib  |
+| 2 | Root  | EXT2  | Grub and NaOS data |  920Mib |
+
+
+Example of grub install:
+```bash
+sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
 ```
-root=(hd0,msdos2)
+
+Example *grub.cfg*:
+```
+root=(hd0,gpt2)
 set default=0
 set timeout=1
 menuentry "NaOS multiboot2" {
-    multiboot2 /system/kernel
-    module2 /system/rfsimg rfsimg
+    insmod efi_gop
+    insmod efi_uga
+    insmod ieee1275_fb
+    insmod part_gpt
+    insmod fat
+    insmod ext2
+    multiboot2 /boot/kernel
+    module2 /boot/rfsimg rfsimg
     boot
 }
 ```
 
-Then move raw disk to *run/disk.img*   
+Then move the raw disk to *run/image/disk.img*   
 
 
 ### 4. Run
@@ -66,7 +88,6 @@ After ```make``` success, you will get these files
 ```
 build
 ├── bin # Binary executable files without debug info
-│   ├── loader
 │   ├── rfsroot # root file system image files (root folder)
 │   └── system
 │       ├── rfsimg # root file system image
@@ -80,7 +101,7 @@ build
 python util/run.py q
 ```
 
-The kernel log will be generated in *util/kernel_out.log*, just ```cat util/kernel_out.log```.
+The kernel log will be generated in *run/kernel_out.log*, just ```cat run/kernel_out.log```.
 
 ### 5. Debug
 Use command ```python util/gen_debug_asm.py kernel``` to generate kernel disassembly if needed. (e.g. Debug in bochs)
@@ -96,7 +117,7 @@ Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.
 ## Repo Tree
 ```
 NaOS
-├── build # generate directory
+├── build # generation directory
 ├── naos
 │   ├── includes
 │   │   └── kernel
@@ -108,17 +129,14 @@ NaOS
 │       │   ├── mm # memory subsystem
 │       │   ├── module # module support code
 │       │   ├── schedulers # time span scheduler and completely fair scheduler
-│       │   ├── task # elf file loader and built-in task
+│       │   ├── task # ELF loader and built-in task
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── usr
 │           ├── init # the userland init program 
-│           └── future_test # kernel test program 
+│           └── syscall_test # kernel test program 
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
 │   └── image
-│       ├── mnt
-│       │   ├── boot # mount_disk.py mount first partition. grub partition
-│       │   └── disk # mount_disk.py mount second partition. system partition
 │       └── disk.img # make_disk.py created
 └── util # Python tools
 ```

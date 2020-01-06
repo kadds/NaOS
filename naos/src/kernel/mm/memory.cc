@@ -214,10 +214,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
 
     auto start_image_data = (args->rfsimg_start) & ~(page_size - 1);
     auto end_image_data = (args->rfsimg_start + args->rfsimg_size + page_size - 1) & ~(page_size - 1);
-    if (start_image_data < end_kernel)
-    {
-        trace::panic("Image space is in kernel code space.");
-    }
+
     if (end_image_data <= start_data || start_image_data >= end_data)
     {
         tag_zone_buddy_memory((void *)start_image_data, (void *)end_image_data);

@@ -53,7 +53,7 @@ Features / TODO
     - [ ] Network interface card driver
     - [X] Mouse & Keyboard driver
 * - [ ] Compatibility layer
-    - [ ] UEFI boot loader
+    - [x] UEFI boot
     - [ ] POSIX API
 * - [ ] Multi-core support (SMP)
     - [x] AP Startup
