@@ -18,16 +18,15 @@ void main()
     trace::debug("idle task running at cpu ", cpu::current().id());
     if (cpu::current().is_bsp())
     {
-        auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root,
-                                  fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
-        if (!file)
-        {
-            trace::panic("Can't open init");
-        }
         auto p = task::create_kernel_process(builtin::softirq::main, 0, create_thread_flags::real_time_rr);
         trace::debug("softirqd created tid=", p->main_thread->tid);
         is_init = true;
         task::create_kernel_process(builtin::input::main, 0, create_thread_flags::real_time_rr);
+
+        auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root,
+                                  fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
+        if (!file)
+            trace::panic("Can't open init program");
 
         task::create_process(file, init::main, 0, 0, 0, 0);
 
