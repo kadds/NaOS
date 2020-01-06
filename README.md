@@ -4,7 +4,7 @@
 A 64bit (x86-64) Simple Operating System Writing By C++.  (:sunglasses:)  
 NaOS runs on Intel / AMD modern processors.  
 
-![build passing](https://img.shields.io/badge/build-passing-green) ![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
+![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
 
 
 ## Features  
@@ -36,8 +36,8 @@ cd /path/to/repo
 
 mkdir build
 cd build
-# CMAKE_BUILD_TYPE: Debug; Release
-# USE_CLANG: OFF (Use GCC); ON (Use Clang)
+# CMAKE_BUILD_TYPE: Debug\Release
+# USE_CLANG: OFF (GCC); ON (Clang)
 cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
 # Then make
 make -j
@@ -51,8 +51,9 @@ NaOS only support GPT disk and UEFI boot. Grub [multiboot2 (spec)](https://www.g
 For QEMU, install [OVMF](https://sourceforge.net/projects/tianocore/), edit OVMF_CODE.fd path at *util/run.py*.  
 
 Example of disk partition:  
+  
 | Partition number |  Type | FS | Content | Size |
-| :----: | ------ | ---------- | ------- | :-----: |
+ :-: | :-: | :-: | :-: | :-: 
 | 1 | ESP   | FAT32 | Grub EFI loader    |  80Mib  |
 | 2 | Root  | EXT2  | Grub and NaOS data |  920Mib |
 
@@ -91,7 +92,7 @@ build
 │   ├── rfsroot # root file system image files (root folder)
 │   └── system
 │       ├── rfsimg # root file system image
-│       └── kernel # kernel file
+│       └── kernel # kernel binary file
 └── debug # Binary executable files with debug info which can be used by debugger gdb/lldb ...
 ```
 
@@ -117,7 +118,7 @@ Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.
 ## Repo Tree
 ```
 NaOS
-├── build # generation directory
+├── build # build directory
 ├── naos
 │   ├── includes
 │   │   └── kernel
@@ -125,10 +126,13 @@ NaOS
 │       ├── kernel
 │       │   ├── arch # arch x86_64 specification source code
 │       │   ├── common # kernel data
+│       │   ├── dev # driver interface
 │       │   ├── fs # file system 
+│       │   ├── io # io subsystem
 │       │   ├── mm # memory subsystem
 │       │   ├── module # module support code
-│       │   ├── schedulers # time span scheduler and completely fair scheduler
+│       │   ├── schedulers # round robin scheduler and completely fair scheduler
+│       │   ├── syscall # syscall entry
 │       │   ├── task # ELF loader and built-in task
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── usr
@@ -137,7 +141,7 @@ NaOS
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
 │   └── image
-│       └── disk.img # make_disk.py created
+│       └── disk.img # raw image
 └── util # Python tools
 ```
 
@@ -149,6 +153,7 @@ NaOS
 * [Linux](https://www.kernel.org/)
 * [Intel SDM](https://software.intel.com/en-us/articles/intel-sdm)
 * [Minix3](http://www.minix3.org/)
+* [VX6](https://github.com/mit-pdos/xv6-public)
 
 ## License
 [BSD-3-Clause](./LICENSE) © Kadds
