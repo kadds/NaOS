@@ -19,16 +19,6 @@ void time_tick(time::microsecond_t expires, u64 user_data)
     timer::add_watcher(100000, time_tick, 0);
 }
 
-void print_tick(time::microsecond_t expires, u64 user_data)
-{
-    time::time_t t;
-    time2time_t(current_time_microsecond, &t);
-    trace::debug("current time: ", 2000 + t.year, ".", t.month + 1, ".", t.mday + 1, " ", t.hour, ":", t.minute, ":",
-                 t.second, ":", t.millisecond, ", weak ", t.wday);
-    timer::add_watcher(10000000, print_tick, 0);
-    return;
-}
-
 void init()
 {
     location_offset = 0;
@@ -46,7 +36,6 @@ void start_tick()
 {
     // add 100 ms
     timer::add_watcher(100000, time_tick, 0);
-    timer::add_watcher(10000000, print_tick, 0);
 }
 
 time::microsecond_t get_current_clock() { return current_time_microsecond; }

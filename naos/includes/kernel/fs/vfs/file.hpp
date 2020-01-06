@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "defines.hpp"
+#include "pseudo.hpp"
 namespace fs::vfs
 {
 class dentry;
@@ -35,6 +36,8 @@ class file
 
     u64 size() const;
     dentry *get_entry() const;
+
+    pseudo_t *get_pseudo();
 
   protected:
     virtual u64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;

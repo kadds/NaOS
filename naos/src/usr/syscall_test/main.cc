@@ -1,6 +1,16 @@
 #include "../common/arch/lib.hpp"
 const char file_content[] = "init file write context";
 
+void print(const char *str)
+{
+    unsigned long len = 0;
+    auto p = str;
+    while (*p++ != 0)
+        ;
+    len = p - str;
+    write(STDOUT, str, len, 0);
+}
+
 void thread(int arg)
 {
     print("thread sleep testing\n");

@@ -32,14 +32,21 @@ lock::spinlock_t spinlock;
 
 void print_inner(const char *str)
 {
+    u64 len = util::strlen(str);
+    print_inner(str, len);
+}
+
+void print_inner(const char *str, u64 len)
+{
+    if (len != 0 && str[len - 1] == 0)
+        len--;
     if (unlikely(ring_buffer != nullptr))
     {
-        u64 len = util::strlen(str);
         ring_buffer->write((const byte *)str, len);
-        serial_device.write((const byte *)str, len);
     }
     else
     {
+        uctx::UnInterruptableContext icu;
         // early init
         // write log at once
         u64 len = arch::device::vga::putstring(str, 0);

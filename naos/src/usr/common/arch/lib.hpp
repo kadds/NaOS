@@ -10,12 +10,15 @@ extern "C" char _lib_sys_call;
             "jmp _lib_sys_call \n\t ");
 
 SYS_CALL(0, void, sys_none, void)
-SYS_CALL(1, void, print, const char *text)
 
 #define OPEN_MODE_READ 1
 #define OPEN_MODE_WRITE 2
 #define OPEN_MODE_BIN 4
 #define OPEN_MODE_APPEND 8
+
+#define STDIN 0
+#define STDOUT 1
+#define STDERR 2
 
 #define OPEN_ATTR_AUTO_CREATE_FILE 1
 

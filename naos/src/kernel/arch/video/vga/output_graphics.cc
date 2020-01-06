@@ -21,7 +21,7 @@ u64 full_bytes;
 font::font *cur_font;
 byte *video_addr;
 u64 window_height;
-u64 char_window_height;
+byte *video_end;
 
 void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp)
 {
@@ -31,13 +31,13 @@ void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp)
     full_bytes = line_bytes * h;
     video_addr = buffer;
     window_height = 0;
-    char_window_height = 0;
     /// XXX: check reserved space size
     cur_font = new (&reserved_space) font::font_16X8();
     cur_font->init();
     cur_font->get_size(font_width, font_height);
     text_count_per_line = width / font_width;
     text_count_vertical = height / font_height;
+    video_end = buffer + full_bytes;
 }
 
 void cls(cursor_t &cur)
@@ -47,7 +47,6 @@ void cls(cursor_t &cur)
     cur.px = 0;
     cur.py = 0;
     window_height = 0;
-    char_window_height = 0;
 }
 
 void set_buffer(byte *buffer) { video_addr = buffer; }
@@ -56,34 +55,23 @@ void scroll(cursor_t &cur, i32 n)
 {
     if (n <= 0)
         return;
-    char_window_height = (char_window_height + n) % text_count_vertical;
+
     u64 old_window_height = window_height;
 
-    if (char_window_height == 0)
+    window_height = (window_height + n * font_height) % height;
+    if (old_window_height > window_height)
     {
-        window_height = 0;
         util::memzero(video_addr + old_window_height * line_bytes, full_bytes - old_window_height * line_bytes);
         util::memzero(video_addr, window_height * line_bytes);
     }
     else
     {
-        window_height = (window_height + n * font_height) % height;
-        if (old_window_height > window_height)
-        {
-            util::memzero(video_addr + old_window_height * line_bytes, full_bytes - old_window_height * line_bytes);
-            util::memzero(video_addr, window_height * line_bytes);
-        }
-        else
-        {
-            util::memzero(video_addr + old_window_height * line_bytes,
-                          (window_height - old_window_height) * line_bytes);
-        }
+        util::memzero(video_addr + old_window_height * line_bytes, (window_height - old_window_height) * line_bytes);
     }
 
     dirty_rectangle = rectangle(0, 0, width, height);
     cur.py -= n;
 }
-
 void move_pen(cursor_t &cur, i32 x, i32 y)
 {
     cur.py += y;
@@ -97,11 +85,17 @@ void move_pen(cursor_t &cur, i32 x, i32 y)
         scroll(cur, cur.py - text_count_vertical + 1);
 }
 
-u32 get_py(cursor_t &cur) { return (cur.py + char_window_height) % (text_count_vertical); }
-
 u32 *get_video_line_start(cursor_t &cur)
 {
-    return (u32 *)((byte *)video_addr + line_bytes * get_py(cur) * (u64)font_height);
+    u64 h = (cur.py * font_height + window_height);
+    if (h >= height)
+    {
+        h -= height;
+    }
+
+    auto v = (u32 *)((byte *)video_addr + line_bytes * h);
+
+    return v;
 }
 
 struct font_state
@@ -216,29 +210,48 @@ bool set_state(char ch)
 
 void putchar(cursor_t &cur, char ch)
 {
-
-    if (ch != '\t' && ch != '\n')
+    void *font_data;
+    if (ch != '\n')
     {
-        void *font_data = cur_font->get_unicode(ch);
-        if (set_state(ch))
-            return;
+        if (ch == '\b')
+        {
+            if (cur.px >= 1)
+                cur.px--;
+            else
+                return;
+            font_data = cur_font->get_unicode(' ');
+        }
+        else
+        {
+            font_data = cur_font->get_unicode(ch);
+            if (set_state(ch))
+                return;
+        }
 
         u32 fg = global_state.foreground;
         u32 bg = global_state.background;
 
-        u32 *v_start = get_video_line_start(cur) + cur.px * (u64)font_width;
+        u32 *v_start = get_video_line_start(cur) + cur.px * font_width;
 
         for (u32 y = 0; y < font_height; y++)
         {
+            v_start += width;
+            if ((byte *)v_start >= video_end)
+            {
+                v_start = (u32 *)video_addr + cur.px * font_width;
+            }
             for (u32 x = 0; x < font_width; x++)
             {
-                *(v_start + x + y * (u64)width) = cur_font->hit(font_data, x, y) ? fg : bg;
+                *(v_start + x) = cur_font->hit(font_data, x, y) ? fg : bg;
             }
         }
+
         dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height, cur.px * font_width + font_width,
                                      cur.py * font_height + font_height);
-
-        move_pen(cur, 1, 0);
+        if (ch != '\b')
+        {
+            move_pen(cur, 1, 0);
+        }
     }
     else
     {

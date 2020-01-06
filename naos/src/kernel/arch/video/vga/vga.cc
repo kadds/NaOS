@@ -135,6 +135,7 @@ void flush_kbuffer()
         while (size != 0)
         {
             putstring((const char *)buffer, size);
+            trace::serial_device.write((const byte *)buffer, size);
             buffer = trace::get_kernel_log_buffer().read_buffer(&size);
         }
 
@@ -167,17 +168,20 @@ u64 putstring(const char *str, u64 max_len)
     if (unlikely(vram_addr == nullptr))
     {
         u64 i = 0;
-        while (*str != '\0' && i < max_len)
+        while (*str++ != 0 && i < max_len)
             i++;
         return i;
     }
 
     if (max_len == 0)
         max_len = (u64)(-1);
+
     u64 i = 0;
-    while (*str != '\0' && i < max_len)
+
+    while (*str != 0 && i < max_len)
     {
-        graphics::putchar(cursor, *str++);
+        graphics::putchar(cursor, *str);
+        str++;
         i++;
     }
 

@@ -39,7 +39,15 @@ class id_generator
             return index;
         }
         return null_id;
-    };
+    }
+
+    void tag(u64 i)
+    {
+        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        if (unlikely(i == null_id))
+            return;
+        bitmap.set(i);
+    }
 
     void collect(u64 i)
     {
@@ -141,23 +149,42 @@ template <u8 levels> class id_level_generator
             current_pack->rest--;
         }
         return index;
-    };
+    }
 
-    void collect(u64 i)
+    void tag(u64 id)
     {
         uctx::SpinLockUnInterruptableContext icu(spinlock);
-        if (unlikely(i == null_id))
+        if (unlikely(id == null_id))
             return;
         for (u8 i = 0; i < levels; i++)
         {
             if (i < pack[i].max)
             {
-                pack[i].bitmap->clean(i - pack[i].base);
+                if (!pack[i].bitmap->get(id - pack[i].base))
+                {
+                    pack[i].rest--;
+                }
+                pack[i].bitmap->set(id - pack[i].base);
+                break;
+            }
+        }
+    }
+
+    void collect(u64 id)
+    {
+        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        if (unlikely(id == null_id))
+            return;
+        for (u8 i = 0; i < levels; i++)
+        {
+            if (i < pack[i].max)
+            {
+                pack[i].bitmap->clean(id - pack[i].base);
                 pack[i].rest++;
                 if (!pack[i].bitmap->get(pack[i].last_index))
-                    pack[i].last_index = pack[i].last_index > i ? pack[i].last_index : i; /// save maximum
+                    pack[i].last_index = pack[i].last_index > id ? pack[i].last_index : id; /// save maximum
                 else
-                    pack[i].last_index = i;
+                    pack[i].last_index = id;
                 break;
             }
         }

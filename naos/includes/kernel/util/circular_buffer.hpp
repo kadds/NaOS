@@ -80,29 +80,6 @@ template <typename T> class circular_buffer
 
     bool is_full() { return (write_off + 1) % length == read_off; }
 
-    void resize(u64 size)
-    {
-        /// TODO: when size < length
-        if (size < length)
-            return;
-        T *new_buf;
-        if (size > 0)
-            new_buf = (T *)allocator->allocate(size * sizeof(T), alignof(T));
-        else
-            new_buf = nullptr;
-
-        if (buffer != nullptr)
-        {
-            if (new_buf != nullptr)
-            {
-                memcopy(new_buf, buffer, length * sizeof(T));
-            }
-            allocator->deallocate(buffer);
-        }
-        buffer = new_buf;
-        length = size;
-    }
-
     bool read(T *t)
     {
         if (unlikely(read_off == write_off))

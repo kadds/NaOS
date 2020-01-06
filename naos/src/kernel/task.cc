@@ -31,6 +31,8 @@
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "kernel/wait.hpp"
 
+#include "kernel/dev/tty/tty.hpp"
+
 using mm_info_t = memory::vm::info_t;
 namespace task
 {
@@ -185,24 +187,27 @@ void create_devs()
 {
     fs::vfs::create("/dev", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
 
-    fs::vfs::create("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
-    auto *f = fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
-    auto ps = memory::New<fs::vfs::pseudo_pipe_t>(memory::KernelCommonAllocatorV, memory::page_size);
-    fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
-
-    fs::vfs::close(f);
-
     fs::vfs::create("/dev/tty", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
 
     char fname[] = "/dev/tty/x";
-    for (int i = 0; i < 8; i++)
+    for (int i = 1; i < 8; i++)
     {
         fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
         fs::vfs::create(fname, fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
         auto *f = fs::vfs::open(fname, fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
         fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
         fs::vfs::close(f);
     }
+
+    fs::vfs::link("/dev/tty/0", "/dev/tty/1", fs::vfs::global_root, fs::vfs::global_root);
+    fs::vfs::link("/dev/console", "/dev/tty/1", fs::vfs::global_root, fs::vfs::global_root);
+
+    auto *f = fs::vfs::open("/dev/console", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+    auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
+    fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
+
+    fs::vfs::close(f);
 }
 
 std::atomic_bool is_init = false;
@@ -261,7 +266,14 @@ void init()
         is_init = true;
         auto ft = current_process()->res_table.get_file_table();
         create_devs();
-        ft->file_map[0] = fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        ft->id_gen.tag(0);
+        ft->id_gen.tag(1);
+        ft->id_gen.tag(2);
+
+        ft->file_map[0] = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        ft->file_map[1] = ft->file_map[0];
+        ft->file_map[2] = ft->file_map[0];
+
         bin_handle::init();
     }
 }
@@ -320,12 +332,22 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
 
     if (!(flags & create_process_flags::no_shared_stdin))
         new_ft->file_map[0] = old_ft->file_map[0];
+    else
+        new_ft->file_map[0] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stdout))
         new_ft->file_map[1] = old_ft->file_map[1];
+    else
+        new_ft->file_map[1] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stderror))
         new_ft->file_map[2] = old_ft->file_map[2];
+    else
+        new_ft->file_map[2] = nullptr;
+
+    new_ft->id_gen.tag(0);
+    new_ft->id_gen.tag(1);
+    new_ft->id_gen.tag(2);
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
@@ -394,12 +416,22 @@ process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t 
 
     if (!(flags & create_process_flags::no_shared_stdin))
         new_ft->file_map[0] = old_ft->file_map[0];
+    else
+        new_ft->file_map[0] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stdout))
         new_ft->file_map[1] = old_ft->file_map[1];
+    else
+        new_ft->file_map[1] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stderror))
         new_ft->file_map[2] = old_ft->file_map[2];
+    else
+        new_ft->file_map[2] = nullptr;
+
+    new_ft->id_gen.tag(0);
+    new_ft->id_gen.tag(1);
+    new_ft->id_gen.tag(2);
 
     /// create thread
     thread_t *thd = new_thread(process);

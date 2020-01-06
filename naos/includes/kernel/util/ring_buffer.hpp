@@ -1,8 +1,11 @@
 #pragma once
 #include "../mm/new.hpp"
 #include "common.hpp"
+#include <atomic>
+
 namespace util
 {
+/// read : write = 1 : N, linked ring buffer
 class ring_buffer
 {
   public:
@@ -23,13 +26,13 @@ class ring_buffer
   private:
     u64 trunk_size;
     u64 max_trunk_count;
-    u64 count;
+    std::atomic_ulong count;
 
     memory::IAllocator *node_allocator;
     memory::IAllocator *allocator;
     strategy full_strategy;
 
-    trunk *read_trunk, *write_trunk, *free_trunk;
+    trunk *read_trunk, *write_trunk;
 
   public:
     ring_buffer(u64 trunk_size, u64 max_trunk_count, strategy full_strategy, memory::IAllocator *list_node_allocator,

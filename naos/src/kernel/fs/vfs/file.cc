@@ -71,4 +71,6 @@ u64 file::write(const byte *ptr, u64 size, flag_t flags)
     return 0;
 }
 
+pseudo_t *file::get_pseudo() { return entry->get_inode()->get_pseudo_data(); }
+
 } // namespace fs::vfs

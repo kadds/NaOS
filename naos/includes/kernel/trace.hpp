@@ -1,4 +1,5 @@
 #pragma once
+#include "./arch/com.hpp"
 #include "./arch/regs.hpp"
 #include "./kernel.hpp"
 #include "./util/formatter.hpp"
@@ -325,6 +326,9 @@ extern lock::spinlock_t spinlock;
 
 /// print string directly
 void print_inner(const char *str);
+void print_inner(const char *str, u64 len);
+
+extern arch::device::com::serial serial_device;
 
 util::ring_buffer &get_kernel_log_buffer();
 

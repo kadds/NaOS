@@ -42,8 +42,8 @@ _frame_buffer_start:
 .short MULTIBOOT_HEADER_TAG_FRAMEBUFFER
 .short 0
 .long _frame_buffer_end-_frame_buffer_start
-.long 1920
-.long 1080
+.long 800
+.long 600
 .long 32
 _frame_buffer_end:
 .align 8

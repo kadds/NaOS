@@ -1,4 +1,5 @@
 #include "kernel/task/builtin/input_task.hpp"
+#include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/input/key.hpp"
@@ -16,11 +17,11 @@ io::mouse_data current_mouse_data;
 util::bit_set_inplace<32> key_switch_state;
 
 char key_char_table[256] = {
-    0,   0,   '1', '2', '3', '4', '5',  '6', '7', '8', '9', '0', '-', '=', 0,   0,   'q', 'w', 'e',  'r', 't',  'y',
-    'u', 'i', 'o', 'p', '[', ']', '\n', 0,   'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`', 0,    '\\',
-    'z', 'x', 'c', 'v', 'b', 'n', 'm',  ',', '.', '/', 0,   '*', 0,   ' ', 0,   0,   0,   0,   0,    0,   0,    0,
-    0,   0,   0,   0,   0,   '7', '8',  '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.', 0,    0,   0,    0,
-    0,   0,   0,   0,   0,   0,   0,    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,    0,   '\n', 0};
+    0,   0,   '1', '2', '3', '4', '5',  '6', '7', '8', '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e',  'r', 't',  'y',
+    'u', 'i', 'o', 'p', '[', ']', '\n', 0,   'a', 's', 'd', 'f', 'g', 'h', 'j',  'k',  'l', ';', '\'', '`', 0,    '\\',
+    'z', 'x', 'c', 'v', 'b', 'n', 'm',  ',', '.', '/', 0,   '*', 0,   ' ', 0,    0,    0,   0,   0,    0,   0,    0,
+    0,   0,   0,   0,   0,   '7', '8',  '9', '-', '4', '5', '6', '+', '1', '2',  '3',  '0', '.', 0,    0,   0,    0,
+    0,   0,   0,   0,   0,   0,   0,    0,   0,   0,   0,   0,   0,   0,   0,    0,    0,   0,   0,    0,   '\n', 0};
 
 char key_char_table2[256] = {
     0,   0,   '!', '@', '#', '$', '%',  '^', '&', '*', '(', ')', '_', '+', 0,   0,   'Q', 'W', 'E', 'R', 'T',  'Y',
@@ -55,7 +56,7 @@ void set_key_switch_state(switchable_key k, bool enable)
 
 bool is_key_down(key k) { return key_down_state.get((u64)k); }
 
-void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req, fs::vfs::file *f)
+void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req, dev::tty::tty_pseudo_t *tty)
 {
     if (status.io_is_completion)
     {
@@ -98,7 +99,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 {
                     d = (byte)key_char_table[(u8)k];
                 }
-                f->write(&d, 1, fs::rw_flags::override);
+                tty->write_to_buffer(&d, 1, fs::rw_flags::override);
             }
 
             key_down_state.set(res.get.key);
@@ -162,7 +163,9 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
     fs::vfs::file *input_file =
-        fs::vfs::open("/dev/input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+        fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+
+    auto input_tty = (dev::tty::tty_pseudo_t *)input_file->get_pseudo();
 
     fs::vfs::file *mouse_file =
         fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
@@ -217,7 +220,7 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
         {
             task::do_wait(&input_wait_queue, wait_condition, 0, task::wait_context_type::uninterruptible);
         }
-        print_keyboard(request.result, request.status, &request, input_file);
+        print_keyboard(request.result, request.status, &request, input_tty);
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
     };
 }
