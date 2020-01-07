@@ -44,6 +44,13 @@ class scheduler
     virtual void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) = 0;
 
     ///
+    /// \brief call when the task is migrating to other cpu
+    ///
+    /// \param thread
+    ///
+    virtual void on_migrate(thread_t *thread) = 0;
+
+    ///
     /// \brief try if switch task
     ///
     /// \return return has switch thread
@@ -55,7 +62,11 @@ class scheduler
     ///
     virtual void schedule_tick() = 0;
 
-    virtual bool has_task_to_schedule() = 0;
+    virtual u64 scheduleable_task_count() = 0;
+
+    virtual thread_t *get_migratable_task(u32 cpuid) = 0;
+
+    virtual void commit_migrate(thread_t *thd) = 0;
 
     virtual void init_cpu() = 0;
     virtual void destroy_cpu() = 0;
@@ -75,9 +86,13 @@ void add(thread_t *thread, scheduler_class scher);
 void remove(thread_t *thread);
 void update_state(thread_t *thread, thread_state state);
 void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority);
+bool reschedule_task_push(thread_t *task, u32 cpuid);
+bool reschedule_task_pull(thread_t *task);
 
 u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size);
 
 ExportC void schedule();
+
+void reload_load_fac();
 
 } // namespace task::scheduler

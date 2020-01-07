@@ -298,6 +298,8 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
         thd->user_stack_bottom = (void *)stack_vm->start;
     }
 
+    thd->cpumask.mask = cpumask_none;
+
     arch::task::create_thread(thd, (void *)start_func, arg0, arg1, arg2, 0);
 
     if (flags & create_thread_flags::real_time_rr)
@@ -376,6 +378,7 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     process->main_thread = thd;
     thd->attributes |= thread_attributes::main;
     thd->state = thread_state::ready;
+    thd->cpumask.mask = cpumask_none;
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;

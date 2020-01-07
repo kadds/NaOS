@@ -35,7 +35,6 @@ struct cpu_task_list_cf_t
     thread_skip_list_t runable_list;
     thread_list_t block_list;
     u64 min_vruntime;
-    time::microsecond_t last_switch_time;
     lock::spinlock_t list_spinlock;
 
     cpu_task_list_cf_t()
@@ -60,9 +59,14 @@ void completely_fair_scheduler::init_cpu()
     dt->vtime_delta = 100;
     dt->vtime = 0;
     task_list->min_vruntime = 0;
-    task_list->last_switch_time = timer::get_high_resolution_time();
+    auto &data = cpu::current().edit_load_data();
+    data.last_sched_time = timer::get_high_resolution_time();
+    data.last_tick_time = timer::get_high_resolution_time();
+
     cpu::current().get_idle_task()->schedule_data = dt;
     cpu::current().get_idle_task()->scheduler = this;
+    all_task_count++;
+    task_ready_count++;
 }
 
 void completely_fair_scheduler::destroy_cpu()
@@ -78,8 +82,11 @@ void completely_fair_scheduler::add(thread_t *thread)
     auto dt = memory::New<thread_time_cf_t>(memory::KernelCommonAllocatorV);
     dt->vtime_delta = 100;
     dt->vtime = 0;
+    thread->cpuid = cpu::current().id();
     thread->schedule_data = dt;
     task_list->runable_list.insert(thread);
+    all_task_count++;
+    task_ready_count++;
 }
 
 void completely_fair_scheduler::remove(thread_t *thread)
@@ -91,12 +98,15 @@ void completely_fair_scheduler::remove(thread_t *thread)
     if (node != task_list->block_list.end())
     {
         task_list->block_list.remove(node);
+        all_task_count--;
     }
     else
     {
         auto it = task_list->runable_list.find(thread);
         if (it != task_list->runable_list.end())
         {
+            all_task_count--;
+            task_ready_count--;
             task_list->runable_list.remove(it);
         }
     }
@@ -126,6 +136,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
                 task_list->block_list.remove(node);
                 thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
                 task_list->runable_list.insert(thread);
+                task_ready_count++;
                 return;
             }
         }
@@ -152,6 +163,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             {
                 task_list->runable_list.remove(it);
                 task_list->block_list.push_back(thread);
+                task_ready_count--;
                 return;
             }
         }
@@ -173,11 +185,13 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         {
             thread->state = thread_state::interruptable;
             task_list->block_list.push_back(thread);
+            task_ready_count--;
         }
         else if (thread->attributes & thread_attributes::block_unintr)
         {
             thread->state = thread_state::uninterruptible;
             task_list->block_list.push_back(thread);
+            task_ready_count--;
         }
         else
         {
@@ -193,6 +207,12 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
 }
 
 void completely_fair_scheduler::update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) {}
+
+void completely_fair_scheduler::on_migrate(thread_t *thread)
+{
+    thread->cpuid = cpu::current().id();
+    add(thread);
+}
 
 thread_t *completely_fair_scheduler::pick_available_task()
 {
@@ -210,6 +230,7 @@ thread_t *completely_fair_scheduler::pick_available_task()
 bool completely_fair_scheduler::schedule()
 {
     thread_t *cur = current();
+    auto &cpu = cpu::current();
     bool has_task = false;
     while (cur->attributes & task::thread_attributes::need_schedule)
     {
@@ -233,8 +254,9 @@ bool completely_fair_scheduler::schedule()
 
         if (cur != next)
         {
+            cpu.edit_load_data().last_sched_time = timer::get_high_resolution_time();
+            cpu.edit_load_data().schedule_times++;
             next->state = task::thread_state::running;
-            task_list->last_switch_time = timer::get_high_resolution_time();
             has_task = true;
             task::switch_thread(cur, next);
         }
@@ -245,7 +267,7 @@ bool completely_fair_scheduler::schedule()
     }
 
     return has_task;
-}
+} // namespace task::scheduler
 
 void completely_fair_scheduler::schedule_tick()
 {
@@ -253,9 +275,15 @@ void completely_fair_scheduler::schedule_tick()
     auto cur = current();
     auto task_list = get_cpu_task_list();
     auto scher_data = get_schedule_data(cur);
+
+    auto &cpu = cpu::current();
+    auto ctime = timer::get_high_resolution_time();
+    cpu.edit_load_data().running_task_time += ctime - cpu.edit_load_data().last_tick_time;
+    cpu.edit_load_data().last_tick_time = ctime;
+
     scher_data->vtime += scher_data->vtime_delta;
 
-    u64 delta = timer::get_high_resolution_time() - task_list->last_switch_time;
+    u64 delta = timer::get_high_resolution_time() - cpu.edit_load_data().last_sched_time;
     if (delta >= sched_min_granularity_us)
     {
         if (!task_list->runable_list.empty())
@@ -268,13 +296,34 @@ void completely_fair_scheduler::schedule_tick()
     }
 }
 
-bool completely_fair_scheduler::has_task_to_schedule() { return true; }
+u64 completely_fair_scheduler::scheduleable_task_count() { return get_cpu_task_list()->runable_list.size(); }
+
+thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
+{
+    auto list = get_cpu_task_list();
+    for (auto thd : list->runable_list)
+    {
+        if (thd->cpumask.mask & (1ul << cpuid))
+            return thd;
+    }
+    return nullptr;
+}
+
+void completely_fair_scheduler::commit_migrate(thread_t *thd)
+{
+    auto list = get_cpu_task_list();
+    auto it = list->runable_list.find(thd);
+    if (it != list->runable_list.end())
+        list->runable_list.remove(it);
+}
 
 u64 completely_fair_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) { return 0; }
 
 completely_fair_scheduler::completely_fair_scheduler()
     : sched_min_granularity_us(2000)
     , sched_wakeup_granularity_us(1)
+    , all_task_count(0)
+    , task_ready_count(0)
 {
 }
 

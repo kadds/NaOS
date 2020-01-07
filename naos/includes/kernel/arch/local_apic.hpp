@@ -29,6 +29,10 @@ void local_disable(u8 vector);
 void local_EOI(u8 index);
 void local_post_init_IPI();
 void local_post_start_up(u64 addr);
+void local_post_IPI_all(u64 intr);
+void local_post_IPI_all_notself(u64 intr);
+void local_post_IPI_self(u64 intr);
+void local_post_IPI_mask(u64 intr, u64 mask0);
 
 u64 local_ID();
 

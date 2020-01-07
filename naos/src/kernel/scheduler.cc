@@ -1,6 +1,8 @@
 #include "kernel/scheduler.hpp"
+#include "kernel/irq.hpp"
 #include "kernel/schedulers/completely_fair.hpp"
 #include "kernel/schedulers/round_robin.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/util/hash_map.hpp"
 
@@ -18,6 +20,33 @@ void timer_tick(u64 pass, u64 user_data);
 
 std::atomic_bool is_init = false;
 
+task::thread_t *thread_to_reschedule;
+std::atomic_bool reschedule_ready;
+
+irq::request_result reschedule_func(const void *regs, u64 data, u64 user_data)
+{
+    task::thread_t *thd = thread_to_reschedule;
+    if (!reschedule_ready)
+    {
+        thd->scheduler->on_migrate(thd);
+    }
+    reschedule_ready = true;
+    return irq::request_result::ok;
+}
+
+bool reschedule_task_push(thread_t *task, u32 cpuid)
+{
+    if (reschedule_ready)
+    {
+        if (!reschedule_ready.exchange(false))
+            return false;
+        thread_to_reschedule = task;
+        SMP::reschedule_cpu(cpuid);
+        return true;
+    }
+    return false;
+}
+
 void init()
 {
     if (cpu::current().is_bsp())
@@ -28,6 +57,8 @@ void init()
         is_init = true;
 
         timer::add_watcher(5000, timer_tick, 0);
+        reschedule_ready = true;
+        irq::insert_request_func(irq::hard_vector::IPI_reschedule, reschedule_func, 0);
     }
 }
 
@@ -68,6 +99,7 @@ void schedule()
     {
         normal_schedulers->schedule();
     }
+    reload_load_fac();
 }
 
 u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size)
@@ -84,12 +116,71 @@ void timer_tick(u64 pass, u64 user_data)
         real_time_schedulers->schedule_tick();
     else
     {
-        if (real_time_schedulers->has_task_to_schedule())
+        if (real_time_schedulers->scheduleable_task_count() > 0)
         {
             thd->attributes |= thread_attributes::need_schedule;
         }
         normal_schedulers->schedule_tick();
     }
+    reload_load_fac();
+    u64 cpu_count = cpu::count();
+    u64 min_fac = cpu::current().edit_load_data().recent_load_fac;
+    cpu::cpu_data_t *targe_cpu = nullptr;
+    for (u64 i = 0; i < cpu_count; i++)
+    {
+        auto &cpu = cpu::get(i);
+        if (min_fac >= cpu.edit_load_data().recent_load_fac)
+        {
+            min_fac = cpu.edit_load_data().recent_load_fac;
+            targe_cpu = &cpu;
+        }
+    }
+
+    if (targe_cpu != nullptr && (cpu::current().edit_load_data().recent_load_fac - min_fac) >= 100)
+    {
+        auto task = real_time_schedulers->get_migratable_task(targe_cpu->id());
+        if (task != nullptr)
+        {
+            if (reschedule_task_push(task, targe_cpu->id()))
+            {
+                real_time_schedulers->commit_migrate(task);
+                return;
+            }
+        }
+
+        task = normal_schedulers->get_migratable_task(targe_cpu->id());
+        if (task != nullptr)
+        {
+            if (reschedule_task_push(task, targe_cpu->id()))
+            {
+                normal_schedulers->commit_migrate(task);
+            }
+        }
+    }
+
     return;
+}
+
+constexpr u64 load_calc_time_span = 1000;
+constexpr u64 load_calc_times = 5;
+
+void reload_load_fac()
+{
+    auto &cpu = cpu::current();
+    auto &data = cpu.edit_load_data();
+    auto time = timer::get_high_resolution_time();
+    auto dt = time - data.last_load_time;
+    if (dt < load_calc_time_span)
+        return;
+    data.last_load_time = time;
+
+    data.calcing_load_fac +=
+        (real_time_schedulers->scheduleable_task_count() + normal_schedulers->scheduleable_task_count()) * 100;
+
+    if (++data.load_calc_times >= load_calc_times)
+    {
+        data.recent_load_fac = data.calcing_load_fac / data.load_calc_times;
+        data.load_calc_times = 0;
+    }
 }
 } // namespace task::scheduler

@@ -12,6 +12,9 @@ class completely_fair_scheduler : public scheduler
     time::microsecond_t sched_min_granularity_us;
     time::microsecond_t sched_wakeup_granularity_us;
 
+    std::atomic_ulong all_task_count;
+    std::atomic_ulong task_ready_count;
+
   public:
     static const scheduler_class clazz = scheduler_class::cfs;
 
@@ -28,7 +31,13 @@ class completely_fair_scheduler : public scheduler
 
     u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) override;
 
-    bool has_task_to_schedule() override;
+    u64 scheduleable_task_count() override;
+
+    void on_migrate(thread_t *thread) override;
+
+    thread_t *get_migratable_task(u32 cpuid) override;
+
+    void commit_migrate(thread_t *thd) override;
 
     void init_cpu() override;
     void destroy_cpu() override;

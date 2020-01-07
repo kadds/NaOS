@@ -30,4 +30,6 @@ void init()
 #endif
 }
 u64 count() { return arch::cpu::count(); }
+
+cpu_data_t &get(u32 id) { return *(cpu_data_t *)arch::cpu::get(id).get_user_data(); }
 } // namespace cpu

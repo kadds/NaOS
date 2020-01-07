@@ -11,7 +11,9 @@ enum hard_vector
     pit_timer = 34,
     HEPT = 56,
     local_apic_timer = 128,
-    IPI = 255,
+
+    IPI_reschedule = 251,
+    IPI_tlb = 252,
 };
 } // namespace hard_vector
 

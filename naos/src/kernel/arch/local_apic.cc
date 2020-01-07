@@ -234,6 +234,9 @@ void local_init()
             (void *)(u64)read_register(spurious_interrupt_vector_register));
 
     disable_all_lvt();
+    if (!cpu::current().is_bsp())
+    {
+    }
 }
 
 u64 local_ID() { return cpu::current().get_apic_id(); }
@@ -272,6 +275,30 @@ void local_post_start_up(u64 addr)
     addr &= 0x100000 - 1;
     addr >>= 12;
     write_register64(icr_0, 0xc4600 | addr);
+}
+
+void local_post_IPI_all(u64 intr)
+{
+    intr |= 0xFF;
+    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b1000u << 16);
+}
+
+void local_post_IPI_all_notself(u64 intr)
+{
+    intr |= 0xFF;
+    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b1100u << 16);
+}
+
+void local_post_IPI_self(u64 intr)
+{
+    intr |= 0xFF;
+    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b0100u << 16);
+}
+
+void local_post_IPI_mask(u64 intr, u64 mask0)
+{
+    intr |= 0xFF;
+    write_register64(icr_0, intr | (0b10000000u) << 8 | mask0 << 56);
 }
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }

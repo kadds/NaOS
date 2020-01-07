@@ -107,11 +107,19 @@ struct preempt_t
     {
     }
 };
+
 struct statistics_t
 {
-    u64 sleep_time;
-    u64 kernel_time;
-    u64 userland_time;
+    u64 user_time;
+    u64 iowait_time;
+    u64 sys_time;
+    u64 intr_time;
+    u64 soft_intr_time;
+};
+
+struct cpu_mask_t
+{
+    u64 mask;
 };
 
 /// The thread struct
@@ -138,6 +146,7 @@ struct thread_t
     i8 dynamic_priority;
     /// run in cpu core
     u32 cpuid;
+    cpu_mask_t cpumask;
     statistics_t statistics;
     preempt_t preempt_data;
     wait_queue wait_que;
@@ -145,6 +154,8 @@ struct thread_t
     signal_pack_t signal_pack;
     thread_t();
 };
+
+inline constexpr u64 cpumask_none = 0xFFFFFFFFFFFFFFFF;
 
 void init();
 void start_task_idle();
