@@ -65,6 +65,6 @@ extern const u64 max_memory_support;
 
 extern const u64 linear_addr_offset;
 
-extern const u64 page_size;
+inline constexpr u64 page_size = 0x1000;
 
 } // namespace memory

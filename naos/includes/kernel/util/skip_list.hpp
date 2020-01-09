@@ -4,54 +4,78 @@
 #include "random.hpp"
 namespace util
 {
-template <typename E, typename less_cmp> class skip_list
+template <typename E> class skip_list
 {
-    static inline constexpr u64 maximum_deep = 24;
-
   public:
-    struct node_t
+    struct end_node_t
     {
-        union
+        end_node_t *next;
+        end_node_t *end_node;
+        E element;
+        end_node_t(const E &element, end_node_t *next)
+            : next(next)
+            , end_node(this)
+            , element(element)
         {
-            E element;
-        };
-        node_t *next;
-        node_t *child;
-        node_t(E element, node_t *next, node_t *child)
-            : element(element)
-            , next(next)
+        }
+    };
+
+    struct inode_t
+    {
+        inode_t *next;
+        end_node_t *end_node;
+        inode_t *child;
+        inode_t(end_node_t *end_node, inode_t *next, inode_t *child)
+            : next(next)
+            , end_node(end_node)
             , child(child)
+
         {
         }
 
-        node_t(node_t *next, node_t *child)
-            : element(0)
-            , next(next)
+        inode_t(inode_t *next, inode_t *child)
+            : next(next)
             , child(child)
         {
         }
     };
+
+    struct node_t
+    {
+        union
+        {
+            end_node_t end_node;
+            inode_t inode;
+        };
+    };
+
     using list_node = node_t;
 
   private:
     memory::IAllocator *allocator;
-    node_t *root_list;
-    u64 length, count, part;
-    node_t *last_list;
+    inode_t *root_list;
+    u64 height, count;
 
-    void check_list()
+    /// note: part is scale to 10000
+    u32 part;
+    u32 max_height;
+
+    inode_t **stack;
+
+    end_node_t *tail_list;
+
+    u32 rand()
     {
-        if (count == 0 && length != 1)
-        {
-            count++;
-            count--;
-        }
+        u32 node_height = 1;
+        while (next_rand(part) == 0 && node_height <= max_height)
+            node_height++;
+        return node_height;
     }
 
   public:
     class iterator
     {
-        node_t *node;
+        end_node_t *node;
 
       public:
         E &operator*() { return node->element; }
@@ -70,230 +94,171 @@ template <typename E, typename less_cmp> class skip_list
 
         bool operator!=(const iterator &it) { return it.node != node; }
 
-        iterator(node_t *node)
+        iterator(end_node_t *node)
             : node(node)
         {
         }
     };
 
-    void insert(const E &element)
+    iterator insert(const E &element)
     {
-        less_cmp cmp;
-        u64 deep = 1;
-        while (next_rand(part) == 0 && deep <= maximum_deep)
-            deep++;
+        u32 node_height = rand();
 
-        node_t *where[maximum_deep + 1];
-
-        // expand
-        while (length < deep)
+        // expand height
+        u64 h = 0;
+        if (height < node_height)
         {
-            auto node = memory::New<node_t>(allocator, nullptr, root_list);
-            root_list = node;
-            length++;
+            h = node_height - height;
+            // link root inode
+            stack[h] = root_list;
+            for (u64 i = h; i >= 1; i--)
+            {
+                stack[h - 1] = memory::New<inode_t>(allocator, nullptr, nullptr, stack[h]);
+            }
+            root_list = stack[0];
+        }
+        else
+        {
+            stack[h] = root_list;
         }
 
-        node_t *node = root_list;
-        bool root = true;
-        u64 cur_deep = 0;
-        while (node != nullptr)
+        // for each index node
+        inode_t *node = stack[h];
+        for (u64 i = 0; i < height; i++)
         {
-            if (unlikely(!root && node->element == element))
+            while (node->next && node->next->end_node->element < element)
             {
-                while (node)
-                {
-                    auto next = node->child;
-                    where[cur_deep++] = node;
-                    node = next;
-                }
-                break;
+                node = node->next;
             }
-            if (node->next)
-            {
-                if (cmp(node->next->element, element)) // node->next->element < cur_element
-                {
-                    node = node->next;
-                    root = false;
-                    continue;
-                }
-                else if (node->child == nullptr)
-                {
-                    /// last_deep
-                    where[cur_deep++] = node;
-                    break;
-                }
-            }
-            where[cur_deep++] = node;
+            stack[h++] = node;
             node = node->child;
         }
+
+        // create end node
+        auto end_node_prev = (end_node_t *)stack[h - 1];
+        auto new_node = memory::New<end_node_t>(allocator, element, end_node_prev->next);
+        end_node_prev->next = new_node;
         count++;
-        node_t *parent = nullptr;
-        for (u64 i = cur_deep - deep; i < cur_deep; i++)
+
+        if (height < node_height)
         {
-            node = memory::New<node_t>(allocator, element, where[i]->next, nullptr);
-            where[i]->next = node;
-            if (parent != nullptr)
-                parent->child = node;
-            parent = node;
+            height = node_height;
         }
+        // set index node linked list
+        node = (inode_t *)new_node;
+        for (u64 i = 0; i < node_height - 1; i++)
+        {
+            auto inode = memory::New<inode_t>(allocator, new_node, stack[height - i - 2]->next, node);
+            stack[height - i - 2]->next = inode;
+            node = inode;
+        }
+
+        return iterator(new_node);
     }
 
-    void remove(const E &element)
+    iterator remove(const E &element)
     {
-        less_cmp cmp;
         auto node = root_list;
-        node_t *where[maximum_deep + 1];
-        u64 cur_deep = 0;
-
-        while (node != nullptr)
+        u64 h = 0;
+        // for each get element per level
+        for (u64 i = 0; i < height; i++)
         {
-            if (node->next)
+            while (node->next && node->next->end_node->element < element)
             {
-                if (node->next->element == element) // node->next->element >= cur_element
-                {
-                    where[cur_deep++] = node;
-                    node = node->child;
-                    continue;
-                }
-                else if (!cmp(node->next->element, element))
-                {
-                    node = node->child;
-                    continue;
-                }
+                node = node->next;
             }
-            node = node->next;
+            stack[h++] = node;
+            node = node->child;
         }
 
-        for (u64 i = 0; i < cur_deep; i++)
+        // remove inodes
+        // tag if next is element to delete
+        bool eq = false;
+        for (u64 i = 0; i < h - 1; i++)
         {
-            auto n = where[i]->next;
-            where[i]->next = n->next;
-            memory::Delete<>(allocator, n);
+            if (eq || (stack[i]->next && stack[i]->next->end_node->element == element))
+            {
+                node = stack[i]->next;
+                stack[i]->next = node->next;
+                memory::Delete<>(allocator, node);
+                eq = true;
+            }
         }
-        if (length == cur_deep)
+
+        count--;
+
+        node = root_list;
+        // try remove root list
+        for (u64 i = 0; i < h - 1; i++)
         {
-            node = root_list;
-            u64 c = length - 1;
-            for (u64 i = 0; i < c; i++)
+            if (!node->next)
             {
                 auto child = node->child;
-                if (!node->next)
-                {
-                    memory::Delete<>(allocator, node);
-                    node = child;
-                    length--;
-                }
-                else
-                    break;
+                memory::Delete<>(allocator, node);
+                node = child;
+                height--;
+                root_list = node;
+                continue;
             }
-            root_list = node;
+            break;
         }
-        count--;
-        check_list();
+
+        // remove tail node
+
+        auto last_end_node = (end_node_t *)stack[h - 1];
+        if (last_end_node->next)
+        {
+            auto next_node = last_end_node->next;
+            last_end_node->next = (end_node_t *)next_node->next;
+            memory::Delete<>(allocator, next_node);
+            return iterator(last_end_node->next);
+        }
+        return iterator(nullptr);
     }
 
-    void remove(iterator iter) { remove(*iter); }
+    iterator remove(iterator iter) { return remove(*iter); }
 
     u64 size() { return count; }
 
     bool empty() { return count == 0; }
 
-    u64 deep() { return length; }
+    u64 deep() { return height; }
 
-    E front() { return last_list->next->element; }
+    E front() { return tail_list->next->element; }
 
-    E back()
-    {
-        auto n = root_list->next;
-        node_t *last = root_list->next;
-        while (n)
-        {
-            while (n->next)
-            {
-                last = n;
-                n = n->next;
-            }
-            n = n->child;
-        }
-
-        return last->element;
-    }
-
-    iterator begin() { return iterator(last_list->next); }
+    iterator begin() { return iterator(tail_list->next); }
 
     iterator end() { return iterator(nullptr); }
 
     iterator find(const E &element) const
     {
-        less_cmp cmp;
-        auto node = root_list;
-        bool is_root = true;
+        inode_t *node = root_list, *last_node = nullptr;
 
-        while (node != nullptr)
+        for (u64 i = 0; i < height; i++)
         {
-            if (!is_root)
+            while (node->next && node->next->end_node->element < element)
             {
-                if (node->element == element)
-                {
-                    while (node->child)
-                        node = node->child;
-                    return iterator(node);
-                }
+                node = node->next;
             }
-            if (node->next)
-            {
-                if (cmp(node->next->element, element) ||
-                    node->next->element == element) // node->next->element < cur_element
-                {
-                    node = node->next;
-                    is_root = false;
-                    continue;
-                }
-            }
+            last_node = node;
             node = node->child;
         }
-
-        return iterator(nullptr);
+        return iterator((end_node_t *)last_node);
     }
 
-    iterator find_top(const E &element) const
-    {
-        less_cmp cmp;
-        auto node = root_list;
-        bool is_root = true;
-
-        while (node != nullptr)
-        {
-            if (!is_root)
-            {
-                if (node->element == element)
-                {
-                    return iterator(node);
-                }
-            }
-            if (node->next)
-            {
-                if (cmp(node->next->element, element)) // node->next->element < cur_element
-                {
-                    node = node->next;
-                    is_root = false;
-                    continue;
-                }
-            }
-            node = node->child;
-        }
-        return iterator(nullptr);
-    }
-
-    skip_list(memory::IAllocator *allocator, u64 part = 2)
+    skip_list(memory::IAllocator *allocator, u32 part = 2, u32 max_height = 24)
         : allocator(allocator)
-        , length(1)
+        , height(1)
         , count(0)
         , part(part)
+        , max_height(max_height)
     {
-        last_list = memory::New<node_t>(allocator, nullptr, nullptr);
-        root_list = last_list;
+        stack = (inode_t **)memory::KernelCommonAllocatorV->allocate(sizeof(inode_t *) * max_height, 8);
+        root_list = memory::New<inode_t>(allocator, nullptr, nullptr, nullptr);
+        tail_list = (end_node_t *)root_list;
     }
+
+    ~skip_list() { memory::KernelCommonAllocatorV->deallocate(stack); }
 
     skip_list(const skip_list &list) {}
 

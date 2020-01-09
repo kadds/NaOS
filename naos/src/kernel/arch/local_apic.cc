@@ -307,7 +307,7 @@ irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u
 {
     auto event = (clock_event *)user_data;
 
-    if (likely(event && !event->is_suspend))
+    if (likely(event && !event->is_suspend && event->id == cpu::current().get_apic_id()))
     {
         event->tick_count++;
         irq::raise_soft_irq(irq::soft_vector::timer);
@@ -416,60 +416,66 @@ u64 clock_source::calibrate_apic(::clock::clock_source *cs)
     ev->suspend();
     return (end_count - start_count) * 1000000 / t;
 }
+u64 lapic_counter = 0;
+u64 lapic_frq = 0;
 
 void clock_source::calibrate(::clock::clock_source *cs)
 {
     clock_event *ev = (clock_event *)event;
 
-    i64 apic_hz[7];
-    i64 sum = 0;
-    for (auto &i : apic_hz)
+    if (lapic_counter == 0)
     {
-        i = calibrate_apic(cs);
-        sum += i;
+        i64 apic_hz[7];
+        i64 sum = 0;
+        for (auto &i : apic_hz)
+        {
+            i = calibrate_apic(cs);
+            sum += i;
+        }
+        sum /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
+        u64 hz = sum;
+        u64 abs_delta = 0;
+        for (auto i : apic_hz)
+        {
+            i64 d = (i - sum);
+            abs_delta += d * d;
+        }
+
+        abs_delta /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
+
+        u64 frq = hz * ev->init_counter * divide_value(ev->divide);
+        lapic_frq = frq;
+
+        trace::debug("Local APIC Timer ", frq, "HZ. ", frq / 1000000, "MHZ. ", "divide ", divide_value(ev->divide));
+
+        trace::debug("cpu bus frequency ", frq / 1000000, "MHZ");
+
+        lapic_counter = frq / (divide_value(ev->divide) * ev->hz);
+        trace::debug("set counter ", lapic_counter);
     }
-    sum /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
-    u64 hz = sum;
-    u64 abs_delta = 0;
-    for (auto i : apic_hz)
-    {
-        i64 d = (i - sum);
-        abs_delta += d * d;
-    }
+    ev->bus_frequency = lapic_frq;
+    ev->init_counter = lapic_counter;
 
-    abs_delta /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
-
-    u64 frq = hz * ev->init_counter * divide_value(ev->divide);
-    ev->bus_frequency = frq;
-
-    trace::debug("Local APIC Timer ", frq, "HZ. ", frq / 1000000, "MHZ. ", "divide ", divide_value(ev->divide));
-
-    trace::debug("cpu bus frequency ", frq / 1000000, "MHZ");
-
-    u64 c = frq / (divide_value(ev->divide) * ev->hz);
-    ev->init_counter = c;
-    trace::debug("set counter ", c);
     u64 currentHZ = calibrate_apic(cs);
     trace::debug("Local APIC Timer ", currentHZ, "HZ. ", currentHZ / 1000000, "MHZ");
 
     ev->hz = currentHZ;
 }
 
-clock_source *global_lt_cs = nullptr;
-clock_event *global_lt_ev = nullptr;
-
 clock_source *make_clock()
 {
-    if (global_lt_cs == nullptr)
-    {
-        global_lt_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
-        global_lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
-        global_lt_ev->set_source(global_lt_cs);
-        global_lt_cs->set_event(global_lt_ev);
-        global_lt_ev->init(1000);
-        global_lt_cs->init();
-    }
-    return global_lt_cs;
+    clock_source *lt_cs = nullptr;
+    clock_event *lt_ev = nullptr;
+
+    lt_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
+    lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
+    lt_ev->set_source(lt_cs);
+    lt_cs->set_event(lt_ev);
+    lt_ev->init(1000);
+    lt_cs->init();
+    lt_ev->id = cpu::current().get_apic_id();
+
+    return lt_cs;
 }
 
 } // namespace arch::APIC

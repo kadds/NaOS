@@ -62,7 +62,6 @@ u64 limit;
 zones_t global_zones;
 
 const u64 linear_addr_offset = 0xffff800000000000;
-const u64 page_size = 0x1000;
 
 vm::info_t *kernel_vm_info;
 

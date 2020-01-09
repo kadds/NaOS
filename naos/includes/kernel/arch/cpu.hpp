@@ -6,6 +6,7 @@ namespace task
 {
 struct thread_t;
 };
+
 namespace arch::cpu
 {
 inline constexpr u32 max_cpu_support = 32;

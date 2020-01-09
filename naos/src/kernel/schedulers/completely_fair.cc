@@ -24,7 +24,7 @@ struct less_cmp
     }
 };
 
-using thread_skip_list_t = util::skip_list<thread_t *, less_cmp>;
+using thread_skip_list_t = util::skip_list<thread_t *>;
 struct cpu_task_list_cf_t
 {
     using thread_list_cache_allocator_t = memory::list_node_cache_allocator<thread_list_t>;

@@ -70,15 +70,15 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
 
     if (!list.empty())
     {
-        u64 high_bound = range_top;
-        for (auto it = list.rbegin(); it != list.rend(); --it)
+        u64 low_bound = range_bottom;
+        for (auto it = list.begin(); it != list.end(); ++it)
         {
             vm_t *vm = &it;
-            if (high_bound - vm->end >= size)
+            if (vm->start - low_bound >= size)
             {
-                return &list.insert(++it, vm_t(high_bound - size, high_bound, flags, func, user_data));
+                return &list.insert(vm_t(low_bound, low_bound + size, flags, func, user_data));
             }
-            high_bound = vm->start;
+            low_bound = vm->end;
         }
     }
     else
@@ -87,7 +87,7 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
         {
             return nullptr;
         }
-        return &list.push_back(vm_t(range_top - size, range_top, flags, func, user_data));
+        return &list.insert(vm_t(range_bottom, range_bottom + size, flags, func, user_data));
     }
     return nullptr;
 }
@@ -125,21 +125,21 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
 
     if (list.empty())
     {
-        return &list.push_back(vm_t(start, end, flags, func, user_data));
+        return &list.insert(vm_t(start, end, flags, func, user_data));
     }
+
     u64 low_bound = range_bottom;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
         if (start < it->end)
         {
             if (end <= it->start && start >= low_bound)
-                return &list.insert(it, vm_t(start, end, flags, func, user_data));
+                return &list.insert(vm_t(start, end, flags, func, user_data));
             else
                 return nullptr;
         }
-        low_bound = it->end;
     }
-    return &list.push_back(vm_t(start, end, flags, func, user_data));
+    return nullptr;
 }
 
 const vm_t *vm_allocator::get_vm_area(u64 p)

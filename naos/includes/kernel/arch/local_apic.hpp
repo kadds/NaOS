@@ -41,6 +41,7 @@ class clock_source;
 class clock_event : public ::clock::clock_event
 {
   private:
+    friend clock_source *make_clock();
     friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
     friend class clock_source;
     volatile bool is_suspend;
@@ -48,6 +49,7 @@ class clock_event : public ::clock::clock_event
     volatile u32 init_counter;
     volatile u32 divide;
     volatile u64 bus_frequency;
+    u64 id;
 
     u64 hz;
 

@@ -43,6 +43,7 @@ void print_inner(const char *str, u64 len)
     if (unlikely(ring_buffer != nullptr))
     {
         ring_buffer->write((const byte *)str, len);
+        serial_device.write((const byte *)str, len);
     }
     else
     {

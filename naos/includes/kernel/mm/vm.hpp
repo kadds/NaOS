@@ -1,6 +1,6 @@
 #pragma once
 #include "../lock.hpp"
-#include "../util/linked_list.hpp"
+#include "../util/skip_list.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
 #include "list_node_cache.hpp"
@@ -42,6 +42,7 @@ struct vm_t
     vm_page_fault_func handle;
     u64 user_data;
     bool operator==(const vm_t &rhs) const { return rhs.start == start && rhs.end == end && rhs.flags == flags; }
+    bool operator<(const vm_t &rhs) const { return start < rhs.start; }
     vm_t(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data)
         : start(start)
         , end(end)
@@ -53,7 +54,7 @@ struct vm_t
 class vm_allocator
 {
   public:
-    using list_t = util::linked_list<vm_t>;
+    using list_t = util::skip_list<vm_t>;
     using list_node_cache_allocator_t = memory::list_node_cache_allocator<list_t>;
     static list_node_cache_allocator_t *allocator;
 

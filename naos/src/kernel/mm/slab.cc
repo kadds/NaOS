@@ -20,7 +20,7 @@ void slab_group::new_memory_node()
 
 void slab_group::delete_memory_node(slab *s)
 {
-    kassert(s->rest == node_pre_slab, "slab error");
+    kassert(s->rest == node_pre_slab, "slab error rest:", s->rest, " target:", node_pre_slab);
     all_obj_count -= node_pre_slab;
     s->~slab();
     memory::KernelBuddyAllocatorV->deallocate(s);
@@ -130,7 +130,7 @@ void slab_group::free(void *ptr)
 
                 if (all_obj_used * 2 < all_obj_count)
                 {
-                    delete_memory_node(*it);
+                    delete_memory_node(&e);
                     list_empty.pop_back();
                 }
             }
