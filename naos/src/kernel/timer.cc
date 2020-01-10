@@ -55,7 +55,7 @@ struct cpu_timer_t
 
     cpu_timer_t()
         : watcher_list(memory::KernelCommonAllocatorV)
-        , tick_list(memory::KernelCommonAllocatorV, 3)
+        , tick_list(memory::KernelCommonAllocatorV, 2, 16)
     {
     }
 };
@@ -126,18 +126,18 @@ void init()
     {
         cs->calibrate(pit_source);
     }
+
+    auto cev = cpu::current().get_clock_event();
+    cev->resume();
+    cev->wait_next_tick();
+    get_clock_source()->reinit();
+
     if (cpu::current().is_bsp())
     {
         clock::init();
         clock::start_tick();
         irq::insert_soft_request_func(irq::soft_vector::timer, on_tick, 0);
     }
-
-    auto cev = cpu::current().get_clock_event();
-    cev->resume();
-    cev->wait_next_tick();
-
-    get_clock_source()->reinit();
 
     timer_spinlock.unlock();
 }
@@ -176,7 +176,7 @@ void remove_watcher(watcher_func func)
             return;
         }
     }
-
+    uctx::UnInterruptableContext icu;
     for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
     {
         if (it->function <= func)

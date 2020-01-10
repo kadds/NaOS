@@ -6,6 +6,7 @@ namespace task::builtin::softirq
 {
 void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
+    task::set_cpu_mask(task::current(), task::current_cpu_mask());
     while (1)
     {
         irq::wakeup_soft_irq_daemon();

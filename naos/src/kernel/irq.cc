@@ -31,8 +31,6 @@ request_lock_list_t *soft_irq_list;
 
 request_list_node_allocator_t *list_allocator;
 
-task::wait_queue *wait_queue;
-
 const int irq_count = 256;
 
 bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
@@ -88,7 +86,7 @@ void do_soft_irq()
     }
     task::enable_preempt();
     if (unlikely(wakeup_condition(0)))
-        task::do_wake_up(wait_queue);
+        task::do_wake_up(cpu::current().get_soft_irq_wait_queue());
 }
 
 bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
@@ -110,7 +108,8 @@ bool wakeup_condition(u64 user_data)
 
 void wakeup_soft_irq_daemon()
 {
-    task::do_wait(wait_queue, wakeup_condition, 0, task::wait_context_type::uninterruptible);
+    task::do_wait(cpu::current().get_soft_irq_wait_queue(), wakeup_condition, 0,
+                  task::wait_context_type::uninterruptible);
     do_soft_irq();
 }
 
@@ -124,9 +123,7 @@ void init()
 {
     if (cpu::current().is_bsp())
     {
-
         list_allocator = memory::New<request_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-        wait_queue = memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
         irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
         soft_irq_list =
             memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
@@ -145,14 +142,14 @@ void insert_request_func(u32 vector, request_func func, u64 user_data)
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
-void remove_request_func(u32 vector, request_func func)
+void remove_request_func(u32 vector, request_func func, u64 user_data)
 {
     auto &locked_list = irq_list[vector];
     uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
     auto &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        if (it->hard_func == func)
+        if (it->hard_func == func && it->user_data == user_data)
         {
             list.remove(it);
             return;
@@ -167,14 +164,14 @@ void insert_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
-void remove_soft_request_func(u32 vector, soft_request_func func)
+void remove_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
 {
     auto &locked_list = soft_irq_list[vector];
     uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
     request_list_t &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        if (it->soft_func == func)
+        if (it->soft_func == func && it->user_data == user_data)
         {
             list.remove(it);
             return;

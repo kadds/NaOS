@@ -41,8 +41,8 @@ struct vm_t
     u64 flags;
     vm_page_fault_func handle;
     u64 user_data;
-    bool operator==(const vm_t &rhs) const { return rhs.start == start && rhs.end == end && rhs.flags == flags; }
-    bool operator<(const vm_t &rhs) const { return start < rhs.start; }
+    bool operator==(const vm_t &rhs) const { return rhs.end == end; }
+    bool operator<(const vm_t &rhs) const { return end < rhs.end; }
     vm_t(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data)
         : start(start)
         , end(end)
@@ -65,7 +65,7 @@ class vm_allocator
 
   public:
     vm_allocator(u64 top, u64 bottom)
-        : list(allocator)
+        : list(allocator, 2, 32)
         , range_top(top)
         , range_bottom(bottom)
     {

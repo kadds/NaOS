@@ -35,13 +35,21 @@ template <typename E> class array
         E *operator&() { return current; }
         E *operator->() { return current; }
 
-        iterator operator++(int) { return iterator(current + 1); }
+        iterator operator++(int)
+        {
+            current++;
+            return iterator(current - 1);
+        }
         iterator &operator++()
         {
             current++;
             return *this;
         }
-        iterator operator--(int) { return iterator(current - 1); }
+        iterator operator--(int)
+        {
+            current--;
+            return iterator(current + 1);
+        }
         iterator &operator--()
         {
             current--;

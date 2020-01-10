@@ -5,9 +5,9 @@
 #include "kernel/trace.hpp"
 namespace cpu
 {
-bool cpu_data_t::is_bsp() { return arch::cpu::current().is_bsp(); }
+bool cpu_data_t::is_bsp() { return arch::cpu::get(smp_id).is_bsp(); }
 
-int cpu_data_t::id() { return arch::cpu::current().get_id(); }
+int cpu_data_t::id() { return smp_id; }
 
 void cpu_data_t::set_task(task::thread_t *task)
 {
@@ -22,6 +22,9 @@ void init()
     kassert(arch::cpu::current().get_user_data() == nullptr, "arch cpu data must be nullptr");
     cpu_data_t *cpu = memory::New<cpu_data_t>(memory::KernelCommonAllocatorV);
     arch::cpu::current().set_user_data(cpu);
+    cpu->smp_id = arch::cpu::id();
+    cpu->soft_irq_wait_queue =
+        memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
 #ifdef _DEBUG
     auto &c = arch::cpu::current();

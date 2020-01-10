@@ -48,7 +48,11 @@ template <typename E> class linked_list
             node = node->next;
             return *this;
         }
-        iterator operator++(int) { return iterator(node->next); }
+        iterator operator++(int)
+        {
+            node = node->next;
+            return iterator(node->prev);
+        }
 
         iterator &operator--()
         {
@@ -56,7 +60,11 @@ template <typename E> class linked_list
             return *this;
         }
 
-        iterator operator--(int) { return iterator(node->prev); }
+        iterator operator--(int)
+        {
+            node = node->prev;
+            return iterator(node->next);
+        }
 
         bool operator==(const iterator &it) { return it.node == node; }
         bool operator!=(const iterator &it) { return !operator==(it); }

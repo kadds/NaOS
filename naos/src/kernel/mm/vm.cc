@@ -52,14 +52,23 @@ void listen_page_fault() { irq::insert_request_func(arch::exception::vector::pag
 
 template <typename _T> _T *new_page_table()
 {
-    static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    return memory::New<_T, 0x1000>(memory::KernelBuddyAllocatorV);
+    static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
+    return memory::New<_T, memory::page_size>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
-    static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
+    static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
     memory::Delete<_T>(memory::KernelBuddyAllocatorV, addr);
+}
+
+int search_vma(const vm_t &vm, u64 p)
+{
+    if (p >= vm.end)
+        return 1;
+    else if (p < vm.start)
+        return -1;
+    return 0;
 }
 
 const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func func, u64 user_data)
@@ -67,10 +76,11 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
     size = (size + memory::page_size - 1) & ~(memory::page_size - 1);
 
     uctx::SpinLockUnInterruptableContext ctx(list_lock);
+    u64 low_bound = range_bottom;
 
     if (!list.empty())
     {
-        u64 low_bound = range_bottom;
+        // allocate first fit
         for (auto it = list.begin(); it != list.end(); ++it)
         {
             vm_t *vm = &it;
@@ -81,33 +91,27 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
             low_bound = vm->end;
         }
     }
-    else
+    if (range_top < low_bound + size)
     {
-        if (range_top < range_bottom + size)
-        {
-            return nullptr;
-        }
-        return &list.insert(vm_t(range_bottom, range_bottom + size, flags, func, user_data));
+        return nullptr;
     }
-    return nullptr;
+    return &list.insert(vm_t(low_bound, low_bound + size, flags, func, user_data));
 }
 
 void vm_allocator::deallocate_map(const vm_t *vm)
 {
     uctx::SpinLockUnInterruptableContext ctx(list_lock);
-    list.remove(list.find(*vm));
+    list.remove(*vm);
 }
 
 bool vm_allocator::deallocate_map(u64 p)
 {
     uctx::SpinLockUnInterruptableContext ctx(list_lock);
-    for (auto it = list.begin(); it != list.end(); ++it)
+    auto it = list.for_each(search_vma, p);
+    if (it != list.end())
     {
-        if (it->start <= p || it->end > p)
-        {
-            list.remove(it);
-            return true;
-        }
+        list.remove(it);
+        return true;
     }
     return false;
 }
@@ -128,34 +132,27 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
         return &list.insert(vm_t(start, end, flags, func, user_data));
     }
 
-    u64 low_bound = range_bottom;
-    for (auto it = list.begin(); it != list.end(); ++it)
+    auto it = list.for_each_last(search_vma, start);
+    kassert(it != list.end(), "vma assert failed");
+    it++;
+    if (it != list.end())
     {
-        if (start < it->end)
+        if (it->start < end)
         {
-            if (end <= it->start && start >= low_bound)
-                return &list.insert(vm_t(start, end, flags, func, user_data));
-            else
-                return nullptr;
+            return nullptr;
         }
     }
-    return nullptr;
+    return &list.insert(vm_t(start, end, flags, func, user_data));
 }
 
 const vm_t *vm_allocator::get_vm_area(u64 p)
 {
     uctx::SpinLockUnInterruptableContext ctx(list_lock);
-    for (auto it = list.begin(); it != list.end(); ++it)
-    {
-        if ((char *)it->start <= (char *)p)
-        {
-            if ((char *)it->end > (char *)p)
-            {
-                return &it;
-            }
-        }
-    }
-    return nullptr;
+
+    auto it = list.for_each(search_vma, p);
+    if (it == list.end())
+        return nullptr;
+    return &it;
 }
 
 mmu_paging::mmu_paging() { base_paging_addr = new_page_table<arch::paging::base_paging_t>(); }

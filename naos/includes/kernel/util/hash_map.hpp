@@ -91,6 +91,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
         iterator operator++(int)
         {
+            auto old = *this;
             auto node = this->node;
             auto table = this->table;
 
@@ -101,7 +102,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
                 {
                     table++;
                     if (table >= end_table)
-                        return iterator(end_table, end_table, nullptr);
+                        return old;
                     else
                         node = table->next;
                 }
@@ -109,7 +110,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             else
                 node = node->next;
 
-            return iterator(table, end_table, node);
+            return old;
         }
 
         iterator &operator++()

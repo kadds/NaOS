@@ -167,6 +167,8 @@ int sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 stat
 
 void sigreturn(u64 code) { task::signal_return(code); }
 
+u64 getcpu_running() { return task::current()->cpuid; }
+
 BEGIN_SYSCALL
 SYSCALL(30, exit)
 SYSCALL(31, sleep)
@@ -183,6 +185,7 @@ SYSCALL(41, raise)
 SYSCALL(42, sigsend)
 SYSCALL(43, sigput)
 SYSCALL(44, sigreturn)
+SYSCALL(45, getcpu_running);
 END_SYSCALL
 
 } // namespace syscall

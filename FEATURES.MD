@@ -16,7 +16,7 @@ Features / TODO
     - [ ] Scheduler
         - [x] Round Robin
         - [x] CFS
-        - [ ] Load balancing
+        - [x] Load balancing
     - [ ] Thread
         - [x] Schedule
         - [ ] Synchronize

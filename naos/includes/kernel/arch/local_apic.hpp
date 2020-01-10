@@ -41,7 +41,6 @@ class clock_source;
 class clock_event : public ::clock::clock_event
 {
   private:
-    friend clock_source *make_clock();
     friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
     friend class clock_source;
     volatile bool is_suspend;

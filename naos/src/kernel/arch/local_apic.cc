@@ -279,26 +279,26 @@ void local_post_start_up(u64 addr)
 
 void local_post_IPI_all(u64 intr)
 {
-    intr |= 0xFF;
-    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b1000u << 16);
+    intr &= 0xFF;
+    write_register64(icr_0, intr | (0b01000000u) << 8 | 0b1000u << 16);
 }
 
 void local_post_IPI_all_notself(u64 intr)
 {
-    intr |= 0xFF;
-    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b1100u << 16);
+    intr &= 0xFF;
+    write_register64(icr_0, intr | (0b01000000u) << 8 | 0b1100u << 16);
 }
 
 void local_post_IPI_self(u64 intr)
 {
-    intr |= 0xFF;
-    write_register64(icr_0, intr | (0b10000000u) << 8 | 0b0100u << 16);
+    intr &= 0xFF;
+    write_register64(icr_0, intr | (0b01000000u) << 8 | 0b0100u << 16);
 }
 
 void local_post_IPI_mask(u64 intr, u64 mask0)
 {
-    intr |= 0xFF;
-    write_register64(icr_0, intr | (0b10000000u) << 8 | mask0 << 56);
+    intr &= 0xFF;
+    write_register64(icr_0, intr | (0b01000000u) << 8 | mask0 << 56);
 }
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }
@@ -336,6 +336,7 @@ void clock_event::init(u64 HZ)
     this->hz = HZ;
     init_counter = 10000;
     divide = 0b001;
+    id = cpu::current().get_apic_id();
 
     is_suspend = false;
     suspend();
@@ -351,7 +352,7 @@ void clock_event::suspend()
     {
         uctx::UnInterruptableContext icu;
         is_suspend = true;
-        irq::remove_request_func(irq::hard_vector::local_apic_timer, on_event);
+        irq::remove_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
         local_disable(lvt_index::timer);
 
         write_register(timer_initial_count_register, 0xFFFFFFFF);
@@ -473,7 +474,6 @@ clock_source *make_clock()
     lt_cs->set_event(lt_ev);
     lt_ev->init(1000);
     lt_cs->init();
-    lt_ev->id = cpu::current().get_apic_id();
 
     return lt_cs;
 }

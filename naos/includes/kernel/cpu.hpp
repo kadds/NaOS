@@ -1,5 +1,8 @@
 #pragma once
 #include "common.hpp"
+#include "lock.hpp"
+#include "wait.hpp"
+
 namespace task
 {
 struct thread_t;
@@ -12,6 +15,8 @@ class clock_event;
 
 namespace cpu
 {
+typedef void (*call_cpu_func)(u64 user_data);
+
 struct load_data_t
 {
     u64 last_sched_time = 0;
@@ -30,6 +35,7 @@ class cpu_data_t
 {
     task::thread_t *current_task = nullptr;
     task::thread_t *idle_task = nullptr;
+    u32 smp_id;
     void *schedule_data[2];
     void *tasklet_queue = nullptr;
     load_data_t load_data;
@@ -39,7 +45,14 @@ class cpu_data_t
     clock::clock_event *clock_ev;
     void *clock_queue;
 
+    call_cpu_func cpu_func;
+    u64 call_data;
+    lock::spinlock_t call_lock;
+
+    task::wait_queue *soft_irq_wait_queue;
+
   public:
+    friend void init();
     cpu_data_t() = default;
     cpu_data_t(const cpu_data_t &) = delete;
     cpu_data_t &operator=(const cpu_data_t &) = delete;
@@ -77,6 +90,18 @@ class cpu_data_t
     void *get_clock_queue() { return clock_queue; }
 
     void set_clock_queue(void *q) { clock_queue = q; }
+
+    void set_call_cpu_func(call_cpu_func func, u64 user_data)
+    {
+        this->cpu_func = func;
+        this->call_data = user_data;
+    }
+
+    void call_cpu_func() { cpu_func(call_data); }
+
+    lock::spinlock_t &cpu_call_lock() { return call_lock; }
+
+    task::wait_queue *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
 };
 cpu_data_t &current();
 void init();

@@ -54,7 +54,7 @@ void clock_event::suspend()
     if (!is_suspend)
     {
         uctx::UnInterruptableContext icu;
-        irq::remove_request_func(irq::hard_vector::pit_timer, on_event);
+        irq::remove_request_func(irq::hard_vector::pit_timer, on_event, (u64)this);
         io_out8(command_port, 0b00110110);
         u32 p = 0xFFFFFFFF;
         io_out8(channel_0_port, p & 0xff);

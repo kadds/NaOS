@@ -18,13 +18,24 @@ struct thread_time_cf_t
 
 struct less_cmp
 {
-    bool operator()(const thread_t *thd1, const thread_t *thd2)
+};
+
+struct cfs_thread_t
+{
+    thread_t *thread;
+    bool operator<(const cfs_thread_t &thd)
     {
-        return ((thread_time_cf_t *)(thd1->schedule_data))->vtime < ((thread_time_cf_t *)(thd2->schedule_data))->vtime;
+        return ((thread_time_cf_t *)(thread->schedule_data))->vtime <
+               ((thread_time_cf_t *)(thd.thread->schedule_data))->vtime;
+    }
+    bool operator==(const cfs_thread_t &thd) { return thd.thread == thread; }
+    explicit cfs_thread_t(thread_t *thread)
+        : thread(thread)
+    {
     }
 };
 
-using thread_skip_list_t = util::skip_list<thread_t *>;
+using thread_skip_list_t = util::skip_list<cfs_thread_t>;
 struct cpu_task_list_cf_t
 {
     using thread_list_cache_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
@@ -65,8 +76,6 @@ void completely_fair_scheduler::init_cpu()
 
     cpu::current().get_idle_task()->schedule_data = dt;
     cpu::current().get_idle_task()->scheduler = this;
-    all_task_count++;
-    task_ready_count++;
 }
 
 void completely_fair_scheduler::destroy_cpu()
@@ -84,9 +93,7 @@ void completely_fair_scheduler::add(thread_t *thread)
     dt->vtime = 0;
     thread->cpuid = cpu::current().id();
     thread->schedule_data = dt;
-    task_list->runable_list.insert(thread);
-    all_task_count++;
-    task_ready_count++;
+    task_list->runable_list.insert(cfs_thread_t(thread));
 }
 
 void completely_fair_scheduler::remove(thread_t *thread)
@@ -98,15 +105,12 @@ void completely_fair_scheduler::remove(thread_t *thread)
     if (node != task_list->block_list.end())
     {
         task_list->block_list.remove(node);
-        all_task_count--;
     }
     else
     {
-        auto it = task_list->runable_list.find(thread);
+        auto it = task_list->runable_list.find(cfs_thread_t(thread));
         if (it != task_list->runable_list.end())
         {
-            all_task_count--;
-            task_ready_count--;
             task_list->runable_list.remove(it);
         }
     }
@@ -121,7 +125,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
     auto task_list = get_cpu_task_list();
     uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
 
-    if (state == task::thread_state::ready)
+    if (state == thread_state::ready)
     {
         if (thread->process->pid == 0)
         {
@@ -133,10 +137,10 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             auto node = task_list->block_list.find(thread);
             if (node != task_list->block_list.end())
             {
+                thread->state = state;
                 task_list->block_list.remove(node);
                 thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
-                task_list->runable_list.insert(thread);
-                task_ready_count++;
+                task_list->runable_list.insert(cfs_thread_t(thread));
                 return;
             }
         }
@@ -158,12 +162,12 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         }
         else if (thread->state == thread_state::ready)
         {
-            auto it = task_list->runable_list.find(thread);
+            auto it = task_list->runable_list.find(cfs_thread_t(thread));
             if (it != task_list->runable_list.end())
             {
+                thread->state = state;
                 task_list->runable_list.remove(it);
                 task_list->block_list.push_back(thread);
-                task_ready_count--;
                 return;
             }
         }
@@ -185,20 +189,18 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         {
             thread->state = thread_state::interruptable;
             task_list->block_list.push_back(thread);
-            task_ready_count--;
         }
         else if (thread->attributes & thread_attributes::block_unintr)
         {
             thread->state = thread_state::uninterruptible;
             task_list->block_list.push_back(thread);
-            task_ready_count--;
         }
         else
         {
             if (thread->state == thread_state::running)
             {
-                task_list->runable_list.insert(thread);
                 thread->state = thread_state::ready;
+                task_list->runable_list.insert(cfs_thread_t(thread));
             }
         }
         return;
@@ -210,8 +212,18 @@ void completely_fair_scheduler::update_prop(thread_t *thread, u8 static_priority
 
 void completely_fair_scheduler::on_migrate(thread_t *thread)
 {
+    auto task_list = get_cpu_task_list();
+    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
+    auto dt = (thread_time_cf_t *)thread->schedule_data;
+    dt->vtime_delta = 100;
+    dt->vtime = 0;
     thread->cpuid = cpu::current().id();
-    add(thread);
+    if (thread->state == thread_state::ready)
+        task_list->runable_list.insert(cfs_thread_t(thread));
+    else if (thread->state == thread_state::interruptable || thread->state == thread_state::uninterruptible)
+        task_list->block_list.push_back(thread);
+    else
+        trace::panic("Unknown thread state when migrate(CFS). state: ", (u64)thread->state);
 }
 
 thread_t *completely_fair_scheduler::pick_available_task()
@@ -222,9 +234,9 @@ thread_t *completely_fair_scheduler::pick_available_task()
     {
         return cpu::current().get_idle_task();
     }
-    thread_t *t = task_list->runable_list.front();
-    task_list->runable_list.remove(t);
-    return t;
+    auto thd = task_list->runable_list.front();
+    task_list->runable_list.remove(thd);
+    return thd.thread;
 }
 
 bool completely_fair_scheduler::schedule()
@@ -290,7 +302,7 @@ void completely_fair_scheduler::schedule_tick()
         {
             auto next = task_list->runable_list.front();
 
-            if (cur->process->pid == 0 || get_schedule_data(next)->vtime <= scher_data->vtime)
+            if (cur->process->pid == 0 || get_schedule_data(next.thread)->vtime <= scher_data->vtime)
                 cur->attributes |= thread_attributes::need_schedule;
         }
     }
@@ -303,8 +315,8 @@ thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
     auto list = get_cpu_task_list();
     for (auto thd : list->runable_list)
     {
-        if (thd->cpumask.mask & (1ul << cpuid))
-            return thd;
+        if (thd.thread->cpumask.mask & (1ul << cpuid))
+            return thd.thread;
     }
     return nullptr;
 }
@@ -312,9 +324,10 @@ thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
 void completely_fair_scheduler::commit_migrate(thread_t *thd)
 {
     auto list = get_cpu_task_list();
-    auto it = list->runable_list.find(thd);
-    if (it != list->runable_list.end())
-        list->runable_list.remove(it);
+    auto it = list->runable_list.find(cfs_thread_t(thd));
+    kassert(it != list->runable_list.end(), "commit task failed!");
+
+    list->runable_list.remove(it);
 }
 
 u64 completely_fair_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) { return 0; }
@@ -322,8 +335,6 @@ u64 completely_fair_scheduler::sctl(int operator_type, thread_t *target, u64 att
 completely_fair_scheduler::completely_fair_scheduler()
     : sched_min_granularity_us(2000)
     , sched_wakeup_granularity_us(1)
-    , all_task_count(0)
-    , task_ready_count(0)
 {
 }
 

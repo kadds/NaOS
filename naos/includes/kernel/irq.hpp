@@ -11,7 +11,7 @@ enum hard_vector
     pit_timer = 34,
     HEPT = 56,
     local_apic_timer = 128,
-
+    IPI_call = 250,
     IPI_reschedule = 251,
     IPI_tlb = 252,
 };
@@ -55,9 +55,9 @@ void raise_soft_irq(u64 soft_irq_number);
 void init();
 
 void insert_request_func(u32 vector, request_func func, u64 user_data);
-void remove_request_func(u32 vector, request_func func);
+void remove_request_func(u32 vector, request_func func, u64 user_data);
 
 void insert_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
-void remove_soft_request_func(u32 vector, soft_request_func func);
+void remove_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
 
 } // namespace irq

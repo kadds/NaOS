@@ -38,6 +38,7 @@ void init()
     APIC::local_post_init_IPI();
     trace::debug("Send StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
+    APIC::local_post_start_up((u64)base_ap_phy_addr);
 
     trace::debug("Wait for AP startup.");
     u32 count = 0;

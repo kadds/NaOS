@@ -508,11 +508,7 @@ void do_exit(u64 ret)
         auto parent = find_pid(process->parent_pid);
         process->attributes |= process_attributes::no_thread;
         do_wake_up(&process->wait_que);
-
-        if (!parent)
-        {
         }
-    }
     thread_yield();
     trace::panic("Unreachable control flow.");
 }
@@ -723,6 +719,8 @@ void switch_thread(thread_t *old, thread_t *new_task)
 
     _switch_task(old->register_info, new_task->register_info);
 }
+
+void set_cpu_mask(thread_t *thd, cpu_mask_t mask) { thd->cpumask = mask; }
 
 void thread_yield()
 {

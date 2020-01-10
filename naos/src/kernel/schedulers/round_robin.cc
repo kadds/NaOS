@@ -34,7 +34,6 @@ void round_robin_scheduler::add(thread_t *thread)
     thread->cpuid = cpu::current().id();
     thread->schedule_data = rr;
     l->runable_list.push_back(thread);
-    task_ready_count++;
 }
 
 void round_robin_scheduler::remove(thread_t *thread)
@@ -44,7 +43,6 @@ void round_robin_scheduler::remove(thread_t *thread)
     if (it != l->runable_list.end())
     {
         l->runable_list.remove(it);
-        task_ready_count--;
     }
     memory::Delete<>(memory::KernelCommonAllocatorV, (thread_data_rr_t *)thread->schedule_data);
 }
@@ -57,13 +55,12 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     {
         if (thread->state == thread_state::ready)
         {
-            thread->state = state;
             auto it = l->runable_list.find(thread);
             if (it != l->runable_list.end())
             {
+                thread->state = state;
                 l->runable_list.remove(it);
                 block_threads.push_back(thread);
-                task_ready_count--;
                 return;
             }
         }
@@ -80,12 +77,15 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     {
         if (thread->state == thread_state::uninterruptible || thread->state == thread_state::interruptable)
         {
-            thread->state = state;
-            block_threads.remove(block_threads.find(thread));
-            thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
-            l->runable_list.push_back(thread);
-            task_ready_count++;
-            return;
+            auto it = block_threads.find(thread);
+            if (it != block_threads.end())
+            {
+                thread->state = state;
+                block_threads.remove(it);
+                thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
+                l->runable_list.push_back(thread);
+                return;
+            }
         }
         else if (thread->state == thread_state::running)
         {
@@ -98,13 +98,11 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         {
             thread->state = thread_state::interruptable;
             block_threads.push_back(thread);
-            task_ready_count--;
         }
         else if (thread->attributes & thread_attributes::block_unintr)
         {
             thread->state = thread_state::uninterruptible;
             block_threads.push_back(thread);
-            task_ready_count--;
         }
         else
         {
@@ -125,8 +123,20 @@ void round_robin_scheduler::update_prop(thread_t *thread, u8 static_priority, u8
 
 void round_robin_scheduler::on_migrate(thread_t *thread)
 {
+    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+
+    auto rr = memory::New<thread_data_rr_t>(memory::KernelCommonAllocatorV);
+    rr->rest_span = calc_span(thread);
     thread->cpuid = cpu::current().id();
-    add(thread);
+    thread->schedule_data = rr;
+    l->runable_list.push_back(thread);
+
+    if (thread->state == thread_state::ready)
+        l->runable_list.push_back(thread);
+    else if (thread->state == thread_state::interruptable || thread->state == thread_state::uninterruptible)
+        block_threads.push_back(thread);
+    else
+        trace::panic("Unknown thread state when migrate(RR). state: ", (u64)thread->state);
 }
 
 bool round_robin_scheduler::schedule()
@@ -222,7 +232,9 @@ thread_t *round_robin_scheduler::get_migratable_task(u32 cpuid)
 void round_robin_scheduler::commit_migrate(thread_t *thd)
 {
     auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
-    l->runable_list.remove(l->runable_list.find(thd));
+    auto it = l->runable_list.find(thd);
+    kassert(it != l->runable_list.end(), "commit task failed!");
+    l->runable_list.remove(it);
 }
 
 u64 round_robin_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) { return 0; }
@@ -242,7 +254,6 @@ void round_robin_scheduler::destroy_cpu()
 
 round_robin_scheduler::round_robin_scheduler()
     : block_threads(memory::KernelCommonAllocatorV)
-    , task_ready_count(0)
 {
 }
 

@@ -120,6 +120,14 @@ struct statistics_t
 struct cpu_mask_t
 {
     u64 mask;
+    cpu_mask_t(u64 mask)
+        : mask(mask)
+    {
+    }
+    cpu_mask_t()
+        : mask(0xFFFFFFFFFFFFFFFFUL)
+    {
+    }
 };
 
 /// The thread struct
@@ -231,6 +239,10 @@ thread_t *find_tid(process_t *process, thread_id tid);
 
 inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
 inline process_t *current_process() { return current()->process; }
+
+void set_cpu_mask(thread_t *thd, cpu_mask_t mask);
+
+static inline cpu_mask_t current_cpu_mask() { return (1ul << cpu::current().id()); }
 
 void thread_yield();
 void user_schedule();

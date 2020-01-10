@@ -7,7 +7,6 @@ class round_robin_scheduler : public scheduler
 {
     static const scheduler_class clazz = scheduler_class::round_robin;
     thread_list_t block_threads;
-    std::atomic_ulong task_ready_count;
 
   public:
     void add(thread_t *thread) override;

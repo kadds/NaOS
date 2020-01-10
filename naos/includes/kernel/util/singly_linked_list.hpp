@@ -45,7 +45,12 @@ template <typename E> class singly_linked_list
             node = node->next;
             return *this;
         }
-        iterator operator++(int) { return iterator(node->next); }
+        iterator operator++(int)
+        {
+            auto old = *this;
+            node = node->next;
+            return old;
+        }
 
         bool operator==(const iterator &it) { return it.node == node; }
         bool operator!=(const iterator &it) { return !operator==(it); }

@@ -12,9 +12,6 @@ class completely_fair_scheduler : public scheduler
     time::microsecond_t sched_min_granularity_us;
     time::microsecond_t sched_wakeup_granularity_us;
 
-    std::atomic_ulong all_task_count;
-    std::atomic_ulong task_ready_count;
-
   public:
     static const scheduler_class clazz = scheduler_class::cfs;
 
