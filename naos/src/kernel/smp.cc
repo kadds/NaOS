@@ -21,7 +21,7 @@ irq::request_result flush_tlb_irq(const void *regs, u64 data, u64 user_data)
 irq::request_result ipi_call(const void *regs, u64 data, u64 user_data)
 {
     auto &cpu = cpu::current();
-    cpu.call_cpu_func();
+    cpu.call_cpu();
     cpu.cpu_call_lock().unlock();
 
     return irq::request_result::ok;
@@ -44,7 +44,7 @@ void reschedule_cpu(u32 cpuid)
     arch::APIC::local_post_IPI_mask(irq::hard_vector::IPI_reschedule, arch::cpu::get(cpuid).get_apic_id());
 }
 
-void call_cpu(u32 cpuid, cpu::call_cpu_func call_func, u64 user_data)
+void call_cpu(u32 cpuid, cpu::call_cpu_func_t call_func, u64 user_data)
 {
     auto &cpu = cpu::get(cpuid);
     cpu.cpu_call_lock().lock();

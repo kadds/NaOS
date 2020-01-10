@@ -15,7 +15,7 @@ class clock_event;
 
 namespace cpu
 {
-typedef void (*call_cpu_func)(u64 user_data);
+typedef void (*call_cpu_func_t)(u64 user_data);
 
 struct load_data_t
 {
@@ -45,7 +45,7 @@ class cpu_data_t
     clock::clock_event *clock_ev;
     void *clock_queue;
 
-    call_cpu_func cpu_func;
+    call_cpu_func_t cpu_func;
     u64 call_data;
     lock::spinlock_t call_lock;
 
@@ -58,7 +58,7 @@ class cpu_data_t
     cpu_data_t &operator=(const cpu_data_t &) = delete;
 
     bool is_bsp();
-    int id();
+    u32 id();
     void set_task(task::thread_t *task);
 
     task::thread_t *get_task() { return current_task; }
@@ -91,13 +91,13 @@ class cpu_data_t
 
     void set_clock_queue(void *q) { clock_queue = q; }
 
-    void set_call_cpu_func(call_cpu_func func, u64 user_data)
+    void set_call_cpu_func(call_cpu_func_t func, u64 user_data)
     {
         this->cpu_func = func;
         this->call_data = user_data;
     }
 
-    void call_cpu_func() { cpu_func(call_data); }
+    void call_cpu() { cpu_func(call_data); }
 
     lock::spinlock_t &cpu_call_lock() { return call_lock; }
 

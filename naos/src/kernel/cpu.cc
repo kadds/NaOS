@@ -7,7 +7,7 @@ namespace cpu
 {
 bool cpu_data_t::is_bsp() { return arch::cpu::get(smp_id).is_bsp(); }
 
-int cpu_data_t::id() { return smp_id; }
+u32 cpu_data_t::id() { return smp_id; }
 
 void cpu_data_t::set_task(task::thread_t *task)
 {

@@ -160,7 +160,7 @@ void timer_tick(u64 pass, u64 user_data)
     reload_load_fac();
     u64 cpu_count = cpu::count();
     u64 min_fac = cpu::current().edit_load_data().recent_load_fac;
-    auto cur_id = cpu::current().id();
+    u64 cur_id = cpu::current().id();
     cpu::cpu_data_t *targe_cpu = nullptr;
     for (u64 i = 0; i < cpu_count; i++)
     {

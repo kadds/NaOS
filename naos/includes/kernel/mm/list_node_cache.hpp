@@ -49,7 +49,7 @@ template <typename ListType> class list_node_cache_allocator : public IAllocator
         while (1)
         {
             Node *next = next_node(start);
-            if (((char *)next_node(next) - (char *)list) >= memory::page_size)
+            if ((u64)((char *)next_node(next) - (char *)list) >= memory::page_size)
             {
                 list->set_counter(0);
                 start->next = nullptr;

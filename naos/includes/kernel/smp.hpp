@@ -7,6 +7,6 @@ void init();
 void flush_all_tlb();
 void reschedule_cpu(u32 cpuid);
 
-void call_cpu(u32 cpuid, cpu::call_cpu_func, u64 user_data);
+void call_cpu(u32 cpuid, cpu::call_cpu_func_t, u64 user_data);
 
 } // namespace SMP

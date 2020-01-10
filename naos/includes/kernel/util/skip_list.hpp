@@ -133,8 +133,8 @@ template <typename E> class skip_list
     iterator remove(const E &element)
     {
         auto node = list[max_lev - lev];
-        int lev_del = 0;
-        int cur_lev = 0;
+        u32 lev_del = 0;
+        u32 cur_lev = 0;
         // for each get element per level
         for (u32 i = 0; i < lev; i++)
         {
@@ -264,7 +264,7 @@ template <typename E> class skip_list
     {
         stack = (node_t **)memory::KernelCommonAllocatorV->allocate(sizeof(node_t *) * max_lev, 8);
         list = (node_t **)memory::KernelCommonAllocatorV->allocate(sizeof(node_t *) * max_lev, 8);
-        list[max_lev - 1] = list[max_lev - 1] = memory::New<node_t>(allocator, nullptr, nullptr, nullptr);
+        list[max_lev - 1] = memory::New<node_t>(allocator, nullptr, nullptr, nullptr);
         for (u32 i = 1; i < max_lev; i++)
         {
             list[max_lev - i - 1] = memory::New<node_t>(allocator, nullptr, list[max_lev - i], nullptr);

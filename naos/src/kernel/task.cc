@@ -501,14 +501,11 @@ void do_exit(u64 ret)
             {
                 scheduler::remove(thd);
             }
-
-            // do_wake_up(&thd->wait_que); don't wake up
         }
         process->ret_val = ret;
-        auto parent = find_pid(process->parent_pid);
         process->attributes |= process_attributes::no_thread;
         do_wake_up(&process->wait_que);
-        }
+    }
     thread_yield();
     trace::panic("Unreachable control flow.");
 }
