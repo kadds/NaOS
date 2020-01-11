@@ -46,7 +46,7 @@ struct cpu_task_list_cf_t
     thread_skip_list_t runable_list;
     thread_list_t block_list;
     u64 min_vruntime;
-    lock::spinlock_t list_spinlock;
+    lock::rw_lock_t list_lock;
 
     cpu_task_list_cf_t()
         : runable_list(&allocator)
@@ -87,12 +87,12 @@ void completely_fair_scheduler::destroy_cpu()
 void completely_fair_scheduler::add(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
-    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
     auto dt = memory::New<thread_time_cf_t>(memory::KernelCommonAllocatorV);
     dt->vtime_delta = 100;
     dt->vtime = 0;
     thread->cpuid = cpu::current().id();
     thread->schedule_data = dt;
+    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
     task_list->runable_list.insert(cfs_thread_t(thread));
 }
 
@@ -100,7 +100,7 @@ void completely_fair_scheduler::remove(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
 
-    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
+    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
     auto node = task_list->block_list.find(thread);
     if (node != task_list->block_list.end())
     {
@@ -123,7 +123,7 @@ void completely_fair_scheduler::remove(thread_t *thread)
 void completely_fair_scheduler::update_state(thread_t *thread, thread_state state)
 {
     auto task_list = get_cpu_task_list();
-    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
+    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
 
     if (state == thread_state::ready)
     {
@@ -213,7 +213,7 @@ void completely_fair_scheduler::update_prop(thread_t *thread, u8 static_priority
 void completely_fair_scheduler::on_migrate(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
-    uctx::SpinLockUnInterruptableContext uic(task_list->list_spinlock);
+    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
     auto dt = (thread_time_cf_t *)thread->schedule_data;
     dt->vtime_delta = 100;
     dt->vtime = 0;
@@ -246,7 +246,7 @@ bool completely_fair_scheduler::schedule()
     bool has_task = false;
     while (cur->attributes & task::thread_attributes::need_schedule)
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
 
         auto task_list = get_cpu_task_list();
 
@@ -259,10 +259,10 @@ bool completely_fair_scheduler::schedule()
 
         cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
-        uctx::SpinLockContextController ctr(task_list->list_spinlock);
-        task_list->list_spinlock.lock();
+        uctx::RawWriteLockController ctr(task_list->list_lock);
+        ctr.begin();
         thread_t *next = pick_available_task();
-        task_list->list_spinlock.unlock();
+        ctr.end();
 
         if (cur != next)
         {
@@ -283,11 +283,11 @@ bool completely_fair_scheduler::schedule()
 
 void completely_fair_scheduler::schedule_tick()
 {
-    uctx::UnInterruptableContext icu;
     auto cur = current();
     auto task_list = get_cpu_task_list();
-    auto scher_data = get_schedule_data(cur);
+    uctx::UninterruptibleContext icu;
 
+    auto scher_data = get_schedule_data(cur);
     auto &cpu = cpu::current();
     auto ctime = timer::get_high_resolution_time();
     cpu.edit_load_data().running_task_time += ctime - cpu.edit_load_data().last_tick_time;

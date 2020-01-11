@@ -73,7 +73,7 @@ void on_tick(u64 vector, u64 data)
 
     {
         // add to tick list
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         for (auto &ws : cpu_timer.watcher_list)
         {
             if (likely(ws.is_enable()))
@@ -83,7 +83,7 @@ void on_tick(u64 vector, u64 data)
         }
         cpu_timer.watcher_list.clean();
     }
-    uctx::UnInterruptableContextController icc;
+    uctx::UninterruptibleController icc;
     icc.begin();
     auto it = cpu_timer.tick_list.begin();
     for (; it != cpu_timer.tick_list.end() && it->expires <= us + tick_us / 2;)
@@ -109,7 +109,7 @@ void init()
     clock_source_array_t clock_sources(memory::KernelCommonAllocatorV);
 
     {
-        uctx::UnInterruptableContext ctx;
+        uctx::UninterruptibleContext ctx;
 
         auto cpu_timer = memory::New<cpu_timer_t>(memory::KernelCommonAllocatorV);
         cpu::current().set_timer_queue(cpu_timer);
@@ -176,7 +176,7 @@ void remove_watcher(watcher_func func)
             return;
         }
     }
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
     {
         if (it->function <= func)

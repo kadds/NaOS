@@ -34,7 +34,7 @@ using slab_list_node_allocator_t = memory::list_node_cache_allocator<slab_list_t
 class slab_group
 {
   private:
-    lock::spinlock_t slab_lock;
+    lock::rw_lock_t slab_lock;
     const u64 obj_align_size;
     const u64 size;
     const char *name;
@@ -69,7 +69,7 @@ using slab_group_list_node_allocator = memory::list_node_cache_allocator<slab_gr
 struct slab_cache_pool
 {
   private:
-    lock::spinlock_t group_lock;
+    lock::rw_lock_t group_lock;
 
     slab_group_list_t slab_groups;
     slab_list_node_allocator_t slab_list_node_allocator;

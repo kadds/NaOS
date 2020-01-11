@@ -59,7 +59,7 @@ void delay()
 
 void flush()
 {
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     int i = 0;
     while ((io_in8(cmd_status_port) & 0x1) && i < 100)
     {
@@ -187,7 +187,7 @@ void kb_tasklet_func(u64 user_data)
     io::keyboard_data kbdata;
     if (get_key(dev, &kbdata))
     {
-        uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
+        uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
         for (io::keyboard_request_t *it : dev->io_list)
         {
             it->result.get = kbdata;
@@ -264,7 +264,7 @@ u8 get_keyboard_id()
 bool kb_driver::setup(::dev::device *dev)
 {
     kb_device *kbdev = ((kb_device *)dev);
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
 
     io_out8(cmd_port, 0x20);
     wait_for_read();
@@ -426,7 +426,7 @@ void kb_driver::on_io_request(io::request_t *request)
             else
             {
                 {
-                    uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
+                    uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
                     dev->io_list.push_back(req);
                 }
                 if (request->poll)
@@ -442,7 +442,7 @@ void kb_driver::on_io_request(io::request_t *request)
             break;
         }
         case io::keyboard_request_t::command::set_led_cas: {
-            uctx::UnInterruptableContext icu;
+            uctx::UninterruptibleContext icu;
 
             if (req->cmd_param)
                 dev->led_status |= 0b100;
@@ -453,7 +453,7 @@ void kb_driver::on_io_request(io::request_t *request)
             break;
         }
         case io::keyboard_request_t::command::set_led_scroll: {
-            uctx::UnInterruptableContext icu;
+            uctx::UninterruptibleContext icu;
             if (req->cmd_param)
                 dev->led_status |= 0b001;
             else
@@ -463,7 +463,7 @@ void kb_driver::on_io_request(io::request_t *request)
             break;
         }
         case io::keyboard_request_t::command::set_led_num: {
-            uctx::UnInterruptableContext icu;
+            uctx::UninterruptibleContext icu;
             if (req->cmd_param)
                 dev->led_status |= 0b010;
             else
@@ -502,7 +502,7 @@ void mouse_tasklet_func(u64 user_data)
     io::mouse_data io_mouse_data;
     if (mouse_get(dev, &io_mouse_data))
     {
-        uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
+        uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
         for (io::mouse_request_t *it : dev->io_list)
         {
             it->result.get = io_mouse_data;
@@ -724,7 +724,7 @@ void mouse_driver::on_io_request(io::request_t *request)
             else
             {
                 {
-                    uctx::RawSpinLockUnInterruptableContext ctx(dev->io_list_lock);
+                    uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
                     dev->io_list.push_back(req);
                 }
                 if (request->poll)

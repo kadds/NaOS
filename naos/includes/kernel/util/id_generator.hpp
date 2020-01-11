@@ -26,7 +26,7 @@ class id_generator
 
     u64 next()
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (!bitmap.get(last_index))
         {
             bitmap.set(last_index);
@@ -43,7 +43,7 @@ class id_generator
 
     void tag(u64 i)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return;
         bitmap.set(i);
@@ -51,7 +51,7 @@ class id_generator
 
     void collect(u64 i)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return;
         if (!bitmap.get(last_index))
@@ -64,7 +64,7 @@ class id_generator
 
     bool has_use(u64 i)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return false;
         return bitmap.get(last_index);
@@ -126,7 +126,7 @@ template <u8 levels> class id_level_generator
 
     u64 next()
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
 
         if (unlikely(current_pack->rest == 0))
         {
@@ -153,7 +153,7 @@ template <u8 levels> class id_level_generator
 
     void tag(u64 id)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(id == null_id))
             return;
         for (u8 i = 0; i < levels; i++)
@@ -172,7 +172,7 @@ template <u8 levels> class id_level_generator
 
     void collect(u64 id)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(id == null_id))
             return;
         for (u8 i = 0; i < levels; i++)
@@ -192,7 +192,7 @@ template <u8 levels> class id_level_generator
 
     bool has_use(u64 i)
     {
-        uctx::SpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return false;
         for (u8 i = 0; i < levels; i++)

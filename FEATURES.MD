@@ -1,35 +1,40 @@
 Features / TODO
 ====
 
-* - [ ] X86-64 Architecture
+* - [x] X86-64 Architecture
     - [x] Four-level Paging
     - [x] VGA display
-    - [ ] Graphics draw
     - [x] System call
     - [x] Context switch
     - [x] multiboot2 loader
 * - [x] Memory subsystem
     - [x] Buddy frame allocator
     - [x] Slab cache pool
-    - [x] Virtual address allocator
+        - [ ] Cache line coloring
 * - [ ] Process subsystem
-    - [ ] Scheduler
+    - [ ] Job/Group Control
+    - [x] Scheduler
         - [x] Round Robin
         - [x] CFS
         - [x] Load balancing
     - [ ] Thread
         - [x] Schedule
         - [ ] Synchronize
+            - [x] Spinlock
+            - [x] Read/Write lock
+            - [x] Mutex
+            - [x] Semaphore
             - [ ] Condition wait
-            - [x] Sleep
-            - [ ] Locks
+        - [x] Sleep
     - [ ] IPC
-    - [x] Signal
-    - [x] Memory map
+        - [ ] PIPE
         - [ ] Memory shared
+        - [x] Signal
+    - [x] Memory map
+        - [x] Virtual address allocator
     - [ ] Elf loader
         - [X] Static binary loader
-        - [ ] Dynamic link
+        - [ ] Dynamic link elf loader
 * - [ ] File subsystem
     - [ ] Virtual File system
         - [x] Read, Write, Seek
@@ -44,7 +49,8 @@ Features / TODO
         - [x] Kernel softirq thread
     - [x] APIC (Local/APIC, IO/APIC)
 * - [ ] Network subsystem
-    - [ ] socket
+    - [ ] Socket 
+    - [ ] TCP/IP 
 * - [ ] Drivers
     - [ ] ATA Disk driver
         - [ ] DMA
@@ -64,4 +70,8 @@ Features / TODO
     - [ ] User / Group
         - [ ] Root 
     - [ ] C++ lib integration  
-    - [ ] Rust integration
+    - [ ] Rust integration  
+    - [ ] Graphics draw
+    - [x] Kernel logger
+
+

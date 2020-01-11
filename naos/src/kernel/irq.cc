@@ -67,7 +67,7 @@ void do_soft_irq()
         {
             request_list_t &list = *soft_irq_list[i].list;
 
-            uctx::SpinLockUnInterruptableContextController ctr(soft_irq_list[i].spinlock);
+            uctx::RawSpinLockUninterruptibleController ctr(soft_irq_list[i].spinlock);
             ctr.begin();
             if (cpu.is_irq_pending(i))
             {
@@ -115,7 +115,7 @@ void wakeup_soft_irq_daemon()
 
 void raise_soft_irq(u64 soft_irq_number)
 {
-    uctx::UnInterruptableContext uic;
+    uctx::UninterruptibleContext uic;
     arch::cpu::current().set_irq_pending(soft_irq_number);
 }
 
@@ -138,14 +138,14 @@ void init()
 void insert_request_func(u32 vector, request_func func, u64 user_data)
 {
     auto &locked_list = irq_list[vector];
-    uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(locked_list.spinlock);
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
 void remove_request_func(u32 vector, request_func func, u64 user_data)
 {
     auto &locked_list = irq_list[vector];
-    uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(locked_list.spinlock);
     auto &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
@@ -160,14 +160,14 @@ void remove_request_func(u32 vector, request_func func, u64 user_data)
 void insert_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
 {
     auto &locked_list = soft_irq_list[vector];
-    uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(locked_list.spinlock);
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
 void remove_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
 {
     auto &locked_list = soft_irq_list[vector];
-    uctx::SpinLockUnInterruptableContext icu(locked_list.spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(locked_list.spinlock);
     request_list_t &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {

@@ -53,7 +53,7 @@ void clock_event::suspend()
 {
     if (!is_suspend)
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         irq::remove_request_func(irq::hard_vector::pit_timer, on_event, (u64)this);
         io_out8(command_port, 0b00110110);
         u32 p = 0xFFFFFFFF;
@@ -69,7 +69,7 @@ void clock_event::resume()
     if (is_suspend)
     {
         {
-            uctx::UnInterruptableContext icu;
+            uctx::UninterruptibleContext icu;
 
             io_out8(command_port, 0b00110110);
             io_out8(channel_0_port, pc & 0xff);
@@ -98,7 +98,7 @@ u64 clock_source::current()
     u16 count;
     u64 jiff;
     {
-        uctx::UnInterruptableContext uic;
+        uctx::UninterruptibleContext uic;
 
         jiff = ev->tick_jiff;
 

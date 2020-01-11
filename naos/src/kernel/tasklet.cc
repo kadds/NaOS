@@ -28,7 +28,7 @@ void add_tasklet(tasklet_t *tasklet)
 void raise_tasklet(tasklet_t *tasklet)
 {
     {
-        uctx::RawSpinLockUnInterruptableContext utx(lock);
+        uctx::RawSpinLockUninterruptibleContext utx(lock);
         auto &cpu = cpu::current();
         tasklet->next_cpu = (tasklet_t *)cpu.get_tasklet_queue();
         cpu.set_tasklet_queue(tasklet);
@@ -38,7 +38,7 @@ void raise_tasklet(tasklet_t *tasklet)
 
 void exec_tasklet()
 {
-    uctx::RawSpinLockUnInterruptableContextController utx(lock);
+    uctx::RawSpinLockUninterruptibleController utx(lock);
     auto &cpu = cpu::current();
     utx.begin();
     auto tasklet = (tasklet_t *)cpu.get_tasklet_queue();

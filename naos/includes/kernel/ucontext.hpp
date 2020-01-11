@@ -2,22 +2,12 @@
 #include "arch/idt.hpp"
 #include "lock.hpp"
 #include "preempt.hpp"
+#include <type_traits>
+
 namespace uctx
 {
-struct UnPreemptContextController
-{
-    void begin() { task::disable_preempt(); }
-    void end() { task::enable_preempt(); }
-};
 
-struct UnPreemptContext
-{
-    UnPreemptContextController ctr;
-    UnPreemptContext() { ctr.begin(); }
-    ~UnPreemptContext() { ctr.end(); }
-};
-
-struct UnInterruptableContextController
+struct UninterruptibleController
 {
   private:
     bool IF;
@@ -33,46 +23,36 @@ struct UnInterruptableContextController
     }
 };
 
-struct UnInterruptableContext
+template <typename Controller> struct BaseUninterruptibleController
 {
-  private:
-    UnInterruptableContextController ctrl;
-
-  public:
-    UnInterruptableContext() { ctrl.begin(); }
-    ~UnInterruptableContext() { ctrl.end(); }
-};
-
-struct SpinLockContextController
-{
-  private:
-    lock::spinlock_t &sl;
-    UnPreemptContextController ctx;
-
-  public:
-    SpinLockContextController(lock::spinlock_t &sl)
-        : sl(sl)
+    UninterruptibleController ctl;
+    Controller ctl2;
+    template <typename... T>
+    BaseUninterruptibleController(T &&... args)
+        : ctl2(std::forward<T>(args)...)
     {
     }
+
     void begin()
     {
-        ctx.begin();
-        sl.lock();
+        ctl.begin();
+        ctl2.begin();
     }
+
     void end()
     {
-        sl.unlock();
-        ctx.end();
+        ctl2.end();
+        ctl.end();
     }
 };
 
-struct RawSpinLockContextController
+struct RawSpinLockController
 {
   private:
     lock::spinlock_t &sl;
 
   public:
-    RawSpinLockContextController(lock::spinlock_t &sl)
+    RawSpinLockController(lock::spinlock_t &sl)
         : sl(sl)
     {
     }
@@ -80,107 +60,63 @@ struct RawSpinLockContextController
     void end() { sl.unlock(); }
 };
 
-struct RawSpinLockContext
+using RawSpinLockUninterruptibleController = BaseUninterruptibleController<RawSpinLockController>;
+
+struct RawReadLockController
 {
   private:
-    RawSpinLockContextController ctrl;
+    lock::rw_lock_t &lock;
 
   public:
-    RawSpinLockContext(lock::spinlock_t &sl)
-        : ctrl(sl)
+    RawReadLockController(lock::rw_lock_t &lock)
+        : lock(lock)
+    {
+    }
+
+    void begin() { lock.lock_read(); }
+    void end() { lock.unlock_read(); }
+};
+
+using RawReadLockUninterruptibleController = BaseUninterruptibleController<RawReadLockController>;
+
+struct RawWriteLockController
+{
+  private:
+    lock::rw_lock_t &lock;
+
+  public:
+    RawWriteLockController(lock::rw_lock_t &lock)
+        : lock(lock)
+    {
+    }
+
+    void begin() { lock.lock_write(); }
+    void end() { lock.unlock_write(); }
+};
+
+using RawWriteLockUninterruptibleController = BaseUninterruptibleController<RawWriteLockController>;
+
+template <typename Controller> struct Guard_t
+{
+    Controller ctrl;
+    template <typename... T>
+    Guard_t(T &&... arg)
+        : ctrl(std::forward<T>(arg)...)
     {
         ctrl.begin();
     }
-    ~RawSpinLockContext() { ctrl.end(); }
+
+    ~Guard_t() { ctrl.end(); }
 };
 
-struct RawSpinLockUnInterruptableContextController
-{
-  private:
-    lock::spinlock_t &sl;
-    UnInterruptableContextController ctrx;
-
-  public:
-    RawSpinLockUnInterruptableContextController(lock::spinlock_t &sl)
-        : sl(sl)
-    {
-    }
-    void begin()
-    {
-        ctrx.begin();
-        sl.lock();
-    }
-    void end()
-    {
-        sl.unlock();
-        ctrx.end();
-    }
-};
-
-struct RawSpinLockUnInterruptableContext
-{
-  private:
-    RawSpinLockUnInterruptableContextController ctrl;
-
-  public:
-    RawSpinLockUnInterruptableContext(lock::spinlock_t &sl)
-        : ctrl(sl)
-    {
-        ctrl.begin();
-    }
-    ~RawSpinLockUnInterruptableContext() { ctrl.end(); }
-};
-
-struct SpinLockContext
-{
-  private:
-    SpinLockContextController ctrl;
-
-  public:
-    SpinLockContext(lock::spinlock_t &sl)
-        : ctrl(sl)
-    {
-        ctrl.begin();
-    }
-    ~SpinLockContext() { ctrl.end(); }
-};
-
-struct SpinLockUnInterruptableContextController
-
-{
-  private:
-    SpinLockContextController lock_ctrl;
-    UnInterruptableContextController intr;
-
-  public:
-    SpinLockUnInterruptableContextController(lock::spinlock_t &sl)
-        : lock_ctrl(sl)
-    {
-    }
-    void begin()
-    {
-        intr.begin();
-        lock_ctrl.begin();
-    }
-    void end()
-    {
-        lock_ctrl.end();
-        intr.end();
-    }
-};
-
-struct SpinLockUnInterruptableContext
-{
-  private:
-    SpinLockUnInterruptableContextController ctrl;
-
-  public:
-    SpinLockUnInterruptableContext(lock::spinlock_t &sl)
-        : ctrl(sl)
-    {
-        ctrl.begin();
-    }
-    ~SpinLockUnInterruptableContext() { ctrl.end(); }
-};
+using RawSpinLockContext = Guard_t<RawSpinLockController>;
+using SpinLockContext = Guard_t<RawSpinLockController>;
+using UninterruptibleContext = Guard_t<UninterruptibleController>;
+using SpinLockUninterruptibleContext = Guard_t<RawSpinLockUninterruptibleController>;
+using RawSpinLockUninterruptibleContext = Guard_t<RawSpinLockUninterruptibleController>;
+using RawReadLockContext = Guard_t<RawReadLockController>;
+using RawWriteLockContext = Guard_t<RawWriteLockController>;
+using RawReadLockUninterruptibleContext = Guard_t<RawReadLockUninterruptibleController>;
+using RawWriteLockUninterruptibleContext = Guard_t<RawWriteLockUninterruptibleController>;
 
 } // namespace uctx

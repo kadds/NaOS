@@ -149,7 +149,7 @@ bool round_robin_scheduler::schedule()
     {
         if (!l->runable_list.empty())
         {
-            uctx::UnInterruptableContext icu;
+            uctx::UninterruptibleContext icu;
 
             has_task = true;
 

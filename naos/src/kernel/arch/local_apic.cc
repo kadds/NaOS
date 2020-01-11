@@ -350,7 +350,7 @@ void clock_event::suspend()
 {
     if (!is_suspend)
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         is_suspend = true;
         irq::remove_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
         local_disable(lvt_index::timer);
@@ -364,7 +364,7 @@ void clock_event::resume()
 {
     if (is_suspend)
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
 
         local_enable(lvt_index::timer);
 

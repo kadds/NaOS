@@ -60,7 +60,7 @@ class vm_allocator
 
   private:
     list_t list;
-    lock::spinlock_t list_lock;
+    lock::rw_lock_t list_lock;
     u64 range_top, range_bottom;
 
   public:
@@ -85,7 +85,7 @@ class vm_allocator
     const vm_t *get_vm_area(u64 p);
 
     list_t &get_list() { return list; }
-    lock::spinlock_t &get_lock() { return list_lock; }
+    lock::rw_lock_t &get_lock() { return list_lock; }
 };
 
 class mmu_paging

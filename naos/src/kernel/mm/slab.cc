@@ -80,7 +80,7 @@ slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name
 
 void *slab_group::alloc()
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(slab_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
     if (list_partial.empty())
     {
         if (list_empty.empty())
@@ -108,7 +108,7 @@ void *slab_group::alloc()
 
 void slab_group::free(void *ptr)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(slab_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
 
     char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
 
@@ -156,7 +156,7 @@ void slab_group::free(void *ptr)
 
 bool slab_group::include_address(void *ptr)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(slab_lock);
+    uctx::RawReadLockUninterruptibleContext ctx(slab_lock);
 
     char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
     for (auto e : list_full)
@@ -182,7 +182,7 @@ bool slab_group::include_address(void *ptr)
 
 slab_group_list_t::iterator slab_cache_pool::find_slab_group_node(const char *name)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(group_lock);
+    uctx::RawReadLockUninterruptibleContext ctx(group_lock);
 
     auto group = slab_groups.begin();
     while (group != slab_groups.end())
@@ -198,7 +198,7 @@ slab_group_list_t::iterator slab_cache_pool::find_slab_group_node(const char *na
 
 slab_group *slab_cache_pool::find_slab_group(const char *name)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(group_lock);
+    uctx::RawReadLockUninterruptibleContext ctx(group_lock);
 
     auto group_it = find_slab_group_node(name);
     if (group_it != slab_groups.end())
@@ -210,7 +210,7 @@ slab_group *slab_cache_pool::find_slab_group(const char *name)
 
 slab_group *slab_cache_pool::find_slab_group(u64 size)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(group_lock);
+    uctx::RawReadLockUninterruptibleContext ctx(group_lock);
 
     auto group = slab_groups.begin();
     while (group != slab_groups.end())
@@ -226,13 +226,13 @@ slab_group *slab_cache_pool::find_slab_group(u64 size)
 
 slab_group *slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 align, u64 flags)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(group_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
     return &slab_groups.emplace_back(&slab_list_node_allocator, size, name, align, flags);
 }
 
 void slab_cache_pool::remove_slab_group(slab_group *slab_obj)
 {
-    uctx::RawSpinLockUnInterruptableContext ctx(group_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
 
     auto group = slab_groups.begin();
     while (group != slab_groups.end())

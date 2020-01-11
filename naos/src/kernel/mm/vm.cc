@@ -75,7 +75,7 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
 {
     size = (size + memory::page_size - 1) & ~(memory::page_size - 1);
 
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     u64 low_bound = range_bottom;
 
     if (!list.empty())
@@ -100,13 +100,13 @@ const vm_t *vm_allocator::allocate_map(u64 size, u64 flags, vm_page_fault_func f
 
 void vm_allocator::deallocate_map(const vm_t *vm)
 {
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     list.remove(*vm);
 }
 
 bool vm_allocator::deallocate_map(u64 p)
 {
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
+    uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     auto it = list.for_each(search_vma, p);
     if (it != list.end())
     {
@@ -125,7 +125,8 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
         return nullptr;
     if (unlikely(end > range_top))
         return nullptr;
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
+
+    uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
 
     if (list.empty())
     {
@@ -147,7 +148,7 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
 
 const vm_t *vm_allocator::get_vm_area(u64 p)
 {
-    uctx::SpinLockUnInterruptableContext ctx(list_lock);
+    uctx::RawReadLockUninterruptibleContext ctx(list_lock);
 
     auto it = list.for_each(search_vma, p);
     if (it == list.end())
@@ -211,7 +212,7 @@ void mmu_paging::unmap_area(const vm_t *vm)
 {
     if (unlikely(vm == nullptr))
         return;
-    uctx::UnInterruptableContext uic;
+    uctx::UninterruptibleContext uic;
     if (vm->flags & flags::expand)
     {
         u64 page_count = (vm->end - vm->start) / page_size;
@@ -252,7 +253,7 @@ void *mmu_paging::get_page_addr() { return base_paging_addr; }
 
 void mmu_paging::sync_kernel()
 {
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     arch::paging::sync_kernel_page_table(
         (arch::paging::base_paging_t *)base_paging_addr,
         (arch::paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.base_paging_addr);
@@ -267,7 +268,7 @@ info_t::info_t()
 
 info_t::~info_t()
 {
-    uctx::SpinLockUnInterruptableContext ctx(vma.get_lock());
+    uctx::RawWriteLockUninterruptibleContext ctx(vma.get_lock());
     auto &list = vma.get_list();
     for (auto it = list.begin(); it != list.end(); ++it)
     {

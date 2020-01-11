@@ -43,6 +43,6 @@ struct wait_queue
 };
 
 void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct);
-void do_wake_up(wait_queue *queue);
+u64 do_wake_up(wait_queue *queue, u64 count = 0xFFFFFFFFFFFFFFFFUL);
 
 } // namespace task

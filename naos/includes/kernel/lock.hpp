@@ -5,25 +5,7 @@
 
 namespace lock
 {
-struct semaphore_t
-{
-    std::atomic_long lock_res;
-    semaphore_t(u64 count)
-        : lock_res(count)
-    {
-    }
-
-    void down()
-    {
-        lock_res--;
-        while (lock_res < 0)
-        {
-            cpu_pause();
-        }
-    }
-
-    void up() { lock_res++; }
-};
+/// Not nestable, unfair spinlock
 struct spinlock_t
 {
   private:
@@ -56,22 +38,90 @@ struct spinlock_t
 
     void unlock() { lock_m.clear(std::memory_order_release); }
 };
-/// TODO: read write lock
+
 struct rw_lock_t
 {
   private:
-    spinlock_t write;
+    std::atomic_uint64_t lock_m = ATOMIC_FLAG_INIT;
+    static_assert(sizeof(lock_m) == 8);
 
   public:
     rw_lock_t() = default;
     rw_lock_t(const rw_lock_t &) = delete;
     rw_lock_t &operator=(const rw_lock_t &) = delete;
 
-    void lock_read() {}
-    void lock_write() {}
+    void lock_read()
+    {
+        u64 exp;
+        do
+        {
+            while (lock_m == 0x8000000000000000UL)
+                cpu_pause();
 
-    void unlock_read() {}
-    void unlock_write() {}
-};
+            exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
+        } while (!lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire));
+    }
+
+    void lock_write()
+    {
+        u64 exp;
+        do
+        {
+            while (lock_m != 0)
+                cpu_pause();
+            exp = 0;
+        } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_acquire));
+    }
+
+    bool try_lock_read()
+    {
+        u64 exp;
+        if (lock_m == 0x8000000000000000UL)
+            return false;
+        exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
+        return lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire);
+    }
+
+    bool try_lock_write()
+    {
+        u64 exp;
+        if (lock_m != 0)
+            return false;
+        exp = 0;
+        return lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_acquire);
+    }
+
+    void unlock_read()
+    {
+        u64 exp;
+        do
+        {
+#ifdef _DEBUG
+            if (lock_m & 0x8000000000000000UL)
+            {
+                /// TODO: state is invalid.
+                trace::panic("Invalid rw_lock state.");
+            }
+#endif
+            exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
+        } while (!lock_m.compare_exchange_strong(exp, exp - 1, std::memory_order_release));
+    }
+
+    void unlock_write()
+    {
+        u64 exp;
+        do
+        {
+#ifdef _DEBUG
+            if (lock_m == 0)
+            {
+                /// TODO: state is invalid.
+                trace::panic("Invalid rw_lock state.");
+            }
+#endif
+            exp = 0x8000000000000000UL;
+        } while (!lock_m.compare_exchange_strong(exp, 0, std::memory_order_release));
+    }
+}; // namespace lock
 
 }; // namespace lock

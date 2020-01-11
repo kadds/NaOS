@@ -145,7 +145,7 @@ void timer_tick(u64 pass, u64 user_data)
     timer::add_watcher(5000, timer_tick, user_data);
     thread_t *thd = current();
 
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
 
     if (thd->attributes & thread_attributes::real_time)
         real_time_schedulers->schedule_tick();

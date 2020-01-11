@@ -181,7 +181,7 @@ NoReturn void error_unmap()
 bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
          u32 page_ext_flags)
 {
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_map();
@@ -310,7 +310,7 @@ void clean_null_page_pde(pml4t &base_page, u64 pml4e_index, u64 pdpe_index, u64 
 
 bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count)
 {
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     // virtual address doesn't align of 4kb
     if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
         error_unmap();

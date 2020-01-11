@@ -128,7 +128,7 @@ void flush_kbuffer()
 {
     if (likely(vram_addr != nullptr))
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         u64 size;
         byte *buffer = trace::get_kernel_log_buffer().read_buffer(&size);
 

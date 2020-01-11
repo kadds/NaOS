@@ -391,7 +391,7 @@ NoReturn void keep_panic(const regs_t *regs = 0);
 
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
-    uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
     print<>(std::forward<Args>(args)...);
@@ -401,7 +401,7 @@ template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 
 template <typename... Args> NoReturn Trace_Section void panic_stack(const regs_t *regs, Args &&... args)
 {
-    uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
     print<>(std::forward<Args>(args)...);
@@ -411,7 +411,7 @@ template <typename... Args> NoReturn Trace_Section void panic_stack(const regs_t
 
 template <typename... Args> Trace_Section void warning(Args &&... args)
 {
-    uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::LightCyan>>("[warning] ");
     print<PrintAttribute<TextAttribute::Reset>>();
     print<>(std::forward<Args>(args)...);
@@ -420,7 +420,7 @@ template <typename... Args> Trace_Section void warning(Args &&... args)
 
 template <typename... Args> Trace_Section void info(Args &&... args)
 {
-    uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::Green>>("[info]    ");
     print<PrintAttribute<TextAttribute::Reset>>();
     print<>(std::forward<Args>(args)...);
@@ -431,7 +431,7 @@ template <typename... Args> Trace_Section void debug(Args &&... args)
 {
     if (!output_debug)
         return;
-    uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::Brown>>("[debug]   ");
     print<PrintAttribute<TextAttribute::Reset>>();
     print<>(std::forward<Args>(args)...);
@@ -442,7 +442,7 @@ template <typename... Args>
 Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&... args)
 {
     {
-        uctx::RawSpinLockUnInterruptableContext icu(spinlock);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         print<PrintAttribute<Color::Foreground::LightRed>>("[assert]  ");
         print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed: at: ", file, ':', line,
                                                       "\n    assert expr: ", exp, '\n');

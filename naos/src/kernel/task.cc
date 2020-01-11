@@ -85,7 +85,7 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 
 inline process_t *new_kernel_process()
 {
-    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     auto id = process_id_generator->next();
     if (id == util::null_id)
         return nullptr;
@@ -101,7 +101,7 @@ inline process_t *new_kernel_process()
 
 inline process_t *new_process()
 {
-    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     auto id = process_id_generator->next();
     if (id == util::null_id)
         return nullptr;
@@ -119,7 +119,7 @@ inline process_t *new_process()
 
 inline void delete_process(process_t *p)
 {
-    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
 
@@ -137,7 +137,7 @@ inline void delete_process(process_t *p)
 inline thread_t *new_thread(process_t *p)
 {
     using arch::task::register_info_t;
-    uctx::SpinLockUnInterruptableContext icu(p->thread_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(p->thread_list_lock);
 
     auto id = ((thread_id_generator_t *)p->thread_id_gen)->next();
     if (unlikely(id == util::null_id))
@@ -157,7 +157,7 @@ inline thread_t *new_thread(process_t *p)
 
 void delete_thread(thread_t *thd)
 {
-    uctx::SpinLockUnInterruptableContext icu(thd->process->thread_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(thd->process->thread_list_lock);
 
     using arch::task::register_info_t;
 
@@ -216,7 +216,7 @@ void init()
     process_t *process;
     if (cpu::current().is_bsp())
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
         global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
 
@@ -465,7 +465,6 @@ void sleep_callback_func(u64 pass, u64 data)
     thread_t *thd = (thread_t *)data;
     if (thd != nullptr)
     {
-        uctx::UnInterruptableContext icu;
         scheduler::update_state(thd, thread_state::ready);
         return;
     }
@@ -474,7 +473,7 @@ void sleep_callback_func(u64 pass, u64 data)
 
 void do_sleep(u64 milliseconds)
 {
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     current()->attributes |= task::thread_attributes::need_schedule;
 
     if (milliseconds != 0)
@@ -488,7 +487,7 @@ void do_exit(u64 ret)
 {
     process_t *process = current_process();
     {
-        uctx::SpinLockUnInterruptableContext icu(process->thread_list_lock);
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
         auto &list = *(thread_list_t *)process->thread_list;
         for (auto thd : list)
         {
@@ -522,7 +521,7 @@ void start_task_idle()
 {
     {
         task::current()->preempt_data.disable_preempt();
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         scheduler::init();
         scheduler::init_cpu();
     }
@@ -541,7 +540,7 @@ u64 wait_process(process_t *process, u64 &ret)
 {
     if (process == nullptr)
         return 1;
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
 
     process->wait_counter++;
     do_wait(&process->wait_que, wait_process_exit, (u64)process, wait_context_type::interruptable);
@@ -564,7 +563,7 @@ void check_process(process_t *process)
     if (process->attributes & process_attributes::destroy)
     {
         bool all_destroy = true;
-        uctx::SpinLockUnInterruptableContext icu(process->thread_list_lock);
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
         auto list = ((thread_list_t *)process->thread_list);
         for (auto it = list->begin(); it != list->end();)
         {
@@ -602,7 +601,7 @@ void check_thread(thread_t *thd)
 void exit_thread(u64 ret)
 {
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         auto thd = current();
         thd->user_stack_top = (void *)ret;
         thd->state = thread_state::stop;
@@ -646,7 +645,7 @@ u64 join_thread(thread_t *thd, u64 &ret)
         return 2;
     if (thd->attributes & thread_attributes::main)
         return 4;
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     thd->wait_counter++;
     do_wait(&thd->wait_que, wait_exit, (u64)thd, wait_context_type::interruptable);
     ret = (u64)thd->user_stack_top;
@@ -666,7 +665,7 @@ void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(t
 void kill_thread(thread_t *thread, flag_t flags)
 {
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         thread->user_stack_top = (void *)0;
         thread->state = thread_state::stop;
         scheduler::remove(thread);
@@ -687,7 +686,7 @@ void kill_thread(thread_t *thread, flag_t flags)
 
 process_t *find_pid(process_id pid)
 {
-    uctx::SpinLockUnInterruptableContext icu(process_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     process_t *process = nullptr;
     global_process_map->get(pid, &process);
     return process;
@@ -695,7 +694,7 @@ process_t *find_pid(process_id pid)
 
 thread_t *find_tid(process_t *process, thread_id tid)
 {
-    uctx::SpinLockUnInterruptableContext icu(process->thread_list_lock);
+    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
     for (auto thd : list)
     {

@@ -21,7 +21,7 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
     else
         return;
 
-    uctx::UnInterruptableContext icu;
+    uctx::UninterruptibleContext icu;
     {
         uctx::RawSpinLockContext ctx(queue->lock);
         queue->list.emplace_back(current(), condition, user_data);
@@ -42,18 +42,21 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
     }
 }
 
-void do_wake_up(wait_queue *queue)
+u64 do_wake_up(wait_queue *queue, u64 count)
 {
-    uctx::SpinLockUnInterruptableContext ctx(queue->lock);
-    for (auto it = queue->list.begin(); it != queue->list.end();)
+    uctx::RawSpinLockUninterruptibleContext ctx(queue->lock);
+    u64 i = 0;
+    for (auto it = queue->list.begin(); it != queue->list.end() && i < count;)
     {
         if (it->condition(it->user_data))
         {
             scheduler::update_state(it->thd, thread_state::ready);
             it = queue->list.remove(it);
+            i++;
         }
         else
             ++it;
     }
+    return i;
 }
 } // namespace task

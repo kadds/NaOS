@@ -47,7 +47,7 @@ void print_inner(const char *str, u64 len)
     }
     else
     {
-        uctx::UnInterruptableContext icu;
+        uctx::UninterruptibleContext icu;
         // early init
         // write log at once
         u64 len = arch::device::vga::putstring(str, 0);
@@ -57,7 +57,7 @@ void print_inner(const char *str, u64 len)
 
 NoReturn void keep_panic(const regs_t *regs)
 {
-    uctx::UnInterruptableContext uic;
+    uctx::UninterruptibleContext uic;
     print_stack(regs, 30);
     trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
