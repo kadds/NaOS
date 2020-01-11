@@ -1,7 +1,7 @@
 # NaOS  
 
 ## Nano Operating system
-A 64bit (x86-64) Simple Operating System Writing By C++.  (:sunglasses:)  
+A 64bit (arch x86-64) Simple Operating System Writing By C++.  (:sunglasses:)  
 NaOS runs on Intel / AMD modern processors.  
 
 ![BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-green) ![development on linux](https://img.shields.io/badge/build--platform-linux-lightgrey)  
@@ -126,13 +126,13 @@ NaOS
 │       ├── kernel
 │       │   ├── arch # arch x86_64 specification source code
 │       │   ├── common # kernel data
-│       │   ├── dev # driver interface
-│       │   ├── fs # file system 
+│       │   ├── dev # driver interface & drivers
+│       │   ├── fs # file subsystem 
 │       │   ├── io # io subsystem
 │       │   ├── mm # memory subsystem
 │       │   ├── module # module support code
 │       │   ├── schedulers # round robin scheduler and completely fair scheduler
-│       │   ├── syscall # syscall entry
+│       │   ├── syscall # syscall entries
 │       │   ├── task # ELF loader and built-in task
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── usr
@@ -141,7 +141,7 @@ NaOS
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
 │   └── image
-│       └── disk.img # raw image
+│       └── disk.img # raw disk image to startup OS
 └── util # Python tools
 ```
 
