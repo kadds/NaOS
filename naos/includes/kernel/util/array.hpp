@@ -5,6 +5,7 @@
 
 namespace util
 {
+/// A container like std::vector
 template <typename E> class array
 {
   private:

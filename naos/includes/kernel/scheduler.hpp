@@ -62,15 +62,32 @@ class scheduler
     ///
     virtual void schedule_tick() = 0;
 
+    ///
+    /// \brief return task count which can scheduleable (unmasked, ready state)
+    ///
     virtual u64 scheduleable_task_count() = 0;
 
+    ///
+    /// \brief select a task to migrate
+    ///
+    /// \param cpuid cpu to migrate
+    /// \return task
     virtual thread_t *get_migratable_task(u32 cpuid) = 0;
 
+    ///
+    /// \brief commit task to migrate
+    ///
+    /// \param thd task
+    ///
     virtual void commit_migrate(thread_t *thd) = 0;
 
+    /// Initialize per cpu data
     virtual void init_cpu() = 0;
     virtual void destroy_cpu() = 0;
 
+    ///
+    /// \brief control scheduler
+    ///
     virtual u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) = 0;
 
     scheduler() = default;

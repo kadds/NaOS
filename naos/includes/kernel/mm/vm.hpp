@@ -9,9 +9,10 @@ namespace fs::vfs
 class file;
 } // namespace fs::vfs
 
+/// virtual memory system
 namespace memory::vm
 {
-
+/// page flags
 namespace flags
 {
 enum flags : u64
@@ -28,6 +29,7 @@ enum flags : u64
     huge_page = 1ul << 17,
 };
 }
+
 void init();
 void listen_page_fault();
 
@@ -110,6 +112,9 @@ class mmu_paging
     void sync_kernel();
 };
 
+/// virtual memory info struct.
+///
+/// includes head and VMA
 struct info_t
 {
   public:
@@ -133,6 +138,8 @@ struct info_t
     bool umap_file(u64 addr);
     void sync_map_file(u64 addr);
 };
+
+/// map struct
 struct map_t
 {
     fs::vfs::file *file;

@@ -2,7 +2,7 @@
 #include "common.hpp"
 
 ///
-/// \brief interrupt/syscall regs
+/// \brief interrupt/syscall registers
 ///
 ///
 struct regs_t

@@ -4,6 +4,7 @@
 #include "common.hpp"
 namespace fs::vfs
 {
+/// pseudo device interface
 class pseudo_t
 {
   public:

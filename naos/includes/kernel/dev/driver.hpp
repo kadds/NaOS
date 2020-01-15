@@ -27,20 +27,18 @@ class driver
     {
     }
     virtual ~driver() {}
+    /// setup device
     virtual bool setup(device *dev) = 0;
     virtual void cleanup(device *dev) = 0;
+
+    /// call when a request is sent
     virtual void on_io_request(::io::request_t *request) = 0;
 
     num_t get_id() { return id; }
     const char *get_name() { return name; }
 };
 
-struct hash_func
-{
-    u64 operator()(num_t num) { return num; }
-};
-
-using driver_map_t = util::hash_map<num_t, driver *, hash_func>;
+using driver_map_t = util::hash_map<num_t, driver *>;
 using driver_id_gen_t = util::id_generator;
 
 void init_driver();

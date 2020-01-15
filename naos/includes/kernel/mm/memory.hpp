@@ -26,13 +26,17 @@ struct zone_t
     void *start;
     void *end;
     u64 page_count;
+    /// buddy pointer
     void *buddy_impl;
+    /// tell buddy system memory needs to be reserved
     void tag_used(u64 offset_start, u64 offset_end);
 };
 
 struct zones_t
 {
+    /// zones array
     zone_t *zones;
+    /// zone element count
     int count;
 };
 
@@ -61,8 +65,10 @@ template <typename Tptr> inline Unpaged_Text_Section Tptr unpaged_kernel_phyaddr
 class PhyBootAllocator : public IAllocator
 {
   private:
+    /// address to start allocation
     static void *base_ptr;
     static void *current_ptr;
+    /// is enable boot allocator
     static bool available;
 
   public:
@@ -86,10 +92,9 @@ class PhyBootAllocator : public IAllocator
 
         return start;
     }
-    void deallocate(void *) override
-    {
-        // Do not deallocate
-    }
+    /// do nothing
+    void deallocate(void *) override {}
+
     static void *current_ptr_address() { return current_ptr; }
 };
 
@@ -100,10 +105,8 @@ class VirtBootAllocator : public PhyBootAllocator
     {
         return kernel_phyaddr_to_virtaddr(PhyBootAllocator::allocate(size, align));
     }
-    void deallocate(void *) override
-    {
-        // Same as PhyBootAllocator
-    }
+    /// do nothing. Same as PhyBootAllocator
+    void deallocate(void *) override {}
 
     static void *current_ptr_address() { return kernel_phyaddr_to_virtaddr(PhyBootAllocator::current_ptr_address()); }
 };

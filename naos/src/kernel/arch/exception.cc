@@ -52,7 +52,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         handled = global_call_func(regs, extra_data);
     if (unlikely(!handled))
     {
-        if (unlikely(!cpu::is_init()))
+        if (unlikely(!cpu::has_init()))
         {
             trace::panic_stack(regs, "Startup Oops error");
         }

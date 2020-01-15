@@ -3,7 +3,7 @@
 
 namespace arch::cpu_info
 {
-enum class future
+enum class feature
 {
     system_call_ret,
     pcid,
@@ -27,11 +27,12 @@ enum class future
 };
 
 void init();
-// check if has the future
-bool has_future(future f);
+/// check if has the feature
+bool has_feature(feature f);
 
-// get the future value
-u64 get_future(future f);
+/// get the feature value
+u64 get_feature(feature f);
+
 const char *get_cpu_manufacturer();
 
 } // namespace arch::cpu_info

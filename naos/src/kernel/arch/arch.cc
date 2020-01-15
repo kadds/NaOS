@@ -36,11 +36,11 @@ void init(const kernel_start_args *args)
         }
         trace::debug("Arch init start...");
         cpu_info::init();
-        if (!cpu_info::has_future(cpu_info::future::system_call_ret))
+        if (!cpu_info::has_feature(cpu_info::feature::system_call_ret))
         {
             trace::panic("Cpu doesn 't support syscall/sysret instructions.");
         }
-        if (!cpu_info::has_future(cpu_info::future::apic))
+        if (!cpu_info::has_feature(cpu_info::feature::apic))
         {
             trace::panic("Cpu doesn 't support APIC.");
         }

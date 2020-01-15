@@ -41,8 +41,21 @@ struct wait_queue
     {
     }
 };
-
+///
+/// \brief wait current task for condition at the wait queue
+///
+/// \param queue the task save to
+/// \param condition the condition
+/// \param user_data the condition user data pass to
+/// \param wct wait context type
+///
 void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct);
+
+///
+/// \brief try wake up task at queue
+///
+/// \param queue the queue to wake up
+/// \param count maximum number of tasks to wake up
 u64 do_wake_up(wait_queue *queue, u64 count = 0xFFFFFFFFFFFFFFFFUL);
 
 } // namespace task

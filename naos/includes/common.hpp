@@ -32,6 +32,8 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+
+/// easy use likely or unlikely
 #ifndef likely
 #define likely(x) __builtin_expect(!!(x), 1)
 #endif
@@ -39,15 +41,18 @@ typedef uint64_t u64;
 #define unlikely(x) __builtin_expect(!!(x), 0)
 #endif
 
+/// C++17 byte
 typedef std::byte byte;
 typedef u64 flag_t;
 
+/// C++ init function
 typedef void (*InitFunc)(void);
+/// define by compiler
 ExportC InitFunc __init_array_start;
 ExportC InitFunc __init_array_end;
 
 /// Initialize for c++ global variables
-inline void static_init()
+static inline void static_init()
 {
     InitFunc *pFunc = &__init_array_start;
 

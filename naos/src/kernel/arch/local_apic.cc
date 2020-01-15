@@ -165,7 +165,7 @@ void local_init()
     u64 v = (1 << 11);
     if (arch::cpu::current().is_bsp())
     {
-        if (cpu_info::has_future(cpu_info::future::x2apic))
+        if (cpu_info::has_feature(cpu_info::feature::x2apic))
         {
             trace::debug("x2APIC is supported");
             read_register = read_register_MSR;
@@ -195,7 +195,7 @@ void local_init()
         trace::debug("Enable Local APIC...");
     }
 
-    if (cpu_info::has_future(cpu_info::future::x2apic))
+    if (cpu_info::has_feature(cpu_info::feature::x2apic))
     {
         v |= (1 << 10);
     }

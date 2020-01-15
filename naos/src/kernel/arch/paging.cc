@@ -90,7 +90,7 @@ void init()
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
                      ". Maximum memory supported ", memory::max_memory_support, ".");
     // map all phy address
-    if (cpu_info::has_future(cpu_info::future::huge_page_1gb))
+    if (cpu_info::has_feature(cpu_info::feature::huge_page_1gb))
     {
         trace::debug("Paging at 1GB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_1gb,

@@ -82,6 +82,7 @@ inline static void cpu_pause()
     return;
 }
 
+/// print kernel stack (when panic)
 void *print_stack(const regs_t *regs, int max_depth);
 
 inline constexpr u64 maximum_user_addr = 0x00007FFFFFFFFFFFUL;

@@ -83,9 +83,4 @@ void init()
     }
 }
 
-int count()
-{
-    volatile u32 *ap_count = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
-    return *ap_count;
-}
 } // namespace arch::SMP

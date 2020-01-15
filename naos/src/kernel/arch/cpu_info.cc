@@ -1,7 +1,7 @@
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/trace.hpp"
-#define ret_cpu_future(number, reg, bit)                                                                               \
+#define ret_cpu_feature(number, reg, bit)                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
         if ((number > max_basic_number && number < 0x80000000) || number > max_extend_number)                          \
@@ -32,17 +32,17 @@ void init()
     cpu_id(0x80000000, &a, &b, &c, &d);
     max_extend_number = a;
     trace_debug_info();
-    future min_future[] = {
-        future::system_call_ret,
-        future::msr,
-        future::tsc,
-        future::apic,
+    feature min_feature[] = {
+        feature::system_call_ret,
+        feature::msr,
+        feature::tsc,
+        feature::apic,
     };
-    for (auto fut : min_future)
+    for (auto fut : min_feature)
     {
-        if (!has_future(fut))
+        if (!has_feature(fut))
         {
-            trace::panic("Unsupported future.");
+            trace::panic("Unsupported feature.");
         }
     }
 }
@@ -51,67 +51,67 @@ void trace_debug_info()
 {
     trace::debug("Cpu family: ", cpu_name, ". Maximum basic functional number: ", (void *)(u64)max_basic_number,
                  ". Maximum extend functional number: ", (void *)(u64)max_extend_number,
-                 ". Maximum virtual address bits ", get_future(future::max_virt_addr),
-                 ". Maximum physical address bits ", get_future(future::max_phy_addr));
+                 ". Maximum virtual address bits ", get_feature(feature::max_virt_addr),
+                 ". Maximum physical address bits ", get_feature(feature::max_phy_addr));
 }
 
-bool has_future(future f)
+bool has_feature(feature f)
 {
     u32 eax, ebx, ecx, edx;
     switch (f)
     {
-        case future::system_call_ret:
-            ret_cpu_future(0x80000001, edx, 11);
-        case future::pcid:
-            ret_cpu_future(0x1, ecx, 17);
-        case future::fpu:
-            ret_cpu_future(0x1, edx, 0);
-        case future::huge_page_1gb:
-            ret_cpu_future(0x80000001, edx, 26);
-        case future::apic:
-            ret_cpu_future(0x1, edx, 9);
-        case future::xapic:
-            ret_cpu_future(0x1, edx, 9);
-        case future::x2apic:
-            ret_cpu_future(0x1, ecx, 21);
-        case future::msr:
-            ret_cpu_future(0x1, edx, 5);
-        case future::tsc:
-            ret_cpu_future(0x1, edx, 4);
-        case future::contant_tsc:
-            ret_cpu_future(0x80000007, edx, 8);
-        case future::sse:
-            ret_cpu_future(0x1, edx, 25);
-        case future::sse2:
-            ret_cpu_future(0x1, edx, 26);
-        case future::sse3:
-            ret_cpu_future(0x1, ecx, 0);
-        case future::ssse3:
-            ret_cpu_future(0x1, ecx, 9);
-        case future::sse4_1:
-            ret_cpu_future(0x1, ecx, 19);
-        case future::sse4_2:
-            ret_cpu_future(0x1, ecx, 20);
-        case future::popcnt_i:
-            ret_cpu_future(0x1, ecx, 23);
+        case feature::system_call_ret:
+            ret_cpu_feature(0x80000001, edx, 11);
+        case feature::pcid:
+            ret_cpu_feature(0x1, ecx, 17);
+        case feature::fpu:
+            ret_cpu_feature(0x1, edx, 0);
+        case feature::huge_page_1gb:
+            ret_cpu_feature(0x80000001, edx, 26);
+        case feature::apic:
+            ret_cpu_feature(0x1, edx, 9);
+        case feature::xapic:
+            ret_cpu_feature(0x1, edx, 9);
+        case feature::x2apic:
+            ret_cpu_feature(0x1, ecx, 21);
+        case feature::msr:
+            ret_cpu_feature(0x1, edx, 5);
+        case feature::tsc:
+            ret_cpu_feature(0x1, edx, 4);
+        case feature::contant_tsc:
+            ret_cpu_feature(0x80000007, edx, 8);
+        case feature::sse:
+            ret_cpu_feature(0x1, edx, 25);
+        case feature::sse2:
+            ret_cpu_feature(0x1, edx, 26);
+        case feature::sse3:
+            ret_cpu_feature(0x1, ecx, 0);
+        case feature::ssse3:
+            ret_cpu_feature(0x1, ecx, 9);
+        case feature::sse4_1:
+            ret_cpu_feature(0x1, ecx, 19);
+        case feature::sse4_2:
+            ret_cpu_feature(0x1, ecx, 20);
+        case feature::popcnt_i:
+            ret_cpu_feature(0x1, ecx, 23);
         default:
-            trace::panic("Unknown future");
+            trace::panic("Unknown feature");
     }
 }
 
-u64 get_future(future f)
+u64 get_feature(feature f)
 {
     u32 eax, ebx, ecx, edx;
     switch (f)
     {
-        case future::max_phy_addr:
+        case feature::max_phy_addr:
             cpu_id(0x80000008, &eax, &ebx, &ecx, &edx);
             return bits(eax, 0, 7);
-        case future::max_virt_addr:
+        case feature::max_virt_addr:
             cpu_id(0x80000008, &eax, &ebx, &ecx, &edx);
             return bits(eax, 8, 15);
         default:
-            trace::panic("Unknown future");
+            trace::panic("Unknown feature");
     }
 }
 

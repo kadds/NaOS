@@ -39,6 +39,7 @@ struct spinlock_t
     void unlock() { lock_m.clear(std::memory_order_release); }
 };
 
+/// read write lock
 struct rw_lock_t
 {
   private:

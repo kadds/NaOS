@@ -28,8 +28,10 @@ struct slab
 
           };
 };
+
 using slab_list_t = util::linked_list<slab *>;
 using slab_list_node_allocator_t = memory::list_node_cache_allocator<slab_list_t>;
+
 /// A same slab list set
 class slab_group
 {
@@ -91,7 +93,7 @@ extern slab_cache_pool *global_kmalloc_slab_domain;
 extern slab_cache_pool *global_dma_slab_domain;
 extern slab_cache_pool *global_object_slab_domain;
 
-// An object allocator
+/// An object allocator
 struct SlabObjectAllocator : IAllocator
 {
   private:

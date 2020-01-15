@@ -12,8 +12,9 @@
 
 namespace trace
 {
-
+// set if print debug
 extern bool output_debug;
+
 void init();
 void early_init();
 
@@ -218,6 +219,7 @@ namespace BK = Background;
 namespace CFG = Color::FG;
 namespace CBK = Color::BK;
 
+/// Font attribute container
 template <typename... Args> struct PrintAttribute
 {
 };
@@ -336,8 +338,8 @@ template <typename Head> Trace_Section void dispatch(const Head &head)
 {
     using RealType = typename remove_extent<std::decay_t<decltype(head)>>::type;
     util::formatter::format<RealType> fmt;
-    char fmt_str[128];
-    print_inner(fmt(head, fmt_str, 128));
+    char fmt_str[64];
+    print_inner(fmt(head, fmt_str, 64));
 }
 
 template <typename Head> Trace_Section void cast_fmt()
@@ -373,11 +375,11 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
 ///
 /// \brief kernel print string
 ///
-/// \tparam PrintAttribute<> the print attribute: color, bold, etc..
+/// \tparam PrintAttribute<...> the print attribute: color, bold, etc..
 /// \tparam Args
 /// \param args strings to print
-/// \note call begin_print() before print<>() and call end_print() after print<>(), if not, race conditions may occur in
-/// the print<>()
+/// \note call begin_print() before print<...>() and call end_print() after print<>(), if not, race conditions may occur
+/// in the print<...>()
 ///
 template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_Section void print(Args &&... args)
 {

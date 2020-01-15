@@ -16,6 +16,7 @@ struct cpu_t
 {
   private:
     cpuid_t id;
+    /// kernel stack pointer
     void *volatile kernel_rsp;
     void *user_data = nullptr;
 
@@ -25,7 +26,7 @@ struct cpu_t
     void *exception_nmi_rsp;
     std::atomic_bool is_in_soft_irq = false;
     volatile u64 soft_irq_pending = 0;
-
+    /// arch apic id
     u64 apic_id;
 
   public:
@@ -90,6 +91,6 @@ u64 count();
 
 cpuid_t id();
 
-bool is_init();
+bool has_init();
 
 } // namespace arch::cpu

@@ -7,8 +7,8 @@ namespace io
 {
 enum class completion_result_t
 {
-    conti,
-    inter,
+    conti, ///< continue stack uptrace
+    inter, ///< interrupt completion call
 };
 
 namespace chain_number

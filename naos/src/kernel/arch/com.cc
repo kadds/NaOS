@@ -20,9 +20,9 @@ byte io_read(io_port base_port)
     return (byte)io_in8(base_port);
 }
 
-u32 select_port(int index) { return base_port[index]; }
+u16 select_port(int index) { return base_port[index]; }
 
-void serial::init(u32 port)
+void serial::init(u16 port)
 {
     this->port = port;
     io_out8(port + 1, 0);

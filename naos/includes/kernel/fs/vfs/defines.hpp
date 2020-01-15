@@ -34,7 +34,7 @@ enum access_flags : flag_t
 
 namespace mode
 {
-// open file mode
+/// open file mode
 enum mode : flag_t
 {
     read = 1,
@@ -91,6 +91,7 @@ enum symlink_flags : flag_t
 
 };
 }
+
 namespace vfs
 {
 class inode;
@@ -105,7 +106,7 @@ struct dirstream
 {
     file_desc fd;
 };
-
+/// file system flags
 namespace fs_flags
 {
 enum : flag_t
@@ -156,7 +157,7 @@ enum
     pseudo_func,
 };
 }
-
+/// read write flags
 namespace rw_flags
 {
 enum

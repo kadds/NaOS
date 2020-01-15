@@ -94,7 +94,7 @@ cpuid_t init()
     return cpuid;
 }
 
-bool is_init() { return last_cpuid >= 1; }
+bool has_init() { return last_cpuid >= 1; }
 
 void init_data(cpuid_t cpuid)
 {
