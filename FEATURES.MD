@@ -52,7 +52,7 @@ Features / TODO
     - [ ] Ext2
     - [ ] FAT
     - [ ] IO Model
-        - [ ] Blocked IO
+        - [x] Blocked IO
         - [ ] IO Multiplexing
         - [ ] Asynchronous IO
 * - [x] Interrupt subsystem
