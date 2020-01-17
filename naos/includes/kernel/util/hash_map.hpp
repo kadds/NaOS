@@ -306,6 +306,30 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         }
     }
 
+    void remove_value(const K &key, const V &v)
+    {
+        u64 hash = hash_key(key);
+
+        node_t *prev = nullptr;
+        for (auto it = table[hash].next; it != nullptr;)
+        {
+            if (it->content.key == key && it->content.value == v)
+            {
+                auto cur_node = it;
+                it = it->next;
+
+                if (likely(prev))
+                    prev->next = it;
+                else
+                    table[hash].next = it;
+                memory::Delete<>(allocator, cur_node);
+                continue;
+            }
+            prev = it;
+            it = it->next;
+        }
+    }
+
     void remove_once(const K &key)
     {
         u64 hash = hash_key(key);
