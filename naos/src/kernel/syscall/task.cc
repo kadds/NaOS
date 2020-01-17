@@ -169,10 +169,17 @@ void sigreturn(u64 code) { task::signal_return(code); }
 
 u64 getcpu_running() { return task::current()->cpuid; }
 
-u64 setcpu_mask(u64 mask0, u64 mask1)
+void setcpu_mask(u64 mask0, u64 mask1)
 {
     task::current()->cpumask.mask = mask0;
     task::current()->attributes |= task::thread_attributes::need_schedule;
+}
+
+void getcpu_mask(u64 *mask0, u64 *mask1)
+{
+    if (!is_user_space_pointer(mask0))
+        return;
+    *mask0 = task::current()->cpumask.mask;
 }
 
 BEGIN_SYSCALL
@@ -191,8 +198,9 @@ SYSCALL(41, raise)
 SYSCALL(42, sigsend)
 SYSCALL(43, sigput)
 SYSCALL(44, sigreturn)
-SYSCALL(45, getcpu_running);
-SYSCALL(46, setcpu_mask);
+SYSCALL(45, getcpu_running)
+SYSCALL(46, setcpu_mask)
+SYSCALL(47, getcpu_mask)
 END_SYSCALL
 
 } // namespace syscall

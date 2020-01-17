@@ -150,50 +150,50 @@ bool round_robin_scheduler::schedule()
         if (!l->runable_list.empty())
         {
             uctx::UninterruptibleContext icu;
-
-            has_task = true;
-
-            cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
-            if (cur->attributes & thread_attributes::remove)
+            if (!l->runable_list.empty())
             {
-                cur->scheduler->remove(cur);
-            }
+                has_task = true;
 
-            if (cur->scheduler == this)
-            {
-                auto rr = (thread_data_rr_t *)cur->schedule_data;
-                if (rr->rest_span <= 0)
+                cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
+                if (cur->attributes & thread_attributes::remove)
                 {
-                    rr->rest_span = calc_span(cur);
-                    l->runable_list.push_back(cur);
+                    cur->scheduler->remove(cur);
                 }
+
+                if (cur->scheduler == this)
+                {
+                    auto rr = (thread_data_rr_t *)cur->schedule_data;
+                    if (rr->rest_span <= 0)
+                    {
+                        rr->rest_span = calc_span(cur);
+                        l->runable_list.push_back(cur);
+                    }
+                }
+                auto next = l->runable_list.pop_front();
+                cur->attributes &= ~thread_attributes::need_schedule;
+                next->state = thread_state::running;
+                cpu.edit_load_data().last_sched_time = timer::get_high_resolution_time();
+                cpu.edit_load_data().schedule_times++;
+                task::switch_thread(cur, next);
+                continue;
             }
-            auto next = l->runable_list.pop_front();
+        }
+        if (cur->scheduler == this)
+        {
+            auto rr = (thread_data_rr_t *)cur->schedule_data;
+            if (rr->rest_span <= 0)
+            {
+                rr->rest_span = calc_span(cur);
+            }
+            if (cur->attributes & thread_attributes::block_unintr || cur->attributes & thread_attributes::block_intr)
+                return false;
             cur->attributes &= ~thread_attributes::need_schedule;
-            next->state = thread_state::running;
-            cpu.edit_load_data().last_sched_time = timer::get_high_resolution_time();
-            cpu.edit_load_data().schedule_times++;
-            task::switch_thread(cur, next);
+            return true;
         }
         else
-        {
-            if (cur->scheduler == this)
-            {
-                auto rr = (thread_data_rr_t *)cur->schedule_data;
-                if (rr->rest_span <= 0)
-                {
-                    rr->rest_span = calc_span(cur);
-                }
-                if (cur->attributes & thread_attributes::block_unintr ||
-                    cur->attributes & thread_attributes::block_intr)
-                    return false;
-                cur->attributes &= ~thread_attributes::need_schedule;
-                return true;
-            }
-            else
-                return false;
-        }
+            return false;
     }
+
     return has_task;
 }
 

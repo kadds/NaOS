@@ -12,15 +12,12 @@ u64 none()
     return 1;
 }
 
-/// print a string to stdio, which can replace by 'write'
-/// \param str the string to print
-void print(const char *str) { trace::print_inner(str); }
-
 void *system_call_table[128];
 
 BEGIN_SYSCALL
 SYSCALL(0, none)
-SYSCALL(1, print)
+SYSCALL(1, none)
+
 END_SYSCALL
 
 } // namespace syscall

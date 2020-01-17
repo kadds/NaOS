@@ -33,7 +33,7 @@ Features / TODO
         - [x] PIPE
         - [ ] FIFO
         - [ ] Memory shared
-        - [ ] Message queue
+        - [x] Message queue
         - [x] Signal
             - [ ] Mask
     - [x] Memory map
@@ -53,6 +53,7 @@ Features / TODO
     - [ ] FAT
     - [ ] IO Model
         - [x] Blocked IO
+        - [ ] NoBlocked IO
         - [ ] IO Multiplexing
         - [ ] Asynchronous IO
 * - [x] Interrupt subsystem
