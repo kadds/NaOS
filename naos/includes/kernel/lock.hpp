@@ -101,7 +101,6 @@ struct rw_lock_t
             if (lock_m & 0x8000000000000000UL)
             {
                 /// TODO: state is invalid.
-                trace::panic("Invalid rw_lock state.");
             }
 #endif
             exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
@@ -117,7 +116,6 @@ struct rw_lock_t
             if (lock_m == 0)
             {
                 /// TODO: state is invalid.
-                trace::panic("Invalid rw_lock state.");
             }
 #endif
             exp = 0x8000000000000000UL;

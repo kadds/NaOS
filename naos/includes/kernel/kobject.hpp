@@ -25,10 +25,10 @@ class kobject
 
     obj_type get_type() { return type; }
 
-    template <typename T, obj_type type> T *get()
+    template <typename T, obj_type t> T *get()
     {
-        if (likely(type == this->type))
-            return T * (this);
+        if (likely(t == this->type))
+            return (T *)this;
         return nullptr;
     }
 };

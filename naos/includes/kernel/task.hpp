@@ -218,7 +218,7 @@ u64 wait_process(process_t *process, u64 &ret);
 void check_process(process_t *process);
 void check_thread(thread_t *thd);
 
-NoReturn void exit_thread(u64 ret);
+NoReturn void do_exit_thread(u64 ret);
 u64 detach_thread(thread_t *thd);
 u64 join_thread(thread_t *thd, u64 &ret);
 
@@ -227,6 +227,7 @@ namespace thread_control_flags
 enum : flag_t
 {
     process = 1,
+    core_dump = 2,
 };
 }
 

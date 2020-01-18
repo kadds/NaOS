@@ -10,8 +10,12 @@ bool sp_condition(u64 data);
 
 struct semaphore_t
 {
+  private:
     std::atomic_long lock_res = ATOMIC_FLAG_INIT;
     task::wait_queue wait_queue;
+    friend bool sp_condition(u64 data);
+
+  public:
     semaphore_t(i64 count)
         : lock_res(count)
         , wait_queue(memory::KernelCommonAllocatorV)
@@ -39,12 +43,8 @@ struct semaphore_t
             task::do_wake_up(&wait_queue, lock_res);
         }
     }
-};
 
-bool sp_condition(u64 data)
-{
-    semaphore_t *sep = (semaphore_t *)data;
-    return sep->lock_res > 0;
-}
+    i64 res() { return lock_res; }
+};
 
 } // namespace lock

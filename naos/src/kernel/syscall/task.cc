@@ -68,11 +68,11 @@ void exit_thread(u64 ret)
 {
     if (task::current()->attributes & task::thread_attributes::main)
     {
-        exit(ret);
+        task::do_exit(ret);
     }
     else
     {
-        task::exit_thread(ret);
+        task::do_exit_thread(ret);
     }
 }
 

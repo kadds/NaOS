@@ -10,12 +10,15 @@ namespace memory
 u64 lev[] = {2048, max_message_queue_count};
 util::id_level_generator<2> *msg_queue_id_generator = nullptr;
 util::hash_map<msg_id, message_queue_t *> *msg_hash_map = nullptr;
+lock::rw_lock_t msg_queue_lock;
 
-void init()
+void msg_queue_init()
 {
     msg_queue_id_generator = memory::New<util::id_level_generator<2>>(memory::KernelCommonAllocatorV, lev);
+    msg_queue_id_generator->tag(0);
+
     msg_hash_map = memory::New<util::hash_map<msg_id, message_queue_t *>>(memory::KernelCommonAllocatorV,
-                                                                          memory::KernelCommonAllocatorV);
+                                                                          memory::KernelCommonAllocatorV, 7, 100);
 }
 
 message_queue_t *create_msg_queue(u64 maximum_msg_count, u64 maximum_msg_bytes)
@@ -24,22 +27,30 @@ message_queue_t *create_msg_queue(u64 maximum_msg_count, u64 maximum_msg_bytes)
         maximum_msg_bytes = max_message_pack_bytes;
     if (maximum_msg_count > max_message_count)
         maximum_msg_count = max_message_count;
-    if (unlikely(msg_queue_id_generator == nullptr))
-        init();
     msg_id id = msg_queue_id_generator->next();
     if (id <= 0 || id == util::null_id)
         return nullptr;
 
     message_queue_t *msgq = memory::New<message_queue_t>(memory::KernelCommonAllocatorV);
     msgq->key = id;
+    msgq->maximum_msg_count = maximum_msg_count;
+    msgq->maximum_msg_bytes = maximum_msg_bytes;
+    uctx::RawWriteLockUninterruptibleContext icu(msg_queue_lock);
     msg_hash_map->insert(id, msgq);
     return msgq;
 }
 
+void delete_msg_queue(message_queue_t *q)
+{
+    uctx::RawWriteLockUninterruptibleContext icu(msg_queue_lock);
+    msg_hash_map->remove(q->key);
+    msg_queue_id_generator->collect(q->key);
+    memory::Delete<>(memory::KernelCommonAllocatorV, q);
+}
+
 message_queue_t *get_msg_queue(msg_id id)
 {
-    if (unlikely(msg_queue_id_generator == nullptr))
-        init();
+    uctx::RawReadLockUninterruptibleContext icu(msg_queue_lock);
     message_queue_t *q = nullptr;
     msg_hash_map->get(id, &q);
     return q;
@@ -54,45 +65,22 @@ struct wait_t
 bool wait_sender_func(u64 data)
 {
     auto *queue = (message_queue_t *)data;
-    return queue->msg_count < queue->maximum_msg_count;
+    return queue->msg_count < queue->maximum_msg_count || queue->close;
 }
 
 bool wait_reader_func(u64 data)
 {
     auto *w = (wait_t *)data;
-    return w->queue->msg_count < w->queue->maximum_msg_count && w->queue->msg_packs.has(w->type);
+    msg_pack_list_t *pack_list;
+    uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
+    return (w->queue->msg_packs.get(w->type, &pack_list) && !pack_list->empty()) || w->queue->close;
 }
 
-u64 write_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
+u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
 {
-    if (unlikely(length > max_message_pack_bytes))
-        return 0;
-
-    u64 exp;
-    do
-    {
-        if (queue->msg_count >= queue->maximum_msg_count)
-        {
-            if (flags & msg_flags::no_block)
-            {
-                return 0;
-            }
-            else
-            {
-                task::do_wait(&queue->sender_wait_queue, wait_sender_func, (u64)queue,
-                              task::wait_context_type::uninterruptible);
-            }
-        }
-        exp = queue->msg_count;
-    } while (!queue->msg_count.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire));
-
-    message_pack_t *msg = (message_pack_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
     msg->msg_length = length;
-    msg->next_msg = nullptr;
-    msg->last_msg = nullptr;
     msg->rest_msg = nullptr;
     msg->put_time = timer::get_high_resolution_time();
-    msg->type = type;
     u64 len = memory::page_size - offsetof(message_pack_t, buffer);
     const u64 plen = memory::page_size - offsetof(messsage_seg_t, buffer);
 
@@ -110,7 +98,7 @@ u64 write_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, f
     {
         messsage_seg_t *msgs = (messsage_seg_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
         u64 mlen = (plen > length - len) ? length - len : plen;
-        util::memcopy(msgs->buffer, buffer + len, mlen);
+        util::memcopy(msgs->buffer + len, buffer + len, mlen);
         len += mlen;
         msgs->next = nullptr;
         if (msg->rest_msg == nullptr)
@@ -119,83 +107,123 @@ u64 write_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, f
             last_seg->next = msgs;
         last_seg = msgs;
     }
-    uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
+    return length;
+}
 
-    message_pack_t *root;
+u64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags)
+{
+    if (unlikely(length > max_message_pack_bytes) || queue->close)
+        return 0;
 
-    if (queue->msg_packs.get(type, &root))
+    u64 exp;
+    do
     {
-        root->next_msg = msg;
-    }
-    else
+        if (queue->msg_count >= queue->maximum_msg_count)
+        {
+            if (flags & msg_flags::no_block)
+                return 0;
+            task::do_wait(&queue->sender_wait_queue, wait_sender_func, (u64)queue,
+                          task::wait_context_type::uninterruptible);
+        }
+        if (unlikely(queue->close))
+            return 0;
+        exp = queue->msg_count;
+    } while (!queue->msg_count.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire) &&
+             queue->msg_count < queue->maximum_msg_count);
+
+    message_pack_t *msg = (message_pack_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
+    msg->type = type;
+    write_msg_data(msg, buffer, length);
+
     {
-        root = msg;
-        root->last_msg = msg;
-        queue->msg_packs.insert(type, root);
+        msg_pack_list_t *list;
+        uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
+        if (!queue->msg_packs.get(type, &list))
+        {
+            list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+            queue->msg_packs.insert(type, list);
+        }
+        list->push_back(msg);
     }
 
+    task::do_wake_up(&queue->receiver_wait_queue, 1);
     return length;
 } // namespace memory
 
-u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
+u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
 {
-    message_pack_t *root;
-
-    while (!queue->msg_packs.get(type, &root))
-    {
-        if (flags & msg_flags::no_block)
-        {
-            return 0;
-        }
-        else
-        {
-            wait_t *wait = memory::New<wait_t>(memory::KernelCommonAllocatorV);
-            wait->queue = queue;
-            wait->type = type;
-            task::do_wait(&queue->receiver_wait_queue, wait_reader_func, (u64)wait,
-                          task::wait_context_type::uninterruptible);
-        }
-    }
-    queue->msg_packs.remove_value(type, root);
-    message_pack_t *next = root->next_msg;
-    if (next)
-    {
-        queue->msg_packs.insert(type, next);
-        next->last_msg = root->last_msg;
-    }
     u64 len = memory::page_size - offsetof(message_pack_t, buffer);
     const u64 plen = memory::page_size - offsetof(messsage_seg_t, buffer);
-    if (length > root->msg_length)
-        length = root->msg_length;
+    if (length > msg->msg_length)
+        length = msg->msg_length;
 
     if (len < length)
     {
-        util::memcopy(buffer, root->buffer, len);
+        util::memcopy(buffer, msg->buffer, len);
     }
     else
     {
-        util::memcopy(buffer, root->buffer, length);
-        ;
+        util::memcopy(buffer, msg->buffer, length);
     }
 
-    messsage_seg_t *seg = root->rest_msg;
+    messsage_seg_t *seg = msg->rest_msg;
     while (len < length && seg)
     {
         u64 mlen = plen > length - len ? length - len : plen;
         util::memcopy(buffer + len, seg->buffer, mlen);
         len += mlen;
     }
+    return length;
+}
+
+u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
+{
+    message_pack_t *msg;
+    msg_pack_list_t *msg_pack_list = nullptr;
+    for (;;)
+    {
+        if (queue->close && queue->msg_count == 0)
+        {
+            delete_msg_queue(queue);
+            return 0;
+        }
+        uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
+        icu.begin();
+        if (!queue->msg_packs.get(type, &msg_pack_list) || !msg_pack_list || msg_pack_list->empty())
+        {
+            icu.end();
+            if (flags & msg_flags::no_block)
+            {
+                return 0;
+            }
+            wait_t *wait = memory::New<wait_t>(memory::KernelCommonAllocatorV);
+            wait->queue = queue;
+            wait->type = type;
+            task::do_wait(&queue->receiver_wait_queue, wait_reader_func, (u64)wait,
+                          task::wait_context_type::uninterruptible);
+            memory::Delete<>(memory::KernelCommonAllocatorV, wait);
+        }
+        else
+        {
+            msg = msg_pack_list->pop_front();
+            icu.end();
+            break;
+        }
+    }
+
+    read_msg_data(msg, buffer, length);
 
     queue->msg_count--;
     task::do_wake_up(&queue->sender_wait_queue, 1);
     return length;
 }
 
-void close_msg_queue(message_queue_t *q)
+bool close_msg_queue(message_queue_t *q)
 {
-    if (unlikely(msg_queue_id_generator == nullptr))
-        init();
-    msg_hash_map->remove(q->key);
+    q->close = true;
+    if (q->msg_count == 0)
+        delete_msg_queue(q);
+    return true;
 }
 
 } // namespace memory

@@ -109,6 +109,18 @@ template <typename Controller> struct Guard_t
     ~Guard_t() { ctrl.end(); }
 };
 
+template <typename Lock> struct LockGuard_t
+{
+    Lock &ctrl;
+    explicit LockGuard_t(Lock &l)
+        : ctrl(l)
+    {
+        ctrl.lock();
+    }
+
+    ~LockGuard_t() { ctrl.unlock(); }
+};
+
 using RawSpinLockContext = Guard_t<RawSpinLockController>;
 using SpinLockContext = Guard_t<RawSpinLockController>;
 using UninterruptibleContext = Guard_t<UninterruptibleController>;

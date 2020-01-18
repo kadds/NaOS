@@ -483,28 +483,31 @@ void do_sleep(u64 milliseconds)
     }
 }
 
+void exit_process(process_t *process, u64 ret)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+    auto &list = *(thread_list_t *)process->thread_list;
+    for (auto thd : list)
+    {
+        // Just destroy all thread
+        if (thd->state == thread_state::stop || thd->state == thread_state::destroy)
+        {
+            thd->state = thread_state::destroy;
+        }
+        else
+        {
+            scheduler::remove(thd);
+        }
+    }
+    process->ret_val = ret;
+    process->attributes |= process_attributes::no_thread;
+    do_wake_up(&process->wait_que);
+}
+
 void do_exit(u64 ret)
 {
     process_t *process = current_process();
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
-        auto &list = *(thread_list_t *)process->thread_list;
-        for (auto thd : list)
-        {
-            // Just destroy all thread
-            if (thd->state == thread_state::stop || thd->state == thread_state::destroy)
-            {
-                thd->state = thread_state::destroy;
-            }
-            else
-            {
-                scheduler::remove(thd);
-            }
-        }
-        process->ret_val = ret;
-        process->attributes |= process_attributes::no_thread;
-        do_wake_up(&process->wait_que);
-    }
+    exit_process(process, ret);
     thread_yield();
     trace::panic("Unreachable control flow.");
 }
@@ -598,25 +601,28 @@ void check_thread(thread_t *thd)
     }
 }
 
-void exit_thread(u64 ret)
+/// TODO: exit other thread which is running
+void exit_thread(thread_t *thd, u64 ret)
 {
+    uctx::UninterruptibleContext icu;
+    thd->user_stack_top = (void *)ret;
+    thd->state = thread_state::stop;
+    scheduler::remove(thd);
+    if (thd->attributes & thread_attributes::detached)
     {
-        uctx::UninterruptibleContext icu;
-        auto thd = current();
-        thd->user_stack_top = (void *)ret;
-        thd->state = thread_state::stop;
-        scheduler::remove(thd);
-        if (thd->attributes & thread_attributes::detached)
-        {
-            thd->state = thread_state::destroy;
-            check_thread(thd);
-        }
-        else
-        {
-            do_wake_up(&thd->wait_que);
-        }
+        thd->state = thread_state::destroy;
+        check_thread(thd);
     }
+    else
+    {
+        do_wake_up(&thd->wait_que);
+    }
+}
 
+void do_exit_thread(u64 ret)
+{
+    auto thd = current();
+    exit_thread(thd, ret);
     thread_yield();
     trace::panic("Unreachable control flow.");
 }
@@ -665,22 +671,17 @@ void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(t
 void kill_thread(thread_t *thread, flag_t flags)
 {
     {
-        uctx::UninterruptibleContext icu;
-        thread->user_stack_top = (void *)0;
-        thread->state = thread_state::stop;
-        scheduler::remove(thread);
-        if (thread->attributes & thread_attributes::detached)
+
+        if (flags & thread_control_flags::process)
         {
-            thread->state = thread_state::destroy;
-            check_thread(thread);
+            exit_process(thread->process, -1);
         }
         else
         {
-            do_wake_up(&thread->wait_que);
+            exit_thread(thread, -1);
         }
     }
     thread_yield();
-
     trace::panic("Unreachable control flow.");
 }
 

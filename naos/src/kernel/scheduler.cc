@@ -89,7 +89,7 @@ void add(thread_t *thread, scheduler_class scher)
     thread->scheduler->add(thread);
 }
 
-void remove(thread_t *thread) { thread->attributes |= thread_attributes::remove; }
+void remove(thread_t *thread) { thread->attributes |= thread_attributes::remove | thread_attributes::need_schedule; }
 
 struct update_state_ipi_param
 {

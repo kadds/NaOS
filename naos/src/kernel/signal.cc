@@ -9,25 +9,25 @@ void sig_ignore(signal_num_t num, signal_info_t *info) {}
 
 void sig_kill(signal_num_t num, signal_info_t *info)
 {
-    trace::info("signal ", num, ": kill process ", task::current()->process->pid, " tid ", task::current()->tid);
+    trace::info("signal ", num, ": kill process ", task::current()->process->pid);
     task::kill_thread(task::current(), task::thread_control_flags::process);
 }
 
 void sig_kill_dump(signal_num_t num, signal_info_t *info)
 {
-    trace::info("signal ", num, ": dump process ", task::current()->process->pid, " tid ", task::current()->tid);
-    task::kill_thread(task::current(), task::thread_control_flags::process);
+    trace::info("signal ", num, ": dump process ", task::current()->process->pid);
+    task::kill_thread(task::current(), task::thread_control_flags::process | task::thread_control_flags::core_dump);
 }
 
 void sig_stop(signal_num_t num, signal_info_t *info)
 {
-    trace::info("signal ", num, ": stop process ", task::current()->process->pid, " tid ", task::current()->tid);
+    trace::info("signal ", num, ": stop process ", task::current()->process->pid);
     task::stop_thread(task::current(), task::thread_control_flags::process);
 }
 
 void sig_cont(signal_num_t num, signal_info_t *info)
 {
-    trace::info("signal ", num, ": continue process ", task::current()->process->pid, " tid ", task::current()->tid);
+    trace::info("signal ", num, ": continue process ", task::current()->process->pid);
     task::continue_thread(task::current(), task::thread_control_flags::process);
 }
 

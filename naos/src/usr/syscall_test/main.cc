@@ -147,6 +147,53 @@ unsigned long test_thread()
     return create_thread((void *)thread, 2, 0);
 }
 
+const char *msg_str = "hi, message sent from msg queue";
+
+void read_test_message_queue(long msg_id)
+{
+    char buffer[sizeof(msg_str)];
+    while (1)
+    {
+        long ret = 0;
+        if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
+        {
+            exit_thread(ret);
+        }
+        if (read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), 0) != sizeof(msg_str))
+        {
+            print("read from message queue failed\n");
+            exit(-2);
+        }
+    }
+}
+
+void test_message_queue()
+{
+    print("message queue testing\n");
+    auto msg_id = create_msg_queue(2, 100);
+    if (msg_id == EPARAM)
+    {
+        print("Can't create message queue.");
+        exit_thread(-1);
+    }
+    auto tid = create_thread((void *)read_test_message_queue, msg_id, 0);
+    for (int i = 0; i < 20; i++)
+    {
+        write_msg_queue(msg_id, 1, msg_str, sizeof(msg_str), 0);
+    }
+    long exit_ret = 1;
+    write_msg_queue(msg_id, 2, &exit_ret, sizeof(exit_ret), 0);
+    long ret;
+    join(tid, &ret);
+    close_msg_queue(msg_id);
+    if (ret != exit_ret)
+    {
+        print("message queue test failed\n");
+        exit_thread(-1);
+    }
+    print("message queue tested.\n");
+}
+
 void test_memory()
 {
     print("memory testing\n");
@@ -161,6 +208,7 @@ void test_memory()
     *(char *)p = 'A';
     mumap(p);
     print("memory tested.\n");
+    test_message_queue();
 }
 
 void sighandler(int sig, long error, long code, long status)

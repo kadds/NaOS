@@ -412,6 +412,7 @@ bool info_t::umap_file(u64 addr)
     }
     vma.deallocate_map(vm);
     mmu_paging.unmap_area(vm);
+    arch::paging::reload();
     return true;
 }
 } // namespace memory::vm

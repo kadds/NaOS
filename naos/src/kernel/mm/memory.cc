@@ -6,9 +6,11 @@
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/buddy.hpp"
+#include "kernel/mm/msg_queue.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
+
 namespace memory
 {
 
@@ -254,6 +256,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
 
     PhyBootAllocatorV->discard();
     kassert((u64)PhyBootAllocatorV->current_ptr_address() <= end_data, "BootAllocator is Out of memory");
+    msg_queue_init();
 }
 
 void listen_page_fault() { vm::listen_page_fault(); }

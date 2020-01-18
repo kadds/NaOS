@@ -49,7 +49,8 @@ struct wait_queue
 /// \param user_data the condition user data pass to
 /// \param wct wait context type
 ///
-void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct);
+/// \return bool false: wait confition check failed, maybe interrupt by signal. true: ok
+bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct);
 
 ///
 /// \brief try wake up task at queue
@@ -57,5 +58,7 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
 /// \param queue the queue to wake up
 /// \param count maximum number of tasks to wake up
 u64 do_wake_up(wait_queue *queue, u64 count = 0xFFFFFFFFFFFFFFFFUL);
+
+u64 do_wake_up_signal(wait_queue *queue, thread_t *thread);
 
 } // namespace task

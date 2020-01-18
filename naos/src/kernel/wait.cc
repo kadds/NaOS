@@ -5,10 +5,10 @@
 namespace task
 {
 
-void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct)
+bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct)
 {
     if (condition(user_data))
-        return;
+        return true;
     thread_state state;
     if (wct == wait_context_type::interruptable)
     {
@@ -19,7 +19,7 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
         state = thread_state::uninterruptible;
     }
     else
-        return;
+        trace::panic("wait context type is unknown.");
 
     uctx::UninterruptibleContext icu;
     {
@@ -33,13 +33,15 @@ void do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
         thd->attributes |= task::thread_attributes::need_schedule;
         scheduler::update_state(thd, state);
         scheduler::schedule();
-        if (condition(user_data))
+        if (thd->signal_pack.is_set() || condition(user_data))
             break;
+        // false wake up, try sleep.
     }
     {
         uctx::RawSpinLockContext ctx(queue->lock);
         queue->list.remove(queue->list.find(wait_context_t(current(), condition, user_data)));
     }
+    return condition(user_data);
 }
 
 u64 do_wake_up(wait_queue *queue, u64 count)
@@ -58,5 +60,23 @@ u64 do_wake_up(wait_queue *queue, u64 count)
             ++it;
     }
     return i;
+}
+
+u64 do_wake_up_signal(wait_queue *queue, thread_t *thread)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(queue->lock);
+
+    for (auto it = queue->list.begin(); it != queue->list.end();)
+    {
+        if (it->thd == thread)
+        {
+            scheduler::update_state(it->thd, thread_state::ready);
+            it = queue->list.remove(it);
+            return 1;
+        }
+        else
+            ++it;
+    }
+    return 0;
 }
 } // namespace task

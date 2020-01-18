@@ -24,7 +24,7 @@ SYS_CALL(0, void, sys_none, void)
 
 SYS_CALL(10, int, open, const char *path, unsigned long mode, unsigned long attr)
 SYS_CALL(11, void, close, int fd);
-#define EOF -1
+
 #define RWFLAGS_NO_BLOCK 1
 #define RWFLAGS_OVERRIDE 2
 
@@ -111,7 +111,9 @@ SYS_CALL(40, int, sigaction, int signum, void (*handler)(int signum, long error,
 SYS_CALL(41, int, raise, int signum, int error, int code, int status)
 SYS_CALL(42, int, sigsend, int tid, int signum, int error, int code, int status)
 SYS_CALL(44, void, sigreturn, int code)
-SYS_CALL(45, int, get_which_cpu_running)
+SYS_CALL(45, int, getcpucorerunning)
+SYS_CALL(46, void, setcpumask, unsigned long mask0, unsigned long mask1)
+SYS_CALL(47, void, getcpumask, unsigned long *mask0, unsigned long *mask1)
 
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)
@@ -124,3 +126,21 @@ SYS_CALL(51, unsigned long, sbrk, long offset)
 
 SYS_CALL(52, void *, mmap, unsigned long start, int fd, unsigned long offset, unsigned long len, unsigned long flags)
 SYS_CALL(53, unsigned long, mumap, void *addr)
+SYS_CALL(54, long, create_msg_queue, unsigned long msg_count, unsigned long msg_bytes)
+SYS_CALL(55, unsigned long, write_msg_queue, long key, unsigned long type, const void *buffer, unsigned long size,
+         unsigned long flags)
+SYS_CALL(56, unsigned long, read_msg_queue, long key, unsigned long type, void *buffer, unsigned long size,
+         unsigned long flags)
+SYS_CALL(57, void, close_msg_queue, long key)
+
+#define MSGQUEUE_FLAGS_NOBLOCK 1
+
+#define OK 0
+#define EOF -1
+#define ETIMEOUT -2
+#define EINTR -3
+#define EPARAM -4
+#define EBUFFER -5
+#define ESIZE -6
+#define EPERMISSION -7
+#define ERESOURCE_NOT_NULL -8

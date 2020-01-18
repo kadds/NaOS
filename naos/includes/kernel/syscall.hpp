@@ -13,3 +13,12 @@ ExportC void *system_call_table[];
     ;                                                                                                                  \
     static Section(".init_array") __attribute__((__used__)) void *syscall_init_ptr = (void *)&syscall_init;
 } // namespace syscall
+#define OK 0
+#define EOF -1
+#define ETIMEOUT -2
+#define EINTR -3
+#define EPARAM -4
+#define EBUFFER -5
+#define ESIZE -6
+#define EPERMISSION -7
+#define ERESOURCE_NOT_NULL -8
