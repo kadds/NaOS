@@ -31,7 +31,7 @@ Features / TODO
         - [ ] Thread local storage
     - [ ] IPC
         - [x] PIPE
-        - [ ] FIFO
+        - [x] FIFO
         - [ ] Memory shared
         - [x] Message queue
         - [x] Signal
