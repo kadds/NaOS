@@ -18,7 +18,7 @@ std::atomic_int last_cpuid = 0;
 void *get_rsp()
 {
     void *stack;
-    __asm__ __volatile__("movq %%rsp,%0	\n\t" : "=r"(stack) :);
+    __asm__ __volatile__("movq %%rsp,%0	\n\t" : "=r"(stack) : :);
     return stack;
 }
 
@@ -110,7 +110,7 @@ void init_data(cpuid_t cpuid)
                              memory::exception_nmi_stack_size;
 
     u64 krsp = ~(memory::kernel_stack_size - 1);
-    __asm__("andq %%rsp, %0\n\t" : "=r"(krsp)::"memory");
+    __asm__ __volatile__("andq %%rsp, %0\n\t" : "+g"(krsp)::"memory");
     auto kernel_rsp = (void *)(krsp + memory::kernel_stack_size);
     data.kernel_rsp = kernel_rsp;
     tss::set_rsp(cpuid, 0, (void *)kernel_rsp);
@@ -131,13 +131,13 @@ cpu_t &current()
     kassert(_rdmsr(0xC0000101) != 0, "Unreadable gs base");
     kassert(_rdmsr(0xC0000102) == 0, "Unreadable kernel gs base");
 #endif
-    __asm__("movq %%gs:0x0, %0\n\t" : "=r"(cpuid)::"memory");
+    __asm__("movq %%gs:0x0, %0\n\t" : "=r"(cpuid) : :);
     return per_cpu_data[cpuid];
 }
 void *current_user_data()
 {
     u64 u;
-    __asm__("movq %%gs:0x10, %0\n\t" : "=r"(u)::"memory");
+    __asm__("movq %%gs:0x10, %0\n\t" : "=r"(u) : :);
     return (void *)u;
 }
 

@@ -448,7 +448,7 @@ void reload()
 base_paging_t *current()
 {
     u64 v;
-    __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : : "memory");
+    __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : :);
     return (base_paging_t *)memory::kernel_phyaddr_to_virtaddr(v);
 }
 

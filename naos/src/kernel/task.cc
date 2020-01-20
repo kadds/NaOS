@@ -717,7 +717,11 @@ void switch_thread(thread_t *old, thread_t *new_task)
     _switch_task(old->register_info, new_task->register_info);
 }
 
-void set_cpu_mask(thread_t *thd, cpu_mask_t mask) { thd->cpumask = mask; }
+void set_cpu_mask(thread_t *thd, cpu_mask_t mask)
+{
+    thd->cpumask = mask;
+    thd->attributes |= thread_attributes::need_schedule;
+}
 
 void thread_yield()
 {

@@ -45,7 +45,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     u64 extra_data = 0;
     if (regs->vector == 14)
     {
-        __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(extra_data) : : "memory");
+        __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(extra_data) : :);
     }
     bool handled = false;
     if (likely(global_call_func))
@@ -183,7 +183,7 @@ ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
 {
     trace::debug("page fault. ");
     u64 cr2;
-    __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : : "memory");
+    __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : :);
 
     trace::debug("page at: ", (void *)cr2);
 }

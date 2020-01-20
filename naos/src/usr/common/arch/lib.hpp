@@ -134,6 +134,7 @@ SYS_CALL(56, unsigned long, read_msg_queue, long key, unsigned long type, void *
 SYS_CALL(57, void, close_msg_queue, long key)
 
 #define MSGQUEUE_FLAGS_NOBLOCK 1
+#define MSGQUEUE_FLAGS_NOBLOCKOTHER 2
 
 #define OK 0
 #define EOF -1

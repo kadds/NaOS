@@ -51,6 +51,8 @@ ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
     return (u64)&_kstart;
 }
 
+u64 timestamp_version = BUILD_VERSION_TS;
+
 ExportC NoReturn void _kstart(kernel_start_args *args)
 {
     if (args == 0) // ap
@@ -64,11 +66,11 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
         task::start_task_idle();
         trace::panic("Unreachable control flow in _kstart.");
     } // else bsp
-
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
     arch::init(args);
+    trace::info("build version ", timestamp_version);
     cpu::init();
     irq::init();
     memory::listen_page_fault();

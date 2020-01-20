@@ -53,7 +53,7 @@ Features / TODO
     - [ ] FAT
     - [ ] IO Model
         - [x] Blocked IO
-        - [ ] NoBlocked IO
+        - [x] NoBlocked IO
         - [ ] IO Multiplexing
         - [ ] Asynchronous IO
 * - [x] Interrupt subsystem

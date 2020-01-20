@@ -6,6 +6,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/str.hpp"
 #include <stdarg.h>
@@ -55,6 +56,14 @@ void print_inner(const char *str, u64 len)
     }
 }
 
+void cpu_wait_panic(u64 data)
+{
+    for (;;)
+    {
+        cpu_pause();
+    }
+}
+
 NoReturn void keep_panic(const regs_t *regs)
 {
     uctx::UninterruptibleContext uic;
@@ -62,6 +71,11 @@ NoReturn void keep_panic(const regs_t *regs)
     trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
     trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
     arch::device::vga::flush_kbuffer();
+    for (u32 id = 0; id < cpu::count(); id++)
+    {
+        if (id != cpu::current().id())
+            SMP::call_cpu(id, cpu_wait_panic, 0);
+    }
     for (;;)
     {
         cpu_pause();

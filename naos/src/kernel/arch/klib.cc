@@ -11,8 +11,8 @@ void *print_stack(const regs_t *regs, int max_depth)
     if (regs == nullptr)
     {
         u64 bp, sp;
-        __asm__ __volatile__("movq %%rbp, %0 \n\t" : "=r"(bp) : : "memory");
-        __asm__ __volatile__("movq %%rsp, %0 \n\t" : "=r"(sp) : : "memory");
+        __asm__ __volatile__("movq %%rbp, %0 \n\t" : "=g"(bp) : :);
+        __asm__ __volatile__("movq %%rsp, %0 \n\t" : "=g"(sp) : :);
         rbp = (u64 *)bp;
         rsp = (u64 *)sp;
     }
@@ -74,7 +74,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     if (regs != nullptr)
     {
         u64 fs, gs;
-        __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : : "memory");
+        __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : :);
         trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(with intr regs):");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
         trace::print("\nrax=", (void *)regs->rax, ", rbx=", (void *)regs->rbx, ", rcx=", (void *)regs->rcx,
@@ -94,12 +94,12 @@ void *print_stack(const regs_t *regs, int max_depth)
                              "%4\n\t movq %%cs, %5\n\t"
                              : "=r"(fs), "=r"(gs), "=r"(ds), "=r"(es), "=r"(ss), "=r"(cs)
                              :
-                             : "memory");
+                             :);
         u64 rsp, rip, rbp, rflags;
-        __asm__ __volatile__("movq %%rsp, %0 \n\t lea (%%rip), %1\n\t movq %%rbp, %2 \n\t pushf \n\t popq %3"
-                             : "=r"(rsp), "=r"(rip), "=r"(rbp), "=r"(rflags)
+        __asm__ __volatile__("movq %%rsp, %0 \n\t leaq (%%rip), %1\n\t movq %%rbp, %2 \n\t pushf \n\t popq %3"
+                             : "=g"(rsp), "=r"(rip), "=g"(rbp), "=g"(rflags)
                              :
-                             : "memory");
+                             :);
 
         trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(without intr regs):");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
@@ -119,7 +119,7 @@ void *print_stack(const regs_t *regs, int max_depth)
         "movq %%cr0, %0 \n\t movq %%cr2, %1\n\t  movq %%cr3, %2\n\t  movq %%cr4,  %3\n\t  movq %%cr8, %4\n\t "
         : "=r"(cr0), "=r"(cr2), "=r"(cr3), "=r"(cr4), "=r"(cr8)
         :
-        : "memory");
+        :);
 
     trace::print("current control registers: cr0=", (void *)cr0, ", cr2=", (void *)cr2, ", cr3=", (void *)cr3,
                  ", cr4=", (void *)cr4, ", cr8=", (void *)cr8, '\n');

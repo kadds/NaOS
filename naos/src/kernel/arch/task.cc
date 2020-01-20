@@ -89,7 +89,7 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
 bool make_signal_context(void *stack, void *func, userland_code_context *context)
 {
     u64 rsp;
-    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=r"(rsp) : : "memory");
+    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=g"(rsp) : :);
     regs_t *regs;
     auto &cpu = arch::cpu::current();
     if (cpu.is_in_exception_context((void *)rsp) || cpu.is_in_interrupt_context((void *)rsp))
@@ -166,7 +166,7 @@ void set_signal_context(userland_code_context *context) { *context->rsp = contex
 void return_from_signal_context(userland_code_context *context, u64 code)
 {
     u64 rsp;
-    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=r"(rsp) : : "memory");
+    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=g"(rsp) : :);
     regs_t *regs;
     auto &cpu = arch::cpu::current();
     if (cpu.is_in_kernel_context((void *)rsp))

@@ -48,12 +48,11 @@ u64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
     {
         if (flags & rw_flags::no_block)
         {
-            return 0;
+            return -1;
         }
         task::do_wait(&wait_queue, tty_read_func, (u64)this, task::wait_context_type::interruptable);
     }
-
-    for (u64 i = 0; i < max_size; i++)
+    for (u64 i = 0; i < max_size;)
     {
         if (buffer.data_size() == 0)
         {
@@ -72,13 +71,11 @@ u64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
         }
         else if (ch == '\b')
         {
-            if (i > 1)
-            {
-                i -= 2;
-            }
+            if (i > 0)
+                i--;
             continue;
         }
-        data[i] = (byte)ch;
+        data[i++] = (byte)ch;
     }
     return max_size;
 }

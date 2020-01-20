@@ -72,13 +72,13 @@ ExportC void _switch_stack(u64 param1, u64 param2, u64 param3, u64 param4, void 
 inline static u64 get_stack()
 {
     u64 v0;
-    __asm__ __volatile__("movq %%rsp, %0 \n\t" : "=r"(v0) : : "memory");
+    __asm__ __volatile__("movq %%rsp, %0 \n\t" : "=r"(v0) : :);
     return v0;
 }
 
 inline static void cpu_pause()
 {
-    __asm__ __volatile__("pause \n\t" : : : "memory");
+    __asm__ __volatile__("pause \n\t" : : :);
     return;
 }
 

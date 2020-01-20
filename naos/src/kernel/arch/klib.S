@@ -19,6 +19,8 @@ reload_seg_x:
 
 .globl _cpu_id
 _cpu_id:
+    pushq %rbp
+    movq %rsp, %rbp
     pushq %rbx
     movl %edi, %eax
     movq %rcx, %r9
@@ -33,6 +35,7 @@ _cpu_id:
     mov %ecx, (%r9)
     mov %edx, (%r8)
     popq %rbx
+    leave
     ret
 .globl _switch_task
 _switch_task:
@@ -186,12 +189,15 @@ _call_sys_ret:
 /// r9 new_stack
 .globl _switch_stack
 _switch_stack:
+    pushq %rbp
+    movq  %rsp, %rbp
     pushq %r15
     movq %rsp, %r15
     movq %r9, %rsp
     call *%r8
-    movq %r15, %rsp 
+    movq %r15, %rsp
     popq %r15
+    popq %rbp
     retq
 # ======================================================
 .section .unpaged.text

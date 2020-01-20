@@ -51,7 +51,7 @@ struct message_queue_t
     task::wait_queue sender_wait_queue;
     msg_pack_hash_map_t msg_packs;
     lock::spinlock_t spinlock;
-    bool close;
+    volatile bool close;
 
     message_queue_t()
         : msg_count(0)
@@ -66,6 +66,7 @@ namespace msg_flags
 enum
 {
     no_block = 1,
+    no_block_other = 2,
 };
 } // namespace msg_flags
 

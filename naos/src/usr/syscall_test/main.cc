@@ -155,12 +155,13 @@ void read_test_message_queue(long msg_id)
     while (1)
     {
         long ret = 0;
-        if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
+
+        if (read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), MSGQUEUE_FLAGS_NOBLOCKOTHER) != sizeof(msg_str))
         {
-            exit_thread(ret);
-        }
-        if (read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), 0) != sizeof(msg_str))
-        {
+            if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
+            {
+                exit_thread(ret);
+            }
             print("read from message queue failed\n");
             exit(-2);
         }
@@ -186,6 +187,7 @@ void test_message_queue()
     long ret;
     join(tid, &ret);
     close_msg_queue(msg_id);
+
     if (ret != exit_ret)
     {
         print("message queue test failed\n");

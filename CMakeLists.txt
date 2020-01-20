@@ -57,4 +57,8 @@ else()
     SET (CMAKE_CXX_COMPILER      "/usr/bin/g++")
     SET (CMAKE_LINKER  "/usr/bin/ld")
 endif(USE_CLANG)
+
+string(TIMESTAMP BUILD_VERSION_TS "%s")
+add_definitions(-DBUILD_VERSION_TS=${BUILD_VERSION_TS})
+
 add_subdirectory(naos)

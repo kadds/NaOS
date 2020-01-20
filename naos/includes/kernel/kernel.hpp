@@ -72,3 +72,4 @@ ExportC NoReturn void _kstart(kernel_start_args *args);
 ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args);
 
 extern kernel_start_args *kernel_args;
+extern u64 timestamp_version;

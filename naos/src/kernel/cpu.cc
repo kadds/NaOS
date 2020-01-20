@@ -26,11 +26,9 @@ void init()
     cpu->soft_irq_wait_queue =
         memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
-#ifdef _DEBUG
     auto &c = arch::cpu::current();
     trace::debug("[cpu", c.get_id(), "] exception rsp:", (void *)c.get_exception_rsp(),
                  " interrupt rsp:", (void *)c.get_interrupt_rsp(), " kernel rsp:", (void *)c.get_kernel_rsp());
-#endif
 }
 u64 count() { return arch::cpu::count(); }
 

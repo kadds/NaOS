@@ -60,20 +60,13 @@ struct wait_t
 {
     message_queue_t *queue;
     msg_type type;
+    flag_t flags;
 };
 
 bool wait_sender_func(u64 data)
 {
     auto *queue = (message_queue_t *)data;
     return queue->msg_count < queue->maximum_msg_count || queue->close;
-}
-
-bool wait_reader_func(u64 data)
-{
-    auto *w = (wait_t *)data;
-    msg_pack_list_t *pack_list;
-    uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
-    return (w->queue->msg_packs.get(w->type, &pack_list) && !pack_list->empty()) || w->queue->close;
 }
 
 u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
@@ -110,27 +103,26 @@ u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
     return length;
 }
 
+bool write_for_write(message_queue_t *queue, flag_t flags)
+{
+    while (queue->msg_count >= queue->maximum_msg_count) // full
+    {
+        if (flags & msg_flags::no_block)
+            return false;
+        task::do_wait(&queue->sender_wait_queue, wait_sender_func, (u64)queue,
+                      task::wait_context_type::uninterruptible);
+        if (unlikely(queue->close))
+            return false;
+    }
+    return true;
+}
+
 u64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags)
 {
     if (unlikely(length > max_message_pack_bytes) || queue->close)
         return 0;
-
-    u64 exp;
-    do
-    {
-        if (queue->msg_count >= queue->maximum_msg_count)
-        {
-            if (flags & msg_flags::no_block)
-                return 0;
-            task::do_wait(&queue->sender_wait_queue, wait_sender_func, (u64)queue,
-                          task::wait_context_type::uninterruptible);
-        }
-        if (unlikely(queue->close))
-            return 0;
-        exp = queue->msg_count;
-    } while (!queue->msg_count.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire) &&
-             queue->msg_count < queue->maximum_msg_count);
-
+    if (!write_for_write(queue, flags))
+        return -1;
     message_pack_t *msg = (message_pack_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
     msg->type = type;
     write_msg_data(msg, buffer, length);
@@ -138,17 +130,40 @@ u64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
     {
         msg_pack_list_t *list;
         uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
+        if (!write_for_write(queue, flags))
+            return -1;
+
         if (!queue->msg_packs.get(type, &list))
         {
             list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
             queue->msg_packs.insert(type, list);
         }
         list->push_back(msg);
+        queue->msg_count++;
     }
-
-    task::do_wake_up(&queue->receiver_wait_queue, 1);
+    task::do_wake_up(&queue->receiver_wait_queue);
     return length;
 } // namespace memory
+
+bool wait_reader_func(u64 data)
+{
+    auto *w = (wait_t *)data;
+    msg_pack_list_t *pack_list;
+    uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
+    if (!w->queue->msg_packs.get(w->type, &pack_list) || pack_list->empty())
+    {
+        if (w->queue->close && w->queue->msg_count == 0)
+        {
+            return true;
+        }
+        if (w->flags & msg_flags::no_block_other && w->queue->msg_count > 0)
+        {
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
 
 u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
 {
@@ -167,11 +182,15 @@ u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
     }
 
     messsage_seg_t *seg = msg->rest_msg;
+    memory::Delete<>(memory::KernelBuddyAllocatorV, msg);
     while (len < length && seg)
     {
         u64 mlen = plen > length - len ? length - len : plen;
         util::memcopy(buffer + len, seg->buffer, mlen);
         len += mlen;
+        auto next = seg->next;
+        memory::Delete<>(memory::KernelBuddyAllocatorV, seg);
+        seg = next;
     }
     return length;
 }
@@ -185,20 +204,24 @@ u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
         if (queue->close && queue->msg_count == 0)
         {
             delete_msg_queue(queue);
-            return 0;
+            return -1;
         }
+
         uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
         icu.begin();
-        if (!queue->msg_packs.get(type, &msg_pack_list) || !msg_pack_list || msg_pack_list->empty())
+        if (!queue->msg_packs.get(type, &msg_pack_list) || msg_pack_list->empty())
         {
             icu.end();
             if (flags & msg_flags::no_block)
-            {
-                return 0;
-            }
+                return -1;
+            if (flags & msg_flags::no_block_other)
+                if (queue->msg_count > 0)
+                    return -2;
+
             wait_t *wait = memory::New<wait_t>(memory::KernelCommonAllocatorV);
             wait->queue = queue;
             wait->type = type;
+            wait->flags = flags;
             task::do_wait(&queue->receiver_wait_queue, wait_reader_func, (u64)wait,
                           task::wait_context_type::uninterruptible);
             memory::Delete<>(memory::KernelCommonAllocatorV, wait);
@@ -206,6 +229,7 @@ u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
         else
         {
             msg = msg_pack_list->pop_front();
+            queue->msg_count--;
             icu.end();
             break;
         }
@@ -213,16 +237,26 @@ u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
 
     read_msg_data(msg, buffer, length);
 
-    queue->msg_count--;
-    task::do_wake_up(&queue->sender_wait_queue, 1);
+    task::do_wake_up(&queue->sender_wait_queue);
     return length;
 }
 
-bool close_msg_queue(message_queue_t *q)
+bool close_msg_queue(message_queue_t *queue)
 {
-    q->close = true;
-    if (q->msg_count == 0)
-        delete_msg_queue(q);
+    uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
+    icu.begin();
+    queue->close = true;
+    task::do_wake_up(&queue->sender_wait_queue);
+    task::do_wake_up(&queue->receiver_wait_queue);
+    if (queue->msg_count == 0)
+    {
+        icu.end();
+        delete_msg_queue(queue);
+    }
+    else
+    {
+        icu.end();
+    }
     return true;
 }
 
