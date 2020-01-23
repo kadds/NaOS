@@ -51,7 +51,7 @@ template <typename E> class skip_list
     u32 rand()
     {
         u32 node_lev = 1;
-        while (next_rand(part) == 0 && node_lev <= max_lev)
+        while (next_rand(part) == 0 && node_lev < max_lev)
             node_lev++;
         return node_lev;
     }
