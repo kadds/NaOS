@@ -21,27 +21,27 @@ void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
 process_id create_process(const char *filename, const char *args, flag_t flags)
 {
-    if (!is_user_space_pointer(filename))
+    if (filename == nullptr || !is_user_space_pointer(filename))
     {
-        return -1;
+        return EPARAM;
     }
     if (!is_user_space_pointer(args))
     {
-        return -1;
+        return EPARAM;
     }
     auto ft = task::current_process()->res_table.get_file_table();
     auto file =
         fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
     if (!file)
     {
-        return -2;
+        return ENOEXIST;
     }
     auto p = task::create_process(file, user_process_thread, 0, args, 0, flags);
     if (p)
     {
         return p->pid;
     }
-    return -1;
+    return EFAILED;
 }
 
 void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
@@ -51,9 +51,9 @@ void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
 thread_id create_thread(void *entry, u64 arg, flag_t flags)
 {
-    if (!is_user_space_pointer(entry))
+    if (entry == nullptr || !is_user_space_pointer(entry))
     {
-        return -1;
+        return EPARAM;
     }
 
     auto t = task::create_thread(task::current_process(), user_thread, arg, (u64)entry, 0, flags);
@@ -61,7 +61,7 @@ thread_id create_thread(void *entry, u64 arg, flag_t flags)
     {
         return t->tid;
     }
-    return -1;
+    return EFAILED;
 }
 
 void exit_thread(u64 ret)
@@ -103,27 +103,27 @@ long wait_process(process_id pid, u64 *ret)
 /// sleep current thread
 void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 
-int sigaction(task::signal_num_t num, task::signal_func_t handler, u64 mask, flag_t flags)
+u64 sigaction(task::signal_num_t num, task::signal_func_t handler, u64 mask, flag_t flags)
 {
-    if (!is_user_space_pointer(handler))
-        return -1;
+    if (handler == nullptr || !is_user_space_pointer(handler))
+        return EPARAM;
     task::current_process()->signal_actions->set_action(num, handler, mask, flags);
-    return 0;
+    return OK;
 }
 
-int raise(task::signal_num_t num, u64 error, u64 code, u64 status)
+u64 raise(task::signal_num_t num, u64 error, u64 code, u64 status)
 {
     task::current()->signal_pack.set(num, error, code, status);
-    return 0;
+    return OK;
 }
 
-int sigsend(thread_id tid, task::signal_num_t num, u64 error, u64 code, u64 status)
+u64 sigsend(thread_id tid, task::signal_num_t num, u64 error, u64 code, u64 status)
 {
     auto t = task::find_tid(task::current_process(), tid);
     if (t == nullptr)
-        return -2;
+        return ENOEXIST;
     t->signal_pack.set(num, error, code, status);
-    return 0;
+    return OK;
 }
 
 struct target
@@ -141,15 +141,15 @@ enum target_flags : flag_t
     send_to_thread = 4,
 };
 
-int sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 status)
+u64 sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 status)
 {
-    if (!is_user_space_pointer(target))
-        return -1;
+    if (target == nullptr || !is_user_space_pointer(target))
+        return EPARAM;
     if (target->flags & send_to_process)
     {
         auto proc = task::find_pid(target->pid);
         if (proc == nullptr)
-            return -2;
+            return ENOEXIST;
     }
     else if (target->flags & send_to_thread)
     {
@@ -162,7 +162,7 @@ int sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 stat
         /// TODO: send group
     }
 
-    return 0;
+    return OK;
 }
 
 void sigreturn(u64 code) { task::signal_return(code); }

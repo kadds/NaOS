@@ -22,3 +22,6 @@ ExportC void *system_call_table[];
 #define ESIZE -6
 #define EPERMISSION -7
 #define ERESOURCE_NOT_NULL -8
+#define ENOEXIST -9
+#define EINNER -10
+#define EFAILED -11

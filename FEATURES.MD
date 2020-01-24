@@ -55,6 +55,8 @@ Features / TODO
         - [x] Blocked IO
         - [x] NoBlocked IO
         - [ ] IO Multiplexing
+            - [ ] Select
+            - [ ] Epoll
         - [ ] Asynchronous IO
 * - [x] Interrupt subsystem
     - [x] Hard IRQ

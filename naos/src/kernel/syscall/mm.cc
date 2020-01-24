@@ -8,14 +8,18 @@
 
 namespace syscall
 {
-bool brk(u64 ptr)
+u64 brk(u64 ptr)
 {
     if (!is_user_space_pointer(ptr))
     {
-        return false;
+        return EPARAM;
     }
     auto info = (memory::vm::info_t *)(task::current_process()->mm_info);
-    return info->set_brk(ptr);
+    if (info->set_brk(ptr))
+    {
+        return OK;
+    }
+    return EFAILED;
 }
 
 u64 sbrk(i64 offset)
@@ -36,7 +40,7 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
 {
     if (!is_user_space_pointer(map_address) || !is_user_space_pointer(map_address + length))
     {
-        return EBUFFER;
+        return EPARAM;
     }
     auto &res = task::current_process()->res_table;
     auto vm_info = ((memory::vm::info_t *)(task::current_process()->mm_info));
@@ -45,13 +49,13 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     {
         auto file = res.get_file(fd);
         if (!file)
-            return -2;
+            return ENOEXIST;
     }
     auto vm = vm_info->map_file(map_address, file, offset, length, flags);
 
     if (vm)
         return vm->start;
-    return 0;
+    return EFAILED;
 
     // ((memory::vm::info_t *)(task::current_process()->mm_info))->mmu_paging.map_area();
 }
@@ -60,11 +64,12 @@ u64 umap(u64 address)
 {
     if (!is_user_space_pointer(address))
     {
-        return EBUFFER;
+        return EPARAM;
     }
     auto vm_info = ((memory::vm::info_t *)(task::current_process()->mm_info));
-    vm_info->umap_file(address);
-    return 1;
+    if (vm_info->umap_file(address))
+        return OK;
+    return EFAILED;
 }
 
 unsigned long create_msg_queue(unsigned long msg_count, unsigned long msg_bytes)

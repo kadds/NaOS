@@ -10,8 +10,9 @@ file_desc open(const char *filepath, u64 mode, u64 flags)
 {
     if (filepath == nullptr || !is_user_space_pointer(filepath))
     {
-        return -1;
+        return EPARAM;
     }
+
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
 
@@ -21,26 +22,26 @@ file_desc open(const char *filepath, u64 mode, u64 flags)
         auto fd = res.new_file_desc(file);
         return fd;
     }
-    return -1;
+    return ENOEXIST;
 }
 
-bool close(file_desc fd)
+u64 close(file_desc fd)
 {
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
     if (file)
     {
         fs::vfs::close(file);
-        return true;
+        return OK;
     }
-    return false;
+    return ENOEXIST;
 }
 
 u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
-        return 0;
+        return EBUFFER;
     }
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
@@ -48,14 +49,14 @@ u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
     {
         return file->write(buffer, max_len, flags);
     }
-    return 0;
+    return ENOEXIST;
 }
 
 u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
-        return 0;
+        return EBUFFER;
     }
 
     auto &res = task::current_process()->res_table;
@@ -64,7 +65,7 @@ u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
     {
         return file->read(buffer, max_len, flags);
     }
-    return 0;
+    return ENOEXIST;
 }
 
 u64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
@@ -76,7 +77,7 @@ u64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
         file->move(offset);
         return file->write(buffer, max_len, flags);
     }
-    return 0;
+    return ENOEXIST;
 }
 
 u64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
@@ -88,7 +89,7 @@ u64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
         file->move(offset);
         return file->read(buffer, max_len, flags);
     }
-    return 0;
+    return ENOEXIST;
 }
 
 /// seek file offset
@@ -117,13 +118,16 @@ u64 lseek(file_desc fd, i64 offset, u64 type)
     return 0;
 }
 
+u64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) {}
+
 BEGIN_SYSCALL
-SYSCALL(10, open)
-SYSCALL(11, close)
-SYSCALL(12, write)
-SYSCALL(13, read)
-SYSCALL(14, pwrite)
-SYSCALL(15, pread)
-SYSCALL(16, lseek)
+SYSCALL(2, open)
+SYSCALL(3, close)
+SYSCALL(4, write)
+SYSCALL(5, read)
+SYSCALL(6, pwrite)
+SYSCALL(7, pread)
+SYSCALL(8, lseek)
+SYSCALL(9, select)
 END_SYSCALL
 } // namespace syscall

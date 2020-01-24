@@ -22,20 +22,25 @@ SYS_CALL(0, void, sys_none, void)
 
 #define OPEN_ATTR_AUTO_CREATE_FILE 1
 
-SYS_CALL(10, int, open, const char *path, unsigned long mode, unsigned long attr)
-SYS_CALL(11, void, close, int fd);
+SYS_CALL(2, int, open, const char *path, unsigned long mode, unsigned long attr)
+SYS_CALL(3, void, close, int fd);
 
 #define RWFLAGS_NO_BLOCK 1
 #define RWFLAGS_OVERRIDE 2
 
-SYS_CALL(12, unsigned long, write, int fd, const char *buffer, unsigned long len, unsigned long flags)
-SYS_CALL(13, unsigned long, read, int fd, char *buffer, unsigned long max_len, unsigned long flags)
+SYS_CALL(4, unsigned long, write, int fd, const char *buffer, unsigned long len, unsigned long flags)
+SYS_CALL(5, unsigned long, read, int fd, char *buffer, unsigned long max_len, unsigned long flags)
 
 #define LSEEK_MODE_CURRENT 0
 #define LSEEK_MODE_BEGIN 1
 #define LSEEK_MODE_END 2
 
-SYS_CALL(16, unsigned long, lseek, int fd, long offset, int mode)
+SYS_CALL(6, unsigned long, pwrite, int fd, unsigned long offset, const char *buffer, unsigned long len,
+         unsigned long flags)
+SYS_CALL(7, unsigned long, pread, int fd, unsigned long offset, char *buffer, unsigned long max_len,
+         unsigned long flags)
+
+SYS_CALL(8, unsigned long, lseek, int fd, long offset, int mode)
 
 SYS_CALL(17, int, rename, const char *src, const char *target);
 SYS_CALL(18, int, symbolink, const char *src, const char *target, unsigned long flags);
@@ -145,3 +150,6 @@ SYS_CALL(57, void, close_msg_queue, long key)
 #define ESIZE -6
 #define EPERMISSION -7
 #define ERESOURCE_NOT_NULL -8
+#define ENOEXIST -9
+#define EINNER -10
+#define EFAILED -11

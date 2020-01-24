@@ -114,7 +114,7 @@ const char *get_type_str(map_type_t type)
         case map_type_t::nvs:
             return "nvs";
         case map_type_t::badram:
-            return "unknown";
+            return "badram";
         default:
             return "unknown";
     }

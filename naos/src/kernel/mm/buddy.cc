@@ -165,6 +165,7 @@ void buddy::cat_tree(buddy_tree *tree, int index)
         cat_tree(tree->right, index * 2 + 2);
     }
 }
+
 buddy_tree *buddy::gen_tree()
 {
     buddy_tree *tree = memory::NewArray<buddy_tree>(memory::VirtBootAllocatorV, size);
@@ -223,7 +224,7 @@ void BuddyAllocator::deallocate(void *ptr)
                     "offset should not less than 0 or more than buddy max page");
 
             buddies->buddies[buddy_index].free(offset);
-            break;
+            return;
         }
     }
 }
