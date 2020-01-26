@@ -24,7 +24,7 @@ void thread(int arg)
     {
         print("thread2 sleep\n");
         sleep(1000);
-        print("thread2 sleep end\n");
+        print("thread2 wake up\n");
     }
     print("thread2 exit\n");
     exit_thread(0);
@@ -147,22 +147,23 @@ unsigned long test_thread()
     return create_thread((void *)thread, 2, 0);
 }
 
-const char *msg_str = "hi, message sent from msg queue";
+const char msg_str[] = "hi, message sent from msg queue.";
 
 void read_test_message_queue(long msg_id)
 {
-    char buffer[sizeof(msg_str)];
+    char buffer[sizeof(msg_str) + 1];
     while (1)
     {
         long ret = 0;
+        unsigned long msglen = read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), MSGQUEUE_FLAGS_NOBLOCKOTHER);
 
-        if (read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), MSGQUEUE_FLAGS_NOBLOCKOTHER) != sizeof(msg_str))
+        if (msglen != sizeof(msg_str))
         {
             if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
             {
                 exit_thread(ret);
             }
-            print("read from message queue failed\n");
+            print("read from message queue failed. \n");
             exit(-2);
         }
     }
@@ -172,7 +173,7 @@ void test_message_queue()
 {
     print("message queue testing\n");
     auto msg_id = create_msg_queue(2, 100);
-    if (msg_id == EPARAM)
+    if (msg_id < 0)
     {
         print("Can't create message queue.");
         exit_thread(-1);
@@ -195,6 +196,40 @@ void test_message_queue()
     }
     print("message queue tested.\n");
 }
+const char msg_pipe_str[] = "hi, message sent from pipe.";
+void pipe_thread(long out)
+{
+    char buffer[sizeof(msg_pipe_str) + 1];
+    for (int i = 0; i < 100; i++)
+    {
+        if (read(out, buffer, sizeof(msg_pipe_str), 0) == EOF)
+        {
+            exit_thread(0);
+        }
+    }
+    print("close");
+    exit_thread(1);
+}
+
+void test_pipe()
+{
+    print("pipe testing\n");
+    int in, out;
+    if (get_pipe(&out, &in) != OK)
+    {
+        print("pipe test failed.");
+        exit_thread(-1);
+    }
+
+    auto tid = create_thread((void *)pipe_thread, in, 0);
+    print("write to input");
+    for (int i = 0; i < 10; i++)
+    {
+        write(out, msg_pipe_str, sizeof(msg_pipe_str), 0);
+    }
+    join(tid, nullptr);
+    print("pipe tested\n");
+}
 
 void test_memory()
 {
@@ -210,7 +245,6 @@ void test_memory()
     *(char *)p = 'A';
     mumap(p);
     print("memory tested.\n");
-    test_message_queue();
 }
 
 void sighandler(int sig, long error, long code, long status)
@@ -224,10 +258,11 @@ extern "C" void _start(char *args)
     sigaction(SIGINT, sighandler, 0, 0);
     // __asm__ __volatile__("INT $3  \n\t" : : : "memory");
     print("Begin tests.\n");
-
-    unsigned long tid = test_thread();
+    auto tid = test_thread();
     test_fs();
     test_memory();
+    test_message_queue();
+    test_pipe();
     long ret;
     print("join thread2\n");
     join(tid, &ret);

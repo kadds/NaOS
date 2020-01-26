@@ -6,6 +6,7 @@
 #include "kernel/clock.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/dev/device.hpp"
+#include "kernel/fs/pipefs/pipefs.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/io/io_manager.hpp"
@@ -82,6 +83,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     trace::debug("Root file system init...");
     fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
+    fs::pipefs::init();
     ksybs::init();
     io::init();
     dev::init();

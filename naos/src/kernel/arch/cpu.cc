@@ -100,7 +100,6 @@ void init_data(cpuid_t cpuid)
 {
     _wrmsr(0xC0000101, (u64)&per_cpu_data[cpuid]);
 
-    uctx::RawSpinLockContext ctx(lock);
     auto &data = cpu::current();
     data.interrupt_rsp =
         (byte *)memory::KernelBuddyAllocatorV->allocate(memory::interrupt_stack_size, 0) + memory::interrupt_stack_size;

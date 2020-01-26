@@ -6,8 +6,7 @@
 #include "../vfs/inode.hpp"
 #include "../vfs/super_block.hpp"
 #include "common.hpp"
-
-namespace fs::ramfs
+namespace fs::pipefs
 {
 void init();
 class super_block;
@@ -23,9 +22,6 @@ class inode : public vfs::inode
 {
     friend class super_block;
     friend class file;
-
-    byte *start_ptr;
-    u64 ram_size;
 
   public:
     bool create_symbolink(vfs::dentry *entry, const char *target) override;
@@ -45,7 +41,7 @@ class file : public vfs::file
 class file_system : public vfs::file_system
 {
   public:
-    file_system(const char *fsname = "ramfs");
+    file_system(const char *fsname = "pipefs");
     virtual vfs::super_block *load(const char *device_name, const byte *data, u64 size) override;
     void unload(vfs::super_block *block) override;
 };
@@ -59,15 +55,11 @@ class super_block : public vfs::super_block
 {
   private:
     friend class file_system;
-    u64 block_size;
-    u64 max_ram_size;
-    u64 current_ram_used;
     util::hash_map<u64, inode *, member_hash> inode_map;
     int last_inode_index;
 
   public:
-    super_block(u64 max_ram_size, file_system *fs);
-
+    super_block(file_system *fs);
     void load() override;
     void save() override;
     void dirty_inode(vfs::inode *node) override;
@@ -84,9 +76,7 @@ class super_block : public vfs::super_block
     void dealloc_inode(vfs::inode *node) override;
     dentry *alloc_dentry() override;
     void dealloc_dentry(vfs::dentry *entry) override;
-
-    void add_ram_used(i64 size) { current_ram_used += size; }
-    u64 get_current_used() const { return current_ram_used; }
-    u64 get_max_ram_size() const { return max_ram_size; }
 };
-} // namespace fs::ramfs
+
+void init();
+} // namespace fs::pipefs

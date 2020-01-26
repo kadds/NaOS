@@ -3,6 +3,7 @@
 #include "defines.hpp"
 namespace fs::vfs
 {
+extern super_block *pipe_block;
 extern dentry *global_root;
 
 void init();
@@ -14,7 +15,6 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
 dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags);
 
 file *open(const char *path, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr);
-void close(file *file);
 
 bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags);
 
@@ -34,8 +34,11 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
            u64 max_len);
 bool umount(const char *path, dentry *path_root, dentry *cur_dir);
 
-bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size);
+bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size);
 
 u64 size(file *f);
+
+file *open_pipe();
+file *open_fifo(const char *path, dentry *root, dentry *current, flag_t mode);
 
 } // namespace fs::vfs

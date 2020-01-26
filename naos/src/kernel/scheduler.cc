@@ -128,11 +128,18 @@ void schedule()
 {
     if (unlikely(!is_init))
         return;
+    if (current() && !current()->preempt_data.preemptible())
+    {
+        trace::panic("schedule no preemptible.");
+    }
+    task::disable_preempt();
+
     if (!real_time_schedulers->schedule())
     {
         normal_schedulers->schedule();
     }
     reload_load_fac();
+    task::enable_preempt();
 }
 
 u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size)

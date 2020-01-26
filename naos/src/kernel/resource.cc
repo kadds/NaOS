@@ -64,7 +64,7 @@ fs::vfs::file *resource_table_t::get_file(file_desc fd)
 
 void resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
 {
-    if (f_table->file_map.has(fd))
+    if (!f_table->file_map.has(fd))
     {
         f_table->file_map[fd] = file;
     }

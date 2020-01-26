@@ -52,6 +52,7 @@ ExportC void on_intr_exit(const regs_t *regs) {}
 
 ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
 {
+    ::task::disable_preempt();
     if (likely(global_call_func))
         global_call_func(regs, 0);
     APIC::EOI(regs->vector);
@@ -67,14 +68,13 @@ ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
         if (!cpu::current().in_soft_irq())
         {
             cpu::current().enter_soft_irq();
-            ::task::disable_preempt();
             idt::enable();
             global_soft_irq_func(regs, 0);
             idt::disable();
-            ::task::enable_preempt();
             cpu::current().exit_soft_irq();
         }
     }
+    ::task::enable_preempt();
 }
 
 ExportC _ctx_interrupt_ void __do_irq(const regs_t *regs)

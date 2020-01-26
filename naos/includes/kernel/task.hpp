@@ -48,7 +48,7 @@ enum attributes : flag_t
 struct process_t
 {
     process_id pid;
-    volatile flag_t attributes;
+    std::atomic_uint64_t attributes;
     u64 parent_pid;             ///< The parent process id
     void *mm_info;              ///< Memory map infomation
     resource_table_t res_table; ///< Resource table
@@ -100,8 +100,8 @@ struct preempt_t
 
   public:
     bool preemptible() { return preempt_counter == 0; }
-    void enable_preempt() { --preempt_counter; }
-    void disable_preempt() { ++preempt_counter; }
+    void enable_preempt() { preempt_counter--; }
+    void disable_preempt() { preempt_counter++; }
     preempt_t()
         : preempt_counter(0)
     {
@@ -160,6 +160,7 @@ struct thread_t
     wait_queue wait_que;
     std::atomic_int wait_counter;
     signal_pack_t signal_pack;
+    u64 error_code;
     thread_t();
 };
 

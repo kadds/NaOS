@@ -31,7 +31,7 @@ u64 close(file_desc fd)
     auto file = res.get_file(fd);
     if (file)
     {
-        fs::vfs::close(file);
+        file->close();
         return OK;
     }
     return ENOEXIST;
@@ -120,6 +120,77 @@ u64 lseek(file_desc fd, i64 offset, u64 type)
 
 u64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) {}
 
+u64 get_pipe(file_desc *fd1, file_desc *fd2)
+{
+    auto file = fs::vfs::open_pipe();
+    if (!file)
+        return EFAILED;
+    auto &res = task::current_process()->res_table;
+    auto ft = res.get_file_table();
+    auto fdx0 = ft->id_gen.next();
+    if (fdx0 == util::null_id)
+    {
+        file->close();
+        return EFAILED;
+    }
+
+    auto fdx1 = ft->id_gen.next();
+    if (fdx1 == util::null_id)
+    {
+        file->close();
+        ft->id_gen.collect(fdx0);
+        return EFAILED;
+    }
+
+    res.set_file(fdx0, file);
+    res.set_file(fdx1, file);
+
+    *fd1 = fdx0;
+    *fd2 = fdx1;
+
+    return OK;
+}
+
+file_desc get_fifo(const char *path, u64 mode)
+{
+    if (path == nullptr || !is_user_space_pointer(path))
+    {
+        return EPARAM;
+    }
+    auto &res = task::current_process()->res_table;
+    auto ft = res.get_file_table();
+    auto fd = ft->id_gen.next();
+    if (fd == util::null_id)
+    {
+        return EFAILED;
+    }
+
+    auto file = fs::vfs::open_fifo(path, ft->root, ft->current, mode);
+    if (!file)
+    {
+        ft->id_gen.collect(fd);
+        return EFAILED;
+    }
+    res.set_file(fd, file);
+
+    return OK;
+}
+
+u64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
+{
+    auto &res = task::current_process()->res_table;
+    auto file = res.get_file(fd);
+    if (!file)
+    {
+        return EFAILED;
+    }
+    if (!fs::vfs::fcntl(file, operator_type, target, attr, value, size))
+    {
+        return EFAILED;
+    }
+    return OK;
+}
+
 BEGIN_SYSCALL
 SYSCALL(2, open)
 SYSCALL(3, close)
@@ -129,5 +200,8 @@ SYSCALL(6, pwrite)
 SYSCALL(7, pread)
 SYSCALL(8, lseek)
 SYSCALL(9, select)
+SYSCALL(10, get_pipe)
+SYSCALL(11, get_fifo)
+SYSCALL(12, fcntl)
 END_SYSCALL
 } // namespace syscall

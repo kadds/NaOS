@@ -522,8 +522,6 @@ file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, fla
     return f;
 }
 
-void close(file *f) { f->close(); }
-
 bool rename(const char *new_dir, const char *old_dir, dentry *root, dentry *cur_dir)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
@@ -669,46 +667,46 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
 
 u64 size(file *f) { return f->get_entry()->get_inode()->get_size(); }
 
-bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
+bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
 {
     auto inode = f->get_entry()->get_inode();
     if (unlikely(size < sizeof(u64)))
         return false;
-    if (operator_type == fctl_type::get)
+    if (operator_type == fcntl_type::get)
     {
         switch (attr)
         {
-            case fctl_attr::mtime:
+            case fcntl_attr::mtime:
                 *value = inode->get_last_write_time();
                 break;
-            case fctl_attr::ctime:
+            case fcntl_attr::ctime:
                 *value = inode->get_last_attr_change_time();
                 break;
-            case fctl_attr::atime:
+            case fcntl_attr::atime:
                 *value = inode->get_last_read_time();
                 break;
-            case fctl_attr::btime:
+            case fcntl_attr::btime:
                 *value = inode->get_birth_time();
                 break;
-            case fctl_attr::uid:
+            case fcntl_attr::uid:
                 *value = inode->get_owner();
                 break;
-            case fctl_attr::gid:
+            case fcntl_attr::gid:
                 *value = inode->get_group();
                 break;
-            case fctl_attr::link_count:
+            case fcntl_attr::link_count:
                 *value = inode->get_link_count();
                 break;
-            case fctl_attr::inode_number:
+            case fcntl_attr::inode_number:
                 *value = inode->get_index();
                 break;
-            case fctl_attr::permission:
+            case fcntl_attr::permission:
                 *value = inode->get_permission();
                 break;
-            case fctl_attr::type:
+            case fcntl_attr::type:
                 *value = (u8)inode->get_type();
                 break;
-            case fctl_attr::pseudo_func:
+            case fcntl_attr::pseudo_func:
                 *value = (u64)inode->get_pseudo_data();
                 break;
             default:
@@ -716,38 +714,38 @@ bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size
         }
         return true;
     }
-    else if (operator_type == fctl_type::set)
+    else if (operator_type == fcntl_type::set)
     {
         switch (attr)
         {
-            case fctl_attr::mtime:
+            case fcntl_attr::mtime:
                 inode->set_last_write_time(*value);
                 break;
-            case fctl_attr::ctime:
+            case fcntl_attr::ctime:
                 inode->set_last_attr_change_time(*value);
                 break;
-            case fctl_attr::atime:
+            case fcntl_attr::atime:
                 inode->set_last_read_time(*value);
                 break;
-            case fctl_attr::btime:
+            case fcntl_attr::btime:
                 inode->set_birth_time(*value);
                 break;
-            case fctl_attr::uid:
+            case fcntl_attr::uid:
                 inode->set_owner(*value);
                 break;
-            case fctl_attr::gid:
+            case fcntl_attr::gid:
                 inode->set_group(*value);
                 break;
-            case fctl_attr::link_count:
+            case fcntl_attr::link_count:
                 return false;
-            case fctl_attr::inode_number:
+            case fcntl_attr::inode_number:
                 return false;
-            case fctl_attr::permission:
+            case fcntl_attr::permission:
                 inode->set_permission(*value);
                 break;
-            case fctl_attr::type:
+            case fcntl_attr::type:
                 return false;
-            case fctl_attr::pseudo_func:
+            case fcntl_attr::pseudo_func:
                 inode->set_pseudo_data((pseudo_t *)*value);
                 break;
             default:
@@ -756,6 +754,53 @@ bool fctl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size
         return true;
     }
     return false;
+}
+
+super_block *pipe_block;
+
+file *open_pipe()
+{
+    super_block *su_block = pipe_block;
+    dentry *entry = su_block->alloc_dentry();
+
+    entry->set_name(nullptr);
+    entry->set_parent(nullptr);
+
+    if (unlikely(entry == nullptr))
+        return nullptr;
+
+    inode *node = su_block->alloc_inode();
+    if (unlikely(node == nullptr))
+        return nullptr;
+    node->create_pseudo(entry, inode_type_t::pipe, 4096);
+    auto ps = memory::New<fs::vfs::pseudo_pipe_t>(memory::KernelCommonAllocatorV, memory::page_size);
+    node->set_pseudo_data(ps);
+
+    file *f = su_block->alloc_file();
+    f->open(entry, mode::read | mode::write);
+    return f;
+}
+
+file *open_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
+{
+    nameidata src_idata(&data->dir_entry_allocator, 1, 0);
+
+    dentry *entry = path_walk(path, root, current, 0, src_idata);
+
+    if (entry)
+        return nullptr;
+
+    i64 name_len = rest_file_name(src_idata);
+    if (unlikely(name_len <= 0))
+        return nullptr;
+
+    entry = create_file(src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len, &src_idata);
+    if (unlikely(entry == nullptr))
+        return nullptr;
+
+    file *f = entry->get_inode()->get_super_block()->alloc_file();
+    f->open(entry, mode);
+    return f;
 }
 
 } // namespace fs::vfs

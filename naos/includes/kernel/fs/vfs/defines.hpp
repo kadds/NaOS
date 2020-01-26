@@ -131,7 +131,7 @@ struct dir_path_str
     char *operator*() { return name; }
 };
 
-namespace fctl_type
+namespace fcntl_type
 {
 enum
 {
@@ -140,7 +140,7 @@ enum
 };
 }
 
-namespace fctl_attr
+namespace fcntl_attr
 {
 enum
 {

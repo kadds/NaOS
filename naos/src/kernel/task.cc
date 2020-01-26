@@ -196,8 +196,8 @@ void create_devs()
         fs::vfs::create(fname, fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
         auto *f = fs::vfs::open(fname, fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
         auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
-        fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
-        fs::vfs::close(f);
+        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
+        f->close();
     }
 
     fs::vfs::link("/dev/tty/0", "/dev/tty/1", fs::vfs::global_root, fs::vfs::global_root);
@@ -205,9 +205,9 @@ void create_devs()
 
     auto *f = fs::vfs::open("/dev/console", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
     auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
-    fs::vfs::fctl(f, fs::fctl_type::set, 0, fs::fctl_attr::pseudo_func, (u64 *)&ps, 8);
+    fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
 
-    fs::vfs::close(f);
+    f->close();
 }
 
 std::atomic_bool is_init = false;
@@ -253,6 +253,8 @@ void init()
     thd->state = thread_state::running;
     thd->static_priority = 125;
     thd->dynamic_priority = 0;
+    thd->cpumask = current_cpu_mask();
+    thd->cpuid = cpu::current().id();
     process->main_thread = thd;
     thd->attributes |= thread_attributes::main;
 
@@ -485,6 +487,7 @@ void do_sleep(u64 milliseconds)
 
 void exit_process(process_t *process, u64 ret)
 {
+    trace::debug("process ", process->pid, " exit.");
     uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
     for (auto thd : list)
@@ -522,14 +525,13 @@ void destroy_process(process_t *process)
 
 void start_task_idle()
 {
+    disable_preempt();
     {
-        task::current()->preempt_data.disable_preempt();
         uctx::UninterruptibleContext icu;
         scheduler::init();
         scheduler::init_cpu();
     }
-
-    task::current()->preempt_data.enable_preempt();
+    enable_preempt();
     task::builtin::idle::main();
 }
 
@@ -604,6 +606,7 @@ void check_thread(thread_t *thd)
 /// TODO: exit other thread which is running
 void exit_thread(thread_t *thd, u64 ret)
 {
+    trace::debug("exit thread ", thd->tid, " pid ", thd->process->pid);
     uctx::UninterruptibleContext icu;
     thd->user_stack_top = (void *)ret;
     thd->state = thread_state::stop;
@@ -726,7 +729,7 @@ void set_cpu_mask(thread_t *thd, cpu_mask_t mask)
 void thread_yield()
 {
     current()->attributes |= thread_attributes::need_schedule;
-    scheduler::schedule();
+    yield_preempt();
 }
 
 ExportC void kernel_return() { yield_preempt(); }

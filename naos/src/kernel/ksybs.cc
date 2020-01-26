@@ -41,10 +41,10 @@ void init()
         memory::KernelVirtualAllocatorV->deallocate(file_header);
         trace::info("Can't read kernel symbols file.");
         file_header = nullptr;
-        fs::vfs::close(f);
+        f->close();
         return;
     }
-    fs::vfs::close(f);
+    f->close();
 
     if (!file_header->is_valid())
     {

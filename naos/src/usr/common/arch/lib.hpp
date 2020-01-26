@@ -42,6 +42,14 @@ SYS_CALL(7, unsigned long, pread, int fd, unsigned long offset, char *buffer, un
 
 SYS_CALL(8, unsigned long, lseek, int fd, long offset, int mode)
 
+SYS_CALL(9, unsigned long, select, unsigned long size, int *rfd, int *wfd, int *errfd, unsigned long flags)
+
+SYS_CALL(10, unsigned long, get_pipe, int *fd1, int *fd2)
+SYS_CALL(11, unsigned long, get_fifo, const char *path, unsigned long mode)
+
+SYS_CALL(12, unsigned long, fcntl, int fd, unsigned int operator_type, unsigned int target, unsigned int attr,
+         void *value, unsigned long size)
+
 SYS_CALL(17, int, rename, const char *src, const char *target);
 SYS_CALL(18, int, symbolink, const char *src, const char *target, unsigned long flags);
 
@@ -142,14 +150,14 @@ SYS_CALL(57, void, close_msg_queue, long key)
 #define MSGQUEUE_FLAGS_NOBLOCKOTHER 2
 
 #define OK 0
-#define EOF -1
-#define ETIMEOUT -2
-#define EINTR -3
-#define EPARAM -4
-#define EBUFFER -5
-#define ESIZE -6
-#define EPERMISSION -7
-#define ERESOURCE_NOT_NULL -8
-#define ENOEXIST -9
-#define EINNER -10
-#define EFAILED -11
+#define EOF -1ul
+#define ETIMEOUT -2ul
+#define EINTR -3ul
+#define EPARAM -4ul
+#define EBUFFER -5ul
+#define ESIZE -6ul
+#define EPERMISSION -7ul
+#define ERESOURCE_NOT_NULL -8ul
+#define ENOEXIST -9ul
+#define EINNER -10ul
+#define EFAILED -11ul
