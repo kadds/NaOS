@@ -47,8 +47,8 @@ make -j
 [Arch wiki](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
 [Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
   
-NaOS only support GPT disk and UEFI boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
-For QEMU, install [OVMF](https://sourceforge.net/projects/tianocore/), edit OVMF_CODE.fd path at *util/run.py*.  
+NaOS support GPT disk with UEFI boot or MBR disk with MBR boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
+For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/), edit OVMF_CODE.fd path at *util/run.py*.  
 
 Example of disk partition:  
   
@@ -58,7 +58,7 @@ Example of disk partition:
 | 2 | Root  | EXT2  | Grub and NaOS data |  920Mib |
 
 
-Example of grub install:
+Example of grub install (UEFI):
 ```bash
 sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
 ```
@@ -73,6 +73,7 @@ menuentry "NaOS multiboot2" {
     insmod efi_uga
     insmod ieee1275_fb
     insmod part_gpt
+    insmod part_msdos
     insmod fat
     insmod ext2
     multiboot2 /boot/kernel
@@ -158,3 +159,29 @@ NaOS
 ## License
 [BSD-3-Clause](./LICENSE) © Kadds
 
+----
+
+```
+          _____                    _____                   _______                   _____          
+         /\    \                  /\    \                 /::\    \                 /\    \         
+        /::\____\                /::\    \               /::::\    \               /::\    \        
+       /::::|   |               /::::\    \             /::::::\    \             /::::\    \       
+      /:::::|   |              /::::::\    \           /::::::::\    \           /::::::\    \      
+     /::::::|   |             /:::/\:::\    \         /:::/~~\:::\    \         /:::/\:::\    \     
+    /:::/|::|   |            /:::/__\:::\    \       /:::/    \:::\    \       /:::/__\:::\    \    
+   /:::/ |::|   |           /::::\   \:::\    \     /:::/    / \:::\    \      \:::\   \:::\    \   
+  /:::/  |::|   | _____    /::::::\   \:::\    \   /:::/____/   \:::\____\   ___\:::\   \:::\    \  
+ /:::/   |::|   |/\    \  /:::/\:::\   \:::\    \ |:::|    |     |:::|    | /\   \:::\   \:::\    \ 
+/:: /    |::|   /::\____\/:::/  \:::\   \:::\____\|:::|____|     |:::|    |/::\   \:::\   \:::\____\
+\::/    /|::|  /:::/    /\::/    \:::\  /:::/    / \:::\    \   /:::/    / \:::\   \:::\   \::/    /
+ \/____/ |::| /:::/    /  \/____/ \:::\/:::/    /   \:::\    \ /:::/    /   \:::\   \:::\   \/____/ 
+         |::|/:::/    /            \::::::/    /     \:::\    /:::/    /     \:::\   \:::\    \     
+         |::::::/    /              \::::/    /       \:::\__/:::/    /       \:::\   \:::\____\    
+         |:::::/    /               /:::/    /         \::::::::/    /         \:::\  /:::/    /    
+         |::::/    /               /:::/    /           \::::::/    /           \:::\/:::/    /     
+         /:::/    /               /:::/    /             \::::/    /             \::::::/    /      
+        /:::/    /               /:::/    /               \::/____/               \::::/    /       
+        \::/    /                \::/    /                 ~~                      \::/    /        
+         \/____/                  \/____/                                           \/____/         
+                                                                                                    
+```
