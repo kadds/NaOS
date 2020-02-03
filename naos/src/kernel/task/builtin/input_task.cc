@@ -99,6 +99,17 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 {
                     d = (byte)key_char_table[(u8)k];
                 }
+                /// Capslock
+                if (get_key_switch_state(switchable_key::caps))
+                {
+                    char c = (char)d;
+                    if (c >= 'a' && c <= 'z')
+                        c += 'A' - 'a';
+                    else if (c >= 'A' && c <= 'Z')
+                        c += 'a' - 'A';
+
+                    d = (byte)c;
+                }
                 tty->write_to_buffer(&d, 1, fs::rw_flags::override);
             }
 
