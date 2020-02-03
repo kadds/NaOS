@@ -781,7 +781,7 @@ file *open_pipe()
     return f;
 }
 
-file *open_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
+file *create_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
 {
     nameidata src_idata(&data->dir_entry_allocator, 1, 0);
 
@@ -794,7 +794,8 @@ file *open_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
     if (unlikely(name_len <= 0))
         return nullptr;
 
-    entry = create_file(src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len, &src_idata);
+    entry =
+        create_pseudo(inode_type_t::pipe, src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len);
     if (unlikely(entry == nullptr))
         return nullptr;
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "../mm/new.hpp"
 #include "common.hpp"
+#include "hash.hpp"
 #include "memory.hpp"
 #include <type_traits>
 namespace util
@@ -13,22 +14,30 @@ template <typename T> struct member_hash
 
 template <> struct member_hash<unsigned long>
 {
-    u64 operator()(const unsigned long &t) { return t; }
+    u64 operator()(const unsigned long &t) { return murmur_hash2_64(&t, sizeof(unsigned long), 0); }
 };
 
 template <> struct member_hash<unsigned int>
 {
-    u64 operator()(const unsigned int &t) { return (u64)t; }
+    u64 operator()(const unsigned int &t)
+    {
+        u64 k = t;
+        return murmur_hash2_64(&k, sizeof(k), 0);
+    }
 };
 
 template <> struct member_hash<long>
 {
-    u64 operator()(const long &t) { return (u64)t; }
+    u64 operator()(const long &t) { return murmur_hash2_64(&t, sizeof(unsigned long), 0); }
 };
 
 template <> struct member_hash<int>
 {
-    u64 operator()(const int &t) { return (u64)t; }
+    u64 operator()(const int &t)
+    {
+        u64 k = t;
+        return murmur_hash2_64(&k, sizeof(k), 0);
+    }
 };
 
 template <typename K, typename V, typename hash_func = member_hash<K>> class hash_map
@@ -356,7 +365,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
     map_helper operator[](const K &key)
     {
         u64 hash = hash_key(key);
-        for (auto it = table[hash].next; it != nullptr;)
+        for (auto it = table[hash].next; it != nullptr; it = it->next)
         {
             if (it->content.key == key)
             {
@@ -402,7 +411,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
         auto new_table =
             (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * new_capacity, alignof(entry));
-        util::memzero(table, sizeof(entry) * new_capacity);
+        util::memzero(new_table, sizeof(entry) * new_capacity);
 
         recapcity(new_table, new_capacity);
     }
@@ -416,7 +425,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
 
         auto new_table =
             (entry *)memory::KernelMemoryAllocatorV->allocate(sizeof(entry) * new_capacity, alignof(entry));
-        util::memzero(table, sizeof(entry) * new_capacity);
+        util::memzero(new_table, sizeof(entry) * new_capacity);
 
         recapcity(new_table, new_capacity);
     }

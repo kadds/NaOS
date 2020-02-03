@@ -141,9 +141,16 @@ u64 get_pipe(file_desc *fd1, file_desc *fd2)
         ft->id_gen.collect(fdx0);
         return EFAILED;
     }
+    auto f2 = file->clone();
+    if (!f2)
+    {
+        file->close();
+        ft->id_gen.collect(fdx0);
+        return EFAILED;
+    }
 
     res.set_file(fdx0, file);
-    res.set_file(fdx1, file);
+    res.set_file(fdx1, f2);
 
     *fd1 = fdx0;
     *fd2 = fdx1;
@@ -151,7 +158,7 @@ u64 get_pipe(file_desc *fd1, file_desc *fd2)
     return OK;
 }
 
-file_desc get_fifo(const char *path, u64 mode)
+file_desc create_fifo(const char *path, u64 mode)
 {
     if (path == nullptr || !is_user_space_pointer(path))
     {
@@ -165,7 +172,7 @@ file_desc get_fifo(const char *path, u64 mode)
         return EFAILED;
     }
 
-    auto file = fs::vfs::open_fifo(path, ft->root, ft->current, mode);
+    auto file = fs::vfs::create_fifo(path, ft->root, ft->current, mode);
     if (!file)
     {
         ft->id_gen.collect(fd);
@@ -173,7 +180,7 @@ file_desc get_fifo(const char *path, u64 mode)
     }
     res.set_file(fd, file);
 
-    return OK;
+    return fd;
 }
 
 u64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
@@ -201,7 +208,7 @@ SYSCALL(7, pread)
 SYSCALL(8, lseek)
 SYSCALL(9, select)
 SYSCALL(10, get_pipe)
-SYSCALL(11, get_fifo)
+SYSCALL(11, create_fifo)
 SYSCALL(12, fcntl)
 END_SYSCALL
 } // namespace syscall

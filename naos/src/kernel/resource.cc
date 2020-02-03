@@ -9,6 +9,7 @@ file_table::file_table()
     , id_gen(file_id_table)
 {
 }
+
 fs::vfs::dentry *file_table::get_path_root(const char *path)
 {
     if (*path == '/')
@@ -44,7 +45,8 @@ void resource_table_t::copy_file_table(file_table *raw_ft)
 file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
 {
     auto id = f_table->id_gen.next();
-    f_table->file_map[id] = file;
+    if (id != util::null_id)
+        f_table->file_map[id] = file;
     return id;
 }
 
@@ -52,7 +54,6 @@ void resource_table_t::delete_file_desc(file_desc fd)
 {
     f_table->id_gen.collect(fd);
     f_table->file_map.remove_once(fd);
-    f_table->file_map[fd] = nullptr;
 }
 
 fs::vfs::file *resource_table_t::get_file(file_desc fd)

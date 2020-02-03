@@ -163,7 +163,7 @@ void delete_thread(thread_t *thd)
 
     auto thd_list = ((thread_list_t *)thd->process->thread_list);
     thd_list->remove(thd_list->find(thd));
-    if (likely((u64)thd->kernel_stack_top > memory::kernel_stack_size))
+    if (likely((u64)thd->kernel_stack_top != 0))
         delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
 
     ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
@@ -265,7 +265,6 @@ void init()
 
     if (cpu::current().is_bsp())
     {
-        is_init = true;
         auto ft = current_process()->res_table.get_file_table();
         create_devs();
         ft->id_gen.tag(0);
@@ -275,6 +274,7 @@ void init()
         ft->file_map[0] = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
         ft->file_map[1] = ft->file_map[0];
         ft->file_map[2] = ft->file_map[0];
+        is_init = true;
 
         bin_handle::init();
     }

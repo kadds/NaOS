@@ -46,7 +46,6 @@ struct cpu_task_list_cf_t
     thread_skip_list_t runable_list;
     thread_list_t block_list;
     u64 min_vruntime;
-    lock::rw_lock_t list_lock;
 
     cpu_task_list_cf_t()
         : runable_list(&allocator)
@@ -92,7 +91,7 @@ void completely_fair_scheduler::add(thread_t *thread)
     dt->vtime = 0;
     thread->cpuid = cpu::current().id();
     thread->schedule_data = dt;
-    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
+    uctx::UninterruptibleContext icu;
     task_list->runable_list.insert(cfs_thread_t(thread));
 }
 
@@ -100,7 +99,7 @@ void completely_fair_scheduler::remove(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
 
-    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
+    uctx::UninterruptibleContext icu;
     auto node = task_list->block_list.find(thread);
     if (node != task_list->block_list.end())
     {
@@ -123,7 +122,7 @@ void completely_fair_scheduler::remove(thread_t *thread)
 void completely_fair_scheduler::update_state(thread_t *thread, thread_state state)
 {
     auto task_list = get_cpu_task_list();
-    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
+    uctx::UninterruptibleContext icu;
 
     if (state == thread_state::ready)
     {
@@ -213,7 +212,7 @@ void completely_fair_scheduler::update_prop(thread_t *thread, u8 static_priority
 void completely_fair_scheduler::on_migrate(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
-    uctx::RawWriteLockUninterruptibleContext uic(task_list->list_lock);
+    uctx::UninterruptibleContext icu;
     auto dt = (thread_time_cf_t *)thread->schedule_data;
     dt->vtime_delta = 100;
     dt->vtime = 0;
@@ -236,6 +235,12 @@ thread_t *completely_fair_scheduler::pick_available_task()
     }
     auto thd = task_list->runable_list.front();
     task_list->runable_list.remove(thd);
+    if (!task_list->runable_list.empty())
+    {
+        kassert(get_schedule_data(thd.thread)->vtime <=
+                    get_schedule_data(task_list->runable_list.front().thread)->vtime,
+                "CFS running list check failed!");
+    }
     return thd.thread;
 }
 
@@ -248,8 +253,6 @@ bool completely_fair_scheduler::schedule()
     {
         uctx::UninterruptibleContext icu;
 
-        auto task_list = get_cpu_task_list();
-
         cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
 
         if (cur->attributes & thread_attributes::remove)
@@ -259,10 +262,7 @@ bool completely_fair_scheduler::schedule()
 
         cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
-        uctx::RawWriteLockController ctr(task_list->list_lock);
-        ctr.begin();
         thread_t *next = pick_available_task();
-        ctr.end();
 
         if (cur != next)
         {
@@ -300,6 +300,7 @@ void completely_fair_scheduler::schedule_tick()
     {
         if (!task_list->runable_list.empty())
         {
+            uctx::UninterruptibleContext icu;
             auto next = task_list->runable_list.front();
 
             if (cur->process->pid == 0 || get_schedule_data(next.thread)->vtime <= scher_data->vtime)
@@ -313,6 +314,9 @@ u64 completely_fair_scheduler::scheduleable_task_count() { return get_cpu_task_l
 thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
 {
     auto list = get_cpu_task_list();
+    if (list->runable_list.empty())
+        return nullptr;
+    uctx::UninterruptibleContext icu;
     for (auto thd : list->runable_list)
     {
         if (thd.thread->cpumask.mask & (1ul << cpuid))
@@ -324,6 +328,8 @@ thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
 void completely_fair_scheduler::commit_migrate(thread_t *thd)
 {
     auto list = get_cpu_task_list();
+    uctx::UninterruptibleContext icu;
+
     auto it = list->runable_list.find(cfs_thread_t(thd));
     kassert(it != list->runable_list.end(), "commit task failed!");
 

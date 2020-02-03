@@ -11,6 +11,24 @@ void print(const char *str)
     write(STDOUT, str, len, 0);
 }
 
+int strcmp(const char *str1, const char *str2)
+{
+    if (str1 == str2)
+        return true;
+    if (!str1 || !str2)
+        return false;
+
+    while (1)
+    {
+        if (*str1 != *str2)
+            return (int)*str1 - *str2;
+        if (*str1 == 0)
+            return 0;
+        str1++;
+        str2++;
+    }
+}
+
 void thread(int arg)
 {
     print("thread sleep testing\n");
@@ -197,18 +215,28 @@ void test_message_queue()
     print("message queue tested.\n");
 }
 const char msg_pipe_str[] = "hi, message sent from pipe.";
-void pipe_thread(long out)
+
+void pipe_thread(long in)
 {
     char buffer[sizeof(msg_pipe_str) + 1];
+    print("pipe try read data...\n");
+
     for (int i = 0; i < 100; i++)
     {
-        if (read(out, buffer, sizeof(msg_pipe_str), 0) == EOF)
+        auto len = read(in, buffer, sizeof(msg_pipe_str), 0);
+        if (len == EOF)
         {
+            close(in);
             exit_thread(0);
         }
+        buffer[len] = 0;
+        if (len != sizeof(msg_pipe_str) || strcmp(buffer, msg_pipe_str) != 0)
+        {
+            break;
+        }
     }
-    print("close");
-    exit_thread(1);
+    close(in);
+    exit(-1);
 }
 
 void test_pipe()
@@ -222,13 +250,67 @@ void test_pipe()
     }
 
     auto tid = create_thread((void *)pipe_thread, in, 0);
-    print("write to input");
+    print("pipe write to input\n");
     for (int i = 0; i < 10; i++)
     {
         write(out, msg_pipe_str, sizeof(msg_pipe_str), 0);
     }
+    close(out);
     join(tid, nullptr);
     print("pipe tested\n");
+}
+
+const char *path = "/fifo_test";
+
+void fifo_thread()
+{
+    auto fd = open(path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
+    if (fd < OK)
+    {
+        print("fifo test failed. can't open fifo");
+        exit_thread(-1);
+    }
+
+    char buffer[sizeof(msg_pipe_str) + 1];
+
+    for (int i = 0; i < 10; i++)
+    {
+        auto len = read(fd, buffer, sizeof(msg_pipe_str), 0);
+        if (len == EOF)
+        {
+            close(fd);
+            exit_thread(0);
+        }
+        buffer[len] = 0;
+        if (len != sizeof(msg_pipe_str) || strcmp(buffer, msg_pipe_str) != 0)
+        {
+            close(fd);
+            exit(-1);
+        }
+    }
+    close(fd);
+    exit_thread(0);
+}
+
+void test_fifo()
+{
+    print("fifo testing\n");
+    auto fd = create_fifo(path, 0);
+    if (fd < 0)
+    {
+        print("fifo test failed. can't open fifo");
+        exit_thread(-1);
+    }
+
+    auto tid = create_thread((void *)fifo_thread, 0, 0);
+
+    for (int i = 0; i < 10; i++)
+    {
+        write(fd, msg_pipe_str, sizeof(msg_pipe_str), 0);
+    }
+    close(fd);
+    join(tid, nullptr);
+    print("fifo tested\n");
 }
 
 void test_memory()
@@ -263,6 +345,7 @@ extern "C" void _start(char *args)
     test_memory();
     test_message_queue();
     test_pipe();
+    test_fifo();
     long ret;
     print("join thread2\n");
     join(tid, &ret);

@@ -46,12 +46,7 @@ struct device_class
     virtual device *try_scan(int index) = 0;
 };
 
-struct dev_hash_func
-{
-    u64 operator()(num_t num) { return num; }
-};
-
-using device_map_t = util::hash_map<num_t, device *, dev_hash_func>;
+using device_map_t = util::hash_map<num_t, device *>;
 using device_id_gen_t = util::id_generator;
 
 extern device_map_t *device_map, *unbinding_device_map;

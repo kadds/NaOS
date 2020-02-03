@@ -3,18 +3,14 @@
 #include "lock.hpp"
 #include "mm/new.hpp"
 #include "types.hpp"
+#include "util/hash.hpp"
 #include "util/hash_map.hpp"
 #include "util/id_generator.hpp"
 #include <atomic>
 namespace task
 {
 
-struct hash_file_desc
-{
-    u64 operator()(const file_desc &fd) { return fd; }
-};
-
-using file_map_t = util::hash_map<file_desc, fs::vfs::file *, hash_file_desc>;
+using file_map_t = util::hash_map<file_desc, fs::vfs::file *>;
 
 struct file_table
 {

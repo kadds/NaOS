@@ -79,4 +79,7 @@ u64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
     }
     return max_size;
 }
+
+void tty_pseudo_t::close() { task::do_wake_up(&wait_queue); };
+
 } // namespace dev::tty

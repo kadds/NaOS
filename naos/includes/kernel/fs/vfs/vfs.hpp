@@ -39,6 +39,6 @@ bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 siz
 u64 size(file *f);
 
 file *open_pipe();
-file *open_fifo(const char *path, dentry *root, dentry *current, flag_t mode);
+file *create_fifo(const char *path, dentry *root, dentry *current, flag_t mode);
 
 } // namespace fs::vfs

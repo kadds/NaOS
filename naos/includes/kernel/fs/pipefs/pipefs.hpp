@@ -46,16 +46,11 @@ class file_system : public vfs::file_system
     void unload(vfs::super_block *block) override;
 };
 
-struct member_hash
-{
-    u64 operator()(u64 i) { return i; }
-};
-
 class super_block : public vfs::super_block
 {
   private:
     friend class file_system;
-    util::hash_map<u64, inode *, member_hash> inode_map;
+    util::hash_map<u64, inode *> inode_map;
     int last_inode_index;
 
   public:

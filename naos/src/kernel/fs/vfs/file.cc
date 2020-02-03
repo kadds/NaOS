@@ -14,11 +14,35 @@ int file::open(dentry *entry, flag_t mode)
     return 0;
 }
 
-int file::close()
+void file::close()
 {
     remove_ref();
-    entry->get_inode()->get_super_block()->dealloc_file(this);
-    return 0;
+    if (ref_count == 0)
+    {
+        auto type = entry->get_inode()->get_type();
+        if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory &&
+            type != fs::inode_type_t::symbolink)
+        {
+            auto pd = entry->get_inode()->get_pseudo_data();
+            if (pd)
+                pd->close();
+        }
+        entry->get_inode()->get_super_block()->dealloc_file(this);
+    }
+    return;
+}
+
+file *file::clone()
+{
+    file *f = entry->get_inode()->get_super_block()->alloc_file();
+    if (!f)
+        return nullptr;
+
+    f->entry = entry;
+    f->mode = mode;
+    f->add_ref();
+    f->pointer_offset = pointer_offset;
+    return f;
 }
 
 void file::seek(i64 offset) { pointer_offset += offset; }

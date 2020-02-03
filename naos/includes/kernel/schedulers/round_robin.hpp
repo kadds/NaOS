@@ -6,7 +6,6 @@ namespace task::scheduler
 class round_robin_scheduler : public scheduler
 {
     static const scheduler_class clazz = scheduler_class::round_robin;
-    thread_list_t block_threads;
 
   public:
     void add(thread_t *thread) override;

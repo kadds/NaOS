@@ -17,10 +17,16 @@ class file
     file()
         : pointer_offset(0)
         , ref_count(0){};
-    virtual ~file() = default;
+
+    file(const file &f) = delete;
+    file &operator=(const file &f) = delete;
+
+    virtual ~file(){};
+
+    virtual file *clone();
 
     virtual int open(dentry *entry, flag_t mode);
-    virtual int close();
+    virtual void close();
 
     void add_ref() { ref_count++; }
     void remove_ref() { ref_count--; }

@@ -43,7 +43,7 @@ ExportC void do_exit(u64 exit_code)
 u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     regs_t regs;
-    util::memset(&regs, 0, sizeof(regs));
+    util::memzero(&regs, sizeof(regs));
 
     regs.rbx = (u64)function;
     regs.rdi = arg0;

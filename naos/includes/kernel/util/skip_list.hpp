@@ -166,17 +166,17 @@ template <typename E> class skip_list
 
     iterator remove(iterator iter) { return remove(*iter); }
 
-    u64 size() { return count; }
+    u64 size() const { return count; }
 
-    bool empty() { return count == 0; }
+    bool empty() const { return count == 0; }
 
-    u64 deep() { return lev; }
+    u64 deep() const { return lev; }
 
-    E front() { return list[max_lev - 1]->next->element; }
+    E front() const { return list[max_lev - 1]->next->element; }
 
-    iterator begin() { return iterator(list[max_lev - 1]->next); }
+    iterator begin() const { return iterator(list[max_lev - 1]->next); }
 
-    iterator end() { return iterator(nullptr); }
+    iterator end() const { return iterator(nullptr); }
 
     iterator find(const E &element) const
     {
@@ -273,8 +273,8 @@ template <typename E> class skip_list
 
     ~skip_list() { memory::KernelCommonAllocatorV->deallocate(stack); }
 
-    skip_list(const skip_list &list) {}
+    skip_list(const skip_list &list) = delete;
+    skip_list &operator=(const skip_list &list) = delete;
 
-    skip_list *operator=(const skip_list &list) { return *this; }
 }; // namespace util
 } // namespace util
