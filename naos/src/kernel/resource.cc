@@ -4,21 +4,13 @@ namespace task
 {
 const u64 file_id_table[] = {128, 4096, 65536};
 
-file_table::file_table()
+file_table_t::file_table_t()
     : file_map(memory::KernelMemoryAllocatorV)
     , id_gen(file_id_table)
 {
 }
 
-fs::vfs::dentry *file_table::get_path_root(const char *path)
-{
-    if (*path == '/')
-        return root;
-    return current;
-}
-
-resource_table_t::resource_table_t(file_table *ft)
-
+resource_table_t::resource_table_t(file_table_t *ft)
 {
     if (ft != nullptr)
     {
@@ -26,15 +18,13 @@ resource_table_t::resource_table_t(file_table *ft)
     }
     else
     {
-        f_table = memory::New<file_table>(memory::KernelCommonAllocatorV);
+        f_table = memory::New<file_table_t>(memory::KernelCommonAllocatorV);
     }
-
-    void copy_file_table(file_table * raw_ft);
 }
 
 resource_table_t::~resource_table_t() {}
 
-void resource_table_t::copy_file_table(file_table *raw_ft)
+void resource_table_t::copy_file_table(file_table_t *raw_ft)
 {
     if (f_table == nullptr)
     {
@@ -44,6 +34,7 @@ void resource_table_t::copy_file_table(file_table *raw_ft)
 
 file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
 {
+    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
     auto id = f_table->id_gen.next();
     if (id != util::null_id)
         f_table->file_map[id] = file;
@@ -52,6 +43,7 @@ file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
 
 void resource_table_t::delete_file_desc(file_desc fd)
 {
+    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
     f_table->id_gen.collect(fd);
     f_table->file_map.remove_once(fd);
 }
@@ -59,16 +51,21 @@ void resource_table_t::delete_file_desc(file_desc fd)
 fs::vfs::file *resource_table_t::get_file(file_desc fd)
 {
     fs::vfs::file *f = nullptr;
+    uctx::RawReadLockUninterruptibleContext icu(f_table->filemap_lock);
     f_table->file_map.get(fd, &f);
     return f;
 }
 
-void resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
+bool resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
 {
+    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
+
     if (!f_table->file_map.has(fd))
     {
         f_table->file_map[fd] = file;
+        return true;
     }
+    return false;
 }
 
 } // namespace task

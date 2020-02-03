@@ -487,7 +487,7 @@ void do_sleep(u64 milliseconds)
 
 void exit_process(process_t *process, u64 ret)
 {
-    trace::debug("process ", process->pid, " exit.");
+    trace::debug("process ", process->pid, " exit with code ", ret);
     uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
     for (auto thd : list)

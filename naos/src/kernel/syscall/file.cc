@@ -31,6 +31,7 @@ u64 close(file_desc fd)
     auto file = res.get_file(fd);
     if (file)
     {
+        res.delete_file_desc(fd);
         file->close();
         return OK;
     }
@@ -126,31 +127,29 @@ u64 get_pipe(file_desc *fd1, file_desc *fd2)
     if (!file)
         return EFAILED;
     auto &res = task::current_process()->res_table;
-    auto ft = res.get_file_table();
-    auto fdx0 = ft->id_gen.next();
-    if (fdx0 == util::null_id)
+    auto fdx0 = res.new_file_desc(file);
+    if (fdx0 == invalid_file_desc)
     {
         file->close();
-        return EFAILED;
-    }
-
-    auto fdx1 = ft->id_gen.next();
-    if (fdx1 == util::null_id)
-    {
-        file->close();
-        ft->id_gen.collect(fdx0);
         return EFAILED;
     }
     auto f2 = file->clone();
+
     if (!f2)
     {
         file->close();
-        ft->id_gen.collect(fdx0);
+        res.delete_file_desc(fdx0);
         return EFAILED;
     }
 
-    res.set_file(fdx0, file);
-    res.set_file(fdx1, f2);
+    auto fdx1 = res.new_file_desc(f2);
+    if (fdx1 == invalid_file_desc)
+    {
+        file->close();
+        f2->close();
+        res.delete_file_desc(fdx0);
+        return EFAILED;
+    }
 
     *fd1 = fdx0;
     *fd2 = fdx1;

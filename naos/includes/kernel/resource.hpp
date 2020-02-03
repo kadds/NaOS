@@ -12,22 +12,21 @@ namespace task
 
 using file_map_t = util::hash_map<file_desc, fs::vfs::file *>;
 
-struct file_table
+struct file_table_t
 {
     std::atomic_int64_t count;
     lock::spinlock_t lock;
     file_map_t file_map;
+    lock::rw_lock_t filemap_lock;
     util::id_level_generator<3> id_gen;
     fs::vfs::dentry *root, *current;
-
-    file_table();
-    fs::vfs::dentry *get_path_root(const char *path);
+    file_table_t();
 };
 
 struct resource_table_t
 {
   private:
-    file_table *f_table;
+    file_table_t *f_table;
 
   public:
     char **args;
@@ -35,15 +34,16 @@ struct resource_table_t
     char *env;
 
   public:
-    resource_table_t(file_table *ft = nullptr);
+    resource_table_t(file_table_t *ft = nullptr);
     ~resource_table_t();
 
-    void copy_file_table(file_table *raw_ft);
-    file_table *get_file_table() { return f_table; }
+    file_table_t *get_file_table() { return f_table; }
+    /// TODO: implement this function
+    void copy_file_table(file_table_t *raw_ft);
 
     file_desc new_file_desc(fs::vfs::file *);
     void delete_file_desc(file_desc fd);
     fs::vfs::file *get_file(file_desc fd);
-    void set_file(file_desc fd, fs::vfs::file *file);
+    bool set_file(file_desc fd, fs::vfs::file *file);
 };
 } // namespace task

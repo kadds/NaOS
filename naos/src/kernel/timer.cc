@@ -147,7 +147,6 @@ time::microsecond_t get_high_resolution_time() { return get_clock_source()->curr
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {
     auto &cpu_timer = *(cpu_timer_t *)cpu::current().get_timer_queue();
-
     cpu_timer.watcher_list.push_back(watcher_t(expires_delta_time + get_high_resolution_time(), func, user_data));
 }
 

@@ -25,6 +25,8 @@ using user_id = u64;
 using group_id = u64;
 using dev_t = u64;
 
+inline constexpr file_desc invalid_file_desc = -1;
+
 struct dirent
 {
     const char *filename;

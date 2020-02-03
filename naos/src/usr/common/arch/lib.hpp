@@ -45,7 +45,7 @@ SYS_CALL(8, unsigned long, lseek, int fd, long offset, int mode)
 SYS_CALL(9, unsigned long, select, unsigned long size, int *rfd, int *wfd, int *errfd, unsigned long flags)
 
 SYS_CALL(10, unsigned long, get_pipe, int *fd1, int *fd2)
-SYS_CALL(11, unsigned long, create_fifo, const char *path, unsigned long mode)
+SYS_CALL(11, int, create_fifo, const char *path, unsigned long mode)
 
 SYS_CALL(12, unsigned long, fcntl, int fd, unsigned int operator_type, unsigned int target, unsigned int attr,
          void *value, unsigned long size)
