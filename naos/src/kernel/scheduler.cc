@@ -8,10 +8,6 @@
 
 namespace task::scheduler
 {
-struct hash_func
-{
-    u64 operator()(scheduler_class sc) { return (u64)sc; }
-};
 
 scheduler *real_time_schedulers;
 scheduler *normal_schedulers;
@@ -138,7 +134,6 @@ void schedule()
     {
         normal_schedulers->schedule();
     }
-    reload_load_fac();
     task::enable_preempt();
 }
 
@@ -164,7 +159,9 @@ void timer_tick(u64 pass, u64 user_data)
         }
         normal_schedulers->schedule_tick();
     }
-    reload_load_fac();
+    if (!reload_load_fac())
+        return; /// time too short. do it after
+
     u64 cpu_count = cpu::count();
     u64 min_fac = cpu::current().edit_load_data().recent_load_fac;
     u64 cur_id = cpu::current().id();
@@ -209,14 +206,14 @@ void timer_tick(u64 pass, u64 user_data)
 constexpr u64 load_calc_time_span = 10000;
 constexpr u64 load_calc_times = 5;
 
-void reload_load_fac()
+bool reload_load_fac()
 {
     auto &cpu = cpu::current();
     auto &data = cpu.edit_load_data();
     auto time = timer::get_high_resolution_time();
     auto dt = time - data.last_load_time;
     if (dt < load_calc_time_span)
-        return;
+        return false;
     data.last_load_time = time;
 
     data.calcing_load_fac +=
@@ -226,6 +223,8 @@ void reload_load_fac()
     {
         data.recent_load_fac = data.calcing_load_fac / data.load_calc_times;
         data.load_calc_times = 0;
+        return true;
     }
+    return false;
 }
 } // namespace task::scheduler

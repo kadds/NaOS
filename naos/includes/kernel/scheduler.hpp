@@ -110,6 +110,6 @@ u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size);
 
 ExportC void schedule();
 
-void reload_load_fac();
+bool reload_load_fac();
 
 } // namespace task::scheduler
