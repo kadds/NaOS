@@ -652,7 +652,7 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
                 last_data[last_index++] = dt.data;
                 if (!(dt.data & 0b1000))
                 {
-                    trace::warning("Unkown mouse data.");
+                    trace::warning("Unknown mouse data.");
                     last_index = 0;
                 }
                 break;
