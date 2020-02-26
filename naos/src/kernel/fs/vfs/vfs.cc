@@ -256,12 +256,14 @@ bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
 
 void rmdir(dentry *entry)
 {
-    if (entry->get_inode()->get_ref_count() == 0)
+    if (entry->get_inode()->get_link_count() == 0)
         return;
 
     super_block *su_block = entry->get_inode()->get_super_block();
     entry->get_parent()->remove_child(entry);
     entry->get_inode()->rmdir();
+    su_block->save_dentry(entry);
+    su_block->write_inode(entry->get_inode());
     su_block->dealloc_inode(entry->get_inode());
     su_block->dealloc_dentry(entry);
 }

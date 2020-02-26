@@ -1,8 +1,14 @@
 #include "../common/arch/lib.hpp"
 
-const char promot[] = "NaOS>";
+const char promot[] = "\e[92;48mNaOS\e[0m->";
 const char unknown_command[] = "unknown command ";
-const char help_msg[] = "whereis  show current directory\ncd path  change current directory\n";
+const char help_msg[] = "some commands:\n"
+                        "  \e[32mwhereis\e[0m  show current directory\n"
+                        "  \e[32mcd\e[0m path  change current directory\n"
+                        "  \e[32mmkdir\e[0m path  make directory\n"
+                        "  \e[32mrmdir\e[0m path  remove directory\n"
+                        "  \e[32mhelp\e[0m  show this info\n"
+                        "enter process name to startup process.\n";
 
 int start_with(const char *str, const char *prefix)
 {
@@ -82,7 +88,7 @@ int itoa(long num, char *buffer, int max_len)
 extern "C" void _start(char *args)
 {
     auto ptr = sbrk(4096);
-    if (ptr == EFAILED)
+    if ((long)ptr == EFAILED)
     {
         write(STDERR, "sbrk failed nsh.", 12, 0);
         while (1)
