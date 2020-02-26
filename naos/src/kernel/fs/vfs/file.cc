@@ -3,6 +3,7 @@
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
+#include "kernel/fs/vfs/vfs.hpp"
 namespace fs::vfs
 {
 
@@ -19,15 +20,9 @@ void file::close()
     remove_ref();
     if (ref_count == 0)
     {
-        auto type = entry->get_inode()->get_type();
-        if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory &&
-            type != fs::inode_type_t::symbolink)
-        {
-            auto pd = entry->get_inode()->get_pseudo_data();
-            if (pd)
-                pd->close();
-        }
         entry->get_inode()->get_super_block()->dealloc_file(this);
+        if (mode & mode::delete_on_close)
+            unlink(entry);
     }
     return;
 }
@@ -54,12 +49,6 @@ i64 file::current_offset() { return pointer_offset; }
 u64 file::size() const { return entry->get_inode()->get_size(); }
 
 dentry *file::get_entry() const { return entry; }
-
-bool wait_buf(u64 data)
-{
-    auto buf = (util::circular_buffer<byte> *)data;
-    return buf->data_size() != 0;
-}
 
 u64 file::read(byte *ptr, u64 max_size, flag_t flags)
 {

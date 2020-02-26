@@ -27,6 +27,7 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len);
 bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t flags);
 
 bool link(const char *src, const char *target, dentry *root, dentry *cur_dir);
+bool unlink(dentry *target);
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir);
 bool symbolink(const char *src, const char *target, dentry *root, dentry *cur_dir, flag_t flags);
 

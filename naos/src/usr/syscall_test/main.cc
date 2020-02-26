@@ -126,10 +126,10 @@ void test_fs()
     mkdir("/tmp/");
     mount("", "/tmp/", "ramfs", 0, nullptr, 0x10000);
     chroot("/tmp");
-    mkdir("/future_test/");
-    mkdir("/future_test/ft2");
-    chdir("/future_test");
-    symbolink("/ft", "/future_test", 0);
+    mkdir("/syscall_test/");
+    mkdir("/syscall_test/ft2");
+    chdir("/syscall_test");
+    symbolink("/ft", "/syscall_test", 0);
     symbolink("./ft2/text.link", "./text", 0);
 
     create("./text1");
@@ -137,11 +137,12 @@ void test_fs()
 
     rename("./text1", "./text");
     link("the_text", "./text");
-    test_file("/future_test/the_text");
+    test_file("/syscall_test/the_text");
     test_file("/ft/text");
     test_file("/ft/ft2/text.link");
     unlink("text");
     unlink("the_text");
+    unlink("/ft/ft2/text.link");
     unlink("/ft/ft2");
     unlink("/ft");
 

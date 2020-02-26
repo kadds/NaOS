@@ -1,6 +1,6 @@
 #pragma once
 #include "../../mm/list_node_cache.hpp"
-#include "../../util/singly_linked_list.hpp"
+#include "../../util/linked_list.hpp"
 #include "common.hpp"
 #include "defines.hpp"
 
@@ -10,12 +10,11 @@ namespace fs::vfs
 class dentry
 {
   public:
-    using dentry_list_t = util::singly_linked_list<dentry *>;
+    using dentry_list_t = util::linked_list<dentry *>;
     using dentry_list_node_allocator_t = memory::list_node_cache_allocator<dentry_list_t>;
 
   protected:
     const char *name;
-
     inode *node;
     dentry *parent;
     bool loaded_child;

@@ -593,6 +593,29 @@ bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
     return true;
 }
 
+bool unlink(dentry *entry)
+{
+    auto type = entry->get_inode()->get_type();
+    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
+    {
+        auto pd = entry->get_inode()->get_pseudo_data();
+        if (pd)
+            pd->close();
+    }
+
+    entry->get_parent()->remove_child(entry);
+    entry->get_inode()->unlink(entry);
+    /// save to disk
+    entry->get_inode()->get_super_block()->write_inode(entry->get_inode());
+    if (entry->get_inode()->get_link_count() == 0)
+    {
+        // link count is 0, delete file
+        entry->get_inode()->get_super_block()->dealloc_inode(entry->get_inode());
+        entry->get_inode()->get_super_block()->dealloc_dentry(entry);
+    }
+    return true;
+}
+
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
@@ -600,15 +623,7 @@ bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
     if (unlikely(entry == nullptr))
         return false;
 
-    entry->get_parent()->remove_child(entry);
-    entry->get_inode()->unlink(entry);
-
-    if (entry->get_inode()->get_link_count() == 0)
-    {
-        // link count is 0, delete file
-        entry->get_inode()->get_super_block()->write_inode(entry->get_inode());
-    }
-    return true;
+    return unlink(entry);
 }
 
 bool symbolink(const char *src, const char *target, dentry *root, dentry *current, flag_t flags)
@@ -660,6 +675,12 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
         ptr += len;
         if (rest_len <= 1)
             return max_len;
+    }
+    if (max_len - rest_len == 1)
+    {
+        *ptr = '/';
+        ptr++;
+        rest_len--;
     }
     *ptr = 0;
     return max_len - rest_len;
@@ -777,7 +798,7 @@ file *open_pipe()
     node->set_pseudo_data(ps);
 
     file *f = su_block->alloc_file();
-    f->open(entry, mode::read | mode::write);
+    f->open(entry, mode::read | mode::write | mode::delete_on_close);
     return f;
 }
 

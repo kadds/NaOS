@@ -19,12 +19,11 @@ extern "C" void _start(char *args)
         if (ret != 0)
         {
             write(STDOUT, failed, sizeof(failed), 0);
-            while (1)
-            {
-                sleep(1000);
-            }
         }
-        write(STDOUT, ok, sizeof(ok), 0);
+        else
+        {
+            write(STDOUT, ok, sizeof(ok), 0);
+        }
     }
 
     write(STDOUT, startup_shell, sizeof(startup_shell), 0);
