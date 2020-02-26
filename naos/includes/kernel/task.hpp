@@ -209,19 +209,19 @@ process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t 
 
 void do_sleep(u64 milliseconds);
 
-NoReturn void do_exit(u64 value);
+NoReturn void do_exit(i64 value);
 
 void destroy_thread(thread_t *thread);
 void destroy_process(process_t *process);
 
-u64 wait_process(process_t *process, u64 &ret);
+u64 wait_process(process_t *process, i64 &ret);
 
 void check_process(process_t *process);
 void check_thread(thread_t *thd);
 
-NoReturn void do_exit_thread(u64 ret);
+NoReturn void do_exit_thread(i64 ret);
 u64 detach_thread(thread_t *thd);
-u64 join_thread(thread_t *thd, u64 &ret);
+u64 join_thread(thread_t *thd, i64 &ret);
 
 namespace thread_control_flags
 {

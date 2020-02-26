@@ -85,6 +85,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             e->content.value = v.e->content.value;
             return *this;
         }
+        pair *operator->() { return &e->content; }
     };
 
     struct iterator
@@ -436,7 +437,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         auto node = this->table->next;
         if (!node)
         {
-            while (!table->next)
+            while (!table->next && table != (this->table + capacity))
             {
                 table++;
             }

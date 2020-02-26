@@ -8,7 +8,7 @@ namespace syscall
 {
 
 /// exit process with return value
-void exit(u64 ret_value) { task::do_exit(ret_value); }
+void exit(i64 ret_value) { task::do_exit(ret_value); }
 
 thread_id current_tid() { return task::current()->tid; }
 
@@ -64,7 +64,7 @@ thread_id create_thread(void *entry, u64 arg, flag_t flags)
     return EFAILED;
 }
 
-void exit_thread(u64 ret)
+void exit_thread(i64 ret)
 {
     if (task::current()->attributes & task::thread_attributes::main)
     {
@@ -78,9 +78,9 @@ void exit_thread(u64 ret)
 
 int detach(thread_id tid) { return task::detach_thread(task::find_tid(task::current_process(), tid)); }
 
-int join(thread_id tid, u64 *ret)
+int join(thread_id tid, i64 *ret)
 {
-    u64 r;
+    i64 r;
     auto rt = task::join_thread(task::find_tid(task::current_process(), tid), r);
     if (ret != nullptr && is_user_space_pointer(ret))
     {
@@ -89,9 +89,9 @@ int join(thread_id tid, u64 *ret)
     return rt;
 }
 
-long wait_process(process_id pid, u64 *ret)
+long wait_process(process_id pid, i64 *ret)
 {
-    u64 r;
+    i64 r;
     u64 retv = task::wait_process(task::find_pid(pid), r);
     if (ret != nullptr && is_user_space_pointer(ret))
     {

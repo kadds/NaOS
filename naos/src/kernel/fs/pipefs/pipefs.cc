@@ -15,9 +15,9 @@ bool inode::create_symbolink(vfs::dentry *entry, const char *target) { return fa
 
 const char *inode::symbolink() { return nullptr; }
 
-u64 file::iwrite(const byte *buffer, u64 size, flag_t flags) { return -1; }
+i64 file::iwrite(const byte *buffer, u64 size, flag_t flags) { return -1; }
 
-u64 file::iread(byte *buffer, u64 max_size, flag_t flags) { return -1; }
+i64 file::iread(byte *buffer, u64 max_size, flag_t flags) { return -1; }
 
 file_system::file_system(const char *fsname)
     : vfs::file_system(fsname)

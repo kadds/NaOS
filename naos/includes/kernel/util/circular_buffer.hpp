@@ -33,26 +33,31 @@ template <typename T> class circular_buffer
 
         ~write_helper()
         {
-            if (unlikely((cb->write_off + 1) == cb->read_off || cb->write_off == cb->read_off - 1))
+            /// XXX: no thread safety, may loss data
+            if (cb->is_full())
             {
                 cb->read_off++;
             }
-            cb->write_off++;
-            if (unlikely(cb->write_off >= cb->length))
+
+            if (unlikely(cb->write_off + 1 >= cb->length))
             {
                 cb->write_off = 0;
+            }
+            else
+            {
+                cb->write_off++;
             }
         }
     };
 
-    circular_buffer(memory::IAllocator *allocator, u64 count)
-        : length(count)
+    circular_buffer(memory::IAllocator *allocator, u64 size)
+        : length(size)
         , read_off(0)
         , write_off(0)
         , allocator(allocator)
     {
-        if (count > 0)
-            buffer = (T *)allocator->allocate(count * sizeof(T), alignof(T));
+        if (size > 0)
+            buffer = (T *)allocator->allocate(size * sizeof(T), alignof(T));
         else
             buffer = nullptr;
     }
@@ -68,29 +73,26 @@ template <typename T> class circular_buffer
 
     write_helper write_with() { return write_helper(this); }
 
-    u64 data_size()
-    {
-        if (write_off >= read_off)
-            return write_off - read_off;
-        else
-            return length - read_off + write_off;
-    }
+    u64 get_buffer_size() const { return length; }
 
-    u64 size() { return length; }
+    bool is_full() const { return (write_off + 1) % length == read_off; }
 
-    bool is_full() { return (write_off + 1) % length == read_off; }
+    bool is_emtpy() const { return read_off == write_off; }
 
     bool read(T *t)
     {
-        if (unlikely(read_off == write_off))
+        if (unlikely(is_emtpy()))
         {
             return false;
         }
         *t = buffer[read_off];
-        read_off++;
-        if (unlikely(read_off >= length))
+        if (read_off + 1 >= length)
         {
             read_off = 0;
+        }
+        else
+        {
+            read_off++;
         }
         return true;
     }

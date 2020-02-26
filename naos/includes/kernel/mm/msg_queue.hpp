@@ -72,9 +72,9 @@ enum
 
 message_queue_t *create_msg_queue(u64 maximum_msg_count = max_message_count,
                                   u64 maximum_msg_bytes = max_message_pack_bytes);
-u64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags);
+i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags);
 message_queue_t *get_msg_queue(msg_id msg_id);
-u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags);
+i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags);
 bool close_msg_queue(message_queue_t *q);
 
 void msg_queue_init();

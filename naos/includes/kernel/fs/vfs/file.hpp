@@ -31,8 +31,8 @@ class file
     void add_ref() { ref_count++; }
     void remove_ref() { ref_count--; }
 
-    u64 read(byte *ptr, u64 max_size, flag_t flags);
-    u64 write(const byte *ptr, u64 size, flag_t flags);
+    i64 read(byte *ptr, u64 max_size, flag_t flags);
+    i64 write(const byte *ptr, u64 size, flag_t flags);
 
     virtual void flush() = 0;
 
@@ -46,7 +46,7 @@ class file
     pseudo_t *get_pseudo();
 
   protected:
-    virtual u64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;
-    virtual u64 iwrite(const byte *ptr, u64 size, flag_t flags) = 0;
+    virtual i64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;
+    virtual i64 iwrite(const byte *ptr, u64 size, flag_t flags) = 0;
 };
 } // namespace fs::vfs

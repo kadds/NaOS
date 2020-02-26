@@ -335,17 +335,29 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
         new_ft->current = file->get_entry()->get_parent();
 
     if (!(flags & create_process_flags::no_shared_stdin))
-        new_ft->file_map[0] = old_ft->file_map[0];
+    {
+        auto old_file = old_ft->file_map[0]->value;
+        if (old_file)
+            new_ft->file_map[0] = old_file->clone();
+    }
     else
         new_ft->file_map[0] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stdout))
-        new_ft->file_map[1] = old_ft->file_map[1];
+    {
+        auto old_file = old_ft->file_map[1]->value;
+        if (old_file)
+            new_ft->file_map[1] = old_file->clone();
+    }
     else
         new_ft->file_map[1] = nullptr;
 
     if (!(flags & create_process_flags::no_shared_stderror))
-        new_ft->file_map[2] = old_ft->file_map[2];
+    {
+        auto old_file = old_ft->file_map[2]->value;
+        if (old_file)
+            new_ft->file_map[2] = old_file->clone();
+    }
     else
         new_ft->file_map[2] = nullptr;
 
@@ -485,7 +497,7 @@ void do_sleep(u64 milliseconds)
     }
 }
 
-void exit_process(process_t *process, u64 ret)
+void exit_process(process_t *process, i64 ret)
 {
     trace::debug("process ", process->pid, " exit with code ", ret);
     uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
@@ -502,12 +514,13 @@ void exit_process(process_t *process, u64 ret)
             scheduler::remove(thd);
         }
     }
+    process->res_table.clear();
     process->ret_val = ret;
     process->attributes |= process_attributes::no_thread;
     do_wake_up(&process->wait_que);
 }
 
-void do_exit(u64 ret)
+void do_exit(i64 ret)
 {
     process_t *process = current_process();
     exit_process(process, ret);
@@ -515,13 +528,7 @@ void do_exit(u64 ret)
     trace::panic("Unreachable control flow.");
 }
 
-void destroy_process(process_t *process)
-{
-    /// TODO: delete file desc
-    /// process->res_table.get_file_table()->file_map;
-
-    delete_process(process);
-}
+void destroy_process(process_t *process) { delete_process(process); }
 
 void start_task_idle()
 {
@@ -541,7 +548,7 @@ bool wait_process_exit(u64 user_data)
     return proc->attributes & process_attributes::no_thread;
 }
 
-u64 wait_process(process_t *process, u64 &ret)
+u64 wait_process(process_t *process, i64 &ret)
 {
     if (process == nullptr)
         return 1;
@@ -549,7 +556,7 @@ u64 wait_process(process_t *process, u64 &ret)
 
     process->wait_counter++;
     do_wait(&process->wait_que, wait_process_exit, (u64)process, wait_context_type::interruptable);
-    ret = (u64)process->ret_val;
+    ret = (i64)process->ret_val;
     process->wait_counter--;
     if (process->wait_counter == 0)
     {
@@ -570,6 +577,7 @@ void check_process(process_t *process)
         bool all_destroy = true;
         uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
         auto list = ((thread_list_t *)process->thread_list);
+        /// TODO: shot down all thread which may running at other cpu
         for (auto it = list->begin(); it != list->end();)
         {
             auto sub_thd = *it;
@@ -604,9 +612,9 @@ void check_thread(thread_t *thd)
 }
 
 /// TODO: exit other thread which is running
-void exit_thread(thread_t *thd, u64 ret)
+void exit_thread(thread_t *thd, i64 ret)
 {
-    trace::debug("exit thread ", thd->tid, " pid ", thd->process->pid);
+    trace::debug("exit thread ", thd->tid, " pid ", thd->process->pid, " code ", ret);
     uctx::UninterruptibleContext icu;
     thd->user_stack_top = (void *)ret;
     thd->state = thread_state::stop;
@@ -622,7 +630,7 @@ void exit_thread(thread_t *thd, u64 ret)
     }
 }
 
-void do_exit_thread(u64 ret)
+void do_exit_thread(i64 ret)
 {
     auto thd = current();
     exit_thread(thd, ret);
@@ -644,7 +652,7 @@ u64 detach_thread(thread_t *thd)
     return 0;
 }
 
-u64 join_thread(thread_t *thd, u64 &ret)
+u64 join_thread(thread_t *thd, i64 &ret)
 {
     if (thd == nullptr)
         return 1;
@@ -657,7 +665,7 @@ u64 join_thread(thread_t *thd, u64 &ret)
     uctx::UninterruptibleContext icu;
     thd->wait_counter++;
     do_wait(&thd->wait_que, wait_exit, (u64)thd, wait_context_type::interruptable);
-    ret = (u64)thd->user_stack_top;
+    ret = (i64)thd->user_stack_top;
     thd->wait_counter--;
     if (thd->wait_counter == 0)
     {

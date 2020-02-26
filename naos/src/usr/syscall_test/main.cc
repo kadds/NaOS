@@ -92,7 +92,7 @@ void test_file(const char *file_path)
     int fd = open(file_path, OPEN_MODE_READ | OPEN_MODE_BIN, 0);
     char fc[sizeof(file_content)];
     lseek(fd, 0, LSEEK_MODE_BEGIN);
-    if (read(fd, fc, sizeof(file_content), 0) < sizeof(file_content))
+    if (read(fd, fc, sizeof(file_content), 0) < (long)sizeof(file_content))
     {
         print("syscall write/read failed! file:");
         print(file_path);
@@ -171,12 +171,13 @@ const char msg_str[] = "hi, message sent from msg queue.";
 void read_test_message_queue(long msg_id)
 {
     char buffer[sizeof(msg_str) + 1];
+    unsigned long i = 0;
     while (1)
     {
         long ret = 0;
-        unsigned long msglen = read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), MSGQUEUE_FLAGS_NOBLOCKOTHER);
+        auto len = read_msg_queue(msg_id, 1, &buffer, sizeof(msg_str), MSGQUEUE_FLAGS_NOBLOCKOTHER);
 
-        if (msglen != sizeof(msg_str))
+        if (len == ECONTI)
         {
             if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
             {
@@ -221,21 +222,22 @@ void pipe_thread(long in)
 {
     char buffer[sizeof(msg_pipe_str) + 1];
     print("pipe try read data...\n");
-
-    for (int i = 0; i < 100; i++)
+    long i = 0;
+    while (true)
     {
         auto len = read(in, buffer, sizeof(msg_pipe_str), 0);
         if (len == EOF)
         {
+            if (i != sizeof(msg_pipe_str) * 10)
+            {
+                break;
+            }
             close(in);
             exit_thread(0);
         }
-        buffer[len] = 0;
-        if (len != sizeof(msg_pipe_str) || strcmp(buffer, msg_pipe_str) != 0)
-        {
-            break;
-        }
+        i += len;
     }
+    print("pipe test failed.");
     close(in);
     exit(-1);
 }
@@ -311,6 +313,7 @@ void test_fifo()
     }
     close(fd);
     join(tid, nullptr);
+    unlink(path);
     print("fifo tested\n");
 }
 
@@ -332,7 +335,7 @@ void test_memory()
 
 void sighandler(int sig, long error, long code, long status)
 {
-    print("signal handle\n");
+    print("signal SIGINT handled\n");
     sigreturn(0);
 }
 

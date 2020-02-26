@@ -28,27 +28,25 @@ SYS_CALL(3, void, close, int fd);
 #define RWFLAGS_NO_BLOCK 1
 #define RWFLAGS_OVERRIDE 2
 
-SYS_CALL(4, unsigned long, write, int fd, const char *buffer, unsigned long len, unsigned long flags)
-SYS_CALL(5, unsigned long, read, int fd, char *buffer, unsigned long max_len, unsigned long flags)
+SYS_CALL(4, long, write, int fd, const char *buffer, unsigned long len, unsigned long flags)
+SYS_CALL(5, long, read, int fd, char *buffer, unsigned long max_len, unsigned long flags)
 
 #define LSEEK_MODE_CURRENT 0
 #define LSEEK_MODE_BEGIN 1
 #define LSEEK_MODE_END 2
 
-SYS_CALL(6, unsigned long, pwrite, int fd, unsigned long offset, const char *buffer, unsigned long len,
-         unsigned long flags)
-SYS_CALL(7, unsigned long, pread, int fd, unsigned long offset, char *buffer, unsigned long max_len,
-         unsigned long flags)
+SYS_CALL(6, long, pwrite, int fd, unsigned long offset, const char *buffer, unsigned long len, unsigned long flags)
+SYS_CALL(7, long, pread, int fd, unsigned long offset, char *buffer, unsigned long max_len, unsigned long flags)
 
-SYS_CALL(8, unsigned long, lseek, int fd, long offset, int mode)
+SYS_CALL(8, long, lseek, int fd, long offset, int mode)
 
-SYS_CALL(9, unsigned long, select, unsigned long size, int *rfd, int *wfd, int *errfd, unsigned long flags)
+SYS_CALL(9, long, select, unsigned long size, int *rfd, int *wfd, int *errfd, unsigned long flags)
 
-SYS_CALL(10, unsigned long, get_pipe, int *fd1, int *fd2)
+SYS_CALL(10, long, get_pipe, int *fd1, int *fd2)
 SYS_CALL(11, int, create_fifo, const char *path, unsigned long mode)
 
-SYS_CALL(12, unsigned long, fcntl, int fd, unsigned int operator_type, unsigned int target, unsigned int attr,
-         void *value, unsigned long size)
+SYS_CALL(12, long, fcntl, int fd, unsigned int operator_type, unsigned int target, unsigned int attr, void *value,
+         unsigned long size)
 
 SYS_CALL(17, int, rename, const char *src, const char *target);
 SYS_CALL(18, int, symbolink, const char *src, const char *target, unsigned long flags);
@@ -65,7 +63,7 @@ SYS_CALL(20, int, access, long mode)
 SYS_CALL(21, int, mkdir, const char *path)
 SYS_CALL(22, int, rmdir, const char *path)
 SYS_CALL(23, int, chdir, const char *new_workpath)
-SYS_CALL(24, unsigned long, current_dir, char *path, unsigned long max_len)
+SYS_CALL(24, long, current_dir, char *path, unsigned long max_len)
 SYS_CALL(25, int, chroot, const char *path)
 SYS_CALL(26, int, link, const char *src, const char *target)
 SYS_CALL(27, int, unlink, const char *target)
@@ -140,24 +138,24 @@ SYS_CALL(51, unsigned long, sbrk, long offset)
 SYS_CALL(52, void *, mmap, unsigned long start, int fd, unsigned long offset, unsigned long len, unsigned long flags)
 SYS_CALL(53, unsigned long, mumap, void *addr)
 SYS_CALL(54, long, create_msg_queue, unsigned long msg_count, unsigned long msg_bytes)
-SYS_CALL(55, unsigned long, write_msg_queue, long key, unsigned long type, const void *buffer, unsigned long size,
+SYS_CALL(55, long, write_msg_queue, long key, unsigned long type, const void *buffer, unsigned long size,
          unsigned long flags)
-SYS_CALL(56, unsigned long, read_msg_queue, long key, unsigned long type, void *buffer, unsigned long size,
-         unsigned long flags)
+SYS_CALL(56, long, read_msg_queue, long key, unsigned long type, void *buffer, unsigned long size, unsigned long flags)
 SYS_CALL(57, void, close_msg_queue, long key)
 
 #define MSGQUEUE_FLAGS_NOBLOCK 1
 #define MSGQUEUE_FLAGS_NOBLOCKOTHER 2
 
 #define OK 0
-#define EOF -1ul
-#define ETIMEOUT -2ul
-#define EINTR -3ul
-#define EPARAM -4ul
-#define EBUFFER -5ul
-#define ESIZE -6ul
-#define EPERMISSION -7ul
-#define ERESOURCE_NOT_NULL -8ul
-#define ENOEXIST -9ul
-#define EINNER -10ul
-#define EFAILED -11ul
+#define EOF -1
+#define ETIMEOUT -2
+#define EINTR -3
+#define EPARAM -4
+#define EBUFFER -5
+#define ESIZE -6
+#define EPERMISSION -7
+#define ERESOURCE_NOT_NULL -8
+#define ENOEXIST -9
+#define EINNER -10
+#define EFAILED -11
+#define ECONTI -12

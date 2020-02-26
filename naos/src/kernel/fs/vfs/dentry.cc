@@ -10,7 +10,6 @@ dentry::dentry()
     : loaded_child(false)
     , mount_point(false)
     , child_list(memory::KernelCommonAllocatorV)
-    , ref_count(1)
 
 {
 }

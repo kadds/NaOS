@@ -5,6 +5,8 @@
 #include "kernel/input/key.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/signal.hpp"
+#include "kernel/task.hpp"
 #include "kernel/util/bit_set.hpp"
 #include "kernel/wait.hpp"
 
@@ -79,16 +81,11 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
             {
                 set_key_switch_state(switchable_key::numlock, !get_key_switch_state(switchable_key::numlock));
             }
-            else
+            if (k == key::c && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
-                if (is_key_down(key::left_shift) && is_key_down(key::right_shift))
-                {
-                    if (is_key_down(key::left_control) || is_key_down(key::right_control))
-                    {
-                    }
-                }
+                /// TODO: kill front task
             }
-            if (key_char_table[(u8)k] != 0)
+            else if (key_char_table[(u8)k] != 0)
             {
                 byte d;
                 if (is_key_down(key::left_shift) || is_key_down(key::right_shift))

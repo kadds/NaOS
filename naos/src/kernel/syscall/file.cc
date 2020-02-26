@@ -38,7 +38,7 @@ u64 close(file_desc fd)
     return ENOEXIST;
 }
 
-u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
+i64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
@@ -53,7 +53,7 @@ u64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
     return ENOEXIST;
 }
 
-u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
+i64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
     if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
     {
@@ -69,7 +69,7 @@ u64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
     return ENOEXIST;
 }
 
-u64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
+i64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
@@ -81,7 +81,7 @@ u64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
     return ENOEXIST;
 }
 
-u64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
+i64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
@@ -99,7 +99,7 @@ u64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 /// \param offset the offset
 /// \param type 0: from current 1: offset of file begin 2: offset of file end
 /// \return old offset
-u64 lseek(file_desc fd, i64 offset, u64 type)
+i64 lseek(file_desc fd, i64 offset, u64 type)
 {
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);
@@ -119,9 +119,9 @@ u64 lseek(file_desc fd, i64 offset, u64 type)
     return 0;
 }
 
-u64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) {}
+i64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) {}
 
-u64 get_pipe(file_desc *fd1, file_desc *fd2)
+i64 get_pipe(file_desc *fd1, file_desc *fd2)
 {
     auto file = fs::vfs::open_pipe();
     if (!file)
@@ -133,23 +133,15 @@ u64 get_pipe(file_desc *fd1, file_desc *fd2)
         file->close();
         return EFAILED;
     }
-    auto f2 = file->clone();
 
-    if (!f2)
-    {
-        file->close();
-        res.delete_file_desc(fdx0);
-        return EFAILED;
-    }
-
-    auto fdx1 = res.new_file_desc(f2);
+    auto fdx1 = res.new_file_desc(file);
     if (fdx1 == invalid_file_desc)
     {
         file->close();
-        f2->close();
         res.delete_file_desc(fdx0);
         return EFAILED;
     }
+    file->add_ref();
 
     *fd1 = fdx0;
     *fd2 = fdx1;
@@ -182,7 +174,7 @@ file_desc create_fifo(const char *path, u64 mode)
     return fd;
 }
 
-u64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
+i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
 {
     auto &res = task::current_process()->res_table;
     auto file = res.get_file(fd);

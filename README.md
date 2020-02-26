@@ -10,6 +10,9 @@ NaOS runs on Intel / AMD modern processors.
 ## Features  
 View [Features](./FEATURES.MD) .
 
+## Preview
+![preview1](https://github.com/kadds/images/raw/master/naos/view1.gif)
+
 ## Quick Start  
 
 ### **Requirement**  
@@ -47,15 +50,15 @@ make -j
 [Arch wiki](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
 [Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
   
-NaOS support GPT disk with UEFI boot or MBR disk with MBR boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
-For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/), edit OVMF_CODE.fd path at *util/run.py*.  
+NaOS supports GPT disk with UEFI boot or MBR disk with MBR boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
+For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/) and edit OVMF_CODE.fd file path at *util/run.py*.  
 
 Example of disk partition:  
   
-| Partition number |  Type | FS | Content | Size |
- :-: | :-: | :-: | :-: | :-: 
-| 1 | ESP   | FAT32 | Grub EFI loader    |  80Mib  |
-| 2 | Root  | EXT2  | Grub and NaOS data |  920Mib |
+| Partition number | Type  |  FS   |      Content       |  Size  |
+| :--------------: | :---: | :---: | :----------------: | :----: |
+|        1         |  ESP  | FAT32 |  Grub EFI loader   | 80Mib  |
+|        2         | Root  | EXT2  | Grub and NaOS data | 920Mib |
 
 
 Example of grub install (UEFI):

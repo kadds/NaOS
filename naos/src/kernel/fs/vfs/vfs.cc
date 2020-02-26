@@ -595,23 +595,26 @@ bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
 
 bool unlink(dentry *entry)
 {
-    auto type = entry->get_inode()->get_type();
-    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
-    {
-        auto pd = entry->get_inode()->get_pseudo_data();
-        if (pd)
-            pd->close();
-    }
-
-    entry->get_parent()->remove_child(entry);
-    entry->get_inode()->unlink(entry);
+    auto su = entry->get_inode()->get_super_block();
+    auto inode = entry->get_inode();
+    inode->unlink(entry);
     /// save to disk
-    entry->get_inode()->get_super_block()->write_inode(entry->get_inode());
-    if (entry->get_inode()->get_link_count() == 0)
+    su->write_inode(inode);
+    if (inode->get_link_count() == 0)
     {
+        auto type = inode->get_type();
+        if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory &&
+            type != fs::inode_type_t::symbolink)
+        {
+            auto pd = inode->get_pseudo_data();
+            if (pd)
+                memory::Delete<>(memory::KernelCommonAllocatorV, pd);
+        }
+        if (entry->get_parent())
+            entry->get_parent()->remove_child(entry);
         // link count is 0, delete file
-        entry->get_inode()->get_super_block()->dealloc_inode(entry->get_inode());
-        entry->get_inode()->get_super_block()->dealloc_dentry(entry);
+        su->dealloc_inode(inode);
+        su->dealloc_dentry(entry);
     }
     return true;
 }
@@ -798,7 +801,7 @@ file *open_pipe()
     node->set_pseudo_data(ps);
 
     file *f = su_block->alloc_file();
-    f->open(entry, mode::read | mode::write | mode::delete_on_close);
+    f->open(entry, mode::read | mode::write | mode::unlink_on_close);
     return f;
 }
 

@@ -45,5 +45,7 @@ struct resource_table_t
     void delete_file_desc(file_desc fd);
     fs::vfs::file *get_file(file_desc fd);
     bool set_file(file_desc fd, fs::vfs::file *file);
+
+    void clear();
 };
 } // namespace task

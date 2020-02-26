@@ -34,8 +34,8 @@ class file : public vfs::file
     void flush() override{};
 
   protected:
-    u64 iwrite(const byte *buffer, u64 size, flag_t flags) override;
-    u64 iread(byte *buffer, u64 max_size, flag_t flags) override;
+    i64 iwrite(const byte *buffer, u64 size, flag_t flags) override;
+    i64 iread(byte *buffer, u64 max_size, flag_t flags) override;
 };
 
 class file_system : public vfs::file_system

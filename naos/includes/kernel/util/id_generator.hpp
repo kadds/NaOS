@@ -158,7 +158,7 @@ template <u8 levels> class id_level_generator
             return;
         for (u8 i = 0; i < levels; i++)
         {
-            if (i < pack[i].max)
+            if (id < pack[i].max)
             {
                 if (!pack[i].bitmap->get(id - pack[i].base))
                 {
@@ -177,7 +177,7 @@ template <u8 levels> class id_level_generator
             return;
         for (u8 i = 0; i < levels; i++)
         {
-            if (i < pack[i].max)
+            if (id < pack[i].max)
             {
                 pack[i].bitmap->clean(id - pack[i].base);
                 pack[i].rest++;

@@ -25,3 +25,4 @@ ExportC void *system_call_table[];
 #define ENOEXIST -9
 #define EINNER -10
 #define EFAILED -11
+#define ECONTI -12ul

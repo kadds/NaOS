@@ -14,8 +14,8 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
     friend bool tty_read_func(u64);
 
   public:
-    u64 write(const byte *data, u64 size, flag_t flags) override;
-    u64 read(byte *data, u64 max_size, flag_t flags) override;
+    i64 write(const byte *data, u64 size, flag_t flags) override;
+    i64 read(byte *data, u64 max_size, flag_t flags) override;
 
     u64 write_to_buffer(const byte *data, u64 size, flag_t flags);
 

@@ -42,7 +42,7 @@ enum mode : flag_t
     bin = 4,
     append = 8,
     no_block = 16,
-    delete_on_close = 32,
+    unlink_on_close = 32,
 };
 } // namespace mode
 

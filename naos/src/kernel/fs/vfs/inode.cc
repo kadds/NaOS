@@ -78,6 +78,7 @@ bool inode::create_symbolink(dentry *entry, const char *target)
     last_attr_change_time = last_write_time;
     birth_time = last_write_time;
     set_type(inode_type_t::symbolink);
+
     return true;
 }
 

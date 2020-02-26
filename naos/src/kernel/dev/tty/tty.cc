@@ -10,10 +10,10 @@ bool tty_read_func(u64 data)
 {
     auto *tty = (tty_pseudo_t *)data;
     auto buffer = &tty->buffer;
-    return tty->line_count > 0 && buffer->data_size() != 0;
+    return tty->line_count > 0 && !buffer->is_emtpy();
 }
 
-u64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
+i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 {
     trace::print_inner((const char *)data, size);
     return size;
@@ -42,7 +42,7 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
     return size;
 }
 
-u64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
+i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
 {
     if (line_count <= 0)
     {
@@ -54,7 +54,7 @@ u64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
     }
     for (u64 i = 0; i < max_size;)
     {
-        if (buffer.data_size() == 0)
+        if (buffer.is_emtpy())
         {
             if (i > 0)
                 return i;

@@ -117,7 +117,7 @@ bool write_for_write(message_queue_t *queue, flag_t flags)
     return true;
 }
 
-u64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags)
+i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags)
 {
     if (unlikely(length > max_message_pack_bytes) || queue->close)
         return 0;
@@ -156,7 +156,7 @@ bool wait_reader_func(u64 data)
         {
             return true;
         }
-        if (w->flags & msg_flags::no_block_other && w->queue->msg_count > 0)
+        if ((w->flags & msg_flags::no_block_other) && w->queue->msg_count > 0)
         {
             return true;
         }
@@ -195,7 +195,7 @@ u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
     return length;
 }
 
-u64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
+i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
 {
     message_pack_t *msg;
     msg_pack_list_t *msg_pack_list = nullptr;

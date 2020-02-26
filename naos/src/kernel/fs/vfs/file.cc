@@ -11,6 +11,7 @@ int file::open(dentry *entry, flag_t mode)
 {
     this->entry = entry;
     this->mode = mode;
+    this->pointer_offset = 0;
     add_ref();
     return 0;
 }
@@ -18,11 +19,20 @@ int file::open(dentry *entry, flag_t mode)
 void file::close()
 {
     remove_ref();
+    auto type = entry->get_inode()->get_type();
+    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
+    {
+        auto pd = entry->get_inode()->get_pseudo_data();
+        if (pd)
+            pd->close();
+    }
     if (ref_count == 0)
     {
-        entry->get_inode()->get_super_block()->dealloc_file(this);
-        if (mode & mode::delete_on_close)
+        auto entry = this->entry;
+        auto su = entry->get_inode()->get_super_block();
+        if (mode & mode::unlink_on_close)
             unlink(entry);
+        su->dealloc_file(this);
     }
     return;
 }
@@ -50,7 +60,7 @@ u64 file::size() const { return entry->get_inode()->get_size(); }
 
 dentry *file::get_entry() const { return entry; }
 
-u64 file::read(byte *ptr, u64 max_size, flag_t flags)
+i64 file::read(byte *ptr, u64 max_size, flag_t flags)
 {
     auto type = entry->get_inode()->get_type();
     if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
@@ -67,7 +77,7 @@ u64 file::read(byte *ptr, u64 max_size, flag_t flags)
     return 0;
 }
 
-u64 file::write(const byte *ptr, u64 size, flag_t flags)
+i64 file::write(const byte *ptr, u64 size, flag_t flags)
 {
     auto type = entry->get_inode()->get_type();
     if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)

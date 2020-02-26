@@ -99,7 +99,12 @@ unsigned long read_msg_queue(unsigned long key, unsigned long type, void *buffer
         return EPARAM;
     if (!is_user_space_pointer(buffer) || !is_user_space_pointer((byte *)buffer + size))
         return EBUFFER;
-    return memory::read_msg(q, type, (byte *)buffer, size, flags);
+    auto ret = memory::read_msg(q, type, (byte *)buffer, size, flags);
+    if (ret == -1)
+        return EOF;
+    if (ret == -2)
+        return ECONTI;
+    return ret;
 }
 
 unsigned long close_msg_queue(unsigned long key)

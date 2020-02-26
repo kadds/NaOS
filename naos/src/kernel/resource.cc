@@ -1,4 +1,5 @@
 #include "kernel/resource.hpp"
+#include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
 namespace task
 {
@@ -66,6 +67,26 @@ bool resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
         return true;
     }
     return false;
+}
+
+void resource_table_t::clear()
+{
+    while (f_table->file_map.size() != 0)
+    {
+        fs::vfs::file *file = nullptr;
+        {
+
+            uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
+
+            auto it = f_table->file_map.begin();
+            if (it == f_table->file_map.end())
+                break;
+            file = it->value;
+            f_table->file_map.remove(it->key);
+        }
+        if (file != nullptr)
+            file->close();
+    }
 }
 
 } // namespace task
