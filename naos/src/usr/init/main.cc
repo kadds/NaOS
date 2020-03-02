@@ -3,7 +3,7 @@ const char hello[] = "userland init\e[32;44mhi,\e[0minit! \e[1;38;2;255;0;25;49m
 const char shell_failed[] = "execute nsh failed, check rootfs image and memory size in system.\nhlt at init.\n";
 const char startup_shell[] = "startup nsh...\n";
 
-extern "C" void _start(char *args)
+extern "C" void _start(int argc, char **argv)
 {
     write(STDOUT, hello, sizeof(hello), 0);
     write(STDOUT, startup_shell, sizeof(startup_shell), 0);

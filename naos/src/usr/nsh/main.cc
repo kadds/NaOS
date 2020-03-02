@@ -3,7 +3,7 @@
 const char promot[] = "\e[92;48mNaOS\e[0m->";
 const char unknown_command[] = "unknown command ";
 const char help_msg[] = "some commands:\n"
-                        "  \e[32mwhereis\e[0m  show current directory\n"
+                        "  \e[32mpwd\e[0m  show current directory\n"
                         "  \e[32mcd\e[0m path  change current directory\n"
                         "  \e[32mmkdir\e[0m path  make directory\n"
                         "  \e[32mrmdir\e[0m path  remove directory\n"
@@ -85,7 +85,7 @@ int itoa(long num, char *buffer, int max_len)
     return i;
 }
 
-extern "C" void _start(char *args)
+extern "C" void _start(int argc, char **argv)
 {
     auto ptr = sbrk(4096);
     if ((long)ptr == EFAILED)
@@ -118,7 +118,7 @@ extern "C" void _start(char *args)
             }
             continue;
         }
-        else if (idx = start_with(cmd, "whereis"); idx == len)
+        else if (idx = start_with(cmd, "pwd"); idx == len)
         {
             if (current_dir(output_buffer, sizeof(output_buffer)) != EBUFFER)
             {

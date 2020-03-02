@@ -339,7 +339,7 @@ void sighandler(int sig, long error, long code, long status)
     sigreturn(0);
 }
 
-extern "C" void _start(char *args)
+extern "C" void _start(int argc, char **argv)
 {
     sigaction(SIGINT, sighandler, 0, 0);
     // __asm__ __volatile__("INT $3  \n\t" : : : "memory");
