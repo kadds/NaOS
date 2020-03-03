@@ -132,6 +132,7 @@ struct info_t
     info_t &operator=(const info_t &) = delete;
     void init_brk(u64 start);
     bool set_brk(u64 ptr);
+    bool set_brk_now(u64 ptr);
     u64 get_brk();
 
     const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_map_offset, u64 map_length, flag_t page_ext_attr);

@@ -657,7 +657,7 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
         return 0;
 
     char *ptr = path;
-    u64 rest_len = max_len - 1;
+    i64 rest_len = max_len - 1;
     util::array<dentry *> array(memory::KernelCommonAllocatorV);
 
     while (current != root && current != nullptr)
@@ -670,24 +670,31 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
     if (current == nullptr)
         return 0;
 
+    *ptr++ = '/';
     int size = array.size();
     for (int i = size - 1; i >= 0; i--)
     {
         auto entry = array[i];
-        *ptr++ = '/';
-        int len = util::strcopy(ptr, entry->get_name(), rest_len);
-        rest_len -= len;
-        ptr += len;
-        if (rest_len <= 1)
+
+        int len = util::strlen(entry->get_name());
+        rest_len -= len + 1;
+        if (rest_len < 0)
+        {
+            util::memcopy(ptr, entry->get_name(), rest_len + len - 1);
+            ptr += rest_len + len - 1;
+            *ptr = '\0';
+            /// XXX: just return when buffer is too small
             return max_len;
+        }
+        util::memcopy(ptr, entry->get_name(), len);
+        ptr += len;
+        *ptr++ = '/';
     }
-    if (max_len - rest_len == 1)
+    if (array.size() > 0)
     {
-        *ptr = '/';
-        ptr++;
-        rest_len--;
+        ptr--;
     }
-    *ptr = 0;
+    *ptr = '\0';
     return max_len - rest_len;
 }
 

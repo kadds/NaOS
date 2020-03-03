@@ -119,19 +119,19 @@ void signal_pack_t::dispatch(signal_actions_t *actions)
     sig_pending = events.size() != 0;
 }
 
-void signal_pack_t::user_return(u64 code)
+void signal_pack_t::user_return()
 {
     in_signal = false;
-    arch::task::return_from_signal_context(&context, code);
+    arch::task::return_from_signal_context(&context);
 }
 
-void signal_return(u64 code)
+void signal_return()
 {
     auto thread = task::current();
     if (unlikely(thread == nullptr))
         return;
     if (thread->signal_pack.is_in_signal())
-        thread->signal_pack.user_return(code);
+        thread->signal_pack.user_return();
 }
 
 void do_signal()

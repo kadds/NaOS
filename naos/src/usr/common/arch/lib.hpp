@@ -83,7 +83,7 @@ SYS_CALL(33, long, current_tid)
 #define CP_FLAG_SHARED_NOROOT 16
 #define CP_FLAG_SHARED_WORK_DIR 32
 
-SYS_CALL(34, long, create_process, const char *filename, const char *args, unsigned long flags)
+SYS_CALL(34, long, create_process, const char *filename, char *const args[], unsigned long flags)
 
 #define CT_FLAG_IMMEDIATELY 1
 #define CT_FLAG_NORETURN 4
@@ -119,13 +119,32 @@ SYS_CALL(39, void, exit_thread, long ret)
 
 SYS_CALL(40, int, sigaction, int signum, void (*handler)(int signum, long error, long code, long status),
          unsigned long long mask, int flags)
-SYS_CALL(41, int, raise, int signum, int error, int code, int status)
-SYS_CALL(42, int, sigsend, int tid, int signum, int error, int code, int status)
-SYS_CALL(44, void, sigreturn, int code)
-SYS_CALL(45, int, getcpucorerunning)
-SYS_CALL(46, void, setcpumask, unsigned long mask0, unsigned long mask1)
-SYS_CALL(47, void, getcpumask, unsigned long *mask0, unsigned long *mask1)
 
+struct sig_info_t
+{
+    long error;
+    long code;
+    long status;
+};
+
+SYS_CALL(41, int, raise, int signum, sig_info_t *info)
+
+struct sigtarget_t
+{
+    long id;
+    long flags;
+};
+
+#define SIGTGT_PROC 1
+#define SIGTGT_GROUP 2
+
+SYS_CALL(42, int, sigput, sigtarget_t *target, int signum, sig_info_t *info)
+SYS_CALL(43, void, sigreturn)
+SYS_CALL(44, void, sigwait, int *num, sig_info_t *info)
+
+SYS_CALL(47, int, get_cpu_running)
+SYS_CALL(48, void, setcpumask, unsigned long mask0, unsigned long mask1)
+SYS_CALL(49, void, getcpumask, unsigned long *mask0, unsigned long *mask1)
 SYS_CALL(50, bool, brk, unsigned long ptr)
 SYS_CALL(51, unsigned long, sbrk, long offset)
 

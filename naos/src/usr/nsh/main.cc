@@ -85,6 +85,61 @@ int itoa(long num, char *buffer, int max_len)
     return i;
 }
 
+void startup_process(char *cmd)
+{
+    constexpr int max_arg_count = 256;
+    char *args[max_arg_count];
+
+    int args_count = 0;
+    char *ptr = cmd;
+    bool has_space = false;
+    while (*ptr != '\0')
+    {
+        if (*ptr == ' ')
+        {
+            if (!has_space)
+            {
+                if (args_count > max_arg_count)
+                {
+                    print("too many args...");
+                    return;
+                }
+                args_count++;
+
+                *ptr = '\0';
+                has_space = true;
+            }
+        }
+        else
+        {
+            if (has_space)
+            {
+                args[args_count] = ptr;
+            }
+            has_space = false;
+        }
+        ptr++;
+    }
+    args[args_count] = nullptr;
+    long pid = create_process(cmd, args, 0);
+    if (pid < 0)
+    {
+        write(STDOUT, unknown_command, sizeof(unknown_command), 0);
+        print(cmd);
+        print("\n");
+    }
+    else
+    {
+        char output_buffer[100];
+        long ret;
+        wait_process(pid, &ret);
+        print("process exit code ");
+        itoa(ret, output_buffer, sizeof(output_buffer));
+        print(output_buffer);
+        print("\n");
+    }
+}
+
 extern "C" void _start(int argc, char **argv)
 {
     auto ptr = sbrk(4096);
@@ -103,8 +158,9 @@ extern "C" void _start(int argc, char **argv)
     {
         write(STDOUT, promot, sizeof(promot), 0);
         int len = read(STDIN, cmd, 4096, 0);
-        if (len == 0)
+        if (len <= 1) // "" "\n"
             continue;
+        len--; // clear \n
         cmd[len] = 0;
         int idx = 0;
 
@@ -142,7 +198,7 @@ extern "C" void _start(int argc, char **argv)
             {
                 print("mkdir ");
                 print(cmd + idx);
-                print("failed. \n");
+                print(" failed. \n");
             }
             continue;
         }
@@ -152,25 +208,10 @@ extern "C" void _start(int argc, char **argv)
             {
                 print("rmdir ");
                 print(cmd + idx);
-                print("failed. \n");
+                print(" failed. \n");
             }
             continue;
         }
-        auto pid = create_process(cmd, "", 0);
-        if (pid < 0)
-        {
-            write(STDOUT, unknown_command, sizeof(unknown_command), 0);
-            print(cmd);
-            print("\n");
-        }
-        else
-        {
-            long ret;
-            wait_process(pid, &ret);
-            print("process exit code ");
-            itoa(ret, output_buffer, sizeof(output_buffer));
-            print(output_buffer);
-            print("\n");
-        }
+        startup_process(cmd);
     }
 }

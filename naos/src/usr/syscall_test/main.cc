@@ -171,7 +171,6 @@ const char msg_str[] = "hi, message sent from msg queue.";
 void read_test_message_queue(long msg_id)
 {
     char buffer[sizeof(msg_str) + 1];
-    unsigned long i = 0;
     while (1)
     {
         long ret = 0;
@@ -336,7 +335,7 @@ void test_memory()
 void sighandler(int sig, long error, long code, long status)
 {
     print("signal SIGINT handled\n");
-    sigreturn(0);
+    sigreturn();
 }
 
 extern "C" void _start(int argc, char **argv)
@@ -353,7 +352,7 @@ extern "C" void _start(int argc, char **argv)
     long ret;
     print("join thread2\n");
     join(tid, &ret);
-    raise(SIGINT, 0, 0, 0);
+    raise(SIGINT, nullptr);
     if (ret != 0)
     {
         print("Some test tests failed.\n");

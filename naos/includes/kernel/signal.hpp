@@ -208,7 +208,7 @@ struct signal_pack_t
 
     void dispatch(signal_actions_t *actions);
 
-    void user_return(u64 code);
+    void user_return();
 
     signal_mask_t &get_mask() { return masks; }
 
@@ -216,7 +216,7 @@ struct signal_pack_t
     bool is_in_signal() { return in_signal; }
     void set_in_signal(bool in) { in_signal = in; }
 };
-void signal_return(u64 code);
+void signal_return();
 void do_signal();
 
 } // namespace task

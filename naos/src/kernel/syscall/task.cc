@@ -16,19 +16,33 @@ process_id current_pid() { return task::current_process()->pid; }
 
 void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
-    arch::task::enter_userland(task::current(), (void *)arg3, arg1);
+    /// the arg3 is entry address
+    arch::task::enter_userland(task::current(), (void *)arg3, arg1, arg2);
 }
 
-process_id create_process(const char *filename, const char *args, flag_t flags)
+process_id create_process(const char *filename, const char *argv[], flag_t flags)
 {
     if (filename == nullptr || !is_user_space_pointer(filename))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer(args))
+    if (!is_user_space_pointer(argv))
     {
         return EPARAM;
     }
+    if (argv != nullptr)
+    {
+        int i = 0;
+        while (argv[i] != nullptr)
+        {
+            if (!is_user_space_pointer(argv[i]))
+                return EPARAM;
+            i++;
+            if (i > 255)
+                return EPARAM;
+        }
+    }
+
     auto ft = task::current_process()->res_table.get_file_table();
     auto file =
         fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
@@ -36,7 +50,7 @@ process_id create_process(const char *filename, const char *args, flag_t flags)
     {
         return ENOEXIST;
     }
-    auto p = task::create_process(file, user_process_thread, 0, args, 0, flags);
+    auto p = task::create_process(file, user_process_thread, argv, flags);
     if (p)
     {
         return p->pid;
@@ -46,7 +60,7 @@ process_id create_process(const char *filename, const char *args, flag_t flags)
 
 void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
-    arch::task::enter_userland(task::current(), (void *)arg1, arg0);
+    arch::task::enter_userland(task::current(), (void *)arg1, arg0, 0);
 }
 
 thread_id create_thread(void *entry, u64 arg, flag_t flags)
@@ -111,26 +125,28 @@ u64 sigaction(task::signal_num_t num, task::signal_func_t handler, u64 mask, fla
     return OK;
 }
 
-u64 raise(task::signal_num_t num, u64 error, u64 code, u64 status)
+struct sig_info_t
 {
-    task::current()->signal_pack.set(num, error, code, status);
+    u64 error;
+    u64 code;
+    u64 status;
+};
+
+i64 raise(task::signal_num_t num, sig_info_t *info)
+{
+    if (info != nullptr && !is_user_space_pointer(info))
+        return EPARAM;
+    if (info)
+        task::current()->signal_pack.set(num, info->error, info->code, info->status);
+    else
+        task::current()->signal_pack.set(num, 0, 0, 0);
+
     return OK;
 }
 
-u64 sigsend(thread_id tid, task::signal_num_t num, u64 error, u64 code, u64 status)
+struct target_t
 {
-    auto t = task::find_tid(task::current_process(), tid);
-    if (t == nullptr)
-        return ENOEXIST;
-    t->signal_pack.set(num, error, code, status);
-    return OK;
-}
-
-struct target
-{
-    process_id pid;
-    thread_id tid;
-    group_id gid;
+    u64 id;
     flag_t flags;
 };
 
@@ -138,24 +154,20 @@ enum target_flags : flag_t
 {
     send_to_group = 1,
     send_to_process = 2,
-    send_to_thread = 4,
 };
 
-u64 sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 status)
+u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 {
     if (target == nullptr || !is_user_space_pointer(target))
         return EPARAM;
+    if (info != nullptr && !is_user_space_pointer(info))
+        return EPARAM;
+
     if (target->flags & send_to_process)
     {
-        auto proc = task::find_pid(target->pid);
+        auto proc = task::find_pid(target->id);
         if (proc == nullptr)
             return ENOEXIST;
-    }
-    else if (target->flags & send_to_thread)
-    {
-        auto proc = task::find_pid(target->pid);
-        if (proc == nullptr)
-            proc = task::current_process();
     }
     else if (target->flags & send_to_group)
     {
@@ -165,7 +177,9 @@ u64 sigput(target *target, task::signal_num_t num, u64 error, u64 code, u64 stat
     return OK;
 }
 
-void sigreturn(u64 code) { task::signal_return(code); }
+u64 sigwait(task::signal_num_t *num, sig_info_t *info) {}
+
+void sigreturn() { task::signal_return(); }
 
 u64 getcpu_running() { return task::current()->cpuid; }
 
@@ -196,11 +210,12 @@ SYSCALL(39, exit_thread)
 SYSCALL(40, sigaction)
 SYSCALL(41, raise)
 SYSCALL(42, sigsend)
-SYSCALL(43, sigput)
+SYSCALL(43, sigwait)
 SYSCALL(44, sigreturn)
-SYSCALL(45, getcpu_running)
-SYSCALL(46, setcpu_mask)
-SYSCALL(47, getcpu_mask)
+
+SYSCALL(47, getcpu_running)
+SYSCALL(48, setcpu_mask)
+SYSCALL(49, getcpu_mask)
 END_SYSCALL
 
 } // namespace syscall

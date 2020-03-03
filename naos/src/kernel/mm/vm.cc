@@ -22,6 +22,7 @@ irq::request_result _ctx_interrupt_ page_fault_func(const void *regs, u64 extra_
 
         if (extra_data >= 0xFFFF800000000000)
         {
+            /// FIXME: user space page fault at kernel vm area
             info = (info_t *)memory::kernel_vm_info;
         }
 
@@ -301,6 +302,40 @@ bool info_t::set_brk(u64 ptr)
     {
         /// add page
         /// \see head_expand_vm
+    }
+    else
+    {
+        /// remove pages
+        vm_t vm = *head_vm;
+        vm.start = ptr;
+        vm.end = current_head_ptr;
+        mmu_paging.unmap_area(&vm);
+    }
+    current_head_ptr = ptr;
+    return true;
+}
+
+bool info_t::set_brk_now(u64 ptr)
+{
+    ptr = (ptr + memory::page_size - 1) & ~(memory::page_size - 1);
+
+    if (ptr > head_vm->end || ptr < head_vm->start)
+    {
+        return false;
+    }
+
+    if (ptr > current_head_ptr)
+    {
+        /// add page
+        auto current_map = current_head_ptr;
+        while (ptr < current_map)
+        {
+            byte *ptr = (byte *)memory::malloc_page();
+            vm_t vm = *head_vm;
+            vm.start = current_map;
+            vm.end = current_map + memory::page_size;
+            mmu_paging.map_area_phy(&vm, (void *)ptr);
+        }
     }
     else
     {

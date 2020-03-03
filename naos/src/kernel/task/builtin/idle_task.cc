@@ -28,7 +28,7 @@ void main()
         if (!file)
             trace::panic("Can't open init program");
 
-        task::create_process(file, init::main, 0, 0, 0, 0);
+        task::create_process(file, init::main, 0, 0);
 
         // fs::vfs::close(file);
     }

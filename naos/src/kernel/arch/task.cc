@@ -67,7 +67,7 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     return 0;
 }
 
-u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
+u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1)
 {
     regs_t regs;
     util::memzero(&regs, sizeof(regs));
@@ -80,7 +80,9 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg)
     regs.ds = gdt::gen_selector(gdt::selector_type::user_data, 3);
     regs.es = regs.ds;
     regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
-    regs.rdi = arg;
+    regs.rdi = arg0;
+    regs.rsi = arg1;
+
     uctx::UninterruptibleContext icu;
     _call_sys_ret(&regs);
     return 1;
@@ -163,7 +165,7 @@ void set_signal_param(userland_code_context *context, int index, u64 val) { *con
 
 void set_signal_context(userland_code_context *context) { *context->rsp = context->data_stack_rsp; }
 
-void return_from_signal_context(userland_code_context *context, u64 code)
+void return_from_signal_context(userland_code_context *context)
 {
     u64 rsp;
     __asm__ __volatile__("movq %%rsp, %0\n\t" : "=g"(rsp) : :);

@@ -12,6 +12,7 @@
 #include "kernel/util/hash_map.hpp"
 #include "kernel/util/id_generator.hpp"
 #include "kernel/util/memory.hpp"
+#include "kernel/util/str.hpp"
 
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -312,17 +313,94 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
     return thd;
 }
 
-process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64 arg0, const char *args,
-                          const char *env, flag_t flags)
+void copy_args_in_process(int argc, char *argv, char **&userland_argv)
 {
-    auto process = new_process();
-    if (!process)
-        return nullptr;
+    if (argc == 0)
+    {
+        if (argv != nullptr)
+            memory::KernelCommonAllocatorV->deallocate(argv);
+        return;
+    }
+    if (argv == nullptr)
+        return;
 
-    process->parent_pid = current_process()->pid;
+    auto mm_info = (memory::vm::info_t *)current_process()->mm_info;
+    auto ptr = mm_info->get_brk();
+    mm_info->set_brk_now(ptr + sizeof(char *) * argc + *(u16 *)argv);
+    argv += sizeof(u16) / sizeof(char);
+    userland_argv = (char **)ptr;
+    ptr += sizeof(char **) * argc;
+    char *dst = (char *)ptr;
 
-    auto old_ft = current_process()->res_table.get_file_table();
-    auto new_ft = process->res_table.get_file_table();
+    for (int i = 0; i < argc; i++)
+    {
+        int n = util::strcopy(dst, argv) + 1;
+        userland_argv[i] = dst;
+
+        argv += n;
+        dst += n;
+    }
+    memory::KernelCommonAllocatorV->deallocate(argv);
+}
+
+void befor_run_process(thread_start_func start_func, int argc, char *argv, void *entry)
+{
+    char **userland_argv;
+    copy_args_in_process(argc, argv, userland_argv);
+    start_func(0, argc, (u64)userland_argv, (u64)entry);
+}
+
+void cast_args(process_t *process, const char *args[], int *argc, char **argv)
+{
+    /// here: maximum args byte size is 4096bytes (a page) - sizeof(u16)
+    constexpr int max_args_size = memory::page_size - 2;
+    int arg_size = 0;
+    int arg_count = 0;
+    if (args == nullptr)
+    {
+        *argc = 0;
+        *argv = nullptr;
+        return;
+    }
+    for (int i = 0; i < 255; i++)
+    {
+        if (args[i] == nullptr)
+        {
+            break;
+        }
+        int len = util::strlen(args[i]);
+        if (arg_size + len + 1 > max_args_size)
+            break;
+        arg_size += len + 1;
+        arg_count++;
+    }
+    *argc = arg_count;
+
+    char *ptr = (char *)memory::KernelCommonAllocatorV->allocate(arg_size + sizeof(u16), sizeof(u16));
+
+    char *cur = ptr;
+    *(u16 *)cur = arg_size;
+    cur += sizeof(u16) / sizeof(char);
+
+    for (int i = 0; i < arg_count; i++)
+    {
+        int len = util::strcopy(cur, args[i]);
+        cur += len + 1;
+    }
+
+    *argv = ptr;
+}
+
+void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag_t flags)
+{
+    kassert(new_proc != old_proc, "2 parameter processes assert failed");
+
+    auto old_ft = old_proc->res_table.get_file_table();
+    auto new_ft = new_proc->res_table.get_file_table();
+
+    new_ft->id_gen.tag(0);
+    new_ft->id_gen.tag(1);
+    new_ft->id_gen.tag(2);
 
     if (unlikely(flags & create_process_flags::no_shared_root))
         new_ft->root = fs::vfs::global_root;
@@ -331,8 +409,8 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
 
     if (unlikely(flags & create_process_flags::shared_work_dir))
         new_ft->current = old_ft->current;
-    else
-        new_ft->current = file->get_entry()->get_parent();
+    else // set to parent dir (file directory)
+        new_ft->current = file ? file->get_entry()->get_parent() : fs::vfs::global_root;
 
     if (!(flags & create_process_flags::no_shared_stdin))
     {
@@ -360,10 +438,17 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     }
     else
         new_ft->file_map[2] = nullptr;
+}
 
-    new_ft->id_gen.tag(0);
-    new_ft->id_gen.tag(1);
-    new_ft->id_gen.tag(2);
+process_t *create_process(fs::vfs::file *file, thread_start_func start_func, const char *args[], flag_t flags)
+{
+    auto process = new_process();
+    if (!process)
+        return nullptr;
+
+    process->parent_pid = current_process()->pid;
+
+    copy_fd(file, process, current_process(), flags);
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
@@ -397,9 +482,13 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, u64
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
 
-    /// TODO: cast args, env
+    /// TODO: cast env
+    int argc;
+    char *argv;
+    cast_args(process, args, &argc, &argv);
 
-    arch::task::create_thread(thd, (void *)start_func, arg0, (u64)args, (u64)env, (u64)exec_info.entry_start_address);
+    arch::task::create_thread(thd, (void *)befor_run_process, (u64)start_func, (u64)argc, (u64)argv,
+                              (u64)exec_info.entry_start_address);
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
@@ -420,35 +509,7 @@ process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t 
         return nullptr;
 
     process->parent_pid = current_process()->pid;
-
-    auto old_ft = current_process()->res_table.get_file_table();
-    auto new_ft = process->res_table.get_file_table();
-
-    if (unlikely(flags & create_process_flags::no_shared_root))
-        new_ft->root = fs::vfs::global_root;
-    else
-        new_ft->root = old_ft->root;
-
-    new_ft->current = old_ft->current;
-
-    if (!(flags & create_process_flags::no_shared_stdin))
-        new_ft->file_map[0] = old_ft->file_map[0];
-    else
-        new_ft->file_map[0] = nullptr;
-
-    if (!(flags & create_process_flags::no_shared_stdout))
-        new_ft->file_map[1] = old_ft->file_map[1];
-    else
-        new_ft->file_map[1] = nullptr;
-
-    if (!(flags & create_process_flags::no_shared_stderror))
-        new_ft->file_map[2] = old_ft->file_map[2];
-    else
-        new_ft->file_map[2] = nullptr;
-
-    new_ft->id_gen.tag(0);
-    new_ft->id_gen.tag(1);
-    new_ft->id_gen.tag(2);
+    copy_fd(nullptr, process, current_process(), flags);
 
     /// create thread
     thread_t *thd = new_thread(process);

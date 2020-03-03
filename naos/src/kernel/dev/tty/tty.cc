@@ -64,8 +64,9 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
         }
         char ch;
         buffer.read((byte *)&ch);
-        if (ch == '\n')
+        if (ch == '\n') // keep \n
         {
+            data[i++] = (byte)ch;
             line_count--;
             return i;
         }

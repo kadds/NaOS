@@ -19,15 +19,23 @@ int strcmp(const char *str1, const char *str2)
 int strcopy(char *dst, const char *src, int max_len)
 {
     int i = 0;
-    while (*src != 0 && i++ < max_len)
+    do
+    {
         *dst++ = *src++;
-    return i;
+    } while (*src != 0 && i++ < max_len);
+
+    return i - 1;
 }
 
-void strcopy(char *dst, const char *src)
+int strcopy(char *dst, const char *src)
 {
-    while (*src != 0)
+    const char *s = src;
+    do
+    {
         *dst++ = *src++;
+    } while (*src != 0);
+
+    return src - s - 1;
 }
 
 int strlen(const char *str)
