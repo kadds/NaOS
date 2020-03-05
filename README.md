@@ -11,7 +11,7 @@ NaOS runs on Intel / AMD modern processors.
 View [Features](./FEATURES.MD) .
 
 ## Preview
-![preview1](https://github.com/kadds/images/raw/master/naos/view1.gif)
+![preview1](https://github.com/kadds/images/raw/master/naos/view1.apng)
 
 ## Quick Start  
 
