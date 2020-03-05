@@ -21,7 +21,7 @@ struct mutex_t
     {
         while (!lock_m.test_and_set())
         {
-            wait_queue.do_wait(mutex_func, (u64)this, task::wait_context_type::uninterruptible);
+            wait_queue.do_wait(mutex_func, (u64)this);
         };
     }
 

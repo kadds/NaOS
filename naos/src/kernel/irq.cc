@@ -102,7 +102,7 @@ bool wakeup_condition(u64 user_data)
 
 void wakeup_soft_irq_daemon()
 {
-    cpu::current().get_soft_irq_wait_queue()->do_wait(wakeup_condition, 0, task::wait_context_type::uninterruptible);
+    cpu::current().get_soft_irq_wait_queue()->do_wait(wakeup_condition, 0);
     do_soft_irq();
 }
 

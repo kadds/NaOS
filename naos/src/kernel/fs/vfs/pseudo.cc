@@ -28,7 +28,7 @@ i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
             if (flags & rw_flags::no_block)
                 return -1;
             wait_queue.do_wake_up();
-            wait_queue.do_wait(pipe_write_func, (u64)this, task::wait_context_type::uninterruptible);
+            wait_queue.do_wait(pipe_write_func, (u64)this);
         }
         buffer.write_with() = data[i];
     }
@@ -49,7 +49,7 @@ i64 pseudo_pipe_t::read(byte *data, u64 max_size, flag_t flags)
             if (flags & rw_flags::no_block)
                 return -1;
             wait_queue.do_wake_up();
-            wait_queue.do_wait(pipe_read_func, (u64)this, task::wait_context_type::uninterruptible);
+            wait_queue.do_wait(pipe_read_func, (u64)this);
         }
         buffer.read(&data[i]);
     }

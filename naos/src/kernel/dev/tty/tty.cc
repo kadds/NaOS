@@ -57,7 +57,7 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
         {
             return -1;
         }
-        wait_queue.do_wait(tty_read_func, (u64)this, task::wait_context_type::interruptable);
+        wait_queue.do_wait(tty_read_func, (u64)this);
     }
     for (u64 i = 0; i < max_size;)
     {
@@ -83,7 +83,7 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
                 if (!ok)
                     return -1;
             }
-            wait_queue.do_wait(tty_read_func, (u64)this, task::wait_context_type::interruptable);
+            wait_queue.do_wait(tty_read_func, (u64)this);
         }
         char ch;
         buffer.read((byte *)&ch);

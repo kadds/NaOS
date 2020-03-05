@@ -83,15 +83,15 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
             }
             if (k == key::c && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
-                task::find_pid(1);
-                /// TODO: kill front task
+                /// send sigint
+                task::find_pid(1)->signal_pack.set(task::signal::sigint, 0, 0, 0);
             }
             else if (k == key::d && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
-                /// TODO: send EOF
                 tty->send_EOF();
             }
-            else if (key_char_table[(u8)k] != 0)
+
+            if (key_char_table[(u8)k] != 0)
             {
                 byte d;
                 if (is_key_down(key::left_shift) || is_key_down(key::right_shift))
@@ -232,7 +232,7 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
         if (!request.status.io_is_completion && !mreq.status.io_is_completion)
         {
-            input_wait_queue.do_wait(wait_condition, 0, task::wait_context_type::uninterruptible);
+            input_wait_queue.do_wait(wait_condition, 0);
         }
         print_keyboard(request.result, request.status, &request, input_tty);
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);

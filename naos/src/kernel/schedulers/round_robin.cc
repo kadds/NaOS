@@ -54,7 +54,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
     uctx::UninterruptibleContext icu;
 
-    if (state == thread_state::interruptable || state == thread_state::uninterruptible)
+    if (state == thread_state::stop)
     {
         if (thread->state == thread_state::ready)
         {
@@ -69,23 +69,20 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         }
         else if (thread->state == thread_state::running)
         {
-            if (state == thread_state::interruptable)
-                thread->attributes |= thread_attributes::block_intr | thread_attributes::need_schedule;
-            else
-                thread->attributes |= thread_attributes::block_unintr | thread_attributes::need_schedule;
+            thread->attributes |= thread_attributes::block_to_stop | thread_attributes::need_schedule;
             return;
         }
     }
     else if (state == thread_state::ready)
     {
-        if (thread->state == thread_state::uninterruptible || thread->state == thread_state::interruptable)
+        if (thread->state == thread_state::stop)
         {
             auto it = l->block_threads.find(thread);
             if (it != l->block_threads.end())
             {
                 thread->state = state;
                 l->block_threads.remove(it);
-                thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
+                thread->attributes &= ~(thread_attributes::block_to_stop);
                 l->runable_list.push_back(thread);
                 return;
             }
@@ -97,14 +94,9 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     }
     else if (state == thread_state::sched_switch_to_ready)
     {
-        if (thread->attributes & thread_attributes::block_intr)
+        if (thread->attributes & thread_attributes::block_to_stop)
         {
-            thread->state = thread_state::interruptable;
-            l->block_threads.push_back(thread);
-        }
-        else if (thread->attributes & thread_attributes::block_unintr)
-        {
-            thread->state = thread_state::uninterruptible;
+            thread->state = thread_state::stop;
             l->block_threads.push_back(thread);
         }
         else
@@ -138,7 +130,7 @@ void round_robin_scheduler::on_migrate(thread_t *thread)
 
     if (thread->state == thread_state::ready)
         l->runable_list.push_back(thread);
-    else if (thread->state == thread_state::interruptable || thread->state == thread_state::uninterruptible)
+    else if (thread->state == thread_state::stop)
         l->block_threads.push_back(thread);
     else
         trace::panic("Unknown thread state when migrate(RR). state: ", (u64)thread->state);
@@ -190,7 +182,7 @@ bool round_robin_scheduler::schedule()
             {
                 rr->rest_span = calc_span(cur);
             }
-            if (cur->attributes & thread_attributes::block_unintr || cur->attributes & thread_attributes::block_intr)
+            if (cur->attributes & thread_attributes::block_to_stop)
                 return false;
             cur->attributes &= ~thread_attributes::need_schedule;
             return true;

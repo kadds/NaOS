@@ -29,7 +29,7 @@ struct semaphore_t
         {
             while (lock_res <= 0)
             {
-                wait_queue.do_wait(sp_condition, (u64)this, task::wait_context_type::uninterruptible);
+                wait_queue.do_wait(sp_condition, (u64)this);
             }
             exp = lock_res;
         } while (!lock_res.compare_exchange_strong(exp, exp - 1, std::memory_order_acquire));

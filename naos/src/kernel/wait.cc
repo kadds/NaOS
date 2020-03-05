@@ -5,21 +5,11 @@
 namespace task
 {
 
-bool wait_queue_t::do_wait(condition_func condition, u64 user_data, wait_context_type wct)
+bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
 {
     if (condition(user_data))
         return true;
-    thread_state state;
-    if (wct == wait_context_type::interruptable)
-    {
-        state = thread_state::interruptable;
-    }
-    else if (wct == wait_context_type::uninterruptible)
-    {
-        state = thread_state::uninterruptible;
-    }
-    else
-        trace::panic("wait context type is unknown.");
+    thread_state state = thread_state::stop;
 
     uctx::UninterruptibleContext icu;
     {

@@ -131,14 +131,14 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             thread->state = thread_state::ready;
             return;
         }
-        if (thread->state == thread_state::uninterruptible || thread->state == thread_state::interruptable)
+        if (thread->state == thread_state::stop)
         {
             auto node = task_list->block_list.find(thread);
             if (node != task_list->block_list.end())
             {
                 thread->state = state;
                 task_list->block_list.remove(node);
-                thread->attributes &= ~(thread_attributes::block_unintr | thread_attributes::block_intr);
+                thread->attributes &= ~(thread_attributes::block_to_stop);
                 task_list->runable_list.insert(cfs_thread_t(thread));
                 return;
             }
@@ -148,14 +148,11 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             return;
         }
     }
-    else if (state == thread_state::interruptable || state == thread_state::uninterruptible)
+    else if (state == thread_state::stop)
     {
         if (thread->state == thread_state::running)
         {
-            if (state == thread_state::interruptable)
-                thread->attributes |= thread_attributes::block_intr | thread_attributes::need_schedule;
-            else
-                thread->attributes |= thread_attributes::block_unintr | thread_attributes::need_schedule;
+            thread->attributes |= thread_attributes::block_to_stop | thread_attributes::need_schedule;
 
             return;
         }
@@ -170,8 +167,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
                 return;
             }
         }
-        else if (thread->state == task::thread_state::interruptable ||
-                 thread->state == task::thread_state::uninterruptible)
+        else if (thread->state == task::thread_state::stop)
         {
             return;
         }
@@ -184,14 +180,9 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             return;
         }
 
-        if (thread->attributes & thread_attributes::block_intr)
+        if (thread->attributes & thread_attributes::block_to_stop)
         {
-            thread->state = thread_state::interruptable;
-            task_list->block_list.push_back(thread);
-        }
-        else if (thread->attributes & thread_attributes::block_unintr)
-        {
-            thread->state = thread_state::uninterruptible;
+            thread->state = thread_state::stop;
             task_list->block_list.push_back(thread);
         }
         else
@@ -219,7 +210,7 @@ void completely_fair_scheduler::on_migrate(thread_t *thread)
     thread->cpuid = cpu::current().id();
     if (thread->state == thread_state::ready)
         task_list->runable_list.insert(cfs_thread_t(thread));
-    else if (thread->state == thread_state::interruptable || thread->state == thread_state::uninterruptible)
+    else if (thread->state == thread_state::stop)
         task_list->block_list.push_back(thread);
     else
         trace::panic("Unknown thread state when migrate(CFS). state: ", (u64)thread->state);

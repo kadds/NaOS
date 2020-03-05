@@ -550,7 +550,7 @@ void do_sleep(u64 milliseconds)
     if (milliseconds != 0)
     {
         timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
-        scheduler::update_state(current(), thread_state::interruptable);
+        scheduler::update_state(current(), thread_state::stop);
     }
 }
 
@@ -612,7 +612,7 @@ u64 wait_process(process_t *process, i64 &ret)
     uctx::UninterruptibleContext icu;
 
     process->wait_counter++;
-    process->wait_queue.do_wait(wait_process_exit, (u64)process, wait_context_type::interruptable);
+    process->wait_queue.do_wait(wait_process_exit, (u64)process);
     ret = (i64)process->ret_val;
     process->wait_counter--;
     if (process->wait_counter == 0)
@@ -721,7 +721,7 @@ u64 join_thread(thread_t *thd, i64 &ret)
         return 4;
     uctx::UninterruptibleContext icu;
     thd->wait_counter++;
-    thd->wait_queue.do_wait(wait_exit, (u64)thd, wait_context_type::interruptable);
+    thd->wait_queue.do_wait(wait_exit, (u64)thd);
 
     ret = (i64)thd->user_stack_top;
     thd->wait_counter--;
@@ -733,7 +733,7 @@ u64 join_thread(thread_t *thd, i64 &ret)
     return 0;
 }
 
-void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::uninterruptible); }
+void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::stop); }
 
 void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
 

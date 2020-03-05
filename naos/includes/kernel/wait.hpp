@@ -4,11 +4,6 @@
 #include "util/linked_list.hpp"
 namespace task
 {
-enum class wait_context_type : u32
-{
-    interruptable,
-    uninterruptible,
-};
 
 typedef bool (*condition_func)(u64 user_data);
 struct thread_t;
@@ -44,13 +39,11 @@ struct wait_queue_t
     ///
     /// \brief wait current task for condition at the wait queue
     ///
-    /// \param queue the task save to
     /// \param condition the condition
     /// \param user_data the condition user data pass to
-    /// \param wct wait context type
     ///
     /// \return bool false: wait confition check failed, maybe interrupt by signal. true: ok
-    bool do_wait(condition_func condition, u64 user_data, wait_context_type wct);
+    bool do_wait(condition_func condition, u64 user_data);
 
     ///
     /// \brief try wake up task at queue

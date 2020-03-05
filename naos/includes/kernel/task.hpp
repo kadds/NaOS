@@ -71,11 +71,9 @@ struct process_t
 
 enum class thread_state : u8
 {
-    ready = 0,       ///< Can schedule
-    running,         ///< Running at a CPU
-    interruptable,   ///< Sleep
-    uninterruptible, ///< Uninterruptible sleep
-    stop,            ///< Can't reschedule
+    ready = 0, ///< Can schedule
+    running,   ///< Running at a CPU
+    stop,      ///< Can't reschedule
     destroy,
     sched_switch_to_ready, ///< the task is interrupted by realtime task or switch to next scheduler
 };
@@ -85,8 +83,7 @@ namespace thread_attributes
 enum attributes : flag_t
 {
     need_schedule = 1,
-    block_unintr = 2,
-    block_intr = 4,
+    block_to_stop = 4,
     detached = 8,
     main = 16,
     real_time = 32,

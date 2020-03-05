@@ -43,18 +43,17 @@ signal_func_t default_signal_handler[max_signal_count] = {
 
 void signal_pack_t::set(signal_num_t num, i64 error, i64 code, i64 status)
 {
-    if (!masks.is_ignore(num))
+    thread_t *t = current();
+    if (unlikely(events.size() > 1024))
+        return;
+    signal_info_t info(num, error, code, t->process->pid, t->tid, status);
+    if (!masks.is_valid(num))
     {
-        sig_pending = true;
-        thread_t *t = current();
-        if (unlikely(events.size() > 1024))
-            return;
-        signal_info_t info(num, error, code, t->process->pid, t->tid, status);
-        if (!masks.is_valid(num))
-        {
-            default_signal_handler[num](num, &info);
-        }
-        else
+        default_signal_handler[num](num, &info);
+    }
+    else
+    {
+        if (!masks.is_ignore(num))
         {
             events.push_back(info);
             wait_queue.do_wake_up();
@@ -78,7 +77,7 @@ void signal_pack_t::wait(signal_info_t *info)
             }
             return false;
         },
-        (u64)this, task::wait_context_type::uninterruptible);
+        (u64)this);
 
     auto &mask = this->get_mask();
     auto &ev = this->get_events();
