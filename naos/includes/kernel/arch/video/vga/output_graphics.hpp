@@ -53,6 +53,7 @@ void draw_line(u64 x, u64 y, u64 color);
 void draw_rectangle(const rectangle &rect, u64 color);
 void draw_pixel(u64 px, u64 py, u64 color);
 void draw_text(u64 px, u64 py, const char *text);
+void draw_placeholder(cursor_t &cur, u32 color);
 
 void flush(byte *vraw);
 } // namespace arch::device::vga::graphics

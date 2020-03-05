@@ -74,12 +74,15 @@ void scroll(cursor_t &cur, i32 n)
 }
 void move_pen(cursor_t &cur, i32 x, i32 y)
 {
-    cur.py += y;
-    cur.px += x;
-    if (cur.px >= text_count_per_line)
+    if (cur.px + x >= text_count_per_line)
     {
         cur.px = 0;
         cur.py++;
+    }
+    else
+    {
+        cur.py += y;
+        cur.px += x;
     }
     if (cur.py >= text_count_vertical)
         scroll(cur, cur.py - text_count_vertical + 1);
@@ -219,7 +222,24 @@ void putchar(cursor_t &cur, char ch)
                 cur.px--;
             else
                 return;
-            font_data = cur_font->get_unicode(' ');
+
+            u32 *v_start = get_video_line_start(cur) + cur.px * font_width;
+
+            for (u32 y = 0; y < font_height; y++)
+            {
+                v_start += width;
+                if ((byte *)v_start >= video_end)
+                {
+                    v_start = (u32 *)video_addr + cur.px * font_width;
+                }
+                for (u32 x = 0; x < font_width * 2; x++)
+                {
+                    *(v_start + x) = 0;
+                }
+            }
+            dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height,
+                                         cur.px * font_width + font_width * 2, cur.py * font_height + font_height);
+            return;
         }
         else
         {
@@ -248,15 +268,34 @@ void putchar(cursor_t &cur, char ch)
 
         dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height, cur.px * font_width + font_width,
                                      cur.py * font_height + font_height);
-        if (ch != '\b')
-        {
-            move_pen(cur, 1, 0);
-        }
+
+        move_pen(cur, 1, 0);
     }
     else
     {
         move_pen(cur, -cur.px, 1);
     }
+}
+
+void draw_placeholder(cursor_t &cur, u32 color)
+{
+    u32 *v_start = get_video_line_start(cur) + cur.px * font_width;
+
+    for (u32 y = 0; y < font_height; y++)
+    {
+        v_start += width;
+        if ((byte *)v_start >= video_end)
+        {
+            v_start = (u32 *)video_addr + cur.px * font_width;
+        }
+        for (u32 x = 0; x < font_width; x++)
+        {
+            *(v_start + x) = color;
+        }
+    }
+
+    dirty_rectangle += rectangle(cur.px * font_width, cur.py * font_height, cur.px * font_width + font_width,
+                                 cur.py * font_height + font_height);
 }
 
 void flush(byte *vraw)

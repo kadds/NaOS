@@ -17,6 +17,7 @@ byte *vram_addr;
 byte *backbuffer_addr;
 bool is_auto_flush = false;
 cursor_t cursor;
+u64 placeholder_times;
 
 void init()
 {
@@ -24,7 +25,7 @@ void init()
     using namespace trace;
     bool is_graphics_mode = args->fb_type == 1;
     backbuffer_addr = nullptr;
-
+    placeholder_times = 0;
     if (!is_graphics_mode || args->fb_addr == 0)
     {
         vram_addr = nullptr;
@@ -146,6 +147,20 @@ void flush_timer(u64 dt, u64 ud)
 {
     if (likely(vram_addr != nullptr))
     {
+        constexpr u64 speed = 64;
+        placeholder_times++;
+        if ((placeholder_times % speed) == 1)
+        {
+            auto tk = placeholder_times / speed;
+            if (tk % 2)
+            {
+                graphics::draw_placeholder(cursor, 0x0);
+            }
+            else
+            {
+                graphics::draw_placeholder(cursor, 0xBABABA);
+            }
+        }
         flush_kbuffer();
         timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
@@ -179,10 +194,16 @@ u64 putstring(const char *str, u64 max_len)
 
     while (*str != 0 && i < max_len)
     {
+        if (*str == '\n')
+        {
+            graphics::draw_placeholder(cursor, 0);
+        }
         graphics::putchar(cursor, *str);
         str++;
         i++;
     }
+    if (likely(i > 0))
+        placeholder_times = 0;
 
     if (unlikely(!is_auto_flush))
         flush();
