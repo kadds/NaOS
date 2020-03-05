@@ -16,6 +16,12 @@ class clock_event;
 namespace cpu
 {
 typedef void (*call_cpu_func_t)(u64 user_data);
+typedef void (*task_func)(u64);
+struct next_schedule_microtask_data_t
+{
+    task_func func;
+    u64 data;
+};
 
 struct load_data_t
 {
@@ -51,9 +57,13 @@ class cpu_data_t
 
     task::wait_queue_t *soft_irq_wait_queue;
 
+    util::linked_list<next_schedule_microtask_data_t> schedule_microtask_queue;
+    lock::spinlock_t microtask_lock;
+
   public:
     friend void init();
-    cpu_data_t() = default;
+    cpu_data_t()
+        : schedule_microtask_queue(memory::KernelCommonAllocatorV){};
     cpu_data_t(const cpu_data_t &) = delete;
     cpu_data_t &operator=(const cpu_data_t &) = delete;
 
@@ -102,6 +112,9 @@ class cpu_data_t
     lock::spinlock_t &cpu_call_lock() { return call_lock; }
 
     task::wait_queue_t *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
+
+    util::linked_list<next_schedule_microtask_data_t> &get_microtask_queue() { return schedule_microtask_queue; }
+    lock::spinlock_t &get_microtask_lock() { return microtask_lock; }
 };
 cpu_data_t &current();
 void init();

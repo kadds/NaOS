@@ -1,5 +1,6 @@
 #include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/defines.hpp"
+#include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 
 namespace dev::tty
@@ -10,7 +11,7 @@ bool tty_read_func(u64 data)
 {
     auto *tty = (tty_pseudo_t *)data;
     auto buffer = &tty->buffer;
-    return tty->eof_count > 0 || tty->line_count > 0 && !buffer->is_emtpy();
+    return tty->eof_count > 0 || (tty->line_count > 0 && !buffer->is_emtpy());
 }
 
 /// print to screen
@@ -104,6 +105,10 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
     return max_size;
 }
 
-void tty_pseudo_t::close() { wait_queue.do_wake_up(); };
+void tty_pseudo_t::close()
+{
+    wait_queue.remove(task::current_process());
+    wait_queue.do_wake_up();
+};
 
 } // namespace dev::tty

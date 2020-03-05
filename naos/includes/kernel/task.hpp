@@ -56,11 +56,8 @@ struct process_t
     wait_queue_t wait_queue;
     std::atomic_int wait_counter;
 
-    union
-    {
-        thread_t *main_thread;
-        u64 ret_val;
-    };
+    thread_t *main_thread;
+    u64 ret_val;
 
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
@@ -87,7 +84,7 @@ enum attributes : flag_t
     detached = 8,
     main = 16,
     real_time = 32,
-    remove = 64,
+    on_migrate = 128,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -157,6 +154,8 @@ struct thread_t
     wait_queue_t wait_queue;
     std::atomic_int wait_counter;
     u64 error_code;
+    wait_queue_t *do_wait_queue_now;
+
     thread_t();
 };
 
@@ -206,33 +205,31 @@ void do_sleep(u64 milliseconds);
 
 NoReturn void do_exit(i64 value);
 
-void destroy_thread(thread_t *thread);
-void destroy_process(process_t *process);
-
 u64 wait_process(process_t *process, i64 &ret);
-
-void check_process(process_t *process);
-void check_thread(thread_t *thd);
 
 NoReturn void do_exit_thread(i64 ret);
 u64 detach_thread(thread_t *thd);
 u64 join_thread(thread_t *thd, i64 &ret);
 
-namespace thread_control_flags
+namespace exit_control_flags
 {
 enum : flag_t
 {
-    process = 1,
     core_dump = 2,
 };
 }
 
 void stop_thread(thread_t *thread, flag_t flags);
 void continue_thread(thread_t *thread, flag_t flags);
-void kill_thread(thread_t *thread, flag_t flags);
 
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);
+
+void exit_process(process_t *process, i64 ret, flag_t flags);
+
+process_t *get_init_process();
+
+void set_init_process(process_t *proc);
 
 inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
 inline process_t *current_process() { return current()->process; }

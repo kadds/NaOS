@@ -8,7 +8,7 @@ extern "C" void _start(int argc, char **argv)
     {
         int fd = open(argv[1], OPEN_MODE_READ, 0);
         if (fd < 0)
-            return;
+            exit(-1);
         input_fd = fd;
     }
     char data[1024];
@@ -17,5 +17,7 @@ extern "C" void _start(int argc, char **argv)
     {
         write(output_fd, data, read_size, 0);
     }
+    if (input_fd != STDIN)
+        close(input_fd);
     exit(0);
 }

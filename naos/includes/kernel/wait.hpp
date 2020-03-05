@@ -4,6 +4,7 @@
 #include "util/linked_list.hpp"
 namespace task
 {
+struct process_t;
 
 typedef bool (*condition_func)(u64 user_data);
 struct thread_t;
@@ -51,6 +52,10 @@ struct wait_queue_t
     /// \param queue the queue to wake up
     /// \param count maximum number of tasks to wake up
     u64 do_wake_up(u64 count = 0xFFFFFFFFFFFFFFFFUL);
+
+    void remove(thread_t *thread);
+
+    void remove(process_t *process);
 };
 
 } // namespace task

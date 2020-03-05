@@ -180,6 +180,7 @@ void read_test_message_queue(long msg_id)
         {
             if (read_msg_queue(msg_id, 2, &ret, sizeof(ret), MSGQUEUE_FLAGS_NOBLOCK) == sizeof(ret))
             {
+                print("message queue thread test end.");
                 exit_thread(ret);
             }
             print("read from message queue failed. \n");

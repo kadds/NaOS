@@ -23,11 +23,11 @@ std::atomic_bool reschedule_ready;
 irq::request_result reschedule_func(const void *regs, u64 data, u64 user_data)
 {
     task::thread_t *thd = thread_to_reschedule;
-    // trace::debug("reschedule task cpu ", thd->cpuid, " to cpu ", cpu::current().id());
 
     if (!reschedule_ready)
     {
         thd->scheduler->on_migrate(thd);
+        thd->attributes &= ~(thread_attributes::on_migrate);
     }
     reschedule_ready = true;
     return irq::request_result::ok;
@@ -39,7 +39,12 @@ bool reschedule_task_push(thread_t *task, u32 cpuid)
     {
         if (!reschedule_ready.exchange(false))
             return false;
+        // trace::debug("reschedule task cpu ", task->cpuid, " to cpu ", cpuid);
+
         thread_to_reschedule = task;
+        task->cpuid = cpuid;
+        task->attributes |= thread_attributes::on_migrate;
+
         SMP::reschedule_cpu(cpuid);
         return true;
     }
@@ -85,8 +90,6 @@ void add(thread_t *thread, scheduler_class scher)
     thread->scheduler->add(thread);
 }
 
-void remove(thread_t *thread) { thread->attributes |= thread_attributes::remove | thread_attributes::need_schedule; }
-
 struct update_state_ipi_param
 {
     thread_t *thread;
@@ -108,6 +111,8 @@ void update_state_ipi(u64 data)
 
 void update_state(thread_t *thread, thread_state state)
 {
+    kassert(thread->state != state, "BUG check failed");
+
     if (thread->cpuid == cpu::current().id())
     {
         thread->scheduler->update_state(thread, state);
@@ -117,6 +122,52 @@ void update_state(thread_t *thread, thread_state state)
         SMP::call_cpu(thread->cpuid, update_state_ipi,
                       (u64)memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state));
         // send IPI
+    }
+}
+
+struct remove_task__ipi_param
+{
+    thread_t *thread;
+    remove_func func;
+    u64 data;
+    remove_task__ipi_param(thread_t *thread, remove_func func, u64 data)
+        : thread(thread)
+        , func(func)
+        , data(data)
+    {
+    }
+};
+
+void remove_task_ipi(u64 data)
+{
+    remove_task__ipi_param *p = (remove_task__ipi_param *)data;
+    p->thread->scheduler->remove(p->thread);
+    auto d = p->data;
+    auto func = p->func;
+    memory::Delete<>(memory::KernelCommonAllocatorV, p);
+    func(d);
+}
+
+void remove(thread_t *thread, remove_func func, u64 user_data)
+{
+    if (thread->attributes & thread_attributes::on_migrate)
+        cpu_pause();
+
+    if (thread->cpuid == cpu::current().id())
+    {
+        thread->scheduler->update_state(thread, thread_state::stop);
+        auto &lock = cpu::current().get_microtask_lock();
+        cpu::next_schedule_microtask_data_t data;
+        data.data = user_data;
+        data.func = func;
+        uctx::RawSpinLockUninterruptibleContext icu(lock);
+        cpu::current().get_microtask_queue().push_back(data);
+    }
+    else
+    {
+        SMP::call_cpu(
+            thread->cpuid, remove_task_ipi,
+            (u64)memory::New<remove_task__ipi_param>(memory::KernelCommonAllocatorV, thread, func, user_data));
     }
 }
 
@@ -134,6 +185,20 @@ void schedule()
     {
         normal_schedulers->schedule();
     }
+    auto &lock = cpu::current().get_microtask_lock();
+    uctx::RawSpinLockUninterruptibleController icu(lock);
+    icu.begin();
+    auto &cpu = cpu::current();
+    auto &q = cpu.get_microtask_queue();
+    while (!q.empty())
+    {
+        auto data = cpu::current().get_microtask_queue().pop_back();
+        icu.end();
+        data.func(data.data);
+        icu.begin();
+    }
+    icu.end();
+
     task::enable_preempt();
 }
 

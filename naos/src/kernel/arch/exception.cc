@@ -66,66 +66,67 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         {
             task->register_info->trap_vector = regs->vector;
             auto &pack = task->process->signal_pack;
+            auto p = task->process;
             switch (regs->vector)
             {
                 case 0:
-                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigfpe, extra_data, regs->error_code, 0);
                     break;
                 case 1:
-                    pack.set(::task::signal::sigtrap, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigtrap, extra_data, regs->error_code, 0);
                     break;
                 case 3:
-                    pack.set(::task::signal::sigtrap, extra_data, regs->error_code, 1);
+                    pack.send(p, ::task::signal::sigtrap, extra_data, regs->error_code, 1);
                     break;
                 case 4:
-                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 1);
+                    pack.send(p, ::task::signal::sigfpe, extra_data, regs->error_code, 1);
                     break;
                 case 5:
-                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigfpe, extra_data, regs->error_code, 0);
                     break;
                 case 6:
-                    pack.set(::task::signal::sigill, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigill, extra_data, regs->error_code, 0);
                     break;
                 case 7:
-                    pack.set(::task::signal::sigbus, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigbus, extra_data, regs->error_code, 0);
                     break;
                 case 8:
-                    pack.set(::task::signal::sigbus, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigbus, extra_data, regs->error_code, 0);
                     break;
                 case 9:
-                    pack.set(::task::signal::sigstkflt, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigstkflt, extra_data, regs->error_code, 0);
                     break;
                 case 10:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 2);
                     break;
                 case 11:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 2);
                     break;
                 case 12:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 2);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 2);
                     break;
                 case 13:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 0);
                     break;
                 case 14:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 1);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 1);
                     break;
                 case 16:
-                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigfpe, extra_data, regs->error_code, 0);
                     break;
                 case 17:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 0);
                     break;
                 case 18:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 0);
                     break;
                 case 19:
-                    pack.set(::task::signal::sigfpe, extra_data, regs->error_code, 1);
+                    pack.send(p, ::task::signal::sigfpe, extra_data, regs->error_code, 1);
                     break;
                 case 20:
                     break;
                 default:
-                    pack.set(::task::signal::sigsegv, extra_data, regs->error_code, 0);
+                    pack.send(p, ::task::signal::sigsegv, extra_data, regs->error_code, 0);
                     break;
             }
         }
@@ -135,7 +136,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             {
                 task->register_info->trap_vector = regs->vector;
             }
-            trace::panic_stack(regs, "Oops error at cpu ", cpu.get_id());
+            trace::panic_stack(regs, "Kernel Oops ->");
         }
     }
 

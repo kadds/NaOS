@@ -9,6 +9,7 @@ const char help_msg[] = "some commands:\n"
                         "  \e[32mrmdir\e[0m path  remove directory\n"
                         "  \e[32mhelp\e[0m  show this info\n"
                         "enter process name to startup process.\n";
+long front_pid = 0;
 
 int start_with(const char *str, const char *prefix)
 {
@@ -130,6 +131,7 @@ void startup_process(char *cmd)
     }
     else
     {
+        front_pid = pid;
         char output_buffer[100];
         long ret;
         wait_process(pid, &ret);
@@ -137,6 +139,22 @@ void startup_process(char *cmd)
         itoa(ret, output_buffer, sizeof(output_buffer));
         print(output_buffer);
         print("\n");
+    }
+}
+
+/// forward SIGINT
+void signal_event()
+{
+    int num;
+    sig_info_t info;
+    while (1)
+    {
+        sigwait(&num, &info);
+        sigtarget_t target;
+        target.id = front_pid;
+        target.flags = SIGTGT_PROC;
+        if (target.id)
+            sigsend(&target, SIGINT, nullptr);
     }
 }
 
@@ -151,6 +169,16 @@ extern "C" void _start(int argc, char **argv)
             sleep(100000000);
         }
     }
+    { /// set signal
+        sig_mask_t mask;
+        sig_mask_init(mask);
+        sig_mask_set(mask, SIGINT);
+
+        sigmask(SIGOPT_OR, &mask, nullptr, nullptr);
+        auto sig_id = create_thread((void *)signal_event, 0, 0);
+        detach(sig_id);
+    }
+
     char *cmd = (char *)ptr;
     char output_buffer[256];
 

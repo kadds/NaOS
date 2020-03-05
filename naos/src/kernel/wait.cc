@@ -21,6 +21,7 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
     {
         auto thd = current();
         thd->attributes |= task::thread_attributes::need_schedule;
+        thd->do_wait_queue_now = this;
         scheduler::update_state(thd, state);
         scheduler::schedule();
         if (condition(user_data))
@@ -29,8 +30,11 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
     }
     {
         uctx::RawSpinLockContext ctx(lock);
-        list.remove(list.find(wait_context_t(current(), condition, user_data)));
+        auto it = list.find(wait_context_t(current(), condition, user_data));
+        list.remove(it);
+        current()->do_wait_queue_now = nullptr;
     }
+
     return condition(user_data);
 }
 
@@ -50,6 +54,34 @@ u64 wait_queue_t::do_wake_up(u64 count)
             ++it;
     }
     return i;
+}
+
+void wait_queue_t::remove(thread_t *thread)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(lock);
+    for (auto it = list.begin(); it != list.end();)
+    {
+        if (thread == it->thd)
+        {
+            it = list.remove(it);
+        }
+        else
+            ++it;
+    }
+}
+
+void wait_queue_t::remove(process_t *process)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(lock);
+    for (auto it = list.begin(); it != list.end();)
+    {
+        if (process == it->thd->process)
+        {
+            it = list.remove(it);
+        }
+        else
+            ++it;
+    }
 }
 
 } // namespace task

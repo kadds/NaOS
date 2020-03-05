@@ -118,7 +118,7 @@ void slab_group::free(void *ptr)
         {
             auto &e = **it;
             u64 index = ((char *)ptr - e.data_ptr) / obj_align_size;
-            kassert(e.bitmap.get(index), "Not an assigned address.");
+            kassert(e.bitmap.get(index), "Not an assigned address or double free.");
             e.bitmap.clean(index);
             e.rest++;
             all_obj_used--;

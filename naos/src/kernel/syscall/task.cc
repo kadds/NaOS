@@ -130,10 +130,12 @@ i64 raise(task::signal_num_t num, sig_info_t *info)
 {
     if (info != nullptr && !is_user_space_pointer(info))
         return EPARAM;
+    auto proc = task::current_process();
+
     if (info)
-        task::current_process()->signal_pack.set(num, info->error, info->code, info->status);
+        proc->signal_pack.send(proc, num, info->error, info->code, info->status);
     else
-        task::current_process()->signal_pack.set(num, 0, 0, 0);
+        proc->signal_pack.send(proc, num, 0, 0, 0);
 
     return OK;
 }
@@ -146,8 +148,8 @@ struct target_t
 
 enum target_flags : flag_t
 {
-    send_to_group = 1,
-    send_to_process = 2,
+    send_to_process = 1,
+    send_to_group = 2,
 };
 
 u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
@@ -162,11 +164,10 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
         auto proc = task::find_pid(target->id);
         if (proc == nullptr)
             return ENOEXIST;
-
         if (info)
-            task::current_process()->signal_pack.set(num, info->error, info->code, info->status);
+            proc->signal_pack.send(proc, num, info->error, info->code, info->status);
         else
-            task::current_process()->signal_pack.set(num, 0, 0, 0);
+            proc->signal_pack.send(proc, num, 0, 0, 0);
     }
     else if (target->flags & send_to_group)
     {

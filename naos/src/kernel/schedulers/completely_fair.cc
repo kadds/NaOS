@@ -112,6 +112,10 @@ void completely_fair_scheduler::remove(thread_t *thread)
         {
             task_list->runable_list.remove(it);
         }
+        else
+        {
+            trace::panic("Can't find task ", thread->tid, " pid: ", thread->process->pid);
+        }
     }
 
     auto scher_data = get_schedule_data(thread);
@@ -246,11 +250,6 @@ bool completely_fair_scheduler::schedule()
 
         cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
 
-        if (cur->attributes & thread_attributes::remove)
-        {
-            cur->scheduler->remove(cur);
-        }
-
         cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
         thread_t *next = pick_available_task();
@@ -270,7 +269,7 @@ bool completely_fair_scheduler::schedule()
     }
 
     return has_task;
-} // namespace task::scheduler
+}
 
 void completely_fair_scheduler::schedule_tick()
 {

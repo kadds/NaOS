@@ -151,12 +151,17 @@ inline thread_t *new_thread(process_t *p)
 
 void delete_thread(thread_t *thd)
 {
+    kassert(thd->state == thread_state::destroy, "thread state check failed.");
+    if (thd->do_wait_queue_now)
+        thd->do_wait_queue_now->remove(thd);
+
     uctx::RawSpinLockUninterruptibleContext icu(thd->process->thread_list_lock);
 
     using arch::task::register_info_t;
 
     auto thd_list = ((thread_list_t *)thd->process->thread_list);
     thd_list->remove(thd_list->find(thd));
+
     if (likely((u64)thd->kernel_stack_top != 0))
         delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
 
@@ -174,6 +179,7 @@ process_t::process_t()
 thread_t::thread_t()
     : wait_queue(memory::KernelCommonAllocatorV)
     , wait_counter(0)
+    , do_wait_queue_now(nullptr)
 {
 }
 
@@ -264,10 +270,11 @@ void init()
         ft->id_gen.tag(0);
         ft->id_gen.tag(1);
         ft->id_gen.tag(2);
-
-        ft->file_map[0] = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
-        ft->file_map[1] = ft->file_map[0];
-        ft->file_map[2] = ft->file_map[0];
+        auto tty0 = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        ft->file_map[0] = tty0->clone();
+        ft->file_map[1] = tty0->clone();
+        ft->file_map[2] = tty0->clone();
+        tty0->close();
         is_init = true;
 
         bin_handle::init();
@@ -413,6 +420,8 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
         auto old_file = old_ft->file_map[0]->value;
         if (old_file)
             new_ft->file_map[0] = old_file->clone();
+        else
+            new_ft->file_map[0] = nullptr;
     }
     else
         new_ft->file_map[0] = nullptr;
@@ -422,6 +431,8 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
         auto old_file = old_ft->file_map[1]->value;
         if (old_file)
             new_ft->file_map[1] = old_file->clone();
+        else
+            new_ft->file_map[1] = nullptr;
     }
     else
         new_ft->file_map[1] = nullptr;
@@ -431,6 +442,8 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
         auto old_file = old_ft->file_map[2]->value;
         if (old_file)
             new_ft->file_map[2] = old_file->clone();
+        else
+            new_ft->file_map[2] = nullptr;
     }
     else
         new_ft->file_map[2] = nullptr;
@@ -478,7 +491,6 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, con
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
 
-    /// TODO: cast env
     int argc;
     char *argv;
     cast_args(process, args, &argc, &argv);
@@ -545,47 +557,101 @@ void sleep_callback_func(u64 pass, u64 data)
 void do_sleep(u64 milliseconds)
 {
     uctx::UninterruptibleContext icu;
-    current()->attributes |= task::thread_attributes::need_schedule;
 
     if (milliseconds != 0)
     {
         timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
         scheduler::update_state(current(), thread_state::stop);
     }
+    else
+    {
+        current()->attributes |= task::thread_attributes::need_schedule;
+    }
 }
 
-void exit_process(process_t *process, i64 ret)
+struct process_data_t
+{
+    thread_t *thd;
+    i64 ret;
+};
+
+void exit_process_inner(thread_t *thd, i64 ret)
+{
+    if (thd->state != thread_state::destroy)
+    {
+        process_data_t *data = memory::New<process_data_t>(memory::KernelCommonAllocatorV);
+        data->thd = thd;
+        data->ret = ret;
+
+        scheduler::remove(
+            thd,
+            [](u64 data) {
+                auto *dt = (process_data_t *)data;
+                auto ret = dt->ret;
+                auto process = dt->thd->process;
+                auto list = (thread_list_t *)process->thread_list;
+
+                dt->thd->user_stack_top = (void *)dt->ret;
+                dt->thd->state = thread_state::destroy;
+                dt->thd->wait_queue.do_wake_up();
+                delete_thread(dt->thd);
+
+                memory::Delete<>(memory::KernelCommonAllocatorV, dt);
+                uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
+                icu.begin();
+                if (!list->empty())
+                {
+                    auto thd = list->front();
+                    icu.end();
+                    exit_process_inner(thd, ret);
+                }
+                else
+                {
+                    icu.end();
+                    process->res_table.clear();
+                    process->attributes |= process_attributes::no_thread;
+                    process->wait_queue.do_wake_up();
+                }
+            },
+            (u64)data);
+    }
+}
+
+void exit_process(process_t *process, i64 ret, flag_t flags)
 {
     trace::debug("process ", process->pid, " exit with code ", ret);
-    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+    uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
-    for (auto thd : list)
-    {
-        // Just destroy all thread
-        if (thd->state == thread_state::stop || thd->state == thread_state::destroy)
-        {
-            thd->state = thread_state::destroy;
-        }
-        else
-        {
-            scheduler::remove(thd);
-        }
-    }
-    process->res_table.clear();
+
     process->ret_val = ret;
-    process->attributes |= process_attributes::no_thread;
-    process->wait_queue.do_wake_up();
+    icu.begin();
+    if (!list.empty())
+    {
+        auto thd = list.front();
+        icu.end();
+        exit_process_inner(thd, ret);
+    }
+    else
+    {
+        icu.end();
+        process->res_table.clear();
+        process->attributes |= process_attributes::no_thread;
+        process->wait_queue.do_wake_up();
+    }
 }
 
 void do_exit(i64 ret)
 {
     process_t *process = current_process();
-    exit_process(process, ret);
+    exit_process(process, ret, 0);
     thread_yield();
     trace::panic("Unreachable control flow.");
 }
 
-void destroy_process(process_t *process) { delete_process(process); }
+process_t *init_process = nullptr;
+process_t *get_init_process() { return init_process; }
+
+void set_init_process(process_t *proc) { init_process = proc; }
 
 void start_task_idle()
 {
@@ -618,73 +684,40 @@ u64 wait_process(process_t *process, i64 &ret)
     if (process->wait_counter == 0)
     {
         process->attributes |= process_attributes::destroy;
-        check_process(process);
+        delete_process(process);
     }
     return 0;
 }
 
-bool wait_exit(u64 user_data) { return ((thread_t *)user_data)->state == thread_state::stop; }
+bool wait_exit(u64 user_data) { return ((thread_t *)user_data)->state == thread_state::destroy; }
 
-void check_process(process_t *process)
-{
-    kassert(process != current_process(), "Invalid param thd");
-
-    if (process->attributes & process_attributes::destroy)
-    {
-        bool all_destroy = true;
-        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
-        auto list = ((thread_list_t *)process->thread_list);
-        /// TODO: shot down all thread which may running at other cpu
-        for (auto it = list->begin(); it != list->end();)
-        {
-            auto sub_thd = *it;
-            if (sub_thd->state == thread_state::destroy)
-            {
-                memory::Delete<>(register_info_t_allocator, sub_thd->register_info);
-                if (likely((u64)sub_thd->kernel_stack_top > memory::kernel_stack_size))
-                    delete_kernel_stack((void *)((u64)sub_thd->kernel_stack_top - memory::kernel_stack_size));
-                memory::Delete<>(thread_t_allocator, sub_thd);
-                it = list->remove(it);
-            }
-            else
-            {
-                all_destroy = false;
-                ++it;
-            }
-            // do_wake_up(&thd->wait_que); don't wake up
-        }
-        if (all_destroy)
-        {
-            destroy_process(process);
-        }
-    }
-}
-void check_thread(thread_t *thd)
-{
-    kassert(thd != current(), "Invalid param thd");
-    if (thd->state == thread_state::destroy)
-    {
-        delete_thread(thd);
-    }
-}
-
-/// TODO: exit other thread which is running
 void exit_thread(thread_t *thd, i64 ret)
 {
     trace::debug("exit thread ", thd->tid, " pid ", thd->process->pid, " code ", ret);
-    uctx::UninterruptibleContext icu;
-    thd->user_stack_top = (void *)ret;
-    thd->state = thread_state::stop;
-    scheduler::remove(thd);
-    if (thd->attributes & thread_attributes::detached)
+    struct data_t
     {
-        thd->state = thread_state::destroy;
-        check_thread(thd);
-    }
-    else
-    {
-        thd->wait_queue.do_wake_up();
-    }
+        thread_t *thd;
+        i64 ret;
+    };
+    data_t *data = memory::New<data_t>(memory::KernelCommonAllocatorV);
+    data->thd = thd;
+    data->ret = ret;
+    scheduler::remove(
+        thd,
+        [](u64 data) {
+            auto *dt = (data_t *)data;
+            dt->thd->user_stack_top = (void *)dt->ret;
+            dt->thd->state = thread_state::destroy;
+            if (dt->thd->attributes & thread_attributes::detached)
+            {
+                delete_thread(dt->thd);
+            }
+            else
+            {
+                dt->thd->wait_queue.do_wake_up();
+            }
+        },
+        (u64)data);
 }
 
 void do_exit_thread(i64 ret)
@@ -705,6 +738,7 @@ u64 detach_thread(thread_t *thd)
         return 2;
     if (thd->attributes & thread_attributes::main)
         return 4;
+
     thd->attributes |= thread_attributes::detached;
     return 0;
 }
@@ -727,8 +761,7 @@ u64 join_thread(thread_t *thd, i64 &ret)
     thd->wait_counter--;
     if (thd->wait_counter == 0)
     {
-        thd->state = thread_state::destroy;
-        check_thread(thd);
+        delete_thread(thd);
     }
     return 0;
 }
@@ -736,23 +769,6 @@ u64 join_thread(thread_t *thd, i64 &ret)
 void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::stop); }
 
 void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
-
-void kill_thread(thread_t *thread, flag_t flags)
-{
-    {
-
-        if (flags & thread_control_flags::process)
-        {
-            exit_process(thread->process, -1);
-        }
-        else
-        {
-            exit_thread(thread, -1);
-        }
-    }
-    thread_yield();
-    trace::panic("Unreachable control flow.");
-}
 
 process_t *find_pid(process_id pid)
 {

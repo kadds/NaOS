@@ -9,6 +9,7 @@
 namespace task
 {
 struct thread_t;
+struct process_t;
 
 using signal_num_t = u8;
 inline constexpr u64 max_signal_count = 64;
@@ -150,7 +151,7 @@ struct signal_info_t
     }
 };
 
-typedef void (*signal_func_t)(signal_num_t num, signal_info_t *info);
+typedef void (*signal_func_t)(process_t *, signal_info_t *info);
 
 extern signal_func_t default_signal_handler[];
 
@@ -168,7 +169,6 @@ struct signal_pack_t
 {
   private:
     signal_mask_t masks;
-    bool sig_pending = false;
 
     /// 32 - 63
     util::linked_list<signal_info_t> events;
@@ -182,11 +182,9 @@ struct signal_pack_t
     {
     }
 
-    void set(signal_num_t num, i64 error, i64 code, i64 status);
+    void send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status);
 
     signal_mask_t &get_mask() { return masks; }
-
-    bool is_set() { return sig_pending; }
 
     util::linked_list<signal_info_t> &get_events() { return events; }
 

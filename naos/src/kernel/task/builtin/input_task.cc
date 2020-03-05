@@ -81,17 +81,18 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
             {
                 set_key_switch_state(switchable_key::numlock, !get_key_switch_state(switchable_key::numlock));
             }
+
             if (k == key::c && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
                 /// send sigint
-                task::find_pid(1)->signal_pack.set(task::signal::sigint, 0, 0, 0);
+                auto proc = task::get_init_process();
+                proc->signal_pack.send(proc, task::signal::sigint, 0, 0, 0);
             }
             else if (k == key::d && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
                 tty->send_EOF();
             }
-
-            if (key_char_table[(u8)k] != 0)
+            else if (key_char_table[(u8)k] != 0)
             {
                 byte d;
                 if (is_key_down(key::left_shift) || is_key_down(key::right_shift))

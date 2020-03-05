@@ -20,6 +20,7 @@ void main()
     {
         auto p = task::create_kernel_process(builtin::softirq::main, 0, create_thread_flags::real_time_rr);
         trace::debug("softirqd created tid=", p->main_thread->tid);
+        kassert(p->pid == 1, "BUG check failed.");
         is_init = true;
         task::create_kernel_process(builtin::input::main, 0, create_thread_flags::real_time_rr);
 
@@ -28,9 +29,8 @@ void main()
         if (!file)
             trace::panic("Can't open init program");
 
-        task::create_process(file, init::main, 0, 0);
-
-        // fs::vfs::close(file);
+        set_init_process(task::create_process(file, init::main, 0, 0));
+        trace::debug("init process created pid=", get_init_process()->pid);
     }
     else
     {
@@ -38,6 +38,7 @@ void main()
         {
             cpu_pause();
         }
+        /// soft irq process
         auto t =
             task::create_thread(task::find_pid(1), builtin::softirq::main, 0, 0, 0, create_thread_flags::real_time_rr);
         trace::debug("softirqd created tid=", t->tid);
@@ -46,7 +47,7 @@ void main()
     task::thread_yield();
     while (1)
     {
-        kassert(arch::idt::is_enable(), "Bug check failed. interrupt disable");
+        kassert(arch::idt::is_enable(), "Bug check failed.");
         __asm__ __volatile__("pause\n\t" : : : "memory");
     }
 }

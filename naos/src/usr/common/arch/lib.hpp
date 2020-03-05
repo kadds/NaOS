@@ -153,7 +153,7 @@ static inline void sig_mask_clear(sig_mask_t &mask, int idx) { mask &= ~(1ul << 
 
 static inline bool sig_mask_get(sig_mask_t mask, int idx) { return mask & (1ul << idx); }
 
-SYS_CALL(41, int, sigput, sigtarget_t *target, int signum, sig_info_t *info)
+SYS_CALL(41, int, sigsend, sigtarget_t *target, int signum, sig_info_t *info)
 SYS_CALL(42, void, sigwait, int *num, sig_info_t *info)
 SYS_CALL(43, int, sigmask, int opt, sig_mask_t *valid, sig_mask_t *block, sig_mask_t *ignore)
 

@@ -32,19 +32,36 @@ void round_robin_scheduler::add(thread_t *thread)
     auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
 
     auto rr = memory::New<thread_data_rr_t>(memory::KernelCommonAllocatorV);
+
     rr->rest_span = calc_span(thread);
     thread->cpuid = cpu::current().id();
     thread->schedule_data = rr;
+    uctx::UninterruptibleContext icu;
+
     l->runable_list.push_back(thread);
 }
 
 void round_robin_scheduler::remove(thread_t *thread)
 {
     auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    uctx::UninterruptibleContext icu;
+
     auto it = l->runable_list.find(thread);
     if (it != l->runable_list.end())
     {
         l->runable_list.remove(it);
+    }
+    else
+    {
+        auto it2 = l->block_threads.find(thread);
+        if (it2 != l->block_threads.end())
+        {
+            l->block_threads.remove(it2);
+        }
+        else
+        {
+            trace::panic("Can't find task ", thread->tid, " pid: ", thread->process->pid);
+        }
     }
     memory::Delete<>(memory::KernelCommonAllocatorV, (thread_data_rr_t *)thread->schedule_data);
 }
@@ -152,10 +169,6 @@ bool round_robin_scheduler::schedule()
                 has_task = true;
 
                 cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
-                if (cur->attributes & thread_attributes::remove)
-                {
-                    cur->scheduler->remove(cur);
-                }
 
                 if (cur->scheduler == this)
                 {

@@ -16,7 +16,7 @@ void signal_event()
         target.id = nsh_pid;
         target.flags = SIGTGT_PROC;
         if (target.id)
-            sigput(&target, SIGINT, nullptr);
+            sigsend(&target, SIGINT, nullptr);
     }
 }
 

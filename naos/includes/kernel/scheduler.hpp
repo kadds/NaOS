@@ -99,8 +99,10 @@ class scheduler
 void init();
 void init_cpu();
 
+typedef void (*remove_func)(u64 data);
+
 void add(thread_t *thread, scheduler_class scher);
-void remove(thread_t *thread);
+void remove(thread_t *thread, remove_func, u64 user_data);
 void update_state(thread_t *thread, thread_state state);
 void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority);
 bool reschedule_task_push(thread_t *task, u32 cpuid);
