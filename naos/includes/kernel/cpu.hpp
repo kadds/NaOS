@@ -49,7 +49,7 @@ class cpu_data_t
     u64 call_data;
     lock::spinlock_t call_lock;
 
-    task::wait_queue *soft_irq_wait_queue;
+    task::wait_queue_t *soft_irq_wait_queue;
 
   public:
     friend void init();
@@ -101,7 +101,7 @@ class cpu_data_t
 
     lock::spinlock_t &cpu_call_lock() { return call_lock; }
 
-    task::wait_queue *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
+    task::wait_queue_t *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
 };
 cpu_data_t &current();
 void init();

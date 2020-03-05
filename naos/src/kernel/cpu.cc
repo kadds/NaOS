@@ -24,7 +24,7 @@ void init()
     arch::cpu::current().set_user_data(cpu);
     cpu->smp_id = arch::cpu::id();
     cpu->soft_irq_wait_queue =
-        memory::New<task::wait_queue>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        memory::New<task::wait_queue_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
     auto &c = arch::cpu::current();
     trace::debug("[cpu", c.get_id(), "] exception rsp:", (void *)c.get_exception_rsp(),

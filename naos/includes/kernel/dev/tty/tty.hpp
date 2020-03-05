@@ -8,8 +8,9 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
 {
   private:
     util::circular_buffer<byte> buffer;
-    task::wait_queue wait_queue;
+    task::wait_queue_t wait_queue;
     std::atomic_int line_count;
+    std::atomic_int eof_count;
 
     friend bool tty_read_func(u64);
 
@@ -18,6 +19,7 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
     i64 read(byte *data, u64 max_size, flag_t flags) override;
 
     u64 write_to_buffer(const byte *data, u64 size, flag_t flags);
+    void send_EOF();
 
     void close() override;
 
@@ -25,6 +27,7 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
         : buffer(memory::KernelMemoryAllocatorV, size)
         , wait_queue(memory::KernelCommonAllocatorV)
         , line_count(0)
+        , eof_count(0)
     {
     }
 };

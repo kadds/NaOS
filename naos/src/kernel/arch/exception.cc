@@ -65,7 +65,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         if (likely((regs->cs & 0x3) != 0)) // user space : DPL 3
         {
             task->register_info->trap_vector = regs->vector;
-            auto &pack = task->signal_pack;
+            auto &pack = task->process->signal_pack;
             switch (regs->vector)
             {
                 case 0:

@@ -109,8 +109,7 @@ bool write_for_write(message_queue_t *queue, flag_t flags)
     {
         if (flags & msg_flags::no_block)
             return false;
-        task::do_wait(&queue->sender_wait_queue, wait_sender_func, (u64)queue,
-                      task::wait_context_type::uninterruptible);
+        queue->sender_wait_queue.do_wait(wait_sender_func, (u64)queue, task::wait_context_type::uninterruptible);
         if (unlikely(queue->close))
             return false;
     }
@@ -141,7 +140,7 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
         list->push_back(msg);
         queue->msg_count++;
     }
-    task::do_wake_up(&queue->receiver_wait_queue);
+    queue->receiver_wait_queue.do_wake_up();
     return length;
 } // namespace memory
 
@@ -222,8 +221,7 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
             wait->queue = queue;
             wait->type = type;
             wait->flags = flags;
-            task::do_wait(&queue->receiver_wait_queue, wait_reader_func, (u64)wait,
-                          task::wait_context_type::uninterruptible);
+            queue->receiver_wait_queue.do_wait(wait_reader_func, (u64)wait, task::wait_context_type::uninterruptible);
             memory::Delete<>(memory::KernelCommonAllocatorV, wait);
         }
         else
@@ -237,7 +235,7 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
 
     read_msg_data(msg, buffer, length);
 
-    task::do_wake_up(&queue->sender_wait_queue);
+    queue->sender_wait_queue.do_wake_up();
     return length;
 }
 
@@ -246,8 +244,8 @@ bool close_msg_queue(message_queue_t *queue)
     uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
     icu.begin();
     queue->close = true;
-    task::do_wake_up(&queue->sender_wait_queue);
-    task::do_wake_up(&queue->receiver_wait_queue);
+    queue->sender_wait_queue.do_wake_up();
+    queue->receiver_wait_queue.do_wake_up();
     if (queue->msg_count == 0)
     {
         icu.end();

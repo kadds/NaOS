@@ -32,33 +32,32 @@ struct wait_context_t
     bool operator!=(const wait_context_t &w) const { return !operator==(w); }
 };
 
-struct wait_queue
+struct wait_queue_t
 {
     util::linked_list<wait_context_t> list;
     lock::spinlock_t lock;
-    wait_queue(memory::IAllocator *a)
+    wait_queue_t(memory::IAllocator *a)
         : list(a)
     {
     }
+
+    ///
+    /// \brief wait current task for condition at the wait queue
+    ///
+    /// \param queue the task save to
+    /// \param condition the condition
+    /// \param user_data the condition user data pass to
+    /// \param wct wait context type
+    ///
+    /// \return bool false: wait confition check failed, maybe interrupt by signal. true: ok
+    bool do_wait(condition_func condition, u64 user_data, wait_context_type wct);
+
+    ///
+    /// \brief try wake up task at queue
+    ///
+    /// \param queue the queue to wake up
+    /// \param count maximum number of tasks to wake up
+    u64 do_wake_up(u64 count = 0xFFFFFFFFFFFFFFFFUL);
 };
-///
-/// \brief wait current task for condition at the wait queue
-///
-/// \param queue the task save to
-/// \param condition the condition
-/// \param user_data the condition user data pass to
-/// \param wct wait context type
-///
-/// \return bool false: wait confition check failed, maybe interrupt by signal. true: ok
-bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct);
-
-///
-/// \brief try wake up task at queue
-///
-/// \param queue the queue to wake up
-/// \param count maximum number of tasks to wake up
-u64 do_wake_up(wait_queue *queue, u64 count = 0xFFFFFFFFFFFFFFFFUL);
-
-u64 do_wake_up_signal(wait_queue *queue, thread_t *thread);
 
 } // namespace task

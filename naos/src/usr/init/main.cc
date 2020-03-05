@@ -5,21 +5,35 @@ const char startup_shell[] = "startup nsh...\n";
 
 long nsh_pid = 0;
 
-void on_signal_int(int sig, long, long, long)
+void signal_event()
 {
-    sigtarget_t target;
-    target.id = nsh_pid;
-    target.flags = SIGTGT_PROC;
-    if (target.id)
-        sigput(&target, SIGINT, nullptr);
-    sigreturn();
+    int num;
+    sig_info_t info;
+    while (1)
+    {
+        sigwait(&num, &info);
+        sigtarget_t target;
+        target.id = nsh_pid;
+        target.flags = SIGTGT_PROC;
+        if (target.id)
+            sigput(&target, SIGINT, nullptr);
+    }
 }
 
 extern "C" void _start(int argc, char **argv)
 {
     write(STDOUT, hello, sizeof(hello), 0);
     write(STDOUT, startup_shell, sizeof(startup_shell), 0);
-    sigaction(SIGINT, on_signal_int, 0, 0);
+    { /// set signal
+        sig_mask_t mask;
+        sig_mask_init(mask);
+        sig_mask_set(mask, SIGINT);
+
+        sigmask(SIGOPT_OR, &mask, nullptr, nullptr);
+        auto sig_id = create_thread((void *)signal_event, 0, 0);
+        detach(sig_id);
+    }
+
     // run shell
     while (1)
     {

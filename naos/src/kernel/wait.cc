@@ -5,7 +5,7 @@
 namespace task
 {
 
-bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_context_type wct)
+bool wait_queue_t::do_wait(condition_func condition, u64 user_data, wait_context_type wct)
 {
     if (condition(user_data))
         return true;
@@ -23,8 +23,8 @@ bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
 
     uctx::UninterruptibleContext icu;
     {
-        uctx::RawSpinLockContext ctx(queue->lock);
-        queue->list.emplace_back(current(), condition, user_data);
+        uctx::RawSpinLockContext ctx(lock);
+        list.emplace_back(current(), condition, user_data);
     }
 
     for (;;)
@@ -33,27 +33,27 @@ bool do_wait(wait_queue *queue, condition_func condition, u64 user_data, wait_co
         thd->attributes |= task::thread_attributes::need_schedule;
         scheduler::update_state(thd, state);
         scheduler::schedule();
-        if (thd->signal_pack.is_set() || condition(user_data))
+        if (condition(user_data))
             break;
         // false wake up, try sleep.
     }
     {
-        uctx::RawSpinLockContext ctx(queue->lock);
-        queue->list.remove(queue->list.find(wait_context_t(current(), condition, user_data)));
+        uctx::RawSpinLockContext ctx(lock);
+        list.remove(list.find(wait_context_t(current(), condition, user_data)));
     }
     return condition(user_data);
 }
 
-u64 do_wake_up(wait_queue *queue, u64 count)
+u64 wait_queue_t::do_wake_up(u64 count)
 {
-    uctx::RawSpinLockUninterruptibleContext ctx(queue->lock);
+    uctx::RawSpinLockUninterruptibleContext ctx(lock);
     u64 i = 0;
-    for (auto it = queue->list.begin(); it != queue->list.end() && i < count;)
+    for (auto it = list.begin(); it != list.end() && i < count;)
     {
         if (it->condition(it->user_data))
         {
             scheduler::update_state(it->thd, thread_state::ready);
-            it = queue->list.remove(it);
+            it = list.remove(it);
             i++;
         }
         else
@@ -62,21 +62,4 @@ u64 do_wake_up(wait_queue *queue, u64 count)
     return i;
 }
 
-u64 do_wake_up_signal(wait_queue *queue, thread_t *thread)
-{
-    uctx::RawSpinLockUninterruptibleContext ctx(queue->lock);
-
-    for (auto it = queue->list.begin(); it != queue->list.end();)
-    {
-        if (it->thd == thread)
-        {
-            scheduler::update_state(it->thd, thread_state::ready);
-            it = queue->list.remove(it);
-            return 1;
-        }
-        else
-            ++it;
-    }
-    return 0;
-}
 } // namespace task

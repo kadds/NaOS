@@ -47,8 +47,8 @@ struct message_queue_t
     std::atomic_uint64_t msg_count;
     u64 maximum_msg_count;
     u64 maximum_msg_bytes;
-    task::wait_queue receiver_wait_queue;
-    task::wait_queue sender_wait_queue;
+    task::wait_queue_t receiver_wait_queue;
+    task::wait_queue_t sender_wait_queue;
     msg_pack_hash_map_t msg_packs;
     lock::spinlock_t spinlock;
     volatile bool close;

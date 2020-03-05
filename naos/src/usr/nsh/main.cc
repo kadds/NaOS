@@ -158,6 +158,10 @@ extern "C" void _start(int argc, char **argv)
     {
         write(STDOUT, promot, sizeof(promot), 0);
         int len = read(STDIN, cmd, 4096, 0);
+        if (len < 0) // EOF
+        {
+            exit(0);
+        }
         if (len <= 1) // "" "\n"
             continue;
         len--; // clear \n

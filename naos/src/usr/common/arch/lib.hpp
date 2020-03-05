@@ -117,17 +117,23 @@ SYS_CALL(39, void, exit_thread, long ret)
 #define SIGSYS 31
 // more ...
 
-SYS_CALL(40, int, sigaction, int signum, void (*handler)(int signum, long error, long code, long status),
-         unsigned long long mask, int flags)
+#define SIGOPT_GET 1
+#define SIGOPT_SET 2
+#define SIGOPT_OR 3
+#define SIGOPT_AND 4
+#define SIGOPT_XOR 5
+#define SIGOPT_INVALID_ALL 6
 
 struct sig_info_t
 {
     long error;
     long code;
     long status;
+    long pid;
+    long tid;
 };
 
-SYS_CALL(41, int, raise, int signum, sig_info_t *info)
+SYS_CALL(40, int, raise, int signum, sig_info_t *info)
 
 struct sigtarget_t
 {
@@ -137,10 +143,19 @@ struct sigtarget_t
 
 #define SIGTGT_PROC 1
 #define SIGTGT_GROUP 2
+typedef unsigned long sig_mask_t;
 
-SYS_CALL(42, int, sigput, sigtarget_t *target, int signum, sig_info_t *info)
-SYS_CALL(43, void, sigreturn)
-SYS_CALL(44, void, sigwait, int *num, sig_info_t *info)
+static inline void sig_mask_init(sig_mask_t &mask) { mask = 0; }
+
+static inline void sig_mask_set(sig_mask_t &mask, int idx) { mask |= (1ul << idx); }
+
+static inline void sig_mask_clear(sig_mask_t &mask, int idx) { mask &= ~(1ul << idx); }
+
+static inline bool sig_mask_get(sig_mask_t mask, int idx) { return mask & (1ul << idx); }
+
+SYS_CALL(41, int, sigput, sigtarget_t *target, int signum, sig_info_t *info)
+SYS_CALL(42, void, sigwait, int *num, sig_info_t *info)
+SYS_CALL(43, int, sigmask, int opt, sig_mask_t *valid, sig_mask_t *block, sig_mask_t *ignore)
 
 SYS_CALL(47, int, get_cpu_running)
 SYS_CALL(48, void, setcpumask, unsigned long mask0, unsigned long mask1)

@@ -5,6 +5,7 @@
 #include "util/array.hpp"
 #include "util/bit_set.hpp"
 #include "util/linked_list.hpp"
+#include "wait.hpp"
 namespace task
 {
 struct thread_t;
@@ -68,19 +69,30 @@ struct signal_set_t
 
     bool operator[](u64 index) { return map.get(index); }
     util::bit_set_inplace<max_signal_count> &operator()() { return map; }
+
+    u64 get() { return *map.get_ptr(); }
+    void set(u64 mask) { map.set_to(mask); }
 };
 
 struct signal_mask_t
 {
   private:
-    signal_set_t block_bitmap, ignore_bitmap;
+    signal_set_t block_bitmap, ignore_bitmap, def_bitmap;
 
   public:
     signal_mask_t()
     {
         block_bitmap().clean_all();
         ignore_bitmap().clean_all();
+        def_bitmap().clean_all();
     }
+
+    signal_set_t &get_block_set() { return block_bitmap; }
+
+    signal_set_t &get_ignore_set() { return ignore_bitmap; }
+
+    signal_set_t &get_valid_set() { return def_bitmap; }
+
     /// mask signal from [start, start + count) set to mask
     ///
     /// \param start signal number start
@@ -104,8 +116,18 @@ struct signal_mask_t
             ignore_bitmap().clean_all(start, count);
     }
 
+    void valid(signal_num_t start, signal_num_t count, bool mask)
+    {
+        kassert((u16)start + count > max_signal_count, "mask signal number out of range.");
+        if (mask)
+            def_bitmap().set_all(start, count);
+        else
+            def_bitmap().clean_all(start, count);
+    }
+
     bool is_ignore(signal_num_t num) { return ignore_bitmap[num]; }
     bool is_block(signal_num_t num) { return block_bitmap[num]; }
+    bool is_valid(signal_num_t num) { return def_bitmap[num]; }
 };
 
 struct signal_info_t
@@ -140,83 +162,35 @@ enum sig_action_flag_t : flag_t
 };
 } // namespace sig_action_flag_t
 
-struct signal_actions_t
-{
-    enum signal_type
-    {
-        type_post_main_thread = 0,
-        type_post_any = 1,
-        type_post_self = 2,
-    };
-
-    struct signal_pack
-    {
-        thread_t *from;
-        u64 user_data;
-        signal_pack(thread_t *from, u64 user_data)
-            : from(from)
-            , user_data(user_data)
-        {
-        }
-    };
-
-    struct action
-    {
-        signal_func_t handler;
-        signal_set_t ignore_bitmap;
-        flag_t flags;
-    };
-
-  private:
-    action actions[max_signal_count];
-
-  public:
-    void set_action(signal_num_t num, signal_func_t handler, signal_set_t set, flag_t flags);
-
-    void clean_all();
-
-    void clean_action(signal_num_t num) { actions[num].handler = default_signal_handler[num]; }
-
-    action &get_action(signal_num_t num) { return actions[num]; }
-
-    signal_actions_t();
-};
+bool sig_condition(u64 data);
 
 struct signal_pack_t
 {
   private:
     signal_mask_t masks;
     bool sig_pending = false;
-    bool in_signal = false;
-    signal_num_t current_signal_sent;
-    void *signal_stack = nullptr;
-
-    arch::task::userland_code_context context;
-    /// 0 - 31 signal
-    signal_set_t pending_bitmap;
 
     /// 32 - 63
     util::linked_list<signal_info_t> events;
 
+    task::wait_queue_t wait_queue;
+
   public:
     signal_pack_t()
         : events(memory::KernelCommonAllocatorV)
+        , wait_queue(memory::KernelCommonAllocatorV)
     {
     }
 
     void set(signal_num_t num, i64 error, i64 code, i64 status);
 
-    void dispatch(signal_actions_t *actions);
-
-    void user_return();
-
     signal_mask_t &get_mask() { return masks; }
 
     bool is_set() { return sig_pending; }
-    bool is_in_signal() { return in_signal; }
-    void set_in_signal(bool in) { in_signal = in; }
+
+    util::linked_list<signal_info_t> &get_events() { return events; }
+
+    void wait(signal_info_t *info);
 };
-void signal_return();
-void do_signal();
 
 } // namespace task

@@ -16,7 +16,7 @@ class pseudo_t
 class pseudo_pipe_t : public pseudo_t
 {
     util::circular_buffer<byte> buffer;
-    task::wait_queue wait_queue;
+    task::wait_queue_t wait_queue;
     std::atomic_bool is_close;
     friend bool pipe_write_func(u64 data);
     friend bool pipe_read_func(u64 data);

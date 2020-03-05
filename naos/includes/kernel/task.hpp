@@ -53,7 +53,7 @@ struct process_t
     void *mm_info;              ///< Memory map infomation
     resource_table_t res_table; ///< Resource table
     void *thread_id_gen;
-    wait_queue wait_que;
+    wait_queue_t wait_queue;
     std::atomic_int wait_counter;
 
     union
@@ -65,7 +65,7 @@ struct process_t
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
-    signal_actions_t *signal_actions;
+    signal_pack_t signal_pack;
     process_t();
 };
 
@@ -157,9 +157,8 @@ struct thread_t
     cpu_mask_t cpumask;
     statistics_t statistics;
     preempt_t preempt_data;
-    wait_queue wait_que;
+    wait_queue_t wait_queue;
     std::atomic_int wait_counter;
-    signal_pack_t signal_pack;
     u64 error_code;
     thread_t();
 };

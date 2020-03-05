@@ -332,15 +332,23 @@ void test_memory()
     print("memory tested.\n");
 }
 
-void sighandler(int sig, long error, long code, long status)
+void sighandler()
 {
-    print("signal SIGINT handled\n");
-    sigreturn();
+    int num;
+    sigwait(&num, nullptr);
+    if (num == SIGINT)
+        print("signal SIGINT handled\n");
+    exit_thread(0);
 }
 
 extern "C" void _start(int argc, char **argv)
 {
-    sigaction(SIGINT, sighandler, 0, 0);
+    sig_mask_t mask;
+    sig_mask_init(mask);
+    sig_mask_set(mask, SIGINT);
+
+    sigmask(SIGOPT_OR, &mask, nullptr, nullptr);
+    auto sigid = create_thread((void *)sighandler, 0, 0);
     // __asm__ __volatile__("INT $3  \n\t" : : : "memory");
     print("Begin tests.\n");
     auto tid = test_thread();
@@ -353,6 +361,7 @@ extern "C" void _start(int argc, char **argv)
     print("join thread2\n");
     join(tid, &ret);
     raise(SIGINT, nullptr);
+    join(sigid, nullptr);
     if (ret != 0)
     {
         print("Some test tests failed.\n");

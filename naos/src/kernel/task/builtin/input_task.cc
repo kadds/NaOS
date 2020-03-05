@@ -34,8 +34,8 @@ char key_char_table2[256] = {
 
 void complation(io::request_t *req, bool intr, u64 user_data)
 {
-    wait_queue *q = (wait_queue *)user_data;
-    task::do_wake_up(q);
+    wait_queue_t *q = (wait_queue_t *)user_data;
+    q->do_wake_up();
 }
 
 enum class switchable_key
@@ -83,7 +83,13 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
             }
             if (k == key::c && (is_key_down(key::left_control) || is_key_down(key::right_control)))
             {
+                task::find_pid(1);
                 /// TODO: kill front task
+            }
+            else if (k == key::d && (is_key_down(key::left_control) || is_key_down(key::right_control)))
+            {
+                /// TODO: send EOF
+                tty->send_EOF();
             }
             else if (key_char_table[(u8)k] != 0)
             {
@@ -189,7 +195,7 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     current_mouse_data.movement_z = 0;
     current_mouse_data.timestamp = 0;
 
-    wait_queue input_wait_queue(memory::KernelCommonAllocatorV);
+    wait_queue_t input_wait_queue(memory::KernelCommonAllocatorV);
 
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;
@@ -226,7 +232,7 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 
         if (!request.status.io_is_completion && !mreq.status.io_is_completion)
         {
-            task::do_wait(&input_wait_queue, wait_condition, 0, task::wait_context_type::uninterruptible);
+            input_wait_queue.do_wait(wait_condition, 0, task::wait_context_type::uninterruptible);
         }
         print_keyboard(request.result, request.status, &request, input_tty);
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);

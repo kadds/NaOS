@@ -80,7 +80,7 @@ void do_soft_irq()
         }
     }
     if (unlikely(wakeup_condition(0)))
-        task::do_wake_up(cpu::current().get_soft_irq_wait_queue());
+        cpu::current().get_soft_irq_wait_queue()->do_wake_up();
 }
 
 bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
@@ -102,8 +102,7 @@ bool wakeup_condition(u64 user_data)
 
 void wakeup_soft_irq_daemon()
 {
-    task::do_wait(cpu::current().get_soft_irq_wait_queue(), wakeup_condition, 0,
-                  task::wait_context_type::uninterruptible);
+    cpu::current().get_soft_irq_wait_queue()->do_wait(wakeup_condition, 0, task::wait_context_type::uninterruptible);
     do_soft_irq();
 }
 

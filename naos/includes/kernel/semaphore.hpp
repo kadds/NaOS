@@ -12,7 +12,7 @@ struct semaphore_t
 {
   private:
     std::atomic_long lock_res = ATOMIC_FLAG_INIT;
-    task::wait_queue wait_queue;
+    task::wait_queue_t wait_queue;
     friend bool sp_condition(u64 data);
 
   public:
@@ -29,7 +29,7 @@ struct semaphore_t
         {
             while (lock_res <= 0)
             {
-                task::do_wait(&wait_queue, sp_condition, (u64)this, task::wait_context_type::uninterruptible);
+                wait_queue.do_wait(sp_condition, (u64)this, task::wait_context_type::uninterruptible);
             }
             exp = lock_res;
         } while (!lock_res.compare_exchange_strong(exp, exp - 1, std::memory_order_acquire));
@@ -40,7 +40,7 @@ struct semaphore_t
         lock_res++;
         if (lock_res > 0)
         {
-            task::do_wake_up(&wait_queue, lock_res);
+            wait_queue.do_wake_up(lock_res);
         }
     }
 

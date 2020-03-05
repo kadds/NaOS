@@ -118,15 +118,20 @@ template <int ElementCount> class bit_set_inplace
 
   public:
     bit_set_inplace() = default;
-    bit_set_inplace(u64 map)
+    bit_set_inplace(u64 map) { set_to(map); }
+
+    ~bit_set_inplace() = default;
+
+    u64 *get_ptr() { return data; }
+
+    void set_to(u64 map)
     {
         if (ElementCount > sizeof(u64) * 8)
         {
-            /// TODO: set mask
+            /// FIXME: set mask
         }
+        data[0] = map;
     }
-
-    ~bit_set_inplace() = default;
 
     void clean_all() { bit_set_opeartion::clean_all(data, ElementCount); }
 

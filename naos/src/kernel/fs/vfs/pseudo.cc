@@ -27,12 +27,12 @@ i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
                 return -1;
             if (flags & rw_flags::no_block)
                 return -1;
-            task::do_wake_up(&wait_queue);
-            task::do_wait(&wait_queue, pipe_write_func, (u64)this, task::wait_context_type::uninterruptible);
+            wait_queue.do_wake_up();
+            wait_queue.do_wait(pipe_write_func, (u64)this, task::wait_context_type::uninterruptible);
         }
         buffer.write_with() = data[i];
     }
-    task::do_wake_up(&wait_queue);
+    wait_queue.do_wake_up();
     return size;
 }
 
@@ -48,19 +48,19 @@ i64 pseudo_pipe_t::read(byte *data, u64 max_size, flag_t flags)
                 return -1;
             if (flags & rw_flags::no_block)
                 return -1;
-            task::do_wake_up(&wait_queue);
-            task::do_wait(&wait_queue, pipe_read_func, (u64)this, task::wait_context_type::uninterruptible);
+            wait_queue.do_wake_up();
+            wait_queue.do_wait(pipe_read_func, (u64)this, task::wait_context_type::uninterruptible);
         }
         buffer.read(&data[i]);
     }
-    task::do_wake_up(&wait_queue);
+    wait_queue.do_wake_up();
     return max_size;
 }
 
 void pseudo_pipe_t::close()
 {
     is_close = true;
-    task::do_wake_up(&wait_queue);
+    wait_queue.do_wake_up();
 }
 
 } // namespace fs::vfs

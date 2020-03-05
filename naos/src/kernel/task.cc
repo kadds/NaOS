@@ -96,7 +96,6 @@ inline process_t *new_kernel_process()
     process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_map->insert(id, process);
-    process->signal_actions = nullptr;
     return process;
 }
 
@@ -113,7 +112,6 @@ inline process_t *new_process()
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
     global_process_map->insert(id, process);
-    process->signal_actions = memory::New<signal_actions_t>(memory::KernelCommonAllocatorV);
 
     return process;
 }
@@ -123,11 +121,6 @@ inline void delete_process(process_t *p)
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
-
-    if (p->signal_actions != nullptr)
-    {
-        memory::Delete<>(memory::KernelCommonAllocatorV, p->signal_actions);
-    }
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
     global_process_map->remove(p->pid);
@@ -173,13 +166,13 @@ void delete_thread(thread_t *thd)
 }
 
 process_t::process_t()
-    : wait_que(memory::KernelCommonAllocatorV)
+    : wait_queue(memory::KernelCommonAllocatorV)
     , wait_counter(0)
 {
 }
 
 thread_t::thread_t()
-    : wait_que(memory::KernelCommonAllocatorV)
+    : wait_queue(memory::KernelCommonAllocatorV)
     , wait_counter(0)
 {
 }
@@ -211,7 +204,7 @@ void create_devs()
     f->close();
 }
 
-std::atomic_bool is_init = false;
+std::atomic_bool is_init = false, init_ok = false;
 void init()
 {
     process_t *process;
@@ -278,7 +271,10 @@ void init()
         is_init = true;
 
         bin_handle::init();
+        init_ok = true;
     }
+    while (!init_ok)
+        cpu_pause();
 }
 
 thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags)
@@ -578,7 +574,7 @@ void exit_process(process_t *process, i64 ret)
     process->res_table.clear();
     process->ret_val = ret;
     process->attributes |= process_attributes::no_thread;
-    do_wake_up(&process->wait_que);
+    process->wait_queue.do_wake_up();
 }
 
 void do_exit(i64 ret)
@@ -616,7 +612,7 @@ u64 wait_process(process_t *process, i64 &ret)
     uctx::UninterruptibleContext icu;
 
     process->wait_counter++;
-    do_wait(&process->wait_que, wait_process_exit, (u64)process, wait_context_type::interruptable);
+    process->wait_queue.do_wait(wait_process_exit, (u64)process, wait_context_type::interruptable);
     ret = (i64)process->ret_val;
     process->wait_counter--;
     if (process->wait_counter == 0)
@@ -687,7 +683,7 @@ void exit_thread(thread_t *thd, i64 ret)
     }
     else
     {
-        do_wake_up(&thd->wait_que);
+        thd->wait_queue.do_wake_up();
     }
 }
 
@@ -725,7 +721,8 @@ u64 join_thread(thread_t *thd, i64 &ret)
         return 4;
     uctx::UninterruptibleContext icu;
     thd->wait_counter++;
-    do_wait(&thd->wait_que, wait_exit, (u64)thd, wait_context_type::interruptable);
+    thd->wait_queue.do_wait(wait_exit, (u64)thd, wait_context_type::interruptable);
+
     ret = (i64)thd->user_stack_top;
     thd->wait_counter--;
     if (thd->wait_counter == 0)
@@ -803,10 +800,6 @@ void thread_yield()
 
 ExportC void kernel_return() { yield_preempt(); }
 
-ExportC void userland_return()
-{
-    scheduler::schedule();
-    do_signal();
-}
+ExportC void userland_return() { scheduler::schedule(); }
 
 } // namespace task

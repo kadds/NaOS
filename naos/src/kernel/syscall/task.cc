@@ -117,19 +117,13 @@ long wait_process(process_id pid, i64 *ret)
 /// sleep current thread
 void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 
-u64 sigaction(task::signal_num_t num, task::signal_func_t handler, u64 mask, flag_t flags)
-{
-    if (handler == nullptr || !is_user_space_pointer(handler))
-        return EPARAM;
-    task::current_process()->signal_actions->set_action(num, handler, mask, flags);
-    return OK;
-}
-
 struct sig_info_t
 {
     u64 error;
     u64 code;
     u64 status;
+    u64 tid;
+    u64 pid;
 };
 
 i64 raise(task::signal_num_t num, sig_info_t *info)
@@ -137,9 +131,9 @@ i64 raise(task::signal_num_t num, sig_info_t *info)
     if (info != nullptr && !is_user_space_pointer(info))
         return EPARAM;
     if (info)
-        task::current()->signal_pack.set(num, info->error, info->code, info->status);
+        task::current_process()->signal_pack.set(num, info->error, info->code, info->status);
     else
-        task::current()->signal_pack.set(num, 0, 0, 0);
+        task::current_process()->signal_pack.set(num, 0, 0, 0);
 
     return OK;
 }
@@ -168,18 +162,118 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
         auto proc = task::find_pid(target->id);
         if (proc == nullptr)
             return ENOEXIST;
+
+        if (info)
+            task::current_process()->signal_pack.set(num, info->error, info->code, info->status);
+        else
+            task::current_process()->signal_pack.set(num, 0, 0, 0);
     }
     else if (target->flags & send_to_group)
     {
-        /// TODO: send group
+        /// TODO: send signal to group
     }
 
     return OK;
 }
 
-u64 sigwait(task::signal_num_t *num, sig_info_t *info) {}
+u64 sigwait(task::signal_num_t *num, sig_info_t *info)
+{
+    if (num != nullptr && !is_user_space_pointer(num))
+        return EPARAM;
+    if (info != nullptr && !is_user_space_pointer(info))
+        return EPARAM;
+    task::signal_info_t inf;
+    task::current_process()->signal_pack.wait(&inf);
+    if (num)
+        *num = inf.number;
 
-void sigreturn() { task::signal_return(); }
+    if (info)
+    {
+        info->code = inf.code;
+        info->error = inf.error;
+        info->status = inf.status;
+        info->pid = inf.pid;
+        info->tid = inf.tid;
+    }
+    return OK;
+}
+
+#define SIGOPT_GET 1
+#define SIGOPT_SET 2
+#define SIGOPT_OR 3
+#define SIGOPT_AND 4
+#define SIGOPT_XOR 5
+#define SIGOPT_INVALID_ALL 6
+
+i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
+{
+    if (valid_mask && !is_user_space_pointer(valid_mask))
+        return EFAILED;
+    if (block_mask && !is_user_space_pointer(block_mask))
+        return EFAILED;
+    if (ignore_mask && !is_user_space_pointer(ignore_mask))
+        return EFAILED;
+    auto &sigpack = task::current_process()->signal_pack;
+
+    auto &valid = sigpack.get_mask().get_valid_set();
+    auto &block = sigpack.get_mask().get_block_set();
+    auto &ignore = sigpack.get_mask().get_ignore_set();
+
+    if (opt == SIGOPT_GET)
+    {
+        if (valid_mask)
+            *valid_mask = valid.get();
+        if (block_mask)
+            *block_mask = block.get();
+        if (ignore_mask)
+            *ignore_mask = ignore.get();
+    }
+    else if (opt == SIGOPT_SET)
+    {
+        if (valid_mask)
+            valid.set(*valid_mask);
+        if (block_mask)
+            block.set(*block_mask);
+        if (ignore_mask)
+            ignore.set(*ignore_mask);
+    }
+    else if (opt == SIGOPT_OR)
+    {
+        if (valid_mask)
+            valid.set(*valid_mask | valid.get());
+        if (block_mask)
+            block.set(*block_mask | block.get());
+        if (ignore_mask)
+            ignore.set(*ignore_mask | ignore.get());
+    }
+    else if (opt == SIGOPT_AND)
+    {
+        if (valid_mask)
+            valid.set(*valid_mask & valid.get());
+        if (block_mask)
+            block.set(*block_mask & block.get());
+        if (ignore_mask)
+            ignore.set(*ignore_mask & ignore.get());
+    }
+    else if (opt == SIGOPT_XOR)
+    {
+        if (valid_mask)
+            valid.set(*valid_mask ^ valid.get());
+        if (block_mask)
+            block.set(*block_mask ^ block.get());
+        if (ignore_mask)
+            ignore.set(*ignore_mask ^ ignore.get());
+    }
+    else if (opt == SIGOPT_INVALID_ALL)
+    {
+        valid.set(0);
+    }
+    else
+    {
+        return EPARAM;
+    }
+    return OK;
+}
 
 u64 getcpu_running() { return task::current()->cpuid; }
 
@@ -207,11 +301,10 @@ SYSCALL(36, detach)
 SYSCALL(37, join)
 SYSCALL(38, wait_process)
 SYSCALL(39, exit_thread)
-SYSCALL(40, sigaction)
-SYSCALL(41, raise)
-SYSCALL(42, sigsend)
-SYSCALL(43, sigwait)
-SYSCALL(44, sigreturn)
+SYSCALL(40, raise)
+SYSCALL(41, sigsend)
+SYSCALL(42, sigwait)
+SYSCALL(43, sigmask)
 
 SYSCALL(47, getcpu_running)
 SYSCALL(48, setcpu_mask)
