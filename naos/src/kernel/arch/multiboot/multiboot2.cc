@@ -149,6 +149,7 @@ ExportC NoReturn void Unpaged_Text_Section _multiboot_main(void *header)
 {
     if (header == nullptr)
         panic();
+    u32 start_ptr = (u32)(u64)header;
     max_boot_tag_ptr = (void *)(*(u32 *)header + ((u8 *)header));
     multiboot_tag *tags = (multiboot_tag *)((byte *)header + 8);
     u32 start, end;
@@ -163,13 +164,16 @@ ExportC NoReturn void Unpaged_Text_Section _multiboot_main(void *header)
         }
         offset = (u64)_bss_end;
     }
-    else if ((u32)(u64)max_boot_tag_ptr < start - 0x1000) // 1KB data
+    else if ((u32)(u64)start_ptr < start) 
+    {
+        offset = (u64)end;
+    }
+    else
     {
         offset = (u64)max_boot_tag_ptr;
     }
-    else
-        panic();
-
+    
+    // align 4Kib
     offset = (offset + 0x1000 - 1) & ~(0x1000 - 1);
     data_offset = offset;
     kernel_start_args *args = (kernel_start_args *)alloca_data(sizeof(kernel_start_args), 8);

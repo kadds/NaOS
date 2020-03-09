@@ -22,7 +22,7 @@ View [Features](./FEATURES.MD) .
 * **Python 3** *(For running utility)*
 * An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
 * **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting disk without root privilege)*
-* **OVMF** UEFI firmware for QEMU
+* *OVMF* UEFI firmware for QEMU
   
 ### **Recommend**  
 
@@ -51,14 +51,20 @@ make -j
 [Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
   
 NaOS supports GPT disk with UEFI boot or MBR disk with MBR boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
-For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/) and edit OVMF_CODE.fd file path at *util/run.py*.  
+For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/) and edit OVMF_CODE.fd path at *util/run.py*.  
 
-Example of disk partition:  
+Example of disk partition (UEFI):  
   
-| Partition number | Type  |  FS   |      Content       |  Size  |
-| :--------------: | :---: | :---: | :----------------: | :----: |
-|        1         |  ESP  | FAT32 |  Grub EFI loader   | 80Mib  |
-|        2         | Root  | EXT2  | Grub and NaOS data | 920Mib |
+| Partition number | Type  | (Gdisk) Code |  FS   |      Content       |  Size  |
+| :--------------: | :---: | :----------: | :---: | :----------------: | :----: |
+|        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 50Mib  |
+|        2         | Root  |     8300     | FAT32 | Grub and NaOS data | 100Mib |
+
+Example of disk partition (MBR):  
+| Partition number | Type  | (Gdisk) Code |  FS   |  Content  |  Size  |
+| :--------------: | :---: | :----------: | :---: | :-------: | :----: |
+|        1         | Grub  |     8300     | FAT32 | Grub data | 50Mib  |
+|        2         | Root  |     8300     | FAT32 | NaOS data | 100Mib |
 
 
 Example of grub install (UEFI):
@@ -66,7 +72,12 @@ Example of grub install (UEFI):
 sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
 ```
 
-Example *grub.cfg*:
+Example of grub install (MBR):
+```bash
+sudo grub-install --boot-directory=/mnt/Root/boot  --targe=i386-pc run/image/disk.img
+```
+
+Example *grub.cfg* (UEFI):
 ```
 root=(hd0,gpt2)
 set default=0
@@ -79,6 +90,20 @@ menuentry "NaOS multiboot2" {
     insmod part_msdos
     insmod fat
     insmod ext2
+    multiboot2 /boot/kernel
+    module2 /boot/rfsimg rfsimg
+    boot
+}
+```
+
+Example *grub.cfg* (MBR):
+```
+root=(hd0,msdos1)
+set default=0
+set timeout=1
+menuentry "NaOS multiboot2" {
+    insmod part_msdos
+    insmod fat
     multiboot2 /boot/kernel
     module2 /boot/rfsimg rfsimg
     boot

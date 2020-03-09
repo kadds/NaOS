@@ -70,6 +70,8 @@ def mount(image_file):
         current_loop_device = current_loop_device[0:-1]
         config.set(image_file, "loop_device", current_loop_device)
         config.write(open(cfg_file_name, 'w'))
+        run_shell("udisksctl mount -b " + current_loop_device + "p1").strip('\n')
+        run_shell("udisksctl mount -b " + current_loop_device + "p2").strip('\n')
 
     print(current_loop_device)
 
@@ -88,7 +90,6 @@ def umount(image_file):
         print(run_shell('udisksctl loop-delete -b ' + loop_device))
         print(run_shell('udisksctl unmount -b ' + loop_device + 'p1'))
         print(run_shell('udisksctl unmount -b ' + loop_device + 'p2'))
-        print(run_shell('udisksctl unmount -b ' + loop_device + 'p3'))
 
 def confirm(msg):
     if input(msg + " [y/N]:") == "y":
@@ -98,7 +99,7 @@ def confirm(msg):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description='ram disk tools: create, mount, umount')
+        description='ram disk tools: getpoint, getloop, mount, umount')
 
     sub_parser = parser.add_subparsers(
         title='sub operation', dest='subparser_name')
@@ -129,8 +130,8 @@ if __name__ == "__main__":
         elif args.subparser_name == "umount":
             umount(args.input)
         elif args.subparser_name == "getpoint":
+            print(mount_point(args.input, 1))
             print(mount_point(args.input, 2))
-            print(mount_point(args.input, 3))
         elif args.subparser_name == "getloop":
             loop = get_mount_loop_device(args.input)
             if loop == "":
