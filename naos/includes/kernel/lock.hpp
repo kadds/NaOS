@@ -3,9 +3,10 @@
 #include "common.hpp"
 #include <atomic>
 
+/// locks aren't disable interrupt, use it by 'ucontext::guard'
 namespace lock
 {
-/// Not nestable, unfair spinlock
+///\brief Not nestable, unfair spinlock
 struct spinlock_t
 {
   private:

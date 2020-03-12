@@ -10,6 +10,7 @@
 #include <initializer_list>
 #include <type_traits>
 
+/// kernel output and debug components
 namespace trace
 {
 // set if print debug
@@ -27,6 +28,7 @@ namespace Foreground
 {
 struct Black
 {
+    /// escape string
     static inline const char *t = "30";
 };
 
@@ -326,13 +328,16 @@ template <typename T, std::size_t N> struct remove_extent<const T[N]>
 
 extern lock::spinlock_t spinlock;
 
-/// print string directly
+/// print string to screen
 void print_inner(const char *str);
 void print_inner(const char *str, u64 len);
 
+/// the kernel print to the serial device. recv com1
 extern arch::device::com::serial serial_device;
 
 util::ring_buffer &get_kernel_log_buffer();
+
+/// ---------- template functions for kernel print logic ----------------
 
 template <typename Head> Trace_Section void dispatch(const Head &head)
 {
@@ -372,6 +377,9 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
         cast_fmt<Args...>();
     }
 }
+
+// -------------------------------
+
 ///
 /// \brief kernel print string
 ///
@@ -391,6 +399,7 @@ template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_S
 
 NoReturn void keep_panic(const regs_t *regs = 0);
 
+///\brief stop all cpu and report an error. not realiable
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
     uctx::RawSpinLockUninterruptibleContext icu(spinlock);

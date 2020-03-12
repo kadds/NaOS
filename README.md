@@ -30,7 +30,7 @@ View [Features](./FEATURES.MD) .
 * **cpp-check**: Code static analyzer 
 * [**VSCode**](https://code.visualstudio.com/): Development environment.
 
-### 1. Download code
+### 1. Download source code
 Clone this repo ```git clone https://url/path/to/repo``` 
 
 ### 2. Compile
@@ -50,11 +50,10 @@ make -j
 [Arch wiki](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
 [Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
   
-NaOS supports GPT disk with UEFI boot or MBR disk with MBR boot. Grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
-For startup QEMU with UEFI, install [OVMF](https://sourceforge.net/projects/tianocore/) and edit OVMF_CODE.fd path at *util/run.py*.  
+NaOS supports GPT disk with UEFI boot or MBR disk with BIOS boot. See grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
+For startup QEMU with UEFI boot, install [OVMF](https://sourceforge.net/projects/tianocore/) and config OVMF_CODE.fd path at *util/run.py*.  
 
 Example of disk partition (UEFI):  
-  
 | Partition number | Type  | (Gdisk) Code |  FS   |      Content       |  Size  |
 | :--------------: | :---: | :----------: | :---: | :----------------: | :----: |
 |        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 50Mib  |
@@ -65,7 +64,6 @@ Example of disk partition (MBR):
 | :--------------: | :---: | :----------: | :---: | :-------: | :----: |
 |        1         | Grub  |     8300     | FAT32 | Grub data | 50Mib  |
 |        2         | Root  |     8300     | FAT32 | NaOS data | 100Mib |
-
 
 Example of grub install (UEFI):
 ```bash

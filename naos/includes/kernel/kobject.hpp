@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+/// TODO: make the kernel object interface, growing vfs
 
 enum class obj_type : u32
 {

@@ -37,6 +37,7 @@ struct load_data_t
     u64 recent_load_fac = 0;
 };
 
+/// per cpu data
 class cpu_data_t
 {
     task::thread_t *current_task = nullptr;
@@ -118,6 +119,8 @@ class cpu_data_t
 };
 cpu_data_t &current();
 void init();
+/// get cpu count
 u64 count();
+/// get cpu[id] data
 cpu_data_t &get(u32 id);
 } // namespace cpu

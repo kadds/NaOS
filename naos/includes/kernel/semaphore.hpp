@@ -32,6 +32,8 @@ struct semaphore_t
                 wait_queue.do_wait(sp_condition, (u64)this);
             }
             exp = lock_res;
+            if (exp <= 0)
+                continue;
         } while (!lock_res.compare_exchange_strong(exp, exp - 1, std::memory_order_acquire));
     }
 

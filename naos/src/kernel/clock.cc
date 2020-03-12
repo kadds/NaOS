@@ -41,7 +41,7 @@ void start_tick()
 
 time::microsecond_t get_current_clock() { return current_time_microsecond; }
 
-time::microsecond_t get_start_clock() { return start_time_microsecond; }
+time::microsecond_t get_startup_clock() { return start_time_microsecond; }
 
 int monthy_table[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 int cv_monthy_table[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365};
