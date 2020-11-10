@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# Genarates ksybs file
+# ksybs format
+# | magic  | version | symbols count | symbol1 | symbol2 | symbolx... | detail0 | detail1 | detailx |
+# each of symbols format
+# | address | detail offset in file |
+# each of details 
+# | type | symbol name |
+
 import os
 import struct
 from mod import set_self_dir, run_shell
@@ -7,7 +15,6 @@ import traceback
 import datetime
 
 cache_file_name = "ksybs_cache.log"
-
 
 def gen_symbols(file, target_file, force):
     try:

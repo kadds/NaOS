@@ -1,4 +1,6 @@
 #!/bin/bash
+# This script minimizes the binary file
+
 Target=$1
 To=$2
 DBGTarget=${To}.dbg

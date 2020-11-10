@@ -11,6 +11,7 @@ How to build VMbox image?
 VBoxManage internalcommands createrawvmdk -filename run/image/disk.vmdk -rawdisk run/image/disk.img
 '''
 
+# set ovmf_path if boot from UEFI 
 ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 
 
@@ -27,7 +28,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description='run tools: run kernel')
     parser.add_argument(
-        "-n", "--nographic",  action='store_true', help="try don't show window")
+        "-n", "--nographic",  action='store_true', help="try don't show GUI")
     parser.add_argument(
         "-u", "--uefi",  action='store_true', help="open qemu with uefi firmware")
     parser.add_argument("emulator_name", type=str,

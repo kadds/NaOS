@@ -1,3 +1,8 @@
+# This program packs files to rfs format
+# rfs format: | magic | version | file counts | file0 | file1 | filex... |
+# each of files: | file size | file contents |
+# 
+
 from mod import set_self_dir, run_shell
 import sys
 import traceback

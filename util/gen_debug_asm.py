@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# This program extracts ASM
+#
+# python gen_debug_asm.py --help
+
 import sys
 import os
 import argparse

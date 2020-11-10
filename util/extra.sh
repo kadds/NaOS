@@ -1,4 +1,6 @@
 #!/bin/bash
+# This script minimizes the kernel
+
 Debug=$4
 Type=$3
 Target=$1

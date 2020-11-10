@@ -1,43 +1,17 @@
 #!/usr/bin/env python3
+# This program mount/umount the raw disk file by 'udisks2'
+
 from mod import set_self_dir, run_shell, run_shell_input
 import sys
 import traceback
 import os
 import argparse
-
 import platform
-import sys
 import subprocess
 import configparser
 
 system = platform.system()
 
-fdisk_mbr= '''o
-n
-p
-1
-4096
-{}
-N
-n
-p
-2
-{}
-{}
-N
-p
-w
-'''
-
-boot_grub = '''root=(hd0,msdos2)
-set default=0
-set timeout=1
-menuentry "NaOS multiboot2" {
-multiboot2 /system/kernel
-module2 /system/rfsimg rfsimg
-boot
-}
-'''
 cfg_file_name = "./disk_mount_status.log"
 
 def get_mount_loop_device(image_file):

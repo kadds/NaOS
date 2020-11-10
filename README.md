@@ -20,15 +20,16 @@ View [Features](./FEATURES.MD) .
 * **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.1.0)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
-* An emulator, virtual machine such as **Bochs**, **QEMU**, **Virtual Box** and **VMware Workstation** *(For running OS)*
-* **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting disk without root privilege)*
-* *OVMF* UEFI firmware for QEMU
+* An emulator or virtual machine such as **Bochs**, **QEMU**, **Virtual Box**, **hyper-v** and **VMware Workstation** *(For running OS)*
+* **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting raw disk without root privilege)*
+
+### **Optional**
+* **OVMF** (UEFI firmware) for QEMU if boot from UEFI environment
   
 ### **Recommend**  
-
 * **clang-format**: Code formatter 
 * **cpp-check**: Code static analyzer 
-* [**VSCode**](https://code.visualstudio.com/): Development environment.
+* [**VSCode**](https://code.visualstudio.com/): Development environment
 
 ### 1. Download source code
 Clone this repo ```git clone https://url/path/to/repo``` 
@@ -47,35 +48,53 @@ make -j
 ```
 
 ### 3. Make a raw disk
-[Arch wiki](https://wiki.archlinux.org/index.php/Fdisk) Make disk  
-[Arch wiki](https://wiki.archlinux.org/index.php/GRUB) Install grub   
-  
-NaOS supports GPT disk with UEFI boot or MBR disk with BIOS boot. See grub [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html)   
-For startup QEMU with UEFI boot, install [OVMF](https://sourceforge.net/projects/tianocore/) and config OVMF_CODE.fd path at *util/run.py*.  
 
-Example of disk partition (UEFI):  
-| Partition number | Type  | (Gdisk) Code |  FS   |      Content       |  Size  |
-| :--------------: | :---: | :----------: | :---: | :----------------: | :----: |
-|        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 50Mib  |
-|        2         | Root  |     8300     | FAT32 | Grub and NaOS data | 100Mib |
+> NaOS requires to boot from multiboot2, which is GRUB supported. [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html).   
 
-Example of disk partition (MBR):  
+#### Option1. **Legacy mode**
+
+Example of disk partition (MBR):    
 | Partition number | Type  | (Gdisk) Code |  FS   |  Content  |  Size  |
 | :--------------: | :---: | :----------: | :---: | :-------: | :----: |
-|        1         | Grub  |     8300     | FAT32 | Grub data | 50Mib  |
-|        2         | Root  |     8300     | FAT32 | NaOS data | 100Mib |
+|        1         | Grub  |     8300     | FAT32 | Grub data | 50MiB  |
+|        2         | Root  |     8300     | FAT32 | NaOS data | 100MiB |
 
-Example of grub install (UEFI):
-```bash
-sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
-```
-
-Example of grub install (MBR):
+Installing command (MBR):
 ```bash
 sudo grub-install --boot-directory=/mnt/Root/boot  --targe=i386-pc run/image/disk.img
 ```
 
-Example *grub.cfg* (UEFI):
+*grub.cfg* (MBR):
+```
+root=(hd0,msdos1)
+set default=0
+set timeout=1
+menuentry "NaOS multiboot2" {
+    insmod part_msdos
+    insmod fat
+    multiboot2 /boot/kernel
+    module2 /boot/rfsimg rfsimg
+    boot
+}
+```
+
+#### Option2. **UEFI mode**
+Installing [OVMF](https://sourceforge.net/projects/tianocore/) and configuring OVMF_CODE.fd path at *util/run.py*.  
+  
+
+Example of disk partition (UEFI):  
+| Partition number | Type  | (Gdisk) Code |  FS   |      Content       |  Size  |
+| :--------------: | :---: | :----------: | :---: | :----------------: | :----: |
+|        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 50MiB  |
+|        2         | Root  |     8300     | FAT32 | Grub and NaOS data | 100MiB |
+
+
+Installing command (UEFI):
+```bash
+sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
+```
+
+*grub.cfg* (UEFI):
 ```
 root=(hd0,gpt2)
 set default=0
@@ -93,22 +112,13 @@ menuentry "NaOS multiboot2" {
     boot
 }
 ```
+---
 
-Example *grub.cfg* (MBR):
-```
-root=(hd0,msdos1)
-set default=0
-set timeout=1
-menuentry "NaOS multiboot2" {
-    insmod part_msdos
-    insmod fat
-    multiboot2 /boot/kernel
-    module2 /boot/rfsimg rfsimg
-    boot
-}
-```
-
-Then move the raw disk to *run/image/disk.img*   
+Move the raw disk file to *run/image/disk.img*.   
+  
+Reference:  
+[Make a disk](https://wiki.archlinux.org/index.php/Fdisk), 
+[Install the grub](https://wiki.archlinux.org/index.php/GRUB). (archlinux wiki)
 
 
 ### 4. Run
@@ -116,7 +126,7 @@ After ```make``` success, you will get these files
 ```
 build
 ├── bin # Binary executable files without debug info
-│   ├── rfsroot # root file system image files (root folder)
+│   ├── rfsroot # root file system image files (the root folder)
 │   └── system
 │       ├── rfsimg # root file system image
 │       └── kernel # kernel binary file
@@ -129,23 +139,22 @@ build
 python util/run.py q
 ```
 
-The kernel log will be generated in *run/kernel_out.log*, just ```cat run/kernel_out.log```.
+The kernel log will be generated in *run/kernel_out.log*, just ```tail -f run/kernel_out.log```.
 
 ### 5. Debug
 Use command ```python util/gen_debug_asm.py kernel``` to generate kernel disassembly if needed. (e.g. Debug in bochs)
 
-Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.vscode/launch.json*
+Easily debugging with **VSCode** when running NaOS on QEMU. Just configure in *.vscode/launch.json*: 
 ```Json
 "MIMode": "gdb", # your debugger: gdb or lldb
 "miDebuggerServerAddress": "localhost:1234", # your host:port
 ```
-, start QEMU and press F5.
 
 
 ## Repo Tree
 ```
 NaOS
-├── build # build directory
+├── build # build target directory
 ├── naos
 │   ├── includes
 │   │   └── kernel

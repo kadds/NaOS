@@ -35,7 +35,6 @@ Features / TODO
         - [ ] Memory shared
         - [x] Message queue
         - [x] Signal
-            - [ ] Mask
     - [x] Memory map
         - [x] Virtual address allocator
     - [ ] Elf loader
@@ -86,10 +85,11 @@ Features / TODO
     - [ ] Kernel modules loader
     - [x] Kernel symbols query
         - [x] Kernel stack trace
-    - [ ] User/Group
+    - [ ] User/Group supported
     - [ ] C++ lib integration  
     - [ ] Rust integration  
-    - [ ] Graphics draw
+    - [ ] Graphics user interface
     - [x] Kernel logger
+    - [ ] Basic shell
 
 
