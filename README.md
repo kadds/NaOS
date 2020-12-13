@@ -50,8 +50,17 @@ make -j
 ### 3. Make a raw disk
 
 > NaOS requires to boot from multiboot2, which is GRUB supported. [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html).   
+#### A. ISO target
+To get kernel iso image:
+```sh
+cur=`pwd`
+ln ${cur}/build/bin/system/kernel ${cur}/run/iso/kernel
+ln ${cur}/build/bin/system/rfsimg ${cur}/run/iso/rfsimg
+grub-mkrescue -o ./run/image/naos.iso ./run/iso
+```
 
-#### Option1. **Legacy mode**
+#### B. Disk target
+##### Option1. **Legacy mode**
 
 Example of disk partition (MBR):    
 | Partition number | Type  | (Gdisk) Code |  FS   |  Content  |  Size  |
@@ -78,7 +87,7 @@ menuentry "NaOS multiboot2" {
 }
 ```
 
-#### Option2. **UEFI mode**
+##### Option2. **UEFI mode**
 Installing [OVMF](https://sourceforge.net/projects/tianocore/) and configuring OVMF_CODE.fd path at *util/run.py*.  
   
 
@@ -117,10 +126,9 @@ menuentry "NaOS multiboot2" {
 Move the raw disk file to *run/image/disk.img*.   
   
 Reference:  
-[Make a disk](https://wiki.archlinux.org/index.php/Fdisk), 
-[Install the grub](https://wiki.archlinux.org/index.php/GRUB). (archlinux wiki)
-
-
+> [Make a disk](https://wiki.archlinux.org/index.php/Fdisk)  
+> [Install the grub](https://wiki.archlinux.org/index.php/GRUB). (archlinux wiki)  
+> [OSDev](https://wiki.osdev.org/Bootable_Disk)  
 ### 4. Run
 After ```make``` success, you will get these files
 ```
