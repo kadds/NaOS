@@ -23,36 +23,42 @@ void init(const kernel_start_args *args)
 {
     if (args != nullptr) /// bsp
     {
+        // init serial device for logger when video device is preparing.
         trace::early_init();
         device::vga::init();
+
         trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
             " NaOS: Nano Operating System (arch X86_64)\n");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
 
-        trace::debug("Boot from ", (const char *)args->boot_loader_name);
+        trace::debug("Boot loader is ", (const char *)args->boot_loader_name);
         if (sizeof(kernel_start_args) != args->size_of_struct)
         {
-            trace::panic("Kernel args is invalid.");
+            trace::panic("Kernel args is invalid");
         }
-        trace::debug("Arch init start...");
+
+        trace::debug("Arch init");
         cpu_info::init();
         if (!cpu_info::has_feature(cpu_info::feature::system_call_ret))
         {
-            trace::panic("Cpu doesn 't support syscall/sysret instructions.");
+            trace::panic("Syscall/sysret instructions is not supported");
         }
         if (!cpu_info::has_feature(cpu_info::feature::apic))
         {
-            trace::panic("Cpu doesn 't support APIC.");
+            trace::panic("APIC is not supported");
         }
         auto cpuid = cpu::init();
 
-        trace::debug("Memory init...");
+        trace::debug("Memory init");
         memory::init(args, 0x0);
         trace::init();
         device::vga::tag_memory();
 
-        trace::debug("Paging init...");
+        trace::debug("Paging init");
+
+        // flush video
         device::vga::flush();
+
         paging::init();
         void *video_start = device::vga::get_vram();
         void *video_start_2mb = (void *)(((u64)video_start) & ~(paging::frame_size::size_2mb - 1));
@@ -68,20 +74,30 @@ void init(const kernel_start_args *args)
 
         device::vga::flush();
 
-        trace::debug("GDT init...");
+        trace::debug("GDT init");
         gdt::init_after_paging();
 
-        trace::debug("TSS init...");
-        tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x80000));
-        cpu::init_data(cpuid);
-        trace::debug("IDT init...");
-        idt::init_after_paging();
-        trace::debug("APIC init...");
-        APIC::init();
+        device::vga::flush();
 
-        trace::debug("Arch init end");
+        trace::debug("TSS init");
+        tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x80000));
+
+        device::vga::flush();
+
+        cpu::init_data(cpuid);
+        trace::debug("IDT init");
+        idt::init_after_paging();
+
+        device::vga::flush();
+
+        trace::debug("APIC init");
+        APIC::init();
+        trace::debug("Arch init done");
+
+        device::vga::flush();
         return;
     }
+    // ap
     auto cpuid = cpu::init();
     paging::init();
     gdt::init_after_paging();
@@ -94,4 +110,5 @@ void init(const kernel_start_args *args)
 void last_init() { device::vga::auto_flush(); }
 
 void init_drivers() { device::chip8042::init(); }
+
 } // namespace arch

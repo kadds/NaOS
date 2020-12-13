@@ -20,6 +20,7 @@ void init()
     if (!cpu::current().is_bsp())
     {
         counter--;
+        trace::debug("AP is arrived entrypoint");
         while (counter > 0)
         {
             cpu_pause();
@@ -34,13 +35,13 @@ void init()
         (u64)memory::kernel_virtaddr_to_phyaddr(memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0));
     u32 *ap_addr = (u32 *)_ap_stack;
     *memory::kernel_phyaddr_to_virtaddr(ap_addr) = cpu_stack;
-    trace::debug("Send INIT-IPI");
+    trace::debug("Sending INIT-IPI");
     APIC::local_post_init_IPI();
-    trace::debug("Send StartUP-IPI");
+    trace::debug("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
     APIC::local_post_start_up((u64)base_ap_phy_addr);
 
-    trace::debug("Wait for AP startup.");
+    trace::debug("Waiting for AP startup");
     u32 count = 0;
     volatile u32 *ap_count = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_count));
     while (1)
@@ -50,6 +51,7 @@ void init()
         {
             cpu_pause();
         }
+        _mfence();
         if (*ap_count == count)
         {
             break;
@@ -57,25 +59,30 @@ void init()
         count = *ap_count;
         tick = false;
     }
-    trace::debug("AP count: ", count);
+    trace::debug("Nums of AP ", count);
+    trace::info("Process ", count + 1);
     counter = count + 1;
 
-    volatile u32 *v = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_stack));
+    volatile u32 *stack = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_stack));
     volatile u32 *standby = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_standby));
 
     for (u32 i = 0; i < count; i++)
     {
         cpu_stack = (u64)memory::kernel_virtaddr_to_phyaddr(
             memory::KernelBuddyAllocatorV->allocate(memory::kernel_stack_size, 0));
-        *v = cpu_stack + memory::kernel_stack_size;
         _mfence();
+        *stack = cpu_stack + memory::kernel_stack_size;
         *standby = 0;
-        trace::debug("Wait AP ", i + 1, ".");
-        while (*v != 0)
+        _mfence();
+        trace::debug("Waiting for AP", i + 1);
+        while (*standby == 0 || *stack != 0)
         {
             cpu_pause();
         }
+        trace::debug("Getting AP ", i + 1, " response");
     }
+    trace::debug("Bsp is arrived entrypoint");
+    trace::debug("Waiting for all processtor to arrive entrypoint");
     counter--;
     while (counter > 0)
     {

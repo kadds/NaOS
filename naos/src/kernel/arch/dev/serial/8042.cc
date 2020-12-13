@@ -20,12 +20,12 @@ void init()
     kb_device_class dc;
     if (dev::enum_device(&dc))
     {
-        trace::info("Find 8042 keyboard device. Loading driver.");
+        trace::info("8042 keyboard device is available. Loading driver");
         auto driver = memory::New<kb_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
         {
-            trace::warning("Load 8042 keyboard driver failed.");
+            trace::warning("Loading 8042 keyboard driver failed");
             memory::Delete<>(memory::KernelCommonAllocatorV, driver);
         }
         io::attach_request_chain_device(dev, 0, io::chain_number::keyboard);
@@ -34,12 +34,12 @@ void init()
     mouse_device_class ds;
     if (dev::enum_device(&ds) > 0)
     {
-        trace::info("Find 8042 mouse device. Loading driver.");
+        trace::info("8042 mouse device is available. Loading driver");
         auto driver = memory::New<mouse_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
         {
-            trace::warning("Load 8042 mouse driver failed.");
+            trace::warning("Loading 8042 mouse driver failed");
             memory::Delete<>(memory::KernelCommonAllocatorV, driver);
         }
         io::attach_request_chain_device(dev, 0, io::chain_number::mouse);

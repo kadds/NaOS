@@ -42,7 +42,7 @@ void init()
     {
         if (!has_feature(fut))
         {
-            trace::panic("Unsupported feature.");
+            trace::panic("Unsupported feature");
         }
     }
 }

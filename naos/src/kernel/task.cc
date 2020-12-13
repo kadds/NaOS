@@ -261,7 +261,7 @@ void init()
     arch::task::init(thd, thd->register_info);
     cpu::current().set_task(thd);
     cpu::current().set_idle_task(thd);
-    trace::debug("idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init...");
+    trace::debug("Idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init");
 
     if (cpu::current().is_bsp())
     {

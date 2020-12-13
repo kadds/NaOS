@@ -54,8 +54,8 @@ make -j
 To get kernel iso image:
 ```sh
 cur=`pwd`
-ln ${cur}/build/bin/system/kernel ${cur}/run/iso/kernel
-ln ${cur}/build/bin/system/rfsimg ${cur}/run/iso/rfsimg
+cp ${cur}/build/bin/system/kernel ${cur}/run/iso/kernel
+cp ${cur}/build/bin/system/rfsimg ${cur}/run/iso/rfsimg
 grub-mkrescue -o ./run/image/naos.iso ./run/iso
 ```
 

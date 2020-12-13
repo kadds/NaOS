@@ -65,22 +65,22 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
         SMP::init();
         task::init();
         task::start_task_idle();
-        trace::panic("Unreachable control flow in _kstart.");
+        trace::panic("Unreachable control flow in _kstart");
     } // else bsp
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
     arch::init(args);
-    trace::info("build version ", timestamp_version);
+    trace::info("Build version ", timestamp_version);
     cpu::init();
     irq::init();
     memory::listen_page_fault();
     timer::init();
-    trace::debug("SMP init...");
+    trace::debug("SMP init");
     SMP::init();
-    trace::debug("VFS init...");
+    trace::debug("VFS init");
     fs::vfs::init();
-    trace::debug("Root file system init...");
+    trace::debug("Root file system init");
     fs::ramfs::init();
     fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
     fs::pipefs::init();
@@ -89,8 +89,8 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     dev::init();
     task::init();
     arch::init_drivers();
-    trace::info("kernel main");
-    arch::last_init();
+    trace::info("Bsp kernel main is running");
+    arch::last_init(); // auto flush video now
     task::start_task_idle();
-    trace::panic("Unreachable control flow in _kstart.");
+    trace::panic("Unreachable control flow in _kstart");
 }

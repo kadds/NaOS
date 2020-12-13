@@ -102,10 +102,10 @@ void init()
         map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_2mb,
             (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
     }
-    trace::debug("Map ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
+    trace::debug("Map address ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
                  (void *)(0xffff800000000000 + max_maped_memory));
 
-    trace::debug("Reload page table");
+    trace::debug("Reloading new page table");
     load(base_kernel_page_addr);
     memory::kernel_vm_info->mmu_paging.load_paging();
 }

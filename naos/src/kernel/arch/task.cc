@@ -35,7 +35,7 @@ ExportC void switch_task(register_info_t *prev, register_info_t *next) {}
 
 ExportC void do_exit(u64 exit_code)
 {
-    trace::debug("thread exit!");
+    trace::debug("Thread exit unexpected!");
     while (1)
         ;
 }

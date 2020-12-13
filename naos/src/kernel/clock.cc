@@ -29,8 +29,8 @@ void init()
 
     time::time_t t;
     time2time_t(current_time_microsecond, &t);
-    trace::debug("current time RTC: ", 2000 + t.year, ".", t.month + 1, ".", t.mday + 1, " ", t.hour, ":", t.minute,
-                 ":", t.second, ":", t.second, ":", t.millisecond);
+    trace::debug("Current time: ", 2000 + t.year, ".", t.month + 1, ".", t.mday + 1, " ", t.hour, ":", t.minute, ":",
+                 t.second, ":", t.second, ":", t.millisecond);
 }
 
 void start_tick()

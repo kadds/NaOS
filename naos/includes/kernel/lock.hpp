@@ -10,34 +10,43 @@ namespace lock
 struct spinlock_t
 {
   private:
-    std::atomic_flag lock_m = ATOMIC_FLAG_INIT;
+    std::atomic_bool lock_m;
 #ifdef _DEBUG
     u64 last_stack_pointer;
     std::atomic_uint64_t wait_times;
 #endif
   public:
-    spinlock_t() = default;
+    spinlock_t()
+        : lock_m(false)
+    {
+    }
     spinlock_t(const spinlock_t &) = delete;
     spinlock_t &operator=(const spinlock_t &) = delete;
     void lock()
     {
+        bool target = false;
         do
         {
-            while (lock_m._M_i)
-                cpu_pause();
+            // while (lock_m.load(std::memory_order_release))
+            cpu_pause();
+            target = false;
 #ifdef _DEBUG
             wait_times++;
 #endif
-        } while (lock_m.test_and_set(std::memory_order_acquire));
+        } while (!lock_m.compare_exchange_strong(target, true, std::memory_order_acquire));
 #ifdef _DEBUG
         last_stack_pointer = get_stack();
         wait_times = 0;
 #endif
     }
 
-    bool try_lock() { return !lock_m.test_and_set(std::memory_order_acquire); }
+    bool try_lock()
+    {
+        bool target = false;
+        return lock_m.compare_exchange_strong(target, true, std::memory_order_acquire);
+    }
 
-    void unlock() { lock_m.clear(std::memory_order_release); }
+    void unlock() { lock_m.store(false, std::memory_order_release); }
 };
 
 /// read write lock
@@ -57,8 +66,8 @@ struct rw_lock_t
         u64 exp;
         do
         {
-            while (lock_m == 0x8000000000000000UL)
-                cpu_pause();
+            // while (lock_m == 0x8000000000000000UL)
+            cpu_pause();
 
             exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
         } while (!lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire));
@@ -69,8 +78,8 @@ struct rw_lock_t
         u64 exp;
         do
         {
-            while (lock_m != 0)
-                cpu_pause();
+            // while (lock_m != 0)
+            cpu_pause();
             exp = 0;
         } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_acquire));
     }

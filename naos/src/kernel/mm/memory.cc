@@ -135,9 +135,9 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
-        trace::debug("Memory map ", i, ": type:", get_type_str(mm_item->map_type), ", start:", (void *)mm_item->addr,
-                     ", end:", (void *)((char *)mm_item->addr + mm_item->len), ", length:", mm_item->len, " -> ",
-                     mm_item->len >> 10, "Kib");
+        trace::debug("Memory map index ", i, ": type:", get_type_str(mm_item->map_type),
+                     ", range:", (void *)mm_item->addr, "-", (void *)((char *)mm_item->addr + mm_item->len),
+                     ", size:", mm_item->len, "bytes -> ", mm_item->len >> 10, "Kib -> ", mm_item->len >> 20, "Mib");
         if (mm_item->map_type == map_type_t::available)
         {
             u64 start = ((u64)mm_item->addr + page_size - 1) & ~(page_size - 1);
@@ -149,12 +149,12 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         if (mm_item->addr + mm_item->len > max_memory_maped)
             max_memory_maped = mm_item->addr + mm_item->len;
     }
-    trace::info("Memory available ", max_memory_available, "byte -> ", max_memory_available >> 10, "Kib -> ",
+    trace::info("Memory available ", max_memory_available, "bytes -> ", max_memory_available >> 10, "Kib -> ",
                 max_memory_available >> 20, "Mib -> ", max_memory_available >> 30, "Gib");
     // 16MB
     if (max_memory_available < 0x1000000)
     {
-        trace::panic("Too few memory to boot.");
+        trace::panic("Too few memory to boot");
     }
 
     mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
@@ -182,7 +182,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
             buddies->count = count + 1;
         else
             buddies->count = count;
-        trace::debug("Memory zone ", cid, " page count:", item.page_count, ", buddy count:", buddies->count);
+        trace::debug("Memory zone index ", cid, " num of page ", item.page_count, ", num of buddy ", buddies->count);
         if (likely(buddies->count > 0))
         {
             buddies->buddies = NewArray<buddy>(VirtBootAllocatorV, buddies->count, buddy_max_page);
@@ -206,7 +206,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     if (start_data < end_kernel)
     {
         start_data = end_kernel;
-        trace::warning("Data space is in kernel code space.");
+        trace::warning("Data space is in kernel code space");
         if (end_data < start_data)
         {
             end_data = start_data;
@@ -226,14 +226,14 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     tag_zone_buddy_memory((void *)start_kernel, (void *)end_kernel);
     tag_zone_buddy_memory((void *)start_data, (void *)end_data);
 
-    trace::debug("Kernel(code):", (void *)start_kernel, "-", (void *)end_kernel,
-                 ", length:", (end_kernel - start_kernel), " -> ", (end_kernel - start_kernel) >> 10, "Kib");
+    trace::debug("Kernel(code):", (void *)start_kernel, "-", (void *)end_kernel, ", size:", (end_kernel - start_kernel),
+                 " -> ", (end_kernel - start_kernel) >> 10, "Kib");
 
-    trace::debug("Kernel(boot data):", (void *)start_data, "-", (void *)end_data, ", length:", (end_data - start_data),
+    trace::debug("Kernel(boot data):", (void *)start_data, "-", (void *)end_data, ", size:", (end_data - start_data),
                  " -> ", (end_data - start_data) >> 10, "Kib");
 
     trace::debug("Kernel(image data):", (void *)start_image_data, "-", (void *)end_image_data,
-                 ", length:", (end_image_data - start_image_data), " -> ", (end_image_data - start_image_data) >> 10,
+                 ", size:", (end_image_data - start_image_data), " -> ", (end_image_data - start_image_data) >> 10,
                  "Kib");
 
     KernelBuddyAllocatorV = New<BuddyAllocator>(VirtBootAllocatorV);

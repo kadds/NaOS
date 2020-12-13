@@ -26,12 +26,12 @@ header *file_header = nullptr;
 
 void init()
 {
-    trace::debug("kernel symbols init...");
+    trace::debug("Kernel symbols init");
     auto f = fs::vfs::open("/data/ksybs", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read | fs::mode::bin,
                            fs::path_walk_flags::file);
     if (f == nullptr)
     {
-        trace::info("Can't load kernel symbols.");
+        trace::info("Loading kernel symbols file failed.");
     }
     u64 size = fs::vfs::size(f);
     file_header = (header *)memory::KernelVirtualAllocatorV->allocate(size, 8);
@@ -39,7 +39,7 @@ void init()
     if (unlikely(f->read((byte *)file_header, size, 0) != (i64)size))
     {
         memory::KernelVirtualAllocatorV->deallocate(file_header);
-        trace::info("Can't read kernel symbols file.");
+        trace::info("Reading kernel symbols file failed.");
         file_header = nullptr;
         f->close();
         return;
@@ -48,7 +48,8 @@ void init()
 
     if (!file_header->is_valid())
     {
-        trace::info("Can't read kernel symbols file. magic: ", file_header->magic, ". version: ", file_header->version);
+        trace::info("Reading kernel symbols file failed.", " magic: ", file_header->magic,
+                    ". version: ", file_header->version);
         memory::KernelVirtualAllocatorV->deallocate(file_header);
         file_header = nullptr;
         return;

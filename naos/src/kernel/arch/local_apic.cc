@@ -192,7 +192,7 @@ void local_init()
             apic_base_addr = (void *)memory::io_map_start_address;
         }
 
-        trace::debug("Enable Local APIC...");
+        trace::debug("Enable Local APIC");
     }
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))

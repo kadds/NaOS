@@ -17,7 +17,7 @@ ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 
 qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 4,sockets=1,cores=4 -serial file:../run/kernel_out.log'
 qemu_uefi = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 4,sockets=1,cores=4 -serial file:../run/kernel_out.log'
-qemu_headless_str = ' -nographic -vnc :0'
+qemu_headless_str = ' -nographic -vnc :1'
 
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
 vbox = 'VBoxManage startvm boot'

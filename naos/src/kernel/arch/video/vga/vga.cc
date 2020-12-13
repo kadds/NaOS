@@ -65,14 +65,14 @@ void init()
     auto fb_width = args->fb_width;
     auto fb_height = args->fb_height;
     auto fb_bbp = args->fb_bbp;
-    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", fb_width, "X", fb_height, ". bit ", fb_bbp,
-                                           ". frame size ", frame_size >> 10, "kb.\n");
+    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", fb_width, "X", fb_height, ". ", fb_bbp, "bit",
+                                           ". frame size ", frame_size >> 10, "KiB.\n");
 
     test();
 
     /// print video card memory info
     trace::debug("Vram address ", (void *)vram_addr);
-    trace::debug("Video backbuffer ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
+    trace::debug("Video backbuffer(VM) ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
 }
 
 void test()

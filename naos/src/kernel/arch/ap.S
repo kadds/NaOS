@@ -50,14 +50,18 @@ ap_code32:
     mov %ax, %ss
     mov %ax, %fs
     mov %ax, %gs
-    incl (_ap_count)
+    lock incl (_ap_count)
 spin_lock:
-    xorl   %ecx, %ecx
-    incl   %ecx
+    movl $1, %ecx
 spin_lock_retry:
     xorl   %eax, %eax
-    lock; cmpxchg %cx, (_ap_standby)
-    jnz    spin_lock_retry
+    // if *_ap_standby == 0
+    //    *_ap_standby = 1
+    mfence
+    lock cmpxchg %ecx, (_ap_standby)
+    mfence
+    jnz    spin_lock
+
     movl (_ap_stack), %esp
     movl $0, (_ap_stack)
     pushl $0
