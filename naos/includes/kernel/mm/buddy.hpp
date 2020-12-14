@@ -21,7 +21,7 @@ class buddy
     const int size;
     /// The 0th to last element comes from the output of the binary tree traversal. Element 0 is root.
     u16 *array;
-    u64 fit_size(u64 size);
+    u64 next_fit_size(u64 size);
 
   public:
     buddy(int max_level);

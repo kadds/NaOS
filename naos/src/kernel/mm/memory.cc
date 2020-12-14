@@ -271,12 +271,12 @@ void *kmalloc(u64 size, u64 align)
     {
         trace::panic("align is larger than size");
     }
-
-    if (size > kmalloc_fixed_slab_size[sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]) - 1].size)
+    constexpr int tmp = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]) - 1;
+    if (unlikely(size > kmalloc_fixed_slab_size[tmp].size))
     {
         trace::panic("allocate size is too large");
-        return nullptr;
     }
+
     u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid;
 
     while (left < right)
@@ -296,6 +296,7 @@ void *kmalloc(u64 size, u64 align)
         }
     }
     kassert(kmalloc_fixed_slab_size[mid].size >= size, "Kernel malloc check failed!");
+
     SlabObjectAllocator allocator(kmalloc_fixed_slab_size[mid].group);
     return allocator.allocate(size, align);
 }

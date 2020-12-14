@@ -11,9 +11,9 @@
 namespace arch::device::chip8042
 {
 
-io_port data_port = 0x60;
-io_port cmd_port = 0x64;
-io_port cmd_status_port = 0x64;
+constexpr io_port data_port = 0x60;
+constexpr io_port cmd_port = 0x64;
+constexpr io_port cmd_status_port = 0x64;
 
 void init()
 {
@@ -112,7 +112,7 @@ void wait_for_read()
             wait_for_read();
             if (io_in8(data_port) != 0x55)
             {
-                trace::debug("8042 self check failed.");
+                trace::debug("8042 self check failed");
                 return nullptr;
             }
         }
@@ -121,7 +121,7 @@ void wait_for_read()
         wait_for_read();
         if (io_in8(data_port) != 0x00)
         {
-            trace::debug("keyboard self check failed.");
+            trace::debug("keyboard self check failed");
             return nullptr;
         }
         return memory::New<kb_device>(memory::KernelCommonAllocatorV);
@@ -142,7 +142,7 @@ void wait_for_read()
             wait_for_read();
             if (io_in8(data_port) != 0x55)
             {
-                trace::debug("8042 self check failed.");
+                trace::debug("8042 self check failed");
                 return nullptr;
             }
         }
@@ -207,7 +207,7 @@ bool set_led(u8 s)
     wait_for_read();
     if (io_in8(data_port) != 0xFA)
     {
-        trace::warning("Can't set led (no ACK)");
+        trace::warning("set led (no ACK) failed");
         return false;
     }
 
@@ -217,7 +217,7 @@ bool set_led(u8 s)
     wait_for_read();
     if (io_in8(data_port) != 0xFA)
     {
-        trace::warning("Can't set led (no ACK)");
+        trace::warning("set led (no ACK) failed");
         return false;
     }
     return true;
@@ -242,7 +242,7 @@ u8 get_keyboard_id()
     wait_for_read();
     if (io_in8(data_port) != 0xFA) // ACK
     {
-        trace::warning("Unable to get keyboard id.");
+        trace::warning("get keyboard id failed");
         return 0;
     }
     wait_for_read();
@@ -273,7 +273,7 @@ bool kb_driver::setup(::dev::device *dev)
     old_status |= 0b01000001;
 
     auto id = get_keyboard_id();
-    trace::debug("keyboard id = ", (void *)(u64)id);
+    trace::debug("keyboard id is ", (void *)(u64)id);
 
     kbdev->id = id;
 
@@ -346,7 +346,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code. ", (void *)(u64)k);
+                trace::warning("Unknow scan code ", (void *)(u64)k);
             }
         }
         else if (dev->last_prefix_count == 1)
@@ -373,7 +373,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code.", (void *)(u64)dev->last_prefix[0], ",", (void *)(u64)k);
+                trace::warning("Unknow scan code ", (void *)(u64)dev->last_prefix[0], ",", (void *)(u64)k);
             }
         }
         else if (dev->last_prefix_count == 2)
@@ -388,14 +388,14 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code.", (void *)(u64)dev->last_prefix[0], ",",
+                trace::warning("Unknow scan code ", (void *)(u64)dev->last_prefix[0], ",",
                                (void *)(u64)dev->last_prefix[1], ",", (void *)(u64)k);
                 dev->last_prefix_count = 0;
             }
         }
         else
         {
-            trace::warning("Unknow scan code. Unknow prefix. ", dev->last_prefix_count);
+            trace::warning("Unknow scan code. Unknow prefix. Prefix num: ", dev->last_prefix_count);
         }
     }
     return false;
@@ -403,7 +403,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
 
 void kb_driver::on_io_request(io::request_t *request)
 {
-    kassert(request->type == io::chain_number::keyboard, "Error driver state.");
+    kassert(request->type == io::chain_number::keyboard, "Error driver state");
     io::keyboard_request_t *req = (io::keyboard_request_t *)request;
     io::status_t &status = req->status;
 
@@ -523,7 +523,7 @@ bool set_mouse_rate(u8 rate)
     wait_for_read();
     if (io_in8(data_port) != 0xFA)
     {
-        trace::warning("Can't set mouse rate (no ACK)");
+        trace::warning("set mouse rate (no ACK) failed");
         return false;
     }
     wait_for_write();
@@ -533,7 +533,7 @@ bool set_mouse_rate(u8 rate)
     wait_for_read();
     if (io_in8(data_port) != 0xFA)
     {
-        trace::warning("Can't set mouse rate (no ACK)");
+        trace::warning("set mouse rate (no ACK) failed");
         return false;
     }
     return true;
@@ -549,7 +549,7 @@ u8 get_mouse_id()
     auto id = io_in8(data_port);
     if (id != 0xFA)
     {
-        trace::warning("Can't get mouse id.");
+        trace::warning("get mouse id failed");
     }
     else
     {
@@ -595,7 +595,7 @@ bool mouse_driver::setup(::dev::device *dev)
         id = get_mouse_id();
     }
     msdev->id = id;
-    trace::debug("mouse id = ", id);
+    trace::debug("mouse id is ", id);
 
     wait_for_write();
     io_out8(cmd_port, 0x60);
@@ -700,7 +700,7 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
 
 void mouse_driver::on_io_request(io::request_t *request)
 {
-    kassert(request->type == io::chain_number::mouse, "Error driver state.");
+    kassert(request->type == io::chain_number::mouse, "Error driver state");
     io::mouse_request_t *req = (io::mouse_request_t *)request;
     io::status_t &status = req->status;
 

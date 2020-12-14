@@ -9,15 +9,17 @@ class serial
     u16 port;
 
   public:
-    void init(u16 port);
+    void init(u16 control_port);
+
     void write(byte data);
     void write(const byte *data, u64 len);
+
     /// read bytes to buffer
     u64 read(byte *data, u64 len);
     /// read one byte
     byte read();
 };
 
-u16 select_port(int index);
+u16 get_control_port(int index);
 
 } // namespace arch::device::com

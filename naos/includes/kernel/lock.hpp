@@ -131,6 +131,6 @@ struct rw_lock_t
             exp = 0x8000000000000000UL;
         } while (!lock_m.compare_exchange_strong(exp, 0, std::memory_order_release));
     }
-}; // namespace lock
+};
 
 }; // namespace lock

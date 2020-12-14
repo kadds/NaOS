@@ -11,7 +11,7 @@ const int buddy_max_page = 1 << 8;
 BuddyAllocator *KernelBuddyAllocatorV;
 lock::spinlock_t buddy_lock;
 
-u64 buddy::fit_size(u64 size)
+u64 buddy::next_fit_size(u64 size)
 {
     size |= size >> 1;
     size |= size >> 2;
@@ -26,7 +26,7 @@ int buddy::alloc(u64 pages)
     if (pages == 0)
         pages = 1;
     else if ((pages & (pages - 1)) != 0) // not pow of 2
-        pages = fit_size(pages);
+        pages = next_fit_size(pages);
 
     // The existing maximum size does not apply to callers.
     if (array[0] < pages)

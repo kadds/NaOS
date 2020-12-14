@@ -2,7 +2,7 @@
 #include "kernel/arch/io.hpp"
 namespace arch::device::com
 {
-const io_port base_port[] = {0x3f8, 0x2f8, 0x3e8, 0x2e8};
+const io_port base_control_port[] = {0x3f8, 0x2f8, 0x3e8, 0x2e8};
 
 void io_write(io_port base_port, byte data)
 {
@@ -20,11 +20,12 @@ byte io_read(io_port base_port)
     return (byte)io_in8(base_port);
 }
 
-u16 select_port(int index) { return base_port[index]; }
+u16 get_control_port(int index) { return base_control_port[index]; }
 
-void serial::init(u16 port)
+void serial::init(u16 control_port)
 {
-    this->port = port;
+    this->port = control_port;
+
     io_out8(port + 1, 0);
     io_out8(port + 3, 0x80);
     io_out8(port + 0, 0x1); // divisor  115200

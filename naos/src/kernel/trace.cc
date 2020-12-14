@@ -19,7 +19,7 @@ util::ring_buffer *ring_buffer = nullptr;
 
 arch::device::com::serial serial_device;
 
-void early_init() { serial_device.init(arch::device::com::select_port(0)); }
+void early_init() { serial_device.init(arch::device::com::get_control_port(0)); }
 
 void init()
 {
