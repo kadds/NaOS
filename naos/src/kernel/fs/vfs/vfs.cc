@@ -795,6 +795,10 @@ file *open_pipe()
 {
     super_block *su_block = pipe_block;
     dentry *entry = su_block->alloc_dentry();
+    if (entry == nullptr)
+    {
+        return nullptr;
+    }
 
     entry->set_name(nullptr);
     entry->set_parent(nullptr);

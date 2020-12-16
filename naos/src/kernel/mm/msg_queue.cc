@@ -146,7 +146,7 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
 
 bool wait_reader_func(u64 data)
 {
-    auto *w = (wait_t *)data;
+    auto *w = reinterpret_cast<wait_t *>(data);
     msg_pack_list_t *pack_list;
     uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
     if (!w->queue->msg_packs.get(w->type, &pack_list) || pack_list->empty())

@@ -16,7 +16,9 @@ template <typename E> class linked_list
 
         template <typename... Args>
         list_node(Args &&... args)
-            : element(std::forward<Args>(args)...){};
+            : element(std::forward<Args>(args)...)
+        {
+        }
     };
     struct list_info_node
     {

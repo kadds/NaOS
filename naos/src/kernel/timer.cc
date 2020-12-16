@@ -68,7 +68,7 @@ constexpr u64 tick_us = 1000;
 
 void on_tick(u64 vector, u64 data)
 {
-    auto &cpu_timer = *(cpu_timer_t *)cpu::current().get_timer_queue();
+    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
     u64 us = get_clock_source()->current();
 
     {
@@ -146,13 +146,13 @@ time::microsecond_t get_high_resolution_time() { return get_clock_source()->curr
 
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {
-    auto &cpu_timer = *(cpu_timer_t *)cpu::current().get_timer_queue();
+    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
     cpu_timer.watcher_list.push_back(watcher_t(expires_delta_time + get_high_resolution_time(), func, user_data));
 }
 
 bool add_time_point_watcher(u64 expires_time_point, watcher_func func, u64 user_data)
 {
-    auto &cpu_timer = *(cpu_timer_t *)cpu::current().get_timer_queue();
+    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     if (get_high_resolution_time() < expires_time_point)
     {
@@ -165,7 +165,7 @@ bool add_time_point_watcher(u64 expires_time_point, watcher_func func, u64 user_
 ///< don't remove timer in soft irq context
 void remove_watcher(watcher_func func)
 {
-    auto &cpu_timer = *(cpu_timer_t *)cpu::current().get_timer_queue();
+    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     for (auto it = cpu_timer.watcher_list.begin(); it != cpu_timer.watcher_list.end(); ++it)
     {

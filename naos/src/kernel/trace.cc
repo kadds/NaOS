@@ -51,7 +51,7 @@ void print_inner(const char *str, u64 len)
         uctx::UninterruptibleContext icu;
         // early init
         // write log at once
-        u64 len = arch::device::vga::putstring(str, 0);
+        len = arch::device::vga::putstring(str, 0);
         serial_device.write((const byte *)str, len);
     }
 }

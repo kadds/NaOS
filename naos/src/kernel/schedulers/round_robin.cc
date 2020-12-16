@@ -29,7 +29,7 @@ struct cpu_task_rr_t
 i64 calc_span(thread_t *);
 void round_robin_scheduler::add(thread_t *thread)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
 
     auto rr = memory::New<thread_data_rr_t>(memory::KernelCommonAllocatorV);
 
@@ -43,7 +43,7 @@ void round_robin_scheduler::add(thread_t *thread)
 
 void round_robin_scheduler::remove(thread_t *thread)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     uctx::UninterruptibleContext icu;
 
     auto it = l->runable_list.find(thread);
@@ -68,7 +68,7 @@ void round_robin_scheduler::remove(thread_t *thread)
 
 void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     uctx::UninterruptibleContext icu;
 
     if (state == thread_state::stop)
@@ -135,7 +135,7 @@ void round_robin_scheduler::update_prop(thread_t *thread, u8 static_priority, u8
 
 void round_robin_scheduler::on_migrate(thread_t *thread)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
 
     auto rr = memory::New<thread_data_rr_t>(memory::KernelCommonAllocatorV);
     rr->rest_span = calc_span(thread);
@@ -158,7 +158,7 @@ bool round_robin_scheduler::schedule()
     auto cur = current();
     bool has_task = false;
     auto &cpu = cpu::current();
-    auto l = (cpu_task_rr_t *)cpu.get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     while (cur->attributes & thread_attributes::need_schedule)
     {
         if (!l->runable_list.empty())
@@ -224,13 +224,13 @@ void round_robin_scheduler::schedule_tick()
 
 u64 round_robin_scheduler::scheduleable_task_count()
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     return l->runable_list.size();
 }
 
 thread_t *round_robin_scheduler::get_migratable_task(u32 cpuid)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     if (l->runable_list.empty())
         return nullptr;
     uctx::UninterruptibleContext icu;
@@ -244,7 +244,7 @@ thread_t *round_robin_scheduler::get_migratable_task(u32 cpuid)
 
 void round_robin_scheduler::commit_migrate(thread_t *thd)
 {
-    auto l = (cpu_task_rr_t *)cpu::current().get_schedule_data((int)clazz);
+    auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     uctx::UninterruptibleContext icu;
     auto it = l->runable_list.find(thd);
     kassert(it != l->runable_list.end(), "commit task failed!");
@@ -255,7 +255,8 @@ u64 round_robin_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u
 
 void round_robin_scheduler::init_cpu()
 {
-    cpu::current().set_schedule_data((int)clazz, memory::New<cpu_task_rr_t>(memory::KernelCommonAllocatorV));
+    cpu::current().set_schedule_data(static_cast<int>(clazz),
+                                     memory::New<cpu_task_rr_t>(memory::KernelCommonAllocatorV));
     auto &data = cpu::current().edit_load_data();
     data.last_sched_time = timer::get_high_resolution_time();
     data.last_tick_time = timer::get_high_resolution_time();

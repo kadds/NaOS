@@ -395,6 +395,8 @@ template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_S
     auto i = std::initializer_list<int>{(dispatch(args), 0)...};
 }
 
+inline static Trace_Section void print_reset() { print<PrintAttribute<TextAttribute::Reset>>(); }
+
 #pragma GCC diagnostic pop
 
 NoReturn void keep_panic(const regs_t *regs = 0);
@@ -455,7 +457,7 @@ Trace_Section void assert_runtime(const char *exp, const char *file, int line, A
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         print<PrintAttribute<Color::Foreground::LightRed>>("[assert]  ");
-        print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed: at: ", file, ':', line,
+        print<PrintAttribute<Color::Foreground::Red>>("runtime assert failed at: ", file, ':', line,
                                                       "\n    assert expr: ", exp, '\n');
     }
     panic<>("from assert failed. ", std::forward<Args>(args)...);

@@ -34,7 +34,7 @@ typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
 typedef __uint128_t u128;
-typedef void *addr;
+typedef void *addr_t;
 
 /// easy use likely or unlikely
 #ifndef likely

@@ -27,7 +27,8 @@ u64 scan_zero(BaseType *data, u64 offset, u64 max_len);
 
 u64 scan_set(BaseType *data, u64 offset, u64 max_len);
 
-}; // namespace bit_set_opeartion
+} // namespace bit_set_opeartion
+
 class bit_set
 {
   private:

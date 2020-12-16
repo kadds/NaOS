@@ -100,7 +100,7 @@ void startup_process(char *cmd)
         {
             if (!has_space)
             {
-                if (args_count > max_arg_count)
+                if (args_count >= max_arg_count)
                 {
                     print("too many args...");
                     return;

@@ -34,7 +34,7 @@ void init()
         trace::info("Loading kernel symbols file failed.");
     }
     u64 size = fs::vfs::size(f);
-    file_header = (header *)memory::KernelVirtualAllocatorV->allocate(size, 8);
+    file_header = reinterpret_cast<header *>(memory::KernelVirtualAllocatorV->allocate(size, 8));
 
     if (unlikely(f->read((byte *)file_header, size, 0) != (i64)size))
     {
@@ -56,7 +56,7 @@ void init()
     }
 }
 
-const char *get_symbol_name(void *address)
+const char *get_symbol_name(addr_t address)
 {
     u64 addr = (u64)address;
     if (unlikely(file_header == nullptr))

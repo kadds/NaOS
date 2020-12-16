@@ -586,7 +586,7 @@ void exit_process_inner(thread_t *thd, i64 ret)
         scheduler::remove(
             thd,
             [](u64 data) {
-                auto *dt = (process_data_t *)data;
+                auto *dt = reinterpret_cast<process_data_t *>(data);
                 auto ret = dt->ret;
                 auto process = dt->thd->process;
                 auto list = (thread_list_t *)process->thread_list;
@@ -705,7 +705,7 @@ void exit_thread(thread_t *thd, i64 ret)
     scheduler::remove(
         thd,
         [](u64 data) {
-            auto *dt = (data_t *)data;
+            auto *dt = reinterpret_cast<data_t *>(data);
             dt->thd->user_stack_top = (void *)dt->ret;
             dt->thd->state = thread_state::destroy;
             if (dt->thd->attributes & thread_attributes::detached)
@@ -717,7 +717,7 @@ void exit_thread(thread_t *thd, i64 ret)
                 dt->thd->wait_queue.do_wake_up();
             }
         },
-        (u64)data);
+        reinterpret_cast<u64>(data));
 }
 
 void do_exit_thread(i64 ret)

@@ -133,4 +133,4 @@ struct rw_lock_t
     }
 };
 
-}; // namespace lock
+} // namespace lock

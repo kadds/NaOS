@@ -74,7 +74,8 @@ struct kmalloc_t
     slab_group *group;
     kmalloc_t(u64 size, const char *name)
         : size(size)
-        , name(name){};
+        , name(name)
+        , group(nullptr){};
 } kmalloc_fixed_slab_size[] = {
     {8, "kmalloc-8"},       {16, "kmalloc-16"},     {24, "kmalloc-24"},     {32, "kmalloc-32"},
     {40, "kmalloc-40"},     {48, "kmalloc-48"},     {56, "kmalloc-56"},     {64, "kmalloc-64"},
@@ -290,7 +291,7 @@ void *kmalloc(u64 size, u64 align)
             }
             right = mid;
         }
-        else if (kmalloc_fixed_slab_size[mid].size < size)
+        else
         {
             left = mid + 1;
         }

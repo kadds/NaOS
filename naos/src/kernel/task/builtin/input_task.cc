@@ -123,7 +123,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
     }
 }
 
-void print_mouse(io::mouse_result_t &res, io::status_t &status, io::request_t *req, fs::vfs::file *f)
+void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, fs::vfs::file *f)
 {
     if (status.io_is_completion)
     {

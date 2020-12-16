@@ -164,13 +164,13 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
         return (program_64 *)p;
     file->move(start);
     file->read(p, len, 0);
-    return (program_64 *)p;
+    return reinterpret_cast<program_64 *>(p);
 }
 
 /// TODO: release memory resource
 bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
-    elf_header_64 *elf = (elf_header_64 *)header;
+    elf_header_64 *elf = reinterpret_cast<elf_header_64 *>(header);
     if (!is_valid(elf))
         return false;
     if (elf->shentsize != sizeof(section_64) || elf->phentsize != sizeof(program_64))

@@ -11,7 +11,7 @@ namespace clock
 {
 class clock_source;
 class clock_event;
-}; // namespace clock
+} // namespace clock
 
 namespace cpu
 {

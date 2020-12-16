@@ -5,7 +5,7 @@
 namespace task
 {
 struct thread_t;
-};
+}
 
 namespace arch::cpu
 {

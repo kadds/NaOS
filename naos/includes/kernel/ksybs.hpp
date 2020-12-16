@@ -3,6 +3,6 @@
 namespace ksybs
 {
 void init();
-const char *get_symbol_name(void *address);
+const char *get_symbol_name(addr_t address);
 
 } // namespace ksybs

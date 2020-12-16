@@ -21,7 +21,7 @@
         {
             "label": "cppcheck",
             "type": "shell",
-            "command": "cppcheck --template=gcc --std=c++14 --enable=warning,performance,style --force naos/",
+            "command": "cppcheck --template=gcc --std=c++17 --enable=warning,performance,style --force naos/",
             "group": "build",
             "problemMatcher": {
                 "owner": "cpp",

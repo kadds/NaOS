@@ -103,7 +103,7 @@ struct update_state_ipi_param
 
 void update_state_ipi(u64 data)
 {
-    update_state_ipi_param *p = (update_state_ipi_param *)data;
+    update_state_ipi_param *p = reinterpret_cast<update_state_ipi_param *>(data);
     p->thread->scheduler->update_state(p->thread, p->state);
 
     memory::Delete<>(memory::KernelCommonAllocatorV, p);

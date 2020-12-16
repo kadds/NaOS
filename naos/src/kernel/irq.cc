@@ -60,14 +60,12 @@ void do_soft_irq()
     {
         if (cpu.is_irq_pending(i))
         {
-            request_list_t &list = *soft_irq_list[i].list;
-
             uctx::RawReadLockUninterruptibleController ctr(soft_irq_list[i].lock);
             ctr.begin();
             if (cpu.is_irq_pending(i))
             {
                 cpu.clean_irq_pending(i);
-
+                request_list_t &list = *soft_irq_list[i].list;
                 for (auto &it : list)
                 {
                     request_func_data fd = it;

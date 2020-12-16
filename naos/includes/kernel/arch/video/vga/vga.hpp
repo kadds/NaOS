@@ -3,7 +3,7 @@
 namespace trace
 {
 struct console_attribute;
-};
+}
 namespace arch::device::vga
 {
 

@@ -23,22 +23,24 @@ kernel_start_args *kernel_args;
 
 ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
 {
-    char *s = (char *)start;
-    char *e = (char *)end;
-    if (s > e)
+    u64 s = reinterpret_cast<u64>(start);
+    u64 e = reinterpret_cast<u64>(end);
+    if (unlikely(s > e))
         return;
-    const int block_size = sizeof(u64);
-    int block_count = (e - s) / block_size;
-    int rest = (e - s) % block_size;
-    u64 *data = (u64 *)s;
-    while (block_count--)
+
+    const u64 block_size = sizeof(u64);
+    u64 num = (e - s) / block_size;
+    u64 rest = (e - s) % block_size;
+
+    u64 *data = reinterpret_cast<u64 *>(start);
+    while (num--)
     {
         *(data) = 0;
     }
-    s = (char *)data;
+    char *p = reinterpret_cast<char *>(data);
     while (rest--)
     {
-        *(s) = 0;
+        *(p) = 0;
     }
 }
 
@@ -52,7 +54,7 @@ ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
     return (u64)&_kstart;
 }
 
-u64 timestamp_version = BUILD_VERSION_TS;
+u64 build_version_timestamp = BUILD_VERSION_TS;
 
 ExportC NoReturn void _kstart(kernel_start_args *args)
 {
@@ -71,7 +73,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     kernel_args = args;
     static_init();
     arch::init(args);
-    trace::info("Build version ", timestamp_version);
+    trace::info("Build version ", build_version_timestamp);
     cpu::init();
     irq::init();
     memory::listen_page_fault();
