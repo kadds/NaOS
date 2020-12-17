@@ -352,7 +352,7 @@ void clock_event::suspend()
     {
         uctx::UninterruptibleContext icu;
         is_suspend = true;
-        irq::remove_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
+        irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
         local_disable(lvt_index::timer);
 
         write_register(timer_initial_count_register, 0xFFFFFFFF);
@@ -371,7 +371,7 @@ void clock_event::resume()
         write_register(timer_initial_count_register, init_counter);
         write_register(timer_divide_register, divide);
         is_suspend = false;
-        irq::insert_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
+        irq::register_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
     }
 }
 

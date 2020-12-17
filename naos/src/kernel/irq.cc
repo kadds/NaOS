@@ -126,14 +126,14 @@ void init()
     arch::idt::enable();
 }
 
-void insert_request_func(u32 vector, request_func func, u64 user_data)
+void register_request_func(u32 vector, request_func func, u64 user_data)
 {
     auto &locked_list = irq_list[vector];
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
-void remove_request_func(u32 vector, request_func func, u64 user_data)
+void unregister_request_func(u32 vector, request_func func, u64 user_data)
 {
     auto &locked_list = irq_list[vector];
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
@@ -148,14 +148,14 @@ void remove_request_func(u32 vector, request_func func, u64 user_data)
     }
 }
 
-void insert_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
+void register_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
 {
     auto &locked_list = soft_irq_list[vector];
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
     locked_list.list->push_back(request_func_data((void *)func, user_data));
 }
 
-void remove_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
+void unregister_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
 {
     auto &locked_list = soft_irq_list[vector];
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);

@@ -49,7 +49,7 @@ void init()
     vm_allocator::allocator = memory::New<vm_allocator::list_node_cache_allocator_t>(memory::VirtBootAllocatorV);
 }
 
-void listen_page_fault() { irq::insert_request_func(arch::exception::vector::page_fault, page_fault_func, 0); }
+void listen_page_fault() { irq::register_request_func(arch::exception::vector::page_fault, page_fault_func, 0); }
 
 template <typename _T> _T *new_page_table()
 {

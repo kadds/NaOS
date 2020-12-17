@@ -11,7 +11,9 @@ enum hard_vector
     pit_timer = 34,
     HEPT = 56,
     local_apic_timer = 128,
+    // sent function to excute on other cpu
     IPI_call = 250,
+    // send task to other cpu
     IPI_reschedule = 251,
     IPI_tlb = 252,
 };
@@ -48,16 +50,16 @@ struct request_func_data
     }
 };
 
-void wakeup_soft_irq_daemon();
-
-void raise_soft_irq(u64 soft_irq_number);
+// fn
 
 void init();
+void wakeup_soft_irq_daemon();
+void raise_soft_irq(u64 soft_irq_number);
 
-void insert_request_func(u32 vector, request_func func, u64 user_data);
-void remove_request_func(u32 vector, request_func func, u64 user_data);
+void register_request_func(u32 vector, request_func func, u64 user_data);
+void unregister_request_func(u32 vector, request_func func, u64 user_data);
 
-void insert_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
-void remove_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
+void register_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
+void unregister_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
 
 } // namespace irq

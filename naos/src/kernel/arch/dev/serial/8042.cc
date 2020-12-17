@@ -170,9 +170,9 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
 
     u8 data;
     data = io_in8(data_port);
-    kb_data_t kdata;
-    kdata.set(timer::get_high_resolution_time(), data);
-    dev->buffer.write_with() = kdata;
+    kb_data_t kb_data;
+    kb_data.set(timer::get_high_resolution_time(), data);
+    dev->buffer.write_with() = kb_data;
 
     irq::raise_tasklet(&dev->tasklet);
 
@@ -263,7 +263,7 @@ u8 get_keyboard_id()
 
 bool kb_driver::setup(::dev::device *dev)
 {
-    kb_device *kbdev = ((kb_device *)dev);
+    kb_device *kb_dev = ((kb_device *)dev);
     uctx::UninterruptibleContext icu;
 
     io_out8(cmd_port, 0x20);
@@ -275,14 +275,14 @@ bool kb_driver::setup(::dev::device *dev)
     auto id = get_keyboard_id();
     trace::debug("keyboard id is ", (void *)(u64)id);
 
-    kbdev->id = id;
+    kb_dev->id = id;
 
     blink_led();
 
     // reset led
     set_led(0);
 
-    kbdev->led_status = 0;
+    kb_dev->led_status = 0;
 
     io_out8(cmd_port, 0x60);
 
@@ -291,9 +291,9 @@ bool kb_driver::setup(::dev::device *dev)
 
     flush();
 
-    kbdev->tasklet.func = kb_tasklet_func;
-    kbdev->tasklet.user_data = (u64)kbdev;
-    irq::add_tasklet(&kbdev->tasklet);
+    kb_dev->tasklet.func = kb_tasklet_func;
+    kb_dev->tasklet.user_data = reinterpret_cast<u64>(kb_dev);
+    irq::add_tasklet(&kb_dev->tasklet);
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -304,7 +304,7 @@ bool kb_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(0x1, &entry);
-    irq::insert_request_func(intr, kb_interrupt, (u64)dev);
+    irq::register_request_func(intr, kb_interrupt, (u64)dev);
     APIC::io_enable(0x1);
     return true;
 }
@@ -570,7 +570,7 @@ u8 get_mouse_id()
 
 bool mouse_driver::setup(::dev::device *dev)
 {
-    mouse_device *msdev = (mouse_device *)dev;
+    mouse_device *ms_dev = (mouse_device *)dev;
     wait_for_write();
     io_out8(cmd_port, 0xA8);
 
@@ -594,7 +594,7 @@ bool mouse_driver::setup(::dev::device *dev)
         set_mouse_rate(80);
         id = get_mouse_id();
     }
-    msdev->id = id;
+    ms_dev->id = id;
     trace::debug("mouse id is ", id);
 
     wait_for_write();
@@ -602,9 +602,9 @@ bool mouse_driver::setup(::dev::device *dev)
     wait_for_write();
     io_out8(data_port, old_status);
 
-    msdev->tasklet.func = mouse_tasklet_func;
-    msdev->tasklet.user_data = (u64)msdev;
-    irq::add_tasklet(&msdev->tasklet);
+    ms_dev->tasklet.func = mouse_tasklet_func;
+    ms_dev->tasklet.user_data = reinterpret_cast<u64>(ms_dev);
+    irq::add_tasklet(&ms_dev->tasklet);
 
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
@@ -615,7 +615,7 @@ bool mouse_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(12, &entry);
-    irq::insert_request_func(intr, mouse_interrupt, (u64)dev);
+    irq::register_request_func(intr, mouse_interrupt, (u64)dev);
 
     wait_for_write();
     io_out8(cmd_port, 0xD4);

@@ -32,8 +32,8 @@ void init()
     arch::SMP::init();
     if (cpu::current().is_bsp())
     {
-        irq::insert_request_func(irq::hard_vector::IPI_tlb, flush_tlb_irq, 0);
-        irq::insert_request_func(irq::hard_vector::IPI_call, ipi_call, 0);
+        irq::register_request_func(irq::hard_vector::IPI_tlb, flush_tlb_irq, 0);
+        irq::register_request_func(irq::hard_vector::IPI_call, ipi_call, 0);
     }
 }
 

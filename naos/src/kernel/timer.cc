@@ -136,7 +136,7 @@ void init()
     {
         clock::init();
         clock::start_tick();
-        irq::insert_soft_request_func(irq::soft_vector::timer, on_tick, 0);
+        irq::register_soft_request_func(irq::soft_vector::timer, on_tick, 0);
     }
 
     timer_spinlock.unlock();

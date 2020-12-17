@@ -12,7 +12,7 @@ void do_tasklet(u64 vec, u64 user_data) { exec_tasklet(); }
 
 void init_tasklet()
 {
-    irq::insert_soft_request_func(soft_vector::task, do_tasklet, 0);
+    irq::register_soft_request_func(soft_vector::task, do_tasklet, 0);
     tasklet_head = nullptr;
 }
 

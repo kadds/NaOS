@@ -60,7 +60,7 @@ void init()
 
         is_init = true;
         reschedule_ready = true;
-        irq::insert_request_func(irq::hard_vector::IPI_reschedule, reschedule_func, 0);
+        irq::register_request_func(irq::hard_vector::IPI_reschedule, reschedule_func, 0);
     }
     timer::add_watcher(5000, timer_tick, 0);
 }
