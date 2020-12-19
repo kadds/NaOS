@@ -15,6 +15,8 @@ namespace trace
 {
 bool output_debug = true;
 
+const u32 slow_level = 0;
+
 util::ring_buffer *ring_buffer = nullptr;
 
 arch::device::com::serial serial_device;
@@ -27,6 +29,7 @@ void init()
                                                  util::ring_buffer::strategy::discard, memory::KernelCommonAllocatorV,
                                                  memory::KernelBuddyAllocatorV);
 }
+
 util::ring_buffer &get_kernel_log_buffer() { return *ring_buffer; }
 
 lock::spinlock_t spinlock;
@@ -37,8 +40,26 @@ void print_inner(const char *str)
     print_inner(str, len);
 }
 
+void run_slower()
+{
+    int m = 1;
+    volatile int *tmp = &m;
+    for (u32 i = 0; i < slow_level; i++)
+    {
+        for (u32 j = 0; j < slow_level; j++)
+        {
+            *tmp = 2;
+        }
+    }
+}
+
 void print_inner(const char *str, u64 len)
 {
+    if (slow_level)
+    {
+        run_slower();
+    }
+
     if (len != 0 && str[len - 1] == 0)
         len--;
     if (unlikely(ring_buffer != nullptr))

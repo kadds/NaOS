@@ -51,7 +51,6 @@ void init(const kernel_start_args *args)
 
         trace::debug("Memory init");
         memory::init(args, 0x0);
-        trace::init();
         device::vga::tag_memory();
 
         trace::debug("Paging init");
@@ -107,7 +106,11 @@ void init(const kernel_start_args *args)
     APIC::init();
 }
 
-void last_init() { device::vga::auto_flush(); }
+void last_init()
+{
+    trace::init();
+    device::vga::auto_flush();
+}
 
 void init_drivers() { device::chip8042::init(); }
 

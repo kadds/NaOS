@@ -20,7 +20,7 @@ void init()
     if (!cpu::current().is_bsp())
     {
         counter--;
-        trace::debug("AP is arrived entrypoint");
+        trace::debug("AP ", cpu::current().get_id(), " is arrived entrypoint");
         while (counter > 0)
         {
             cpu_pause();
@@ -39,6 +39,8 @@ void init()
     APIC::local_post_init_IPI();
     trace::debug("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
+
+    trace::debug("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
 
     trace::debug("Waiting for AP startup");
@@ -60,7 +62,7 @@ void init()
         tick = false;
     }
     trace::debug("Nums of AP ", count);
-    trace::info("Process ", count + 1);
+    trace::info("Processtors ", count + 1);
     counter = count + 1;
 
     volatile u32 *stack = (volatile u32 *)(memory::kernel_phyaddr_to_virtaddr((u32 *)_ap_stack));
