@@ -83,13 +83,13 @@ cpuid_t init()
     cur_data.id = cpuid;
     /// gs kernel base
     _wrmsr(0xC0000102, (u64)&per_cpu_data[cpuid]);
-    kassert(_rdmsr(0xC0000102) == ((u64)&per_cpu_data[cpuid]), "Unable write kernel gs_base");
+    kassert(_rdmsr(0xC0000102) == ((u64)&per_cpu_data[cpuid]), "Unable to write kernel gs_base");
     /// gs user base
     _wrmsr(0xC0000101, 0);
     /// fs base
     _wrmsr(0xC0000100, 0);
     __asm__("swapgs \n\t" ::: "memory");
-    kassert(_rdmsr(0xC0000101) == ((u64)&per_cpu_data[cpuid]), "Unable swap kernel gs");
+    kassert(_rdmsr(0xC0000101) == ((u64)&per_cpu_data[cpuid]), "Unable to swap kernel gs register");
 
     return cpuid;
 }

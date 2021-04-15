@@ -5,10 +5,14 @@
     do                                                                                                                 \
     {                                                                                                                  \
         if ((number > max_basic_number && number < 0x80000000) || number > max_extend_number)                          \
+        {                                                                                                              \
+            trace::info("cpu feature not found number: ", number);                                                              \
             return false;                                                                                              \
+        }                                                                                                              \
         cpu_id(number, &eax, &ebx, &ecx, &edx);                                                                        \
         return (reg & 1ul << bit);                                                                                     \
     } while (0)
+
 #define bits(number, start, end) ((number) >> (start) & ((1 << (end - start + 1)) - 1))
 
 namespace arch::cpu_info
@@ -32,15 +36,15 @@ void init()
     cpu_id(0x80000000, &a, &b, &c, &d);
     max_extend_number = a;
     trace_debug_info();
-    feature min_feature[] = {
+    feature required_feature[] = {
         feature::system_call_ret,
         feature::msr,
         feature::tsc,
         feature::apic,
     };
-    for (auto fut : min_feature)
+    for (auto feat : required_feature)
     {
-        if (!has_feature(fut))
+        if (!has_feature(feat))
         {
             trace::panic("Unsupported feature");
         }

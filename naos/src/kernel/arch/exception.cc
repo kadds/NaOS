@@ -12,8 +12,8 @@
 namespace arch::exception
 {
 
-arch::idt::call_func global_call_func = 0;
-arch::idt::call_func global_exit_call_func = 0;
+static arch::idt::call_func global_call_func = 0;
+static arch::idt::call_func global_post_call_func = 0;
 
 ExportC u64 _get_cr2();
 
@@ -41,7 +41,7 @@ ExportC void _virtualization_exception_wrapper();
 
 void _ctx_interrupt_ dispatch_exception(regs_t *regs)
 {
-    trace::debug("exception occurred at ", (void *)regs->rip, " code: ", regs->error_code);
+    trace::debug("exception occurred at ", (void *)regs->rip, " code ", regs->error_code);
     u64 extra_data = 0;
     if (regs->vector == 14)
     {
@@ -140,9 +140,9 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
         }
     }
 
-    if (likely(global_exit_call_func))
+    if (likely(global_post_call_func))
     {
-        global_exit_call_func(regs, extra_data);
+        global_post_call_func(regs, extra_data);
     }
 }
 
@@ -150,13 +150,13 @@ ExportC _ctx_interrupt_ void entry_divide_error(regs_t *regs) { trace::debug("di
 
 ExportC _ctx_interrupt_ void entry_debug(regs_t *regs) { trace::debug("debug trap. "); }
 
-ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs)
-{
-    trace::debug("nmi interrupt! ");
-    dispatch_exception(regs);
-}
+ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs) { trace::debug("nmi interrupt! "); }
 
-ExportC _ctx_interrupt_ void entry_int3(regs_t *regs) { trace::debug("int3 trap. "); }
+ExportC _ctx_interrupt_ void entry_int3(regs_t *regs)
+{
+    trace::debug("int3 trap. ");
+    /// TODO: debugger
+}
 
 ExportC _ctx_interrupt_ void entry_overflow(regs_t *regs) { trace::debug("overflow trap. "); }
 
@@ -172,6 +172,7 @@ ExportC _ctx_interrupt_ void entry_coprocessor_segment_overrun(regs_t *regs)
 {
     trace::debug("coprocessor segment overrun error. ");
 }
+
 ExportC _ctx_interrupt_ void entry_invalid_TSS(regs_t *regs) { trace::debug("invalid tss error. "); }
 
 ExportC _ctx_interrupt_ void entry_segment_not_present(regs_t *regs) { trace::debug("segment not present error. "); }
@@ -185,7 +186,7 @@ ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
     u64 cr2;
     __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : :);
 
-    trace::debug("page fault at address: ", (void *)cr2);
+    trace::debug("page fault at ", (void *)cr2, ". ");
 }
 
 ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs) { trace::debug("X87 fpu error. "); }
@@ -215,7 +216,7 @@ entry_func exceptions[] = {
     entry_stack_segment_fault,
     entry_general_protection,
     entry_page_fault,
-    (entry_func)0,
+    (entry_func)0, // never called
     entry_x87_FPU_error,
     entry_alignment_check,
     entry_machine_check,
@@ -224,6 +225,7 @@ entry_func exceptions[] = {
 };
 ExportC _ctx_interrupt_ void __do_exception(regs_t *regs)
 {
+    // call exception handler first
     exceptions[regs->vector](regs);
     dispatch_exception(regs);
 }
@@ -246,7 +248,7 @@ void init()
     set_interrupt_system_gate(12, (void *)_stack_segment_fault_wrapper, 0);
     set_interrupt_system_gate(13, (void *)_general_protection_wrapper, 0);
     set_interrupt_system_gate(14, (void *)_page_fault_wrapper, 0);
-    // none 15
+    // never index 15
     set_interrupt_system_gate(16, (void *)_x87_FPU_error_wrapper, 0);
     set_interrupt_system_gate(17, (void *)_alignment_check_wrapper, 0);
     set_interrupt_system_gate(18, (void *)_machine_check_wrapper, 0);
@@ -256,5 +258,5 @@ void init()
 
 void set_callback(arch::idt::call_func func) { global_call_func = func; }
 
-void set_exit_callback(arch::idt::call_func func) { global_exit_call_func = func; }
+void set_post_callback(arch::idt::call_func func) { global_post_call_func = func; }
 } // namespace arch::exception

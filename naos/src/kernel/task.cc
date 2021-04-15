@@ -619,6 +619,7 @@ void exit_process_inner(thread_t *thd, i64 ret)
 
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
+    // TODO: core_dump from flags
     trace::debug("process ", process->pid, " exit with code ", ret);
     uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
