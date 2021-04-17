@@ -17,21 +17,43 @@
 
 namespace arch::cpu_info
 {
-char cpu_name[13];
+char family_name[13];
+char brand_name[64];
 u32 max_basic_number;
 u32 max_extend_number;
 
 void trace_debug_info();
 
+void load_brand_name()
+{
+    u32 a, b, c, d;
+    cpu_id(0x80000002, &a, &b, &c, &d);
+    *(u32 *)brand_name = a;
+    *((u32 *)brand_name + 1) = b;
+    *((u32 *)brand_name + 2) = c;
+    *((u32 *)brand_name + 3) = d;
+    cpu_id(0x80000003, &a, &b, &c, &d);
+    *((u32 *)brand_name + 4) = a;
+    *((u32 *)brand_name + 5) = b;
+    *((u32 *)brand_name + 6) = c;
+    *((u32 *)brand_name + 7) = d;
+    cpu_id(0x80000004, &a, &b, &c, &d);
+    *((u32 *)brand_name + 8) = a;
+    *((u32 *)brand_name + 9) = b;
+    *((u32 *)brand_name + 10) = c;
+    *((u32 *)brand_name + 11) = d;
+}
+
 void init()
 {
     u32 a, b, c, d;
     cpu_id(0, &a, &b, &c, &d);
-    *(u32 *)cpu_name = b;
-    *((u32 *)cpu_name + 1) = d;
-    *((u32 *)cpu_name + 2) = c;
-    cpu_name[12] = '\0';
+    *(u32 *)family_name = b;
+    *((u32 *)family_name + 1) = d;
+    *((u32 *)family_name + 2) = c;
+    family_name[12] = '\0';
     max_basic_number = a;
+    load_brand_name();
 
     cpu_id(0x80000000, &a, &b, &c, &d);
     max_extend_number = a;
@@ -53,9 +75,10 @@ void init()
 
 void trace_debug_info()
 {
-    trace::debug("Cpu family: ", cpu_name, ". Maximum basic functional number: ", (void *)(u64)max_basic_number,
+    trace::debug("Cpu family: ", family_name, ". Cpu name: ", brand_name,
+                 ".\n    Maximum basic functional number: ", (void *)(u64)max_basic_number,
                  ". Maximum extend functional number: ", (void *)(u64)max_extend_number,
-                 ". Maximum virtual address bits ", get_feature(feature::max_virt_addr),
+                 ".\n    Maximum virtual address bits ", get_feature(feature::max_virt_addr),
                  ". Maximum physical address bits ", get_feature(feature::max_phy_addr));
 }
 
@@ -98,6 +121,8 @@ bool has_feature(feature f)
             ret_cpu_feature(0x1, ecx, 20);
         case feature::popcnt_i:
             ret_cpu_feature(0x1, ecx, 23);
+        case feature::htt:
+            ret_cpu_feature(0x1, edx, 28);
         default:
             trace::panic("Unknown feature");
     }
@@ -119,6 +144,6 @@ u64 get_feature(feature f)
     }
 }
 
-const char *get_cpu_manufacturer() { return cpu_name; }
+const char *get_cpu_manufacturer() { return family_name; }
 
 } // namespace arch::cpu_info

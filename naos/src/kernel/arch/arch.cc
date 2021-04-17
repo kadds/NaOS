@@ -106,7 +106,7 @@ void init(const kernel_start_args *args)
     APIC::init();
 }
 
-void last_init()
+void post_init()
 {
     trace::init();
     device::vga::auto_flush();

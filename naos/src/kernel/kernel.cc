@@ -92,7 +92,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     task::init();
     arch::init_drivers();
     trace::info("Bsp kernel main is running");
-    arch::last_init(); // auto flush video now
+    arch::post_init();
     task::start_task_idle();
     trace::panic("Unreachable control flow in _kstart");
 }

@@ -188,7 +188,7 @@ template <u8 levels> class id_level_generator
                 break;
             }
         }
-    };
+    }
 
     bool has_use(u64 i)
     {

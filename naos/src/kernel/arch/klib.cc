@@ -28,7 +28,7 @@ void *print_stack(const regs_t *regs, int max_depth)
 
     u64 least_rsp = rbp - sizeof(u64) * 10;
     u32 p = 0;
-    for (u64 i = rbp; (i >= rsp || i >= least_rsp) && i >= 0xFFFF800000000000 && p < 100; i -= sizeof(u64), p++)
+    for (u64 i = rbp; (i >= rsp || i >= least_rsp) && is_kernel_space_pointer(i) && p < 100; i -= sizeof(u64), p++)
     {
         /// print stack value
         u64 *val_of_i = reinterpret_cast<u64 *>(i);
@@ -44,7 +44,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     int i = 0;
     while ((u64)rbp != 0)
     {
-        if (((u64)rbp) < 0xFFFF800000000000)
+        if (is_user_space_pointer(rbp))
         {
             break;
         }

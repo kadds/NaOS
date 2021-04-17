@@ -42,8 +42,8 @@ template <typename E> class skip_list
     u32 lev;
     u32 max_lev;
 
-    /// note: part is scale to 10000
-    u32 part;
+    /// note: scale to 10000
+    u32 rand_factor;
 
     node_t **stack;
     node_t **list;
@@ -51,7 +51,7 @@ template <typename E> class skip_list
     u32 rand()
     {
         u32 node_lev = 1;
-        while (next_rand(part) == 0 && node_lev < max_lev)
+        while (next_rand(rand_factor) == 0 && node_lev < max_lev)
             node_lev++;
         return node_lev;
     }
@@ -255,12 +255,12 @@ template <typename E> class skip_list
         return iterator(last_node);
     }
 
-    skip_list(memory::IAllocator *allocator, u32 part = 2, u32 max_lev = 16)
+    skip_list(memory::IAllocator *allocator, u32 rand_factor = 2, u32 max_lev = 32)
         : allocator(allocator)
         , count(0)
         , lev(1)
         , max_lev(max_lev)
-        , part(part)
+        , rand_factor(rand_factor)
     {
         stack = (node_t **)memory::KernelCommonAllocatorV->allocate(sizeof(node_t *) * max_lev, 8);
         list = (node_t **)memory::KernelCommonAllocatorV->allocate(sizeof(node_t *) * max_lev, 8);

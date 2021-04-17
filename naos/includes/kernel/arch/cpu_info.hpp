@@ -23,7 +23,8 @@ enum class feature
     sse4_2,
     popcnt_i,
     max_phy_addr,
-    max_virt_addr
+    max_virt_addr,
+    htt
 };
 
 void init();

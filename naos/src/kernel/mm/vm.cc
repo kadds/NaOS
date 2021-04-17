@@ -20,7 +20,7 @@ irq::request_result _ctx_interrupt_ page_fault_func(const void *regs, u64 extra_
     {
         auto info = (info_t *)thread->process->mm_info;
 
-        if (extra_data >= 0xFFFF800000000000)
+        if (is_kernel_space_pointer(extra_data))
         {
             /// FIXME: user space page fault at kernel vm area
             info = (info_t *)memory::kernel_vm_info;
@@ -409,7 +409,7 @@ bool fill_file_vm(u64 page_addr, const vm_t *item)
 
 const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_map_offset, u64 map_length, flag_t page_ext_attr)
 {
-    if (start >= 0xFFFF800000000000)
+    if (is_kernel_space_pointer(start))
     {
         return nullptr;
     }

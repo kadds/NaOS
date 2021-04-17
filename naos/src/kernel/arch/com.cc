@@ -1,8 +1,9 @@
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/io.hpp"
+#include "kernel/trace.hpp"
 namespace arch::device::com
 {
-const io_port base_control_port[] = {0x3f8, 0x2f8, 0x3e8, 0x2e8};
+const io_port base_control_ports[] = {0x3f8, 0x2f8, 0x3e8, 0x2e8};
 
 void io_write(io_port base_port, byte data)
 {
@@ -20,7 +21,11 @@ byte io_read(io_port base_port)
     return (byte)io_in8(base_port);
 }
 
-u16 get_control_port(int index) { return base_control_port[index]; }
+u16 get_control_port(int index)
+{
+    kassert(index >= 0 && index <= 3, "control port index is invalid");
+    return base_control_ports[index];
+}
 
 void serial::init(u16 control_port)
 {
