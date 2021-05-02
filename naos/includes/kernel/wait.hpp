@@ -32,8 +32,8 @@ struct wait_queue_t
 {
     util::linked_list<wait_context_t> list;
     lock::spinlock_t lock;
-    wait_queue_t(memory::IAllocator *a)
-        : list(a)
+    wait_queue_t()
+        : list(memory::KernelCommonAllocatorV)
     {
     }
 

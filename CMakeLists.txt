@@ -4,6 +4,7 @@ project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
 
 option(USE_CLANG "build kernel with clang" OFF)
+enable_testing ()
 
 # dirs
 set(CMAKE_BINARY_DIR ${PROJECT_SOURCE_DIR}/build)

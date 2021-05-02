@@ -2,17 +2,17 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
-#include "kernel/mm/buddy.hpp"
+#include "kernel/arch/paging.hpp"
+#include "kernel/mm/vm.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
-#include "kernel/mm/new.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+
 namespace arch::cpu
 {
 cpu_t per_cpu_data[max_cpu_support];
-
-::lock::spinlock_t lock;
 std::atomic_int last_cpuid = 0;
 
 void *get_rsp()
@@ -143,5 +143,115 @@ void *current_user_data()
 u64 count() { return last_cpuid; }
 
 cpuid_t id() { return current().get_id(); }
+
+void map(u64 &base, u64 pg, bool is_bsp = false) {
+    u64 size = pg * memory::page_size;
+    auto c = (arch::paging::base_paging_t *) memory::kernel_vm_info->mmu_paging.get_base_page();
+    base += memory::page_size;
+    phy_addr_t ks;
+    if (is_bsp) {
+        ks = phy_addr_t::from(0x90000 - memory::page_size * pg);
+    } else {
+        ks = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(size, 0));
+    }
+    paging::map(c, reinterpret_cast<void*>(base), ks, paging::frame_size::size_4kb, pg, paging::flags::writable);
+    base += size;
+}
+
+void allocate_stack(int logic_num)
+{
+    u64 base = memory::kernel_cpu_stack_bottom_address;
+    for (int i = 0; i < logic_num; i++)
+    {
+        if (i != 0) {
+            map(base, memory::kernel_stack_page_count);
+        } else {
+            map(base, memory::kernel_stack_page_count, true);
+        }
+        map(base, memory::exception_stack_page_count);
+        map(base, memory::interrupt_stack_page_count);
+        map(base, memory::exception_nmi_stack_page_count);
+    }
+}
+
+phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {
+    void *vir = get_kernel_stack_bottom(id);
+    phy_addr_t phy = nullptr;
+    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    kassert(ret, "");
+    return phy;
+}
+
+phy_addr_t get_exception_stack_bottom_phy(cpuid_t id) {
+    void *vir = get_exception_stack_bottom(id);
+    phy_addr_t phy = nullptr;
+    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    kassert(ret, "");
+    return phy;
+}
+
+phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id) {
+
+    void *vir = get_interrupt_stack_bottom(id);
+    phy_addr_t phy = nullptr;
+    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    kassert(ret, "");
+    return phy;
+}
+
+phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id) {
+    void *vir = get_exception_nmi_stack_bottom(id);
+    phy_addr_t phy = nullptr;
+    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    kassert(ret, "");
+    return phy;
+}
+
+void* get_kernel_stack_bottom(cpuid_t id)
+{
+    u64 base = memory::kernel_cpu_stack_bottom_address;
+    u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
+                           memory::exception_nmi_stack_size;
+
+    each_of_cpu_size += memory::page_size * 4; // guard pages
+
+    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size);
+}
+
+void* get_exception_stack_bottom(cpuid_t id)
+{
+    u64 base = memory::kernel_cpu_stack_bottom_address;
+    u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
+                           memory::exception_nmi_stack_size;
+
+    each_of_cpu_size += memory::page_size * 4; // guard pages
+
+    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 2 
+        + memory::kernel_stack_size);
+}
+
+void* get_interrupt_stack_bottom(cpuid_t id)
+{
+    u64 base = memory::kernel_cpu_stack_bottom_address;
+    u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
+                           memory::exception_nmi_stack_size;
+
+    each_of_cpu_size += memory::page_size * 4; // guard pages
+
+    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 3 
+        + memory::kernel_stack_size + memory::exception_stack_size);
+}
+
+void* get_exception_nmi_stack_bottom(cpuid_t id)
+{
+    u64 base = memory::kernel_cpu_stack_bottom_address;
+    u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
+                           memory::exception_nmi_stack_size;
+
+    each_of_cpu_size += memory::page_size * 4; // guard pages
+
+    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 4 
+        + memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size);
+}
 
 } // namespace arch::cpu

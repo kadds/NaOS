@@ -16,9 +16,9 @@ int strcmp(const char *str1, const char *str2)
     return 0;
 }
 
-int strcopy(char *dst, const char *src, int max_len)
+i64 strcopy(char *dst, const char *src, i64 max_len)
 {
-    int i = 0;
+    i64 i = 0;
     do
     {
         *dst++ = *src++;
@@ -27,7 +27,7 @@ int strcopy(char *dst, const char *src, int max_len)
     return i - 1;
 }
 
-int strcopy(char *dst, const char *src)
+i64 strcopy(char *dst, const char *src)
 {
     const char *s = src;
     do
@@ -38,9 +38,9 @@ int strcopy(char *dst, const char *src)
     return src - s - 1;
 }
 
-int strlen(const char *str)
+i64 strlen(const char *str)
 {
-    int i = 0;
+    i64 i = 0;
     while (*str++ != 0)
         i++;
     return i++;

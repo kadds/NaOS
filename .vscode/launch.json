@@ -60,6 +60,25 @@
                 },
             ],
             "externalConsole": false,
+        },
+        {
+            "name": "debug ktest",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/ktest/ktest",
+            "args": [],
+            "stopAtEntry": true,
+            "cwd": "${workspaceFolder}/build/bin/ktest",
+            "environment": [],
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+            ],
+            "externalConsole": false,
         }
     ]
 }

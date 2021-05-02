@@ -178,7 +178,6 @@ struct signal_pack_t
   public:
     signal_pack_t()
         : events(memory::KernelCommonAllocatorV)
-        , wait_queue(memory::KernelCommonAllocatorV)
     {
     }
 

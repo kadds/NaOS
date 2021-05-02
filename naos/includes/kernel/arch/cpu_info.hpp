@@ -34,6 +34,14 @@ bool has_feature(feature f);
 /// get the feature value
 u64 get_feature(feature f);
 
+struct cpu_mesh
+{
+    int logic_num;
+    int core_num;
+};
+
+cpu_mesh get_cpu_mesh_info();
+
 const char *get_cpu_manufacturer();
 
 } // namespace arch::cpu_info

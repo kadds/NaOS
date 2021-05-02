@@ -47,7 +47,7 @@ struct device_class
 };
 
 using device_map_t = util::hash_map<num_t, device *>;
-using device_id_gen_t = util::id_generator;
+using device_id_gen_t = util::seq_generator;
 
 extern device_map_t *device_map, *unbinding_device_map;
 

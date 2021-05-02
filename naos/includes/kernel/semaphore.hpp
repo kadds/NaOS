@@ -18,7 +18,6 @@ struct semaphore_t
   public:
     semaphore_t(i64 count)
         : lock_res(count)
-        , wait_queue(memory::KernelCommonAllocatorV)
     {
     }
 

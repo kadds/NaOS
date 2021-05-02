@@ -32,19 +32,19 @@ u64 scan_set(BaseType *data, u64 offset, u64 max_len);
 class bit_set
 {
   private:
-    memory::IAllocator *allocator;
     // data pointer
     u64 *data;
     u64 element_count;
+    memory::IAllocator *allocator;
 
   public:
     bit_set(memory::IAllocator *allocator, u64 element_count)
-        : allocator(allocator)
-        , element_count(element_count)
+        : element_count(element_count)
+        , allocator(allocator)
     {
 
         u64 bytes = (element_count + 7) / 8;
-        data = (u64 *)allocator->allocate(bytes, 1);
+        data = reinterpret_cast<u64 *>(allocator->allocate(bytes, 8));
     }
 
     bit_set(const bit_set &v) = delete;

@@ -1,15 +1,11 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/page.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/bit_set.hpp"
 namespace memory
 {
-
-const int buddy_max_page = 1 << 8;
-
-BuddyAllocator *KernelBuddyAllocatorV;
-lock::spinlock_t buddy_lock;
 
 u64 buddy::next_fit_size(u64 size)
 {
@@ -21,211 +17,335 @@ u64 buddy::next_fit_size(u64 size)
     return size + 1;
 }
 
-int buddy::alloc(u64 pages)
+u64 offset(u8 order) { return 1UL << order; }
+
+page *buddy::alloc(u64 pages)
 {
     if (pages == 0)
         pages = 1;
     else if ((pages & (pages - 1)) != 0) // not pow of 2
         pages = next_fit_size(pages);
 
-    // The existing maximum size does not apply to callers.
-    if (array[0] < pages)
-        return -1;
+    int order = __builtin_ffsl(pages);
+    kassert(order <= buddy_max_order, "order too large");
 
-    // Find block
-    u64 target_page = (size + 1) / 2;
-    int i = 0;
-    for (; target_page != pages; target_page >>= 1)
+    int avail_order = order;
+    while (orders[avail_order] == nullptr && avail_order <= buddy_max_order)
     {
-        if (array[i * 2 + 1] >= pages) // Available at left branch
-        {
-            i = i * 2 + 1;
-        }
-        else // Available at right branch
-        {
-            i = i * 2 + 2;
-        }
+        avail_order++;
     }
-    array[i] = 0;
-    int index = i;
-    while (index > 0) ///< Modify the value of it
+    if (avail_order > buddy_max_order)
     {
-        index = ((index + 1) >> 1) - 1;
-        auto a = array[index * 2 + 1];
-        auto b = array[index * 2 + 2];
-        if (a < b) // maximum size
-        {
-            a = b;
-        }
-        array[index] = a; ///< reset maximum size
+        return nullptr;
     }
-    return (i + 1) * target_page - (size + 1) / 2;
+
+    for (int o = avail_order; o > order && o > 0; o--)
+    {
+        page *cur = orders[o];
+        page *next = cur->get_buddy_next();
+        orders[o] = next;
+        if (next != nullptr)
+        {
+            next->set_buddy_prev(nullptr);
+        }
+        split_buddy(cur);
+    }
+
+    page *p = orders[order];
+    page *next = p->get_buddy_next();
+    orders[order] = next;
+    if (next != nullptr)
+    {
+        next->set_buddy_prev(nullptr);
+    }
+    // take it
+    p->set_buddy_prev(nullptr);
+    p->set_buddy_next(nullptr);
+    p->set_flag(0);
+    return p;
 }
 
-void buddy::free(int offset)
+void buddy::free(page *p)
 {
-    int index = offset + (size + 1) / 2 - 1;
-    u64 node_size = 1;
-    for (; array[index]; index = ((index + 1) >> 1) - 1)
+    u8 order = p->get_buddy_order();
+    page *next = orders[order];
+    p->set_buddy_next(next);
+    p->set_flag(page::buddy_free);
+    p->set_buddy_prev(nullptr);
+    if (next != nullptr)
     {
-        node_size *= 2;
-        if (index == 0)
-            return;
+        next->set_buddy_prev(p);
     }
-    array[index] = node_size;
+    orders[order]->set_buddy_next(p);
+    // merge levels
+    merge(order, true);
+}
 
-    while (index > 0)
+buddy::buddy() {}
+
+page *buddy::split_buddy(page *p)
+{
+    u8 order = p->get_buddy_order();
+    if (order == 0)
     {
-        index = ((index + 1) >> 1) - 1;
-        node_size *= 2;
+        return nullptr;
+    }
+    page *end = z->page_end();
+    order--;
+    page *r = p + offset(order);
+    remove(p);
+    page *next = orders[order];
+    p->set_flag(page::buddy_free);
+    p->set_buddy_prev(nullptr);
+    p->set_buddy_order(order);
 
-        auto left = array[index * 2 + 1];
-        auto right = array[index * 2 + 2];
+    if (r < end)
+    {
+        r->set_flag(page::buddy_free);
+        r->set_buddy_next(next);
+        r->set_buddy_prev(p);
+        r->set_buddy_order(order);
+        if (next != nullptr)
+        {
+            next->set_buddy_prev(r);
+        }
+        p->set_buddy_next(r);
+    }
+     else
+    {
+        r = nullptr;
+        p->set_buddy_next(next);
+        if (next != nullptr)
+        {
+            next->set_buddy_prev(p);
+        }
+    }
+    orders[order] = p;
+    return r;
+}
 
-        if (left + right == node_size)
-            array[index] = node_size;
+page *buddy::get_bro(page *p)
+{
+    i64 index = p - z->page_beg();
+    u64 count = z->pages_count();
+    u8 order = p->get_buddy_order();
+    u64 off = offset(order);
+    if ((index & (offset(order + 1) - 1)))
+    {
+        // p is right
+        i64 lindex = index - off;
+        if (likely(lindex >= 0))
+        {
+            return p - off;
+        }
         else
-            array[index] = left > right ? left : right;
+        {
+            return nullptr;
+        }
+    }
+   
+    else
+    {
+        // p is left
+        i64 rindex = index + off;
+        if (likely(rindex < (i64)count))
+        {
+            return p + off;
+        }
+        else
+        {
+            return nullptr;
+        }
     }
 }
 
-buddy::buddy(int page_count)
-    : size(page_count * 2 - 1)
-    , array((u16 *)memory::VirtBootAllocatorV->allocate(sizeof(u16) * size, 1))
+void buddy::remove(page *p)
 {
-    if ((page_count & (page_count - 1)) != 0)
-        return;
-    u64 node_size = size + 1;
-    for (int i = 0; i < size; i++)
+    page *left = p->get_buddy_prev();
+    page *right = p->get_buddy_next();
+    page *head = right;
+    if (left != nullptr)
     {
-        if (((i + 1) & (i)) == 0)
-        {
-            node_size >>= 1;
-        }
-        array[i] = node_size;
+        left->set_buddy_next(right);
+        head = left;
     }
+    if (right != nullptr)
+    {
+        right->set_buddy_prev(left);
+    }
+    u8 order = p->get_buddy_order();
+    if (p == orders[order]) {
+        orders[order] = head;
+    }
+    p->set_buddy_next(nullptr);
+    p->set_buddy_prev(nullptr);
+    p->set_flag(0);
+}
+
+void buddy::merge(u8 order, bool fast)
+{
+    for (u8 o = order; o < buddy_max_order; o++)
+    {
+        page *p = orders[o];
+        do
+        {
+            if (p == nullptr)
+            {
+                break;
+            }
+            page *n = p->get_buddy_next();
+            page *bro = get_bro(p);
+            if (bro != nullptr && bro->has_flag(page::buddy_free) && bro->get_buddy_order() == o)
+            {
+                if (bro < p)
+                {
+                    // bro -> p
+                    std::swap(p, bro);
+                }
+                if (bro == n)
+                {
+                    n = bro->get_buddy_next();
+                }
+                if (p == n)
+                {
+                    n = p->get_buddy_next();
+                }
+                remove(p);
+                remove(bro);
+                p->set_flag(page::buddy_free);
+                p->set_buddy_order(o + 1);
+                page *next = orders[o + 1];
+                p->set_buddy_next(next);
+                p->set_buddy_prev(nullptr);
+                if (next != nullptr)
+                {
+                    next->set_buddy_prev(p);
+                }
+                orders[o + 1] = p;
+            }
+            p = n;
+        } while  (!fast);
+    }
+}
+
+i64 buddy::init(zone *z)
+{
+    for (auto i = 0; i <= buddy_max_order; i++)
+    {
+        orders[i] = nullptr;
+    }
+
+    this->z = z;
+    page *bstart = z->page_beg();
+    page *bend = z->page_end();
+    u64 pages = z->pages_count();
+    u64 big_pages = (pages / buddy_max_page) * buddy_max_page;
+
+    page *start = bstart;
+    page *end = start + big_pages;
+
+    page *prev = nullptr;
+    i64 count = 0;
+    while (start < end)
+    {
+        page *cur = start;
+        cur->set_flag(page::buddy_free);
+        cur->set_buddy_order(buddy_max_order);
+        cur->set_buddy_next(nullptr);
+        cur->set_buddy_prev(prev);
+        if (unlikely(prev == nullptr))
+        {
+            orders[buddy_max_order] = cur;
+        }
+        else
+        {
+            prev->set_buddy_next(cur);
+        }
+        prev = cur;
+        start += buddy_max_page;
+        count++;
+    }
+
+    // rest pages
+    prev = nullptr;
+    if (end < bend) {
+        count++;
+    }
+
+    while (end < bend)
+    {
+        page *cur = end;
+        cur->set_flag(page::buddy_free);
+        cur->set_buddy_order(0);
+        cur->set_buddy_next(nullptr);
+        cur->set_buddy_prev(prev);
+        if (unlikely(prev == nullptr))
+        {
+            auto next = orders[0];
+            cur->set_buddy_next(next);
+            orders[0] = cur;
+        }
+        else
+        {
+            prev->set_buddy_next(cur);
+        }
+        prev = cur;
+        end++;
+    }
+    merge(0, false);
+
+    return count;
 }
 
 /*
 Tag memory used by kernel.
 */
-bool buddy::tag_alloc(int start_offset, int len)
+bool buddy::mark_unavailable(page *s, page *e)
 {
-    // no include this [start_offset, end_offset)
-    int end_offset = start_offset + len - 1;
-
-    int start_index = start_offset + (size + 1) / 2 - 1;
-    int end_index = end_offset + (size + 1) / 2 - 1;
-    for (int i = start_index; i <= end_index; i++)
+    for (i16 o = buddy_max_order; o >= 0; o--)
     {
-        array[i] = 0;
-    }
-    int sindex = start_index, eindex = end_index;
-    u64 node_size = size + 1;
-    while (sindex > 0 && eindex > 0)
-    {
-        sindex = ((sindex + 1) >> 1) - 1;
-        eindex = ((eindex + 1) >> 1) - 1;
-        for (int i = sindex; i <= eindex; i++)
+        page *p = orders[o];
+        while (p != nullptr)
         {
-            auto left = array[i * 2 + 1];
-            auto right = array[i * 2 + 2];
-
-            if (left + right == node_size)
-                array[i] = node_size; // merge
+            page *next = p->get_buddy_next();
+            page *pleft = p;
+            page *pright = pleft + offset(o);
+            page *left, *right;
+            if (pleft > s)
+            {
+                left = pleft;
+            }
             else
             {
-                array[i] = left > right ? left : right;
+                left = s;
             }
+            if (pright < e)
+            {
+                right = pright;
+            }
+            else
+            {
+                right = e;
+            }
+
+            if (left < right)
+            {
+                // not emtpy
+                if (left == pleft && right == pright)
+                {
+                    remove(p);
+                    p->set_flag(page::buddy_unavailable);
+                }
+                else
+                {
+                    // split
+                    split_buddy(p);
+                }
+            }
+            p = next;
         }
-        node_size >>= 1;
     }
     return true;
 }
 
-void buddy::cat_tree(buddy_tree *tree, int index)
-{
-    if (index > size)
-    {
-        return;
-    }
-    tree->val = array[index];
-
-    if (index * 2 + 2 > size)
-    {
-        tree->left = nullptr;
-        tree->right = nullptr;
-    }
-    else
-    {
-
-        tree->left = tree + index * 2 + 1 - index;
-        tree->right = tree + index * 2 + 2 - index;
-        cat_tree(tree->left, index * 2 + 1);
-        cat_tree(tree->right, index * 2 + 2);
-    }
-}
-
-buddy_tree *buddy::gen_tree()
-{
-    buddy_tree *tree = memory::NewArray<buddy_tree>(memory::VirtBootAllocatorV, size);
-    cat_tree(tree, 0);
-    return tree;
-}
-
-BuddyAllocator::BuddyAllocator() {}
-
-BuddyAllocator::~BuddyAllocator() {}
-
-void *BuddyAllocator::allocate(u64 size, u64 align)
-{
-    uctx::RawSpinLockUninterruptibleContext ctx(buddy_lock);
-
-    auto page = (size + 0x1000 - 1) / 0x1000;
-    for (int i = 0; i < global_zones.count; i++)
-    {
-        zone_t &zone = global_zones.zones[i];
-
-        auto buddies = (buddy_contanier *)zone.buddy_impl;
-        for (int j = 0; j < buddies->count; j++)
-        {
-            i64 offset = buddies->buddies[j].alloc(page);
-            if (offset >= 0 && offset < buddy_max_page)
-            {
-                auto ptr = (byte *)zone.start + offset * memory::page_size;
-                return memory::kernel_phyaddr_to_virtaddr((byte *)ptr + buddy_max_page * page_size * j);
-            }
-        }
-    }
-    return nullptr;
-}
-
-void BuddyAllocator::deallocate(void *ptr)
-{
-    ptr = memory::kernel_virtaddr_to_phyaddr(ptr);
-
-    uctx::RawSpinLockUninterruptibleContext ctx(buddy_lock);
-
-    for (int i = 0; i < global_zones.count; i++)
-    {
-        zone_t &zone = global_zones.zones[i];
-
-        if ((char *)ptr >= zone.start && (char *)ptr < zone.end)
-        {
-            auto buddies = (buddy_contanier *)zone.buddy_impl;
-
-            int buddy_index =
-                ((byte *)ptr - (byte *)zone.start + (memory::page_size * buddy_max_page) + memory::page_size) /
-                    (memory::page_size * buddy_max_page) -
-                1;
-            i64 offset =
-                ((byte *)ptr - buddy_max_page * page_size * buddy_index - (byte *)zone.start) / memory::page_size;
-            kassert(offset >= 0 && offset < buddy_max_page,
-                    "offset should not less than 0 or more than buddy max page");
-
-            buddies->buddies[buddy_index].free(offset);
-            return;
-        }
-    }
-}
 } // namespace memory

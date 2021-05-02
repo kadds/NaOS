@@ -1,12 +1,15 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/str.hpp"
+#include "kernel/mm/page.hpp"
+
 namespace memory
 {
 
 slab_cache_pool *global_kmalloc_slab_domain, *global_dma_slab_domain, *global_object_slab_domain;
-void slab_group::new_memory_node()
+slab *slab_group::new_memory_node()
 {
     slab *s = (slab *)memory::KernelBuddyAllocatorV->allocate(page_pre_slab * memory::page_size, 8);
     new (s) slab(node_pre_slab, 0);
@@ -14,8 +17,13 @@ void slab_group::new_memory_node()
     s->data_ptr = (char *)s + sizeof(slab);
     s->data_ptr = (char *)(((u64)s->data_ptr + align - 1) & ~(align - 1));
     s->bitmap.clean_all();
-    list_empty.push_back(s);
+    page *p = memory::global_zones->get_page(s);
+    for(u32 i = 0; i < page_pre_slab; i++, p++) {
+        p->set_ref_slab(this);
+    }
+
     all_obj_count += node_pre_slab;
+    return s;
 }
 
 void slab_group::delete_memory_node(slab *s)
@@ -23,20 +31,23 @@ void slab_group::delete_memory_node(slab *s)
     kassert(s->rest == node_pre_slab, "slab error rest:", s->rest, " target:", node_pre_slab);
     all_obj_count -= node_pre_slab;
     s->~slab();
+    // page *p = memory::global_zones->get_page(s);
+    // for(int i = 0; i < page_pre_slab; i++, p++) {
+    //     p->set_ref_slab(nullptr);
+    // }
     memory::KernelBuddyAllocatorV->deallocate(s);
 }
 
-slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name, u64 align, u64 flags)
+slab_group::slab_group(u64 size, const char *name, u64 align, u64 flags)
     : obj_align_size((size + align - 1) & ~(align - 1))
     , size(size)
     , name(name)
-    , list_empty(allocator)
-    , list_partial(allocator)
-    , list_full(allocator)
     , flags(flags)
     , align(align)
     , all_obj_count(0)
     , all_obj_used(0)
+    , free_head(nullptr)
+    , used_head(nullptr)
 {
     u64 restsize = memory::page_size - ((sizeof(slab) + align - 1) & ~(align - 1));
 
@@ -81,27 +92,39 @@ slab_group::slab_group(memory::IAllocator *allocator, u64 size, const char *name
 void *slab_group::alloc()
 {
     uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
-    if (list_partial.empty())
+    if (free_head == nullptr)
     {
-        if (list_empty.empty())
-        {
-            new_memory_node();
-        }
-        list_partial.push_back(list_empty.pop_back());
+        free_head = new_memory_node();
     }
-    slab *slab = list_partial.back();
+    slab *slab = free_head;
     auto &bitmap = slab->bitmap;
     u64 i = bitmap.scan_zero();
     kassert(i < bitmap.count() && i < node_pre_slab, "Memory leacorruption in slab");
     bitmap.set(i);
-    kassert(bitmap.get(i), "Can't allocate an addresss. index: ", i);
+    kassert(bitmap.get(i), "Can't allocate an address. index: ", i);
 
     slab->rest--;
     all_obj_used++;
 
     if (slab->rest == 0)
     {
-        list_full.push_back(list_partial.pop_back());
+        free_head = free_head->next;
+        if (used_head == nullptr)
+        {
+            slab->next = nullptr;
+            slab->prev = nullptr;
+        }
+        else
+        {
+            slab->prev = nullptr;
+            slab->next = used_head;
+            used_head->prev = slab;
+        }
+        used_head = slab;
+        if (free_head)
+        {
+            free_head->prev = nullptr;
+        }
     }
     return slab->data_ptr + i * obj_align_size;
 }
@@ -110,144 +133,72 @@ void slab_group::free(void *ptr)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
 
-    char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
-
-    for (auto it = list_partial.begin(); it != list_partial.end(); ++it)
+    byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size * page_pre_slab - 1));
+    slab *s = reinterpret_cast<slab *>(page_addr);
+    u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
+    kassert(s->bitmap.get(index), "Not an assigned address or double free.");
+    s->bitmap.clean(index);
+    s->rest++;
+    all_obj_used--;
+    if (s->rest == 1)
     {
-        if (page_addr == (char *)*it)
+        slab *p = s->prev;
+        slab *n = s->next;
+        if (n != nullptr)
         {
-            auto &e = **it;
-            u64 index = ((char *)ptr - e.data_ptr) / obj_align_size;
-            kassert(e.bitmap.get(index), "Not an assigned address or double free.");
-            e.bitmap.clean(index);
-            e.rest++;
-            all_obj_used--;
-
-            if (e.rest == node_pre_slab)
-            {
-                list_empty.push_back(*it);
-                list_partial.remove(it);
-
-                if (all_obj_used * 2 < all_obj_count)
-                {
-                    delete_memory_node(&e);
-                    list_empty.pop_back();
-                }
-            }
-
-            return;
+            n->prev = p;
+        }
+        if (p == nullptr)
+        {
+            used_head = n;
+        }
+        else
+        {
+            p->next = n;
+        }
+        s->prev = nullptr;
+        s->next = free_head;
+        if (free_head)
+        {
+            free_head->prev = s;
         }
     }
-    for (auto it = list_full.begin(); it != list_full.end(); ++it)
-    {
-        if (page_addr == (char *)*it)
-        {
-            auto &e = **it;
-            e.bitmap.clean(((char *)ptr - e.data_ptr) / obj_align_size);
-            e.rest++;
-            all_obj_used--;
-            list_partial.push_back(*it);
-            list_full.remove(it);
-            return;
-        }
-    }
-    trace::panic("Unreachable control flow.");
 }
 
-bool slab_group::include_address(void *ptr)
-{
-    uctx::RawReadLockUninterruptibleContext ctx(slab_lock);
-
-    char *page_addr = (char *)((u64)ptr & ~(memory::page_size * page_pre_slab - 1));
-    for (auto e : list_full)
-    {
-        if (page_addr == (char *)e)
-            return true;
-    }
-
-    for (auto e : list_partial)
-    {
-        if (page_addr == (char *)e)
-            return true;
-    }
-
-    for (auto e : list_empty)
-    {
-        if (page_addr == (char *)e)
-            return true;
-    }
-
-    return false;
-}
-
-slab_group_list_t::iterator slab_cache_pool::find_slab_group_node(const char *name)
-{
-    uctx::RawReadLockUninterruptibleContext ctx(group_lock);
-
-    auto group = slab_groups.begin();
-    while (group != slab_groups.end())
-    {
-        if (util::strcmp(group->get_name(), name) == 0)
-        {
-            return group;
-        }
-        ++group;
-    }
-    return slab_groups.end();
-}
-
-slab_group *slab_cache_pool::find_slab_group(const char *name)
-{
-    uctx::RawReadLockUninterruptibleContext ctx(group_lock);
-
-    auto group_it = find_slab_group_node(name);
-    if (group_it != slab_groups.end())
-    {
-        return &group_it;
+slab_group *slab_group::get_group_from(void *ptr) {
+    byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size - 1));
+    page *p = memory::global_zones->get_page(page_addr);
+    if (likely(p != nullptr)) {
+        return p->get_ref_slab();
     }
     return nullptr;
 }
 
-slab_group *slab_cache_pool::find_slab_group(u64 size)
+slab_group *slab_cache_pool::find_slab_group(const util::string &name)
 {
     uctx::RawReadLockUninterruptibleContext ctx(group_lock);
-
-    auto group = slab_groups.begin();
-    while (group != slab_groups.end())
-    {
-        if (group->get_size() == size)
-        {
-            return &group;
-        }
-        ++group;
-    }
-    return nullptr;
+    slab_group *g = nullptr;
+    map.get(name, &g);
+    return g;
 }
 
-slab_group *slab_cache_pool::create_new_slab_group(u64 size, const char *name, u64 align, u64 flags)
+slab_group *slab_cache_pool::create_new_slab_group(u64 size, util::string name, u64 align, u64 flags)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
-    return &slab_groups.emplace_back(&slab_list_node_allocator, size, name, align, flags);
+    slab_group *group = memory::New<slab_group>(memory::KernelCommonAllocatorV, size, name.data(), align, flags);
+    auto g = group;
+    map.insert(std::move(name), std::move(g));
+    return group;
 }
 
 void slab_cache_pool::remove_slab_group(slab_group *slab_obj)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
-
-    auto group = slab_groups.begin();
-    while (group != slab_groups.end())
-    {
-        if (&group == slab_obj)
-        {
-            slab_groups.remove(group);
-            return;
-        }
-        ++group;
-    }
+    map.remove(slab_obj->get_name());
 }
 
 slab_cache_pool::slab_cache_pool()
-    : slab_groups(memory::KernelBuddyAllocatorV)
+    : map(memory::KernelCommonAllocatorV)
 {
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "mm.hpp"
 #include "regs.hpp"
 
 extern volatile char base_ap_phy_addr[];
@@ -24,15 +25,12 @@ extern volatile char _ap_code_start[];
 extern volatile char _ap_code_end[];
 
 extern volatile char _ap_count[];
-extern volatile char _ap_standby[];
+extern volatile char _ap_startup_spin_flag[];
 extern volatile char _ap_stack[];
 
 ExportC void _reload_segment(u64 cs, u64 ss);
 
-ExportC void _cpu_id(u64 param, u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *out_edx);
-#define cpu_id_ex(eax, ecx, o_eax, o_ebx, o_ecx, o_edx)                                                                \
-    _cpu_id((ecx) << 32 & (u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
-#define cpu_id(eax, o_eax, o_ebx, o_ecx, o_edx) _cpu_id((u32)(eax), (o_eax), (o_ebx), (o_ecx), (o_edx))
+ExportC void _cpu_id(u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *out_edx);
 
 ExportC NoReturn void _kernel_thread(regs_t *regs);
 ExportC void _switch_task(void *prev, void *next);
@@ -85,17 +83,12 @@ inline static void cpu_pause()
 /// print kernel stack (when panic)
 void *print_stack(const regs_t *regs, int max_depth);
 
-inline constexpr u64 maximum_user_addr = 0x00007FFFFFFFFFFFUL;
-inline constexpr u64 minimum_user_addr = 0UL;
-inline constexpr u64 minimum_kernel_addr = 0xFFFF800000000000UL;
-inline constexpr u64 maximum_kernel_addr = 0xFFFFFFFFFFFFFFFFUL;
-
 template <typename T> static inline bool is_user_space_pointer(T ptr)
 {
-    return (u64)ptr >= minimum_user_addr && (u64)ptr <= maximum_user_addr;
+    return (u64)ptr >= memory::minimum_user_addr && (u64)ptr <= memory::maximum_user_addr;
 }
 
 template <typename T> static inline bool is_kernel_space_pointer(T ptr)
 {
-    return (u64)ptr >= minimum_kernel_addr && (u64)ptr <= maximum_kernel_addr;
+    return (u64)ptr >= memory::minimum_kernel_addr && (u64)ptr <= memory::maximum_kernel_addr;
 }

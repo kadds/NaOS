@@ -3,6 +3,7 @@
 #include "allocator.hpp"
 #include "common.hpp"
 #include "mm.hpp"
+#include "zone.hpp"
 #include <utility>
 
 namespace memory
@@ -14,88 +15,86 @@ struct info_t;
 
 extern vm::info_t *kernel_vm_info;
 
-void tag_zone_buddy_memory(void *start_addr, void *end_addr);
-
 void init(const kernel_start_args *args, u64 fix_memory_limit);
 void paging();
 u64 get_max_available_memory();
 u64 get_max_maped_memory();
 
-struct zone_t
+template <typename T> inline phy_addr_t va2pa(T virt_addr)
 {
-    void *start;
-    void *end;
-    u64 page_count;
-    /// buddy pointer
-    void *buddy_impl;
-    /// tell buddy system memory needs to be reserved
-    void tag_used(u64 offset_start, u64 offset_end);
-};
-
-struct zones_t
-{
-    /// zones array
-    zone_t *zones;
-    /// zone element count
-    int count;
-};
-
-extern zones_t global_zones;
-
-template <typename Tptr> inline Tptr kernel_virtaddr_to_phyaddr(Tptr virt_addr)
-{
-    return (Tptr)((char *)virt_addr - linear_addr_offset);
+    return phy_addr_t::from(reinterpret_cast<byte *>(virt_addr) - linear_addr_offset);
 }
 
-template <typename Tptr> inline Tptr kernel_phyaddr_to_virtaddr(Tptr phy_addr)
+template <typename T = void *> inline T pa2va(phy_addr_t phy_addr)
 {
-    return (Tptr)((char *)phy_addr + linear_addr_offset);
+    return reinterpret_cast<T>(phy_addr() + linear_addr_offset);
+}
+template <typename S, typename T = void *> inline T pa2vax(S s)
+{
+    return reinterpret_cast<T>(phy_addr_t::from<S>(s)() + linear_addr_offset);
 }
 
-template <typename Tptr> inline Unpaged_Text_Section Tptr unpaged_kernel_virtaddr_to_phyaddr(Tptr virt_addr)
+template <typename T> inline Unpaged_Text_Section phy_addr_t unpaged_va2pa(T virt_addr)
 {
-    return (Tptr)((char *)virt_addr - linear_addr_offset);
+    return reinterpret_cast<T>(reinterpret_cast<byte*>(virt_addr) - linear_addr_offset);
 }
 
-template <typename Tptr> inline Unpaged_Text_Section Tptr unpaged_kernel_phyaddr_to_virtaddr(Tptr phy_addr)
+template <typename T> inline Unpaged_Text_Section T unpaged_pa2va(phy_addr_t phy_addr)
 {
-    return (Tptr)((char *)phy_addr + linear_addr_offset);
+    return reinterpret_cast<T>(phy_addr() + linear_addr_offset);
+}
+
+inline phy_addr_t align_down(phy_addr_t v, u64 m)
+{
+    return phy_addr_t::from(reinterpret_cast<u64>(v()) & ~(m - 1));
+}
+
+inline phy_addr_t align_up(phy_addr_t v, u64 m)
+{
+    return phy_addr_t::from((reinterpret_cast<u64>(v()) + (m - 1)) & ~(m - 1));
+}
+
+template <typename T> inline T *align_down(T *v, u64 m)
+{
+    return reinterpret_cast<T *>(reinterpret_cast<u64>(v) & ~(m - 1));
+}
+template <typename T> inline T *align_up(T *v, u64 m)
+{
+    return reinterpret_cast<T *>((reinterpret_cast<u64>(v) + (m - 1)) & ~(m - 1));
 }
 
 class PhyBootAllocator : public IAllocator
 {
   private:
     /// address to start allocation
-    static void *base_ptr;
-    static void *current_ptr;
-    /// is enable boot allocator
+    static phy_addr_t base_ptr;
+    static phy_addr_t current_ptr;
+    /// boot allocator is available
     static bool available;
 
   public:
-    static void init(void *base_ptr)
+    static inline void init(phy_addr_t base_ptr)
     {
         PhyBootAllocator::base_ptr = base_ptr;
         current_ptr = base_ptr;
         available = true;
     }
 
-    static void discard() { available = false; }
+    static inline void discard() { available = false; }
 
     void *allocate(u64 size, u64 align) override
     {
-
         if (unlikely(!available))
             return nullptr;
+        byte *start = align_up(current_ptr(), align);
 
-        char *start = (char *)(((u64)current_ptr + align - 1) & ~(align - 1));
-        current_ptr = start + size;
-
+        current_ptr = phy_addr_t::from(start + size);
         return start;
     }
     /// do nothing
     void deallocate(void *) override {}
 
-    static void *current_ptr_address() { return current_ptr; }
+    static void *current_ptr_address() { return current_ptr(); }
 };
 
 class VirtBootAllocator : public PhyBootAllocator
@@ -103,12 +102,12 @@ class VirtBootAllocator : public PhyBootAllocator
   public:
     void *allocate(u64 size, u64 align) override
     {
-        return kernel_phyaddr_to_virtaddr(PhyBootAllocator::allocate(size, align));
+        return pa2va(phy_addr_t::from(PhyBootAllocator::allocate(size, align)));
     }
     /// do nothing. Same as PhyBootAllocator
     void deallocate(void *) override {}
 
-    static void *current_ptr_address() { return kernel_phyaddr_to_virtaddr(PhyBootAllocator::current_ptr_address()); }
+    static void *current_ptr_address() { return pa2va(phy_addr_t::from(PhyBootAllocator::current_ptr_address())); }
 };
 
 void *kmalloc(u64 size, u64 align);
@@ -124,5 +123,6 @@ void listen_page_fault();
 
 extern VirtBootAllocator *VirtBootAllocatorV;
 extern PhyBootAllocator *PhyBootAllocatorV;
+extern zones *KernelBuddyAllocatorV;
 
 } // namespace memory

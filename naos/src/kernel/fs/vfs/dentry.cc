@@ -44,7 +44,7 @@ void dentry::load_child() { node->get_super_block()->fill_dentry(this); }
 
 void dentry::save_child() { node->get_super_block()->save_dentry(this); }
 
-void dentry::add_child(dentry *child) { child_list.push_back(child); }
+void dentry::add_child(dentry *child) { child_list.push_back(std::move(child)); }
 
 void dentry::remove_child(dentry *child) { child_list.remove(child_list.find(child)); }
 

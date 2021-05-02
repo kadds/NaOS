@@ -7,8 +7,7 @@ driver_map_t *driver_map;
 
 void init_driver()
 {
-    driver_id_gen = memory::New<driver_id_gen_t>(memory::KernelCommonAllocatorV, 4096);
-    driver_id_gen->next();
+    driver_id_gen = memory::New<driver_id_gen_t>(memory::KernelCommonAllocatorV, 1, 1);
     driver_map = memory::New<driver_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 }
 
@@ -25,7 +24,9 @@ num_t add_driver(driver *driver)
             it.value->set_driver(driver);
             driver->id = id;
             unbinding_device_map->remove(it.key);
-            device_map->insert(it.key, it.value);
+            auto k = it.key;
+            auto v = it.value;
+            device_map->insert(std::move(k), std::move(v));
             return it.value->get_dev_id();
         }
     }

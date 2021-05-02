@@ -1,6 +1,7 @@
 #include "../mm/new.hpp"
 #include "common.hpp"
 #include "memory.hpp"
+
 namespace util
 {
 
@@ -51,13 +52,14 @@ template <typename T> class circular_buffer
     };
 
     circular_buffer(memory::IAllocator *allocator, u64 size)
-        : length(size)
+        : buffer(nullptr)
+        , length(size)
         , read_off(0)
         , write_off(0)
         , allocator(allocator)
     {
         if (size > 0)
-            buffer = (T *)allocator->allocate(size * sizeof(T), alignof(T));
+            buffer = reinterpret_cast<T *>(allocator->allocate(size * sizeof(T), alignof(T)));
         else
             buffer = nullptr;
     }

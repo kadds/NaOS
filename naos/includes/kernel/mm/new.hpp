@@ -4,20 +4,20 @@
 namespace memory
 {
 
-template <typename T, int align = alignof(T), typename... Args> T *New(IAllocator *allocator, Args &&... args)
+template <typename T, typename I, int align = alignof(T), typename... Args> T *New(I allocator, Args &&...args)
 {
     T *ptr = (T *)allocator->allocate(sizeof(T), align);
     return new (ptr) T(std::forward<Args>(args)...);
 }
 
-template <typename T> void Delete(IAllocator *allocator, T *t)
+template <typename T, typename I> void Delete(I allocator, T *t)
 {
     t->~T();
     allocator->deallocate(t);
 }
 
-template <typename T, int align = alignof(T), typename... Args>
-T *NewArray(IAllocator *allocator, u64 count, Args &&... args)
+template <typename T, typename I, int align = alignof(T), typename... Args>
+T *NewArray(I allocator, u64 count, Args &&...args)
 {
     T *ptr = (T *)allocator->allocate(sizeof(T) * count, align);
     for (u64 i = 0; i < count; i++)
@@ -27,7 +27,7 @@ T *NewArray(IAllocator *allocator, u64 count, Args &&... args)
     return ptr;
 }
 
-template <typename T> void DeleteArray(IAllocator *allocator, T *t, u64 count)
+template <typename T, typename I> void DeleteArray(I allocator, T *t, u64 count)
 {
     T *addr = t;
     for (u64 i = 0; i < count; i++)
@@ -61,29 +61,16 @@ class KernelVirtualAllocator : public IAllocator
 };
 
 /// Allocate virtual memory or fixed kernel memory depends on allocate size
-class KernelMemoryAllocator : public IAllocator
+class MemoryAllocator : public IAllocator
 {
   public:
     void *allocate(u64 size, u64 align) override;
     void deallocate(void *p) override;
 };
 
-class FixMemoryAllocator : public IAllocator
-{
-  private:
-    void *ptr;
-
-  public:
-    FixMemoryAllocator(void *ptr)
-        : ptr(ptr){};
-    ~FixMemoryAllocator(){};
-    void *allocate(u64 size, u64 align) override { return ptr; }
-    void deallocate(void *p) override {}
-};
-
 extern KernelCommonAllocator *KernelCommonAllocatorV;
 extern KernelVirtualAllocator *KernelVirtualAllocatorV;
-extern KernelMemoryAllocator *KernelMemoryAllocatorV;
+extern MemoryAllocator *MemoryAllocatorV;
 
 template <typename T> struct MemoryView
 {

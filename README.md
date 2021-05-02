@@ -82,7 +82,7 @@ menuentry "NaOS multiboot2" {
     insmod part_msdos
     insmod fat
     multiboot2 /boot/kernel
-    module2 /boot/rfsimg rfsimg
+    module2 /boot/rfsimg
     boot
 }
 ```
@@ -117,7 +117,7 @@ menuentry "NaOS multiboot2" {
     insmod fat
     insmod ext2
     multiboot2 /boot/kernel
-    module2 /boot/rfsimg rfsimg
+    module2 /boot/rfsimg
     boot
 }
 ```

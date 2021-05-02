@@ -38,18 +38,13 @@ struct cfs_thread_t
 using thread_skip_list_t = util::skip_list<cfs_thread_t>;
 struct cpu_task_list_cf_t
 {
-    using thread_list_cache_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
-    using thread_skip_list_cache_allocator_t = memory::list_node_cache_allocator<thread_skip_list_t>;
-
-    thread_list_cache_allocator_t list_node_allocator;
-    thread_skip_list_cache_allocator_t allocator;
     thread_skip_list_t runable_list;
     thread_list_t block_list;
     u64 min_vruntime;
 
     cpu_task_list_cf_t()
-        : runable_list(&allocator)
-        , block_list(&list_node_allocator)
+        : runable_list(memory::KernelCommonAllocatorV)
+        , block_list(memory::KernelCommonAllocatorV)
     {
     }
 };
@@ -167,7 +162,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             {
                 thread->state = state;
                 task_list->runable_list.remove(it);
-                task_list->block_list.push_back(thread);
+                task_list->block_list.push_back(std::move(thread));
                 return;
             }
         }
@@ -187,7 +182,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         if (thread->attributes & thread_attributes::block_to_stop)
         {
             thread->state = thread_state::stop;
-            task_list->block_list.push_back(thread);
+            task_list->block_list.push_back(std::move(thread));
         }
         else
         {
@@ -215,7 +210,7 @@ void completely_fair_scheduler::on_migrate(thread_t *thread)
     if (thread->state == thread_state::ready)
         task_list->runable_list.insert(cfs_thread_t(thread));
     else if (thread->state == thread_state::stop)
-        task_list->block_list.push_back(thread);
+        task_list->block_list.push_back(std::move(thread));
     else
         trace::panic("Unknown thread state when migrate(CFS). state: ", (u64)thread->state);
 }

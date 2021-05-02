@@ -24,8 +24,7 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
     void close() override;
 
     tty_pseudo_t(u64 size = 512)
-        : buffer(memory::KernelMemoryAllocatorV, size)
-        , wait_queue(memory::KernelCommonAllocatorV)
+        : buffer(memory::MemoryAllocatorV, size)
         , line_count(0)
         , eof_count(0)
     {

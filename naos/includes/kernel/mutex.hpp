@@ -15,7 +15,7 @@ struct mutex_t
   public:
     friend bool mutex_func(u64 data);
     mutex_t()
-        : wait_queue(memory::KernelCommonAllocatorV){};
+        : wait_queue(){};
 
     void lock()
     {

@@ -48,7 +48,7 @@ bin_handle *bin_handle_ptr;
 
 void init()
 {
-    handles = memory::New<array_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
+    handles = memory::New<array_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     register_handle(memory::New<elf_handle>(memory::KernelCommonAllocatorV), "elf");
     bin_handle_ptr = memory::New<bin_handle>(memory::KernelCommonAllocatorV);
 }

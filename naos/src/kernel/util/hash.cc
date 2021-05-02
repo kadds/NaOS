@@ -37,7 +37,7 @@ u32 djb_hash(const char *str)
 
 // 64-bit hash for 64-bit platforms
 
-uint64_t murmur_hash2_64(const void *key, int len, u64 seed)
+uint64_t murmur_hash2_64(const void *key, u64 len, u64 seed)
 {
     const uint64_t m = 0xc6a4a7935bd1e995;
     const int r = 47;
@@ -131,7 +131,7 @@ inline uint64_t fmix64(uint64_t k)
     return k;
 }
 
-void murmur_hash3_128(const void *key, const int len, const uint32_t seed, void *out)
+void murmur_hash3_128(const void *key, const u64 len, const uint32_t seed, void *out)
 {
     const uint8_t *data = (const uint8_t *)key;
     const int nblocks = len / 16;

@@ -195,7 +195,7 @@ void kb_tasklet_func(u64 user_data)
             it->status.io_is_completion = true;
             io::completion(it);
         }
-        dev->io_list.clean();
+        dev->io_list.clear();
     }
 }
 
@@ -427,7 +427,7 @@ void kb_driver::on_io_request(io::request_t *request)
             {
                 {
                     uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
-                    dev->io_list.push_back(req);
+                    dev->io_list.push_back(std::move(req));
                 }
                 if (request->poll)
                 {
@@ -510,7 +510,7 @@ void mouse_tasklet_func(u64 user_data)
             it->status.io_is_completion = true;
             io::completion(it);
         }
-        dev->io_list.clean();
+        dev->io_list.clear();
     }
 }
 
@@ -725,7 +725,7 @@ void mouse_driver::on_io_request(io::request_t *request)
             {
                 {
                     uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
-                    dev->io_list.push_back(req);
+                    dev->io_list.push_back(std::move(req));
                 }
                 if (request->poll)
                 {

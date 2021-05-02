@@ -9,7 +9,7 @@ struct thread_t;
 
 namespace arch::cpu
 {
-inline constexpr u32 max_cpu_support = 32;
+constexpr u32 max_cpu_support = 32;
 using cpuid_t = u32;
 
 struct cpu_t
@@ -92,5 +92,17 @@ u64 count();
 cpuid_t id();
 
 bool has_init();
+
+void allocate_stack(int logic_num);
+
+phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id);
+phy_addr_t get_exception_stack_bottom_phy(cpuid_t id);
+phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id);
+phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id);
+
+void *get_kernel_stack_bottom(cpuid_t id);
+void *get_exception_stack_bottom(cpuid_t id);
+void *get_interrupt_stack_bottom(cpuid_t id);
+void *get_exception_nmi_stack_bottom(cpuid_t id);
 
 } // namespace arch::cpu

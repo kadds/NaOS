@@ -78,10 +78,11 @@ void on_tick(u64 vector, u64 data)
         {
             if (likely(ws.is_enable()))
             {
-                cpu_timer.tick_list.insert(ws);
+                auto w = ws;
+                cpu_timer.tick_list.insert(std::move(w));
             }
         }
-        cpu_timer.watcher_list.clean();
+        cpu_timer.watcher_list.clear();
     }
     uctx::UninterruptibleController icc;
     icc.begin();

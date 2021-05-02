@@ -1,58 +1,44 @@
 #pragma once
 #include "allocator.hpp"
-#include "common.hpp"
+#include "mm.hpp"
 
 namespace memory
 {
 
-///< For debugging
-struct buddy_tree
-{
-    buddy_tree *left;
-    buddy_tree *right;
-    u64 val;
-};
-
-extern const int buddy_max_page;
+class page;
+class zone;
+constexpr int buddy_max_order = 10;
+constexpr int buddy_max_page = 1 << buddy_max_order; // 1024 page
+constexpr int buddy_size = buddy_max_page * 2 - 1;
+constexpr int buddy_max_alloc_size = buddy_max_page * memory::page_size;
 
 class buddy
 {
   private:
-    const int size;
-    /// The 0th to last element comes from the output of the binary tree traversal. Element 0 is root.
-    u16 *array;
+    page *orders[buddy_max_order + 1];
+    zone *z;
+
     u64 next_fit_size(u64 size);
 
   public:
-    buddy(int max_level);
+    buddy();
+    i64 init(zone *z);
     ~buddy() = default;
     buddy(const buddy &) = delete;
+    buddy(buddy &&) = delete;
     buddy &operator=(const buddy &) = delete;
+    buddy &operator=(buddy &&) = delete;
 
-    int alloc(u64 size);
-    void free(int offset);
+    page *alloc(u64 size);
+    void free(page *p);
 
-    bool tag_alloc(int start_offset, int len);
-    // for debug
-    buddy_tree *gen_tree();
-    // also for debug
-    void cat_tree(buddy_tree *tree, int index);
+    bool mark_unavailable(page *s, page *e);
+
+  private:
+    void merge(u8 order, bool fast);
+    page *get_bro(page *p);
+    page *split_buddy(page *p);
+    void remove(page *p);
 };
-
-struct buddy_contanier
-{
-    int count;
-    buddy *buddies;
-};
-
-class BuddyAllocator : public IAllocator
-{
-  public:
-    BuddyAllocator();
-    ~BuddyAllocator();
-    void *allocate(u64 size, u64 align) override;
-    void deallocate(void *ptr) override;
-};
-extern BuddyAllocator *KernelBuddyAllocatorV;
 
 } // namespace memory

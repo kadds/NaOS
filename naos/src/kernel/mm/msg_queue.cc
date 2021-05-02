@@ -8,14 +8,13 @@
 namespace memory
 {
 u64 lev[] = {2048, max_message_queue_count};
-util::id_level_generator<2> *msg_queue_id_generator = nullptr;
+util::seq_generator *msg_queue_id_generator = nullptr;
 util::hash_map<msg_id, message_queue_t *> *msg_hash_map = nullptr;
 lock::rw_lock_t msg_queue_lock;
 
 void msg_queue_init()
 {
-    msg_queue_id_generator = memory::New<util::id_level_generator<2>>(memory::KernelCommonAllocatorV, lev);
-    msg_queue_id_generator->tag(0);
+    msg_queue_id_generator = memory::New<util::seq_generator>(memory::KernelCommonAllocatorV, 1, 1);
 
     msg_hash_map = memory::New<util::hash_map<msg_id, message_queue_t *>>(memory::KernelCommonAllocatorV,
                                                                           memory::KernelCommonAllocatorV, 7, 100);
@@ -36,7 +35,8 @@ message_queue_t *create_msg_queue(u64 maximum_msg_count, u64 maximum_msg_bytes)
     msgq->maximum_msg_count = maximum_msg_count;
     msgq->maximum_msg_bytes = maximum_msg_bytes;
     uctx::RawWriteLockUninterruptibleContext icu(msg_queue_lock);
-    msg_hash_map->insert(id, msgq);
+    auto q = msgq;
+    msg_hash_map->insert(std::move(id), std::move(q));
     return msgq;
 }
 
@@ -44,7 +44,7 @@ void delete_msg_queue(message_queue_t *q)
 {
     uctx::RawWriteLockUninterruptibleContext icu(msg_queue_lock);
     msg_hash_map->remove(q->key);
-    msg_queue_id_generator->collect(q->key);
+    // msg_queue_id_generator->collect(q->key);
     memory::Delete<>(memory::KernelCommonAllocatorV, q);
 }
 
@@ -135,9 +135,10 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
         if (!queue->msg_packs.get(type, &list))
         {
             list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-            queue->msg_packs.insert(type, list);
+            auto l = list;
+            queue->msg_packs.insert(std::move(type), std::move(l));
         }
-        list->push_back(msg);
+        list->push_back(std::move(msg));
         queue->msg_count++;
     }
     queue->receiver_wait_queue.do_wake_up();

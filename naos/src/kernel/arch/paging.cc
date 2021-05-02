@@ -1,12 +1,13 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/cpu.hpp"
+#include "kernel/arch/smp.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/vm.hpp"
+#include "kernel/mm/zone.hpp"
 #include "kernel/trace.hpp"
 namespace arch::paging
 {
@@ -17,69 +18,137 @@ static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) =
 template <typename _T> _T *new_page_table()
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    return memory::New<_T, 0x1000>(memory::KernelBuddyAllocatorV);
+    return memory::New<_T, memory::IAllocator *, 0x1000>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    memory::Delete<_T>(memory::KernelBuddyAllocatorV, addr);
+    memory::Delete<_T, memory::IAllocator *>(memory::KernelBuddyAllocatorV, addr);
 }
 
-void *base_entry::get_addr() const
-{
-    return memory::kernel_phyaddr_to_virtaddr((void *)((u64)data & 0xFFFFFFFFFF000UL));
-}
+void *base_entry::get_addr() const { return memory::pa2va(phy_addr_t::from((u64)data & 0xFFFFFFFFFF000UL)); }
 
 void *base_entry::get_phy_addr() const { return (void *)((u64)data & 0xFFFFFFFFFF000UL); }
 
 void base_entry::set_addr(void *ptr)
 {
-    data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::kernel_virtaddr_to_phyaddr(ptr)) & 0xFFFFFFFFFF000UL);
+    data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::va2pa(ptr)()) & 0xFFFFFFFFFF000UL);
 }
 
 void base_entry::set_phy_addr(void *ptr) { data = (data & ~0xFFFFFFFFFF000UL) | (((u64)ptr) & 0xFFFFFFFFFF000UL); }
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
+Unpaged_Text_Section u64 get_bits_unpaged(u64 addr, u8 start_bit, u8 bit_count)
+{
+    return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1);
+}
+
+Unpaged_Text_Section void set_zero(void *p)
+{
+    u64 *page_entries = (u64 *)p;
+    for (int i = 0; i < 512; i++)
+    {
+        page_entries[i] = 0;
+    }
+}
+
+Unpaged_Data_Section u64 page_alloc_position;
+
+Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_addr)
+{
+    u64 *page_entries = (u64 *)0;
+    u64 pc = memory::kernel_stack_page_count;
+    for(u64 i = 0; i < pc; i++) {
+        u64 pml4e_index = get_bits_unpaged(base_virtual_addr, 39, 8);
+        u64 pdpe_index = get_bits_unpaged(base_virtual_addr, 30, 8);
+        u64 pde_index = get_bits_unpaged(base_virtual_addr, 21, 8);
+        u64 pte_index = get_bits_unpaged(base_virtual_addr, 12, 8);
+
+        u64 *page_pdp_entries = (u64 *)(page_entries[pml4e_index] & 0xF'FFFF'FFFF'F000UL);
+
+        if (page_pdp_entries == 0) {
+            page_alloc_position += 0x1000;
+            page_pdp_entries = (u64 *)page_alloc_position;
+            set_zero(page_pdp_entries);
+            page_entries[pml4e_index] = page_alloc_position | 0x3;
+        }
+
+        u64 *page_pd_entries = (u64 *)(page_pdp_entries[pdpe_index] & 0xF'FFFF'FFFF'F000UL);
+        if (page_pd_entries == 0) {
+            page_alloc_position += 0x1000;
+            page_pd_entries = (u64 *) page_alloc_position;
+            set_zero(page_pd_entries);
+            page_pdp_entries[pdpe_index] = page_alloc_position | 0x3;
+        }
+
+        u64 *page_pt_entries = (u64 *)(page_pd_entries[pde_index] & 0xF'FFFF'FFFF'F000UL);
+        if (page_pt_entries == 0) {
+            page_alloc_position += 0x1000;
+            page_pt_entries = (u64 *) page_alloc_position;
+            set_zero(page_pt_entries);
+            page_pd_entries[pde_index] = page_alloc_position | 0x3;
+        }
+
+        page_pt_entries[pte_index] = phy_addr | 0x83;
+
+        base_virtual_addr += memory::page_size;
+        phy_addr += memory::page_size;
+    }
+}
+
 Unpaged_Text_Section void temp_init(bool is_bsp)
 {
-    // map 0x000000-0xffffffff->0x000000-0xffffffff,0-4GB->0-4GB
-    // map 0xffff800000000000-0xffff8000ffffffff->0x000000-0xffffffff
-    const u64 addr = 0x94000;
-    void *temp_pml4_addr = (void *)addr;
+    // map 0x0 -> 1GB
+    // map 0xFFFF800000000000 -> 1GB
+    // also map cpu_stack_bottom_address[0] -> 0x8XFFF-0x90000
+
+    void *temp_pml4_addr = (void *)0;
     if (is_bsp)
     {
-        u64 *page_temp_addr = (u64 *)addr;
-        for (int i = 0; i < 512; i++)
-            page_temp_addr[i] = 0;
-        page_temp_addr[0] = addr + 0x1003;
-        page_temp_addr[256] = page_temp_addr[0];
-        page_temp_addr = (u64 *)(addr + 0x1000);
-        for (int i = 0; i < 512; i++)
-            page_temp_addr[i] = 0;
-        page_temp_addr[0] = addr + 0x2003;
-        page_temp_addr[1] = addr + 0x3003;
-        page_temp_addr[2] = addr + 0x4003;
-        page_temp_addr[3] = addr + 0x5003;
+        page_alloc_position = 0;
+        u64 *page_entries = (u64 *)page_alloc_position;
+        set_zero(page_entries);
+        u64 target_phy = 0x83;
 
-        page_temp_addr = (u64 *)(addr + 0x2000);
+        page_alloc_position += 0x1000;
+        page_entries[0] = page_alloc_position + 3;
+        page_entries[256] = page_alloc_position + 3;
+        u64 *page_pdp_entries = (u64 *)page_alloc_position;
+        set_zero(page_pdp_entries);
 
-        u64 v = 0x83;
-        // map 4GB
-        for (int i = 0; i < 512 * 4; i++)
+        page_alloc_position += 0x1000;
+        page_pdp_entries[0] = page_alloc_position + 3;
+        u64 *page_pd_entries = (u64 *)page_alloc_position;
+        for (int k = 0; k < 512; k++)
         {
-            *page_temp_addr++ = v;
-            v += 0x200000; // 2MB
+            page_pd_entries[k] = target_phy;
+            target_phy += 0x200000;
         }
-    }
 
-    __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
+        __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
+
+        u64 base = memory::kernel_cpu_stack_bottom_address + memory::page_size;
+        fill_stack_page_table(base, 0x90000 - memory::page_size * memory::kernel_stack_page_count);
+
+        __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
+    }
+    else
+    {
+        __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
+        auto phy = arch::SMP::ap_stack_phy;
+        auto base = arch::SMP::ap_stack;
+        fill_stack_page_table((u64)base, (u64)phy);
+        __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
+    }
 }
+
+constexpr u64 pml4_entries_num = memory::max_memory_support / memory_size_gb(512);
 
 void init()
 {
-    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr();
+    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page();
     if (!cpu::current().is_bsp())
     {
         load(base_kernel_page_addr);
@@ -93,21 +162,24 @@ void init()
     if (cpu_info::has_feature(cpu_info::feature::huge_page_1gb))
     {
         trace::debug("Paging at 1GB granularity");
-        map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_1gb,
+        map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_1gb,
             (max_maped_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable);
     }
     else
     {
         trace::debug("Paging at 2MB granularity");
-        map(base_kernel_page_addr, (void *)0xffff800000000000, (void *)0x0, frame_size::size_2mb,
+        map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_2mb,
             (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
     }
     trace::debug("Map address ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
                  (void *)(0xffff800000000000 + max_maped_memory));
+}
 
+void enable_new_paging()
+{
     trace::debug("Reloading new page table");
+    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page();
     load(base_kernel_page_addr);
-    memory::kernel_vm_info->mmu_paging.load_paging();
 }
 
 void check_pml4e(pml4t *base_addr, int pml4_index)
@@ -178,8 +250,8 @@ NoReturn void error_unmap()
                  "or not aligned.");
 }
 
-bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
-         u32 page_ext_flags)
+bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_start_addr, u64 frame_size,
+         u64 frame_count, u32 page_ext_flags)
 {
     uctx::UninterruptibleContext icu;
     // virtual address doesn't align of 4kb
@@ -193,7 +265,7 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start
     u64 pde_index = get_bits(v, 21, 8);
     u64 pte_index = get_bits(v, 12, 8);
 
-    u8 *phy_addr = (u8 *)phy_start_addr;
+    u8 *phy_addr = (u8 *)phy_start_addr();
 
     switch (frame_size)
     {
@@ -429,10 +501,7 @@ bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_siz
 
 void load(base_paging_t *base_paging_addr)
 {
-    __asm__ __volatile__("movq %0, %%cr3	\n\t"
-                         :
-                         : "r"(memory::kernel_virtaddr_to_phyaddr(base_paging_addr))
-                         : "memory");
+    __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(memory::va2pa(base_paging_addr)()) : "memory");
 }
 
 void reload()
@@ -449,7 +518,7 @@ base_paging_t *current()
 {
     u64 v;
     __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : :);
-    return (base_paging_t *)memory::kernel_phyaddr_to_virtaddr(v);
+    return memory::pa2va<base_paging_t *>(phy_addr_t::from(v));
 }
 
 template <typename PageTable> bool copy(PageTable *dst, PageTable *src, int idx)
@@ -545,7 +614,7 @@ void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel)
     }
 }
 
-bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **phy_addr)
+bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_t *phy_addr)
 {
     u64 start = (u64)virt_addr;
     u64 pml4e_index = get_bits(start, 39, 8);
@@ -560,7 +629,7 @@ bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **ph
         {
             if (pdpe.is_big_page())
             {
-                *phy_addr = (void *)pdpe.get_phy_addr();
+                *phy_addr = phy_addr_t::from(pdpe.get_phy_addr());
                 return true;
             }
             auto &pde = pdpe.next()[pde_index];
@@ -568,13 +637,13 @@ bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **ph
             {
                 if (pde.is_big_page())
                 {
-                    *phy_addr = (void *)pde.get_phy_addr();
+                    *phy_addr = phy_addr_t::from(pde.get_phy_addr());
                     return true;
                 }
                 auto &pe = pde.next()[pte_index];
                 if (likely(pe.is_present()))
                 {
-                    *phy_addr = (void *)pe.get_phy_addr();
+                    *phy_addr = phy_addr_t::from(pe.get_phy_addr());
                     return true;
                 }
             }

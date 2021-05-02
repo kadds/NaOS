@@ -11,7 +11,6 @@ class dentry
 {
   public:
     using dentry_list_t = util::linked_list<dentry *>;
-    using dentry_list_node_allocator_t = memory::list_node_cache_allocator<dentry_list_t>;
 
   protected:
     const char *name;

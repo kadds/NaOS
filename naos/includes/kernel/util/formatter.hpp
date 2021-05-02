@@ -148,4 +148,17 @@ template <> struct format<void *>
         return buffer;
     }
 };
+
+template <> struct format<const void *>
+{
+    using In = const void *;
+    const char *operator()(const In &in, char *buffer, int buffer_len)
+    {
+        buffer[0] = '0';
+        buffer[1] = 'x';
+
+        pointer2str(in, buffer + 2, buffer_len - 2);
+        return buffer;
+    }
+};
 } // namespace util::formatter

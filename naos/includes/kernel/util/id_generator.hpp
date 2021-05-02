@@ -4,9 +4,38 @@
 #include "../ucontext.hpp"
 #include "bit_set.hpp"
 #include "common.hpp"
+#include <atomic>
 namespace util
 {
 inline constexpr u64 null_id = (u64)(-1);
+
+// A lock-free sequence generator
+class seq_generator
+{
+  public:
+    seq_generator(u64 beg, i32 step)
+        : start(beg)
+        , step(step)
+    {
+    }
+
+    u64 next()
+    {
+        u64 cur;
+        do
+        {
+            cur = start.load(std::memory_order_release);
+        } while (!start.compare_exchange_strong(cur, cur + step, std::memory_order_acquire));
+        return cur;
+    }
+
+    void collect(u64) {}
+
+  private:
+    std::atomic_uint64_t start;
+    i32 step;
+};
+
 /// TODO cache line sync
 class id_generator
 {
@@ -19,7 +48,7 @@ class id_generator
     id_generator(u64 max)
         : max(max)
         , last_index(0)
-        , bitmap(memory::KernelMemoryAllocatorV, max)
+        , bitmap(memory::KernelCommonAllocatorV, max)
     {
         bitmap.clean_all();
     };
@@ -95,7 +124,7 @@ template <u8 levels> class id_level_generator
                 if (pack[i].bitmap == nullptr)
                 {
                     pack[i].bitmap = memory::New<bit_set>(memory::KernelCommonAllocatorV,
-                                                          memory::KernelMemoryAllocatorV, pack[0].rest);
+                                                          memory::KernelCommonAllocatorV, pack[0].rest);
                     pack[i].bitmap->clean_all();
                 }
                 return &pack[i];
@@ -119,7 +148,7 @@ template <u8 levels> class id_level_generator
             pack[i].last_index = 0;
         }
         pack[0].bitmap =
-            memory::New<bit_set>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV, pack[0].rest);
+            memory::New<bit_set>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV, pack[0].rest);
         pack[0].bitmap->clean_all();
         current_pack = &pack[0];
     };

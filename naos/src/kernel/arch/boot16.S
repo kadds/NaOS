@@ -105,8 +105,25 @@ loop_start:
     movw %ax, %ss
     
     ljmp  $(kernel_code - _gdt_start), $jmp_dst
+
+.code64
+.section .unpaged.text
 jmp_dst:
-    jmp *%esi
+    andq $0xFFFFFFFFFFFFFFF0, %rsp
+    // rsi = multiboot2_main
+    movq %rsi, %r9
+    subq $0x10, %rsp
+    movq %rsp, %rsi
+    movq %rsp, %rdx
+    addq $0x8, %rdx
+    callq *%r9
+    // return args
+    // (%rsp) is kstart function address
+    movq %rax, %rdi
+    movq (%rsp), %r9
+    movq 8(%rsp), %rax
+    movq %rax, %rsp
+    jmp *%r9
 
     nop
     nop

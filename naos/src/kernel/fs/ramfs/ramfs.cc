@@ -1,6 +1,6 @@
 #include "kernel/fs/ramfs/ramfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
-#include "kernel/mm/buddy.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
 namespace fs::ramfs
@@ -91,7 +91,7 @@ super_block::super_block(u64 max_ram_size, file_system *fs)
     , block_size(memory::page_size)
     , max_ram_size(max_ram_size)
     , current_ram_used(0)
-    , inode_map(memory::KernelMemoryAllocatorV, 20, 500)
+    , inode_map(memory::MemoryAllocatorV, 20, 500)
     , last_inode_index(0)
 {
 }

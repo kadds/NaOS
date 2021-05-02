@@ -14,22 +14,19 @@
 namespace irq
 {
 using request_list_t = util::linked_list<request_func_data>;
-using request_list_node_allocator_t = memory::list_node_cache_allocator<request_list_t>;
 
 struct request_lock_list_t
 {
     lock::rw_lock_t lock;
     request_list_t *list;
-    explicit request_lock_list_t(memory::IAllocator *a)
-        : list(memory::New<request_list_t>(memory::KernelCommonAllocatorV, a))
+    explicit request_lock_list_t()
+        : list(memory::New<request_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV))
     {
     }
 };
 
 request_lock_list_t *irq_list;
 request_lock_list_t *soft_irq_list;
-
-request_list_node_allocator_t *list_allocator;
 
 const int irq_count = 256;
 
@@ -114,10 +111,8 @@ void init()
 {
     if (cpu::current().is_bsp())
     {
-        list_allocator = memory::New<request_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count, list_allocator);
-        soft_irq_list =
-            memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT, list_allocator);
+        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count);
+        soft_irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT);
     }
     arch::exception::set_callback(&do_irq);
     arch::interrupt::set_callback(&do_irq);

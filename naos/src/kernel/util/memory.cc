@@ -55,4 +55,19 @@ void memcopy(void *dst, const void *src, u64 size)
         } while (--rest != 0);
     }
 }
+
+int memcmp(const void *lhs, const void *rhs, u64 size)
+{
+    auto l = (char *)lhs;
+    auto r = (char *)rhs;
+    for (u64 i = 0; i < size; i++, l++, r++)
+    {
+        if (*l > *r)
+            return 1;
+        else if (*l < *r)
+            return -1;
+    }
+    return 0;
+}
+
 } // namespace util

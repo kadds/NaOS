@@ -2,6 +2,7 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/zone.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
@@ -14,7 +15,7 @@ void test();
 
 u64 frame_size;
 byte *vram_addr;
-byte *backbuffer_addr;
+byte *backbuffer_addr = nullptr;
 bool is_auto_flush = false;
 cursor_t cursor;
 u64 placeholder_times;
@@ -35,26 +36,9 @@ void init()
 
     vram_addr = (byte *)args->fb_addr;
     frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
+    backbuffer_addr = reinterpret_cast<byte *>(memory::KernelBuddyAllocatorV->allocate(frame_size, 8));
 
     /// XXX: Find memory as backbuffer
-    kernel_memory_map_item *mm_item =
-        ((kernel_memory_map_item *)memory::kernel_phyaddr_to_virtaddr(args->mmap) + args->mmap_count - 1);
-    const u64 align = 0x1000;
-    for (i64 i = args->mmap_count - 1; i >= 0; i--, mm_item--)
-    {
-        if (mm_item->map_type == map_type_t::available)
-        {
-            u64 start = ((u64)mm_item->addr + align - 1) & ~(align - 1);
-            u64 end = ((u64)mm_item->addr + mm_item->len + align - 1) & ~(align - 1);
-            if (start > end)
-                break;
-            if (end - start >= frame_size)
-            {
-                backbuffer_addr = memory::kernel_phyaddr_to_virtaddr((byte *)(end - frame_size));
-                break;
-            }
-        }
-    }
     if (unlikely(backbuffer_addr == nullptr))
     {
         trace::panic("Video backing buffer size is insufficient.");
@@ -173,7 +157,7 @@ void auto_flush()
 
         is_auto_flush = true;
         // 60HZ
-        timer::add_watcher(1000000 / 60, flush_timer, 0);
+        // timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
 }
 
@@ -214,8 +198,7 @@ void tag_memory()
 {
     if (likely(backbuffer_addr != nullptr))
     {
-        memory::tag_zone_buddy_memory(memory::kernel_virtaddr_to_phyaddr((byte *)backbuffer_addr),
-                                      (memory::kernel_virtaddr_to_phyaddr((byte *)backbuffer_addr + frame_size)));
+        memory::global_zones->tag_alloc(memory::va2pa(backbuffer_addr), memory::va2pa(backbuffer_addr + frame_size));
     }
 }
 

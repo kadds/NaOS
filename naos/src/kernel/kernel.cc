@@ -1,4 +1,3 @@
-
 #include "kernel/kernel.hpp"
 #include "common.hpp"
 #include "kernel/arch/arch.hpp"
@@ -18,6 +17,7 @@
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
+#include "kernel/cmdline.hpp"
 
 kernel_start_args *kernel_args;
 
@@ -44,14 +44,13 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
     }
 }
 
-ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args)
+ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args)
 {
     if (args != 0) // bsp
     {
         bss_init((void *)_bss_unpaged_start, (void *)_bss_unpaged_end);
     }
     arch::temp_init(args);
-    return (u64)&_kstart;
 }
 
 u64 build_version_timestamp = BUILD_VERSION_TS;
@@ -73,6 +72,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     kernel_args = args;
     static_init();
     arch::init(args);
+    cmdline::parse(memory::pa2va<char *>(phy_addr_t::from(kernel_args->command_line)));
     trace::info("Build version ", build_version_timestamp);
     cpu::init();
     irq::init();
@@ -84,7 +84,7 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     fs::vfs::init();
     trace::debug("Root file system init");
     fs::ramfs::init();
-    fs::rootfs::init(memory::kernel_phyaddr_to_virtaddr((byte *)args->rfsimg_start), args->rfsimg_size);
+    fs::rootfs::init(memory::pa2va<byte*>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
     fs::pipefs::init();
     ksybs::init();
     io::init();

@@ -10,60 +10,28 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
+#include "kernel/mm/zone.hpp"
 
 namespace memory
 {
-
-const u64 user_stack_size = 0x400000;
-// maximum stack size: 256MB
-const u64 user_stack_maximum_size = 0x10000000;
-
-const u64 user_mmap_top_address = 0x00008000000000 - 0x10000000;
-
-const u64 user_code_bottom_address = 0x400000;
-
-/// 4G
-const u64 user_head_size = 0x100000000;
-
-const u64 kernel_mmap_top_address = 0xFFFF800d00000000;
-
-const u64 kernel_mmap_bottom_address = 0xFFFF800b00000000;
-
-const u64 kernel_vga_bottom_address = 0xFFFF800a00000000;
-
-const u64 kernel_vga_top_address = 0xFFFF800a00FFFFFF;
-
-// 16 kb stack size in X86_64 arch
-const int kernel_stack_page_count = 4;
-// 16 kb irq stack size
-const int interrupt_stack_page_count = 4;
-// 8 kb exception stack size
-const int exception_stack_page_count = 2;
-// 16 kb exception nmi stack size
-const int exception_nmi_stack_page_count = 4;
-
-const u64 kernel_stack_size = kernel_stack_page_count * memory::page_size;
-const u64 interrupt_stack_size = interrupt_stack_page_count * memory::page_size;
-const u64 exception_stack_size = exception_stack_page_count * memory::page_size;
-const u64 exception_nmi_stack_size = exception_nmi_stack_page_count * memory::page_size;
-const u64 max_memory_support = 0x100000000000ul;
 
 VirtBootAllocator *VirtBootAllocatorV;
 PhyBootAllocator *PhyBootAllocatorV;
 KernelCommonAllocator *KernelCommonAllocatorV;
 KernelVirtualAllocator *KernelVirtualAllocatorV;
-KernelMemoryAllocator *KernelMemoryAllocatorV;
+MemoryAllocator *MemoryAllocatorV;
+zones *KernelBuddyAllocatorV;
 
-void *PhyBootAllocator::base_ptr;
-void *PhyBootAllocator::current_ptr;
+lock::spinlock_t buddy_lock;
+
+phy_addr_t PhyBootAllocator::base_ptr;
+phy_addr_t PhyBootAllocator::current_ptr;
 bool PhyBootAllocator::available;
 
 u64 max_memory_available;
 u64 max_memory_maped;
 u64 limit;
-zones_t global_zones;
-
-const u64 linear_addr_offset = 0xffff800000000000;
+zones *global_zones;
 
 vm::info_t *kernel_vm_info;
 
@@ -85,23 +53,6 @@ struct kmalloc_t
     {1024, "kmalloc-1024"}, {1536, "kmalloc-1536"}, {2048, "kmalloc-2048"}, {3072, "kmalloc-3072"},
     {4096, "kmalloc-4096"}, {6144, "kmalloc-6144"}, {8192, "kmalloc-8192"}};
 
-void tag_zone_buddy_memory(void *start_addr, void *end_addr)
-{
-    for (int i = 0; i < global_zones.count; i++)
-    {
-        auto &zone = global_zones.zones[i];
-
-        u64 start = (char *)start_addr > (char *)zone.start ? (u64)start_addr : (u64)zone.start;
-        u64 end = (char *)end_addr < (char *)zone.end ? (u64)end_addr : (u64)zone.end;
-        if (start < end)
-        {
-            u64 start_offset = (start - (u64)zone.start) / page_size;
-            u64 end_offset = (end - (u64)zone.start) / page_size;
-            zone.tag_used(start_offset, end_offset);
-        }
-    }
-}
-
 const char *get_type_str(map_type_t type)
 {
     switch (type)
@@ -121,18 +72,12 @@ const char *get_type_str(map_type_t type)
     }
 }
 
-void init(const kernel_start_args *args, u64 fix_memory_limit)
+int detect_zones(const kernel_start_args *args)
 {
-    PhyBootAllocator::init((void *)(args->data_base + args->data_size));
-    VirtBootAllocator vb;
-    VirtBootAllocatorV = New<VirtBootAllocator>(&vb);
-    PhyBootAllocatorV = New<PhyBootAllocator>(&vb);
-    if (args->mmap_count == 0)
-        trace::panic("memory map shouldn't empty");
-    global_zones.count = 0;
-    kernel_memory_map_item *mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
+    kernel_memory_map_item *mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
     max_memory_available = 0;
     max_memory_maped = 0;
+    int zone_count = 0;
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
@@ -141,11 +86,27 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
                      ", size:", mm_item->len, "bytes -> ", mm_item->len >> 10, "Kib -> ", mm_item->len >> 20, "Mib");
         if (mm_item->map_type == map_type_t::available)
         {
-            u64 start = ((u64)mm_item->addr + page_size - 1) & ~(page_size - 1);
-            u64 end = ((u64)mm_item->addr + mm_item->len - 1) & ~(page_size - 1);
-            if (start < end)
-                global_zones.count++;
-            max_memory_available += mm_item->len;
+            phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
+            phy_addr_t end = align_down(phy_addr_t::from(mm_item->addr + mm_item->len), page_size);
+            if (likely(start >= end))
+            {
+                continue;
+            }
+            zone_count++;
+            i64 len = end - start;
+
+            max_memory_available += len;
+            // kernel loaded at 0x10000 1Mib
+            // check space
+            if (end > phy_addr_t::from(0x100000) && start <= phy_addr_t::from(0x100000))
+            {
+                if (len < 0x400000)
+                {
+                    // less than 4MB
+                    trace::panic("Memory map range too small ", reinterpret_cast<addr_t>(start()),
+                                 reinterpret_cast<addr_t>(end()));
+                }
+            }
         }
         if (mm_item->addr + mm_item->len > max_memory_maped)
             max_memory_maped = mm_item->addr + mm_item->len;
@@ -158,51 +119,71 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         trace::panic("Too few memory to boot");
     }
 
-    mm_item = (kernel_memory_map_item *)kernel_phyaddr_to_virtaddr(args->mmap);
+    return zone_count;
+}
 
-    global_zones.zones = NewArray<zone_t>(VirtBootAllocatorV, global_zones.count);
-    int cid = 0;
+void init(const kernel_start_args *args, u64 fix_memory_limit)
+{
+    if (args->mmap_count == 0)
+        trace::panic("memory map shouldn't empty");
+
+    PhyBootAllocator::init(phy_addr_t::from(args->data_base + args->data_size));
+    VirtBootAllocator vb;
+    VirtBootAllocatorV = New<VirtBootAllocator>(&vb);
+    PhyBootAllocatorV = New<PhyBootAllocator>(&vb);
+
+    int zone_count = detect_zones(args);
+    auto mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
+
+    global_zones = (memory::zones *)VirtBootAllocatorV->allocate(sizeof(zones) + zone_count * sizeof(zone), 8);
+    global_zones = new (global_zones) memory::zones(zone_count);
+
+    int zone_id = 0;
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
         if (mm_item->map_type != map_type_t::available)
             continue;
-        u64 start = ((u64)mm_item->addr + page_size - 1) & ~(page_size - 1);
-        u64 end = ((u64)mm_item->addr + mm_item->len - 1) & ~(page_size - 1);
+
+        phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
+        phy_addr_t end = align_down(phy_addr_t::from(mm_item->addr + mm_item->len), page_size);
         if (start >= end)
             continue;
-        auto &item = global_zones.zones[cid];
-        item.start = (void *)start;
-        item.end = (void *)end;
-        item.page_count = (end - start) / page_size;
-        auto buddies = New<buddy_contanier>(VirtBootAllocatorV);
 
-        item.buddy_impl = buddies;
-        auto count = item.page_count / buddy_max_page;
-        auto rest = item.page_count % buddy_max_page;
-        if (likely(rest > 0))
-            buddies->count = count + 1;
-        else
-            buddies->count = count;
-        trace::debug("Memory zone index ", cid, " num of page ", item.page_count, ", num of buddy ", buddies->count);
-        if (likely(buddies->count > 0))
+        zone *z = global_zones->at(zone_id);
+        if (end > phy_addr_t::from(0x100000) && start <= phy_addr_t::from(0x100000))
         {
-            buddies->buddies = NewArray<buddy>(VirtBootAllocatorV, buddies->count, buddy_max_page);
-            if (rest > 0)
-                buddies->buddies[buddies->count - 1].tag_alloc(rest, buddy_max_page - rest);
+            z = new (z) zone(start, end, phy_addr_t::from(0x100000),
+                             phy_addr_t::from(PhyBootAllocatorV->current_ptr_address()));
         }
         else
         {
+            z = new (z) zone(start, end, nullptr, nullptr);
         }
-        cid++;
+        trace::debug("Memory zone index ", zone_id, " num of page ", z->pages_count(), ", block of buddy ",
+                     z->buddy_blocks_count());
+        zone_id++;
     }
-    // map the kernel and data
-    auto start_kernel = args->kernel_base & ~(page_size - 1);
-    auto end_kernel = (args->kernel_base + args->kernel_size + page_size - 1) & ~(page_size - 1);
 
-    auto start_data = (args->data_base) & ~(page_size - 1);
-    auto end_data = (u64)PhyBootAllocator::current_ptr_address() + sizeof(slab_cache_pool) * 3 +
-                    sizeof(void *) * 2 * 6 + sizeof(vm::vm_allocator) + fix_memory_limit;
-    end_data = (end_data + page_size - 1) & ~(page_size - 1);
+    KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
+    KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
+    MemoryAllocatorV = New<MemoryAllocator>(VirtBootAllocatorV);
+    // after kernel common allocator is initialized
+    global_kmalloc_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+
+    for (auto &i : kmalloc_fixed_slab_size)
+    {
+        i.group = New<slab_group>(VirtBootAllocatorV, i.size, i.name, 8, 0);
+    }
+
+    // map the kernel and data
+    phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);
+    phy_addr_t end_kernel = align_up(phy_addr_t::from(args->kernel_base) + args->kernel_size, page_size);
+
+    phy_addr_t start_data = align_down(phy_addr_t::from(args->data_base), page_size);
+    phy_addr_t end_data = align_up(
+        phy_addr_t::from(PhyBootAllocator::current_ptr_address()) + sizeof(vm::info_t) + fix_memory_limit, page_size);
 
     if (start_data < end_kernel)
     {
@@ -214,49 +195,40 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         }
     }
 
-    auto start_image_data = (args->rfsimg_start) & ~(page_size - 1);
-    auto end_image_data = (args->rfsimg_start + args->rfsimg_size + page_size - 1) & ~(page_size - 1);
+    phy_addr_t start_image_data = align_down(phy_addr_t::from(args->rfsimg_start), page_size);
+    phy_addr_t end_image_data = align_up(phy_addr_t::from(args->rfsimg_start + args->rfsimg_size), page_size);
 
     if (end_image_data <= start_data || start_image_data >= end_data)
     {
-        tag_zone_buddy_memory((void *)start_image_data, (void *)end_image_data);
+        global_zones->tag_alloc(start_image_data, end_image_data);
     }
     // Don't use 0x0 - 0x100000 lower 1MB memory
-    tag_zone_buddy_memory((void *)0x0, (void *)0x100000);
+    global_zones->tag_alloc(phy_addr_t::from(0x0), phy_addr_t::from(0x100000));
     // tell buddy system kernel used
-    tag_zone_buddy_memory((void *)start_kernel, (void *)end_kernel);
-    tag_zone_buddy_memory((void *)start_data, (void *)end_data);
+    global_zones->tag_alloc(start_kernel, end_kernel);
+    global_zones->tag_alloc(start_data, end_data);
 
-    trace::debug("Kernel(code):", (void *)start_kernel, "-", (void *)end_kernel, ", size:", (end_kernel - start_kernel),
-                 " -> ", (end_kernel - start_kernel) >> 10, "Kib");
+    trace::debug("Kernel(code):", reinterpret_cast<addr_t>(start_kernel()), "-", reinterpret_cast<addr_t>(end_kernel()),
+                 ", size:", (end_kernel - start_kernel), " -> ", (end_kernel - start_kernel) >> 10, "Kib");
 
-    trace::debug("Kernel(boot data):", (void *)start_data, "-", (void *)end_data, ", size:", (end_data - start_data),
-                 " -> ", (end_data - start_data) >> 10, "Kib");
+    trace::debug("Kernel(boot data):", reinterpret_cast<addr_t>(start_data()), "-",
+                 reinterpret_cast<addr_t>(end_data()), ", size:", (end_data - start_data), " -> ",
+                 (end_data - start_data) >> 10, "Kib");
 
-    trace::debug("Kernel(image data):", (void *)start_image_data, "-", (void *)end_image_data,
-                 ", size:", (end_image_data - start_image_data), " -> ", (end_image_data - start_image_data) >> 10,
-                 "Kib");
+    trace::debug("Kernel(image data):", reinterpret_cast<addr_t>(start_image_data()), "-",
+                 reinterpret_cast<addr_t>(end_image_data()), ", size:", (end_image_data - start_image_data), " -> ",
+                 (end_image_data - start_image_data) >> 10, "Kib");
 
-    KernelBuddyAllocatorV = New<BuddyAllocator>(VirtBootAllocatorV);
+    KernelBuddyAllocatorV = global_zones;
 
-    global_kmalloc_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
-    global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
-    global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
-
-    for (auto &i : kmalloc_fixed_slab_size)
-    {
-        i.group = global_kmalloc_slab_domain->create_new_slab_group(i.size, i.name, 8, 0);
-    }
-    KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
+    trace::debug("kmalloc prepared.");
 
     memory::vm::init();
     kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV);
     kernel_vm_info->vma.set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
-    KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
-    KernelMemoryAllocatorV = New<KernelMemoryAllocator>(VirtBootAllocatorV);
 
     PhyBootAllocatorV->discard();
-    kassert((u64)PhyBootAllocatorV->current_ptr_address() <= end_data, "BootAllocator is Out of memory");
+    kassert(PhyBootAllocatorV->current_ptr_address() <= end_data(), "BootAllocator is Out of memory");
     msg_queue_init();
 }
 
@@ -304,15 +276,15 @@ void *kmalloc(u64 size, u64 align)
 
 void kfree(void *addr)
 {
-    for (auto it : kmalloc_fixed_slab_size)
+    slab_group *s = slab_group::get_group_from(addr);
+    if (s == nullptr)
     {
-        if (it.group->include_address(addr))
-        {
-            SlabObjectAllocator allocator(it.group);
-            allocator.deallocate(addr);
-            return;
-        }
+        trace::warning("address isn't malloc from kmalloc ", reinterpret_cast<addr_t>(addr));
+        return;
     }
+    SlabObjectAllocator allocator(s);
+    allocator.deallocate(addr);
+    return;
 }
 
 void *vmalloc(u64 size, u64 align)
@@ -320,8 +292,8 @@ void *vmalloc(u64 size, u64 align)
     auto vm = kernel_vm_info->vma.allocate_map(size, align, 0, 0);
     for (u64 start = vm->start; start < vm->end; start += page_size)
     {
-        auto phy = memory::kernel_virtaddr_to_phyaddr(KernelBuddyAllocatorV->allocate(1, 0));
-        arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr(), (void *)start, phy,
+        auto phy = memory::va2pa(KernelBuddyAllocatorV->allocate(1, 0));
+        arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(), (void *)start, phy,
                           arch::paging::frame_size::size_4kb, 1,
                           arch::paging::flags::writable | arch::paging::flags::present);
     }
@@ -336,30 +308,10 @@ void vfree(void *addr)
     {
         /// TODO: free page memory
         kernel_vm_info->vma.deallocate_map(vm);
-        arch::paging::unmap((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_page_addr(),
+        arch::paging::unmap((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(),
                             (void *)vm->start, arch::paging::frame_size::size_4kb,
                             (vm->end - vm->start) / arch::paging::frame_size::size_4kb);
     }
-}
-
-void zone_t::tag_used(u64 offset_start, u64 offset_end)
-{
-    auto buddies = (buddy_contanier *)buddy_impl;
-    u64 s_buddy = offset_start / buddy_max_page;
-    u64 e_buddy = offset_end / buddy_max_page;
-    u64 s_buddy_rest = offset_start % buddy_max_page;
-    u64 e_buddy_rest = offset_end % buddy_max_page;
-    if (s_buddy == e_buddy)
-    {
-        buddies->buddies[s_buddy].tag_alloc(s_buddy_rest, e_buddy_rest - s_buddy_rest);
-        return;
-    }
-    buddies->buddies[s_buddy].tag_alloc(s_buddy_rest, buddy_max_page - s_buddy_rest);
-    for (u64 i = s_buddy + 1; i < e_buddy; i++)
-    {
-        buddies->buddies[i].tag_alloc(0, buddy_max_page);
-    }
-    buddies->buddies[e_buddy].tag_alloc(0, e_buddy_rest);
 }
 
 void *malloc_page() { return KernelBuddyAllocatorV->allocate(1, 0); }
@@ -374,7 +326,7 @@ void *KernelVirtualAllocator::allocate(u64 size, u64 align) { return vmalloc(siz
 
 void KernelVirtualAllocator::deallocate(void *p) { vfree(p); }
 
-void *KernelMemoryAllocator::allocate(u64 size, u64 align)
+void *MemoryAllocator::allocate(u64 size, u64 align)
 {
     if (size > 4096)
     {
@@ -383,7 +335,7 @@ void *KernelMemoryAllocator::allocate(u64 size, u64 align)
     return kmalloc(size, align);
 }
 
-void KernelMemoryAllocator::deallocate(void *p)
+void MemoryAllocator::deallocate(void *p)
 {
     auto vm = kernel_vm_info->vma.get_vm_area((u64)p);
     if (!vm)

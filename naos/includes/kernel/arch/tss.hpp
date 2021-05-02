@@ -76,7 +76,7 @@ struct tss_t
 
 static_assert(sizeof(tss_t) == 104, "sizeof(tss_t) must == 104");
 
-void init(int core_index, void *baseAddr, void *ist);
+void init(int core_index, phy_addr_t base_addr, void *ist);
 
 void set_ist(int core_index, int index, void *ist);
 void *get_ist(int core_index, int index);

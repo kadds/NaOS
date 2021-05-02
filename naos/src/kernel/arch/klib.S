@@ -19,23 +19,19 @@ reload_seg_x:
 
 .globl _cpu_id
 _cpu_id:
-    pushq %rbp
-    movq %rsp, %rbp
     pushq %rbx
-    movl %edi, %eax
     movq %rcx, %r9
-    movq %rdi, %rcx
-    shr  $32, %rcx
+    movq %rdx, %r8
+    movl (%rdi), %eax
+    movl (%rdx), %ecx
     clc
     
-    movq %rdx, %rdi
     cpuid
-    mov %eax, (%rsi)
-    mov %ebx, (%rdi)
-    mov %ecx, (%r9)
-    mov %edx, (%r8)
+    movl %eax, (%rdi)
+    movl %ebx, (%rsi)
+    movl %ecx, (%r8)
+    movl %edx, (%r9)
     popq %rbx
-    leave
     ret
 .globl _switch_task
 _switch_task:

@@ -51,6 +51,7 @@ struct kernel_start_args
     u64 command_line;     ///< Pointer, kernel boot command string
     u64 boot_loader_name; ///< Pointer, like "grub2", "efi" string
 
+    u64 rsdp; ///< Pointer, ACPI RSDP
 } PackStruct;
 
 /// Kernel file struct
@@ -69,7 +70,7 @@ struct kernel_file_head_t
 #define _ctx_interrupt_
 ExportC NoReturn void _kstart(kernel_start_args *args);
 
-ExportC Unpaged_Text_Section u64 _init_unpaged(const kernel_start_args *args);
+ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args);
 
 extern kernel_start_args *kernel_args;
 extern u64 timestamp_version;

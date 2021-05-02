@@ -29,8 +29,8 @@ struct data_t
     memory::SlabObjectAllocator dir_entry_allocator, dir_path_allocator;
 
     data_t()
-        : fs_list(memory::KernelCommonAllocatorV)
-        , mount_list(memory::KernelCommonAllocatorV)
+        : fs_list(memory::MemoryAllocatorV)
+        , mount_list(memory::MemoryAllocatorV)
         , dir_entry_allocator(NewSlabGroup(memory::global_object_slab_domain, dir_entry_str, sizeof(dir_entry_str), 0))
         , dir_path_allocator(NewSlabGroup(memory::global_object_slab_domain, dir_path_str, sizeof(dir_path_str), 0))
     {
@@ -51,7 +51,7 @@ int register_fs(file_system *fs)
         }
     }
 
-    data->fs_list.push_back(fs);
+    data->fs_list.push_back(std::move(fs));
     return 0;
 }
 
@@ -432,7 +432,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
         auto su_block = fs->load(dev, fs_data, max_len);
         mount_t mnt("/", nullptr, nullptr, su_block);
         global_root = su_block->get_root();
-        data->mount_list.push_back(mnt);
+        data->mount_list.push_back(std::move(mnt));
     }
     else
     {
@@ -452,7 +452,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
         /// TODO: copy dev string
         mount_t mnt(path, dev, dir, su_block);
 
-        data->mount_list.push_back(mnt);
+        data->mount_list.push_back(std::move(mnt));
 
         auto new_root = su_block->get_root();
         new_root->set_parent(dir->get_parent());
@@ -658,11 +658,12 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
 
     char *ptr = path;
     i64 rest_len = max_len - 1;
-    util::array<dentry *> array(memory::KernelCommonAllocatorV);
+    util::array<dentry *> array(memory::MemoryAllocatorV);
 
     while (current != root && current != nullptr)
     {
-        array.push_back(current);
+        auto c = current;
+        array.push_back(std::move(c));
         current = current->get_parent();
         if (array.size() > 256)
             return 0;

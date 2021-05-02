@@ -11,6 +11,7 @@ class pseudo_t
     virtual i64 write(const byte *data, u64 size, flag_t flags) = 0;
     virtual i64 read(byte *data, u64 max_size, flag_t flags) = 0;
     virtual void close() = 0;
+    virtual ~pseudo_t() {}
 };
 
 class pseudo_pipe_t : public pseudo_t
@@ -26,8 +27,7 @@ class pseudo_pipe_t : public pseudo_t
     i64 read(byte *data, u64 max_size, flag_t flags) override;
     void close() override;
     pseudo_pipe_t(u64 size = 512)
-        : buffer(memory::KernelMemoryAllocatorV, size)
-        , wait_queue(memory::KernelCommonAllocatorV)
+        : buffer(memory::MemoryAllocatorV, size)
         , is_close(false)
     {
     }

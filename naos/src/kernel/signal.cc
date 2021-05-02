@@ -43,7 +43,7 @@ void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i
     {
         if (!masks.is_ignore(num))
         {
-            events.push_back(info);
+            events.push_back(std::move(info));
             wait_queue.do_wake_up();
         }
     }

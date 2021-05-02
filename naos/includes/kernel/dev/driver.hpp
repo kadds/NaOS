@@ -39,7 +39,7 @@ class driver
 };
 
 using driver_map_t = util::hash_map<num_t, driver *>;
-using driver_id_gen_t = util::id_generator;
+using driver_id_gen_t = util::seq_generator;
 
 void init_driver();
 

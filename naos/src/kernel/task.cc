@@ -44,19 +44,11 @@ const process_id max_process_id = 0x100000;
 const group_id max_group_id = 0x10000;
 
 using thread_list_t = util::linked_list<thread_t *>;
-// using process_list_t = util::linked_list<process_t *>;
-using thread_list_node_allocator_t = memory::list_node_cache_allocator<thread_list_t>;
-// using process_list_node_allocator_t = memory::list_node_cache_allocator<process_list_t>;
 
-const u64 process_id_param[] = {0x1000, 0x8000, 0x40000, 0x80000};
-using process_id_generator_t = util::id_level_generator<sizeof(process_id_param) / sizeof(u64)>;
+using process_id_generator_t = util::seq_generator;
 process_id_generator_t *process_id_generator;
 
-const u64 thread_id_param[] = {0x1000, 0x8000, 0x40000};
-using thread_id_generator_t = util::id_level_generator<sizeof(thread_id_param) / sizeof(u64)>;
-
-thread_list_node_allocator_t *thread_list_cache_allocator;
-// process_list_node_allocator_t *process_list_cache_allocator;
+using thread_id_generator_t = util::seq_generator;
 
 memory::SlabObjectAllocator *thread_t_allocator;
 memory::SlabObjectAllocator *process_t_allocator;
@@ -92,10 +84,11 @@ inline process_t *new_kernel_process()
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->pid = id;
-    process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
+    process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::kernel_vm_info;
-    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
-    global_process_map->insert(id, process);
+    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
+    auto p = process;
+    global_process_map->insert(std::move(id), std::move(p));
     return process;
 }
 
@@ -108,10 +101,11 @@ inline process_t *new_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->attributes = 0;
     process->pid = id;
-    process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, thread_list_cache_allocator);
+    process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
-    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, thread_id_param);
-    global_process_map->insert(id, process);
+    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
+    auto p = process;
+    global_process_map->insert(std::move(id), std::move(p));
 
     return process;
 }
@@ -124,7 +118,7 @@ inline void delete_process(process_t *p)
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
     global_process_map->remove(p->pid);
-    process_id_generator->collect(p->pid);
+    // process_id_generator->collect(p->pid);
     memory::Delete<>(process_t_allocator, p);
 }
 
@@ -141,7 +135,8 @@ inline thread_t *new_thread(process_t *p)
 
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
-    ((thread_list_t *)p->thread_list)->push_back(thd);
+    auto t = thd;
+    ((thread_list_t *)p->thread_list)->push_back(std::move(t));
     register_info_t *register_info = memory::New<register_info_t>(register_info_t_allocator);
     thd->register_info = register_info;
     thd->tid = id;
@@ -165,20 +160,18 @@ void delete_thread(thread_t *thd)
     if (likely((u64)thd->kernel_stack_top != 0))
         delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
 
-    ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
+    // ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
     memory::Delete<>(register_info_t_allocator, thd->register_info);
     memory::Delete<>(thread_t_allocator, thd);
 }
 
 process_t::process_t()
-    : wait_queue(memory::KernelCommonAllocatorV)
-    , wait_counter(0)
+    : wait_counter(0)
 {
 }
 
 thread_t::thread_t()
-    : wait_queue(memory::KernelCommonAllocatorV)
-    , wait_counter(0)
+    : wait_counter(0)
     , do_wait_queue_now(nullptr)
 {
 }
@@ -217,8 +210,7 @@ void init()
     if (cpu::current().is_bsp())
     {
         uctx::UninterruptibleContext icu;
-        thread_list_cache_allocator = memory::New<thread_list_node_allocator_t>(memory::KernelCommonAllocatorV);
-        global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelMemoryAllocatorV);
+        global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
         thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
             memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
@@ -233,7 +225,7 @@ void init()
         register_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
             memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
 
-        process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, process_id_param);
+        process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
         // init for kernel process
         process = new_kernel_process();
         process->parent_pid = 0;

@@ -12,11 +12,11 @@ const u8 tss_type_using = 0b1011;
 
 tss_t *tss;
 
-void init(int core_index, void *baseAddr, void *ist)
+void init(int core_index, phy_addr_t base_addr, void *ist)
 {
     if (core_index == 0) // bsp
     {
-        tss = memory::NewArray<tss_t, 8>(memory::KernelCommonAllocatorV, cpu::max_cpu_support);
+        tss = memory::NewArray<tss_t, memory::IAllocator *, 8>(memory::KernelCommonAllocatorV, cpu::max_cpu_support);
     }
 
     descriptor &tss_descriptor = gdt::get_tss_descriptor(core_index);
@@ -31,9 +31,9 @@ void init(int core_index, void *baseAddr, void *ist)
 
     __asm__ __volatile__("ltr %0	\n\t" : : "r"(tss_index) : "memory");
 
-    set_rsp(core_index, 0, baseAddr);
-    set_rsp(core_index, 1, baseAddr);
-    set_rsp(core_index, 2, baseAddr);
+    set_rsp(core_index, 0, base_addr());
+    set_rsp(core_index, 1, base_addr());
+    set_rsp(core_index, 2, base_addr());
     set_ist(core_index, 1, ist);
     set_ist(core_index, 2, ist);
     set_ist(core_index, 3, ist);

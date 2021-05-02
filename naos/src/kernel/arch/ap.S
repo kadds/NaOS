@@ -1,6 +1,6 @@
 .section .unpaged.text
 .code16
-.align 8
+.balign 8
 .globl _ap_code_start
 _ap_code_start:
 ap_boot: 
@@ -17,14 +17,10 @@ ap_boot:
     smsw %ax
     bts $0, %ax
     lmsw %ax
-    ljmpl *(jump_code32 - _ap_code_start)
+    ljmpl $0x8, $ap_code32
     pause
 .balign 4
-jump_code32:
-    .long	ap_code32 - _ap_code_start + base_ap_phy_addr
-	.word	0x8,0	
     // 64 temporary gdt
-.balign 4
 _gdt_ap_start:
     .quad 0x0 // null
     kernel_code:
@@ -42,6 +38,7 @@ _idt_ptr:
     .short 0
     .int 0
 .balign 4
+
 .code32
 ap_code32:
     mov $0x10, %ax
@@ -55,15 +52,13 @@ spin_lock:
     movl $1, %ecx
 spin_lock_retry:
     xorl   %eax, %eax
-    // if *_ap_standby == 0
-    //    *_ap_standby = 1
     mfence
-    lock cmpxchg %ecx, (_ap_standby)
+    lock cmpxchg %ecx, (_ap_startup_spin_flag)
     mfence
     jnz    spin_lock
 
-    movl (_ap_stack), %esp
-    movl $0, (_ap_stack)
+    // template esp
+    movl $0x80000, %esp 
     pushl $0
     pushl (_target)
     xchg %bx, %bx
@@ -73,21 +68,27 @@ spin_lock_retry:
 hlt_code:
     pause
     jmp hlt_code
-_ap_code_end:
 .globl _ap_code_end
+_ap_code_end:
+
+// data 
 
 .balign 4
-.globl _ap_standby
-_ap_standby:
-    .int 1
-.globl _ap_stack   
-_ap_stack:
+.globl _ap_startup_spin_flag
+_ap_startup_spin_flag:
     .int 0
 .globl _ap_count
 _ap_count:
     .int 0
+    
+.balign 8
+.globl _ap_stack   
+_ap_stack:
+    .quad 0
 _target:
     .quad _ap_64
+
+// amd64 mode code 
 
 .balign 8
 .globl go_to_amd64_ap
@@ -107,7 +108,7 @@ go_to_amd64_ap:
     orl $0x20, %eax
     movl %eax, %cr4
 // set PML4
-    movl $0x90000, %eax
+    movl $0x0, %eax
     movl %eax, %cr3
 
 // open LME. enter ia32e
@@ -149,14 +150,18 @@ _gdt_ptr:
     .int 0
 
 .code64
+.balign 8
 _ap_64:
-    pushq $0
+    andq $0xFFFFFFFFFFFFFFF0, %rsp
+    xorq %rdi, %rdi
     callq _init_unpaged
-    movabsq $base_virtual_addr, %rbx
-    xchg %bx, %bx
-    addq %rbx, %rsp
-    movq $0, %rdi
-    callq *%rax
+    movq $_ap_stack, %rax
+    movq (%rax), %rsp
+    mfence
+    movq $0, (%rax)
+    movabsq $_kstart, %rax
+    xorq %rdi, %rdi
+    jmp *%rax
 
 end_ap:
     pause

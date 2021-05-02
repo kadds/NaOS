@@ -1,13 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include <type_traits>
-/*
-kernel map
-0xFFFF,8000,0000,0000 - 0xFFFF,8A00,0000,0000: 32TB  : kernel fixed memory map
-0xFFFF,FFFF,0000,0000 - 0xFFFF,FFFF,F000,FFFF: 256MB : pre cpu kernel data
-0xFFFF,E000,F000,0000 - 0xFFFF,E000,FFFF,FFFF: video map
-0xFFFF,D000,0000,0000 - 0xFFFF,DFFF,FFFF,FFFF:
-*/
+
 namespace arch::paging
 {
 struct flags
@@ -164,21 +158,22 @@ enum frame_size : u64
 } // namespace frame_size
 using base_paging_t = pml4t;
 
-bool map(base_paging_t *base_paging_addr, void *virt_start_addr, void *phy_start_addr, u64 frame_size, u64 frame_count,
-         u32 page_ext_flags);
+bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_start_addr, u64 frame_size,
+         u64 frame_count, u32 page_ext_flags);
 bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count);
 
 void load(base_paging_t *base_paging_addr);
 void reload();
 
 void init();
+void enable_new_paging();
 void temp_init(bool is_bsp);
 
 void copy_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 end, bool override);
 void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel);
 
 /// get phy addr
-bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, void **phy_addr);
+bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_t *phy_addr);
 
 base_paging_t *current();
 

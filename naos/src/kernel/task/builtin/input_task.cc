@@ -196,7 +196,7 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
     current_mouse_data.movement_z = 0;
     current_mouse_data.timestamp = 0;
 
-    wait_queue_t input_wait_queue(memory::KernelCommonAllocatorV);
+    wait_queue_t input_wait_queue;
 
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;

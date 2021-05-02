@@ -1,15 +1,22 @@
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/trace.hpp"
+
+void cpu_id(u32 fn, u32 p, u32 &eax, u32 &ebx, u32 &ecx, u32 &edx) {
+    eax = fn;
+    ecx = p;
+    _cpu_id(&eax, &ebx, &ecx, &edx);
+}
+
 #define ret_cpu_feature(number, reg, bit)                                                                              \
     do                                                                                                                 \
     {                                                                                                                  \
         if ((number > max_basic_number && number < 0x80000000) || number > max_extend_number)                          \
         {                                                                                                              \
-            trace::info("cpu feature not found number: ", number);                                                              \
+            trace::info("cpu feature not found number: ", number);                                                     \
             return false;                                                                                              \
         }                                                                                                              \
-        cpu_id(number, &eax, &ebx, &ecx, &edx);                                                                        \
+        cpu_id(number, 0, eax, ebx, ecx, edx);                                                                                \
         return (reg & 1ul << bit);                                                                                     \
     } while (0)
 
@@ -27,17 +34,17 @@ void trace_debug_info();
 void load_brand_name()
 {
     u32 a, b, c, d;
-    cpu_id(0x80000002, &a, &b, &c, &d);
+    cpu_id(0x80000002, 0, a, b, c, d);
     *(u32 *)brand_name = a;
     *((u32 *)brand_name + 1) = b;
     *((u32 *)brand_name + 2) = c;
     *((u32 *)brand_name + 3) = d;
-    cpu_id(0x80000003, &a, &b, &c, &d);
+    cpu_id(0x80000003, 0, a, b, c, d);
     *((u32 *)brand_name + 4) = a;
     *((u32 *)brand_name + 5) = b;
     *((u32 *)brand_name + 6) = c;
     *((u32 *)brand_name + 7) = d;
-    cpu_id(0x80000004, &a, &b, &c, &d);
+    cpu_id(0x80000004, 0, a, b, c, d);
     *((u32 *)brand_name + 8) = a;
     *((u32 *)brand_name + 9) = b;
     *((u32 *)brand_name + 10) = c;
@@ -47,7 +54,7 @@ void load_brand_name()
 void init()
 {
     u32 a, b, c, d;
-    cpu_id(0, &a, &b, &c, &d);
+    cpu_id(0, 0, a, b, c, d);
     *(u32 *)family_name = b;
     *((u32 *)family_name + 1) = d;
     *((u32 *)family_name + 2) = c;
@@ -55,7 +62,7 @@ void init()
     max_basic_number = a;
     load_brand_name();
 
-    cpu_id(0x80000000, &a, &b, &c, &d);
+    cpu_id(0x80000000, 0, a, b, c, d);
     max_extend_number = a;
     trace_debug_info();
     feature required_feature[] = {
@@ -134,13 +141,63 @@ u64 get_feature(feature f)
     switch (f)
     {
         case feature::max_phy_addr:
-            cpu_id(0x80000008, &eax, &ebx, &ecx, &edx);
+            cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
             return bits(eax, 0, 7);
         case feature::max_virt_addr:
-            cpu_id(0x80000008, &eax, &ebx, &ecx, &edx);
+            cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
             return bits(eax, 8, 15);
         default:
             trace::panic("Unknown feature");
+    }
+}
+
+int apic_id()
+{
+    u32 eax, ebx, ecx, edx;
+    cpu_id(0x1, 0, eax, ebx, ecx, edx);
+    return bits(ebx, 24, 31);
+}
+
+int logic_bits()
+{
+    u32 eax, ebx, ecx, edx;
+    cpu_id(0x1, 0, eax, ebx, ecx, edx);
+    return bits(ebx, 16, 23);
+}
+
+cpu_mesh get_cpu_mesh_info_amd()
+{
+    cpu_mesh mesh;
+    int logic = logic_bits();
+    u32 eax, ebx, ecx, edx;
+    cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
+    int core_num = bits(ecx, 0, 7) + 1;
+    mesh.logic_num = logic;
+    mesh.core_num = core_num;
+    return mesh;
+}
+
+cpu_mesh get_cpu_mesh_info_intel()
+{
+    cpu_mesh mesh;
+    int logic = logic_bits();
+    u32 eax, ebx, ecx, edx;
+    cpu_id(0x4, 0, eax, ebx, ecx, edx);
+    int core_num = bits(eax, 26, 31) + 1;
+    mesh.logic_num = logic;
+    mesh.core_num = core_num;
+    return mesh;
+}
+
+cpu_mesh get_cpu_mesh_info()
+{
+    if (family_name[0] == 'A')
+    {
+        return get_cpu_mesh_info_amd();
+    }
+    else
+    {
+        return get_cpu_mesh_info_intel();
     }
 }
 

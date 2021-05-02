@@ -1,96 +1,77 @@
 #pragma once
-#include "../mm/allocator.hpp"
 #include "../mm/new.hpp"
 #include "common.hpp"
+#include <utility>
+#include "assert.hpp"
 
 namespace util
 {
 template <typename E> class singly_linked_list
 {
   public:
-    struct list_node
+    struct iterator;
+    struct list_node;
+    struct list_info_node;
+
+    singly_linked_list(memory::IAllocator *allocator)
+        : head(memory::New<list_info_node>(allocator))
+        , tail(memory::New<list_info_node>(allocator))
+        , node_count(0)
+        , allocator(allocator)
     {
-        E element;
-        list_node *next;
-        list_node(E element)
-            : element(element){};
+        head->next = (list_node *)tail;
+        tail->next = nullptr;
+        back_node = (list_node *)head;
     };
-    struct list_info_node
+
+    singly_linked_list(memory::IAllocator *allocator, std::initializer_list<E> il)
+        : singly_linked_list(allocator)
     {
-        char data[sizeof(list_node) - sizeof(list_node *)];
-        list_node *next;
-        list_info_node(){};
-    };
-    using ElementType = E;
-
-    static_assert(sizeof(list_node) == sizeof(list_info_node));
-
-    struct iterator
-    {
-        friend class singly_linked_list;
-
-      private:
-        list_node *node;
-
-        iterator(list_node *node)
-            : node(node){};
-
-      public:
-        E &operator*() { return node->element; }
-        E *operator&() { return &node->element; }
-        E *operator->() { return &node->element; }
-
-        iterator &operator++()
+        u64 s = il.size();
+        for (E a : il)
         {
-            node = node->next;
+            push_back(std::move(a));
+        }
+    };
+
+    ~singly_linked_list()
+    {
+        free();
+    }
+
+    singly_linked_list(const singly_linked_list &rhs)
+    {
+        copy(rhs);
+    }
+
+    singly_linked_list(singly_linked_list &&rhs)
+    {
+        move(std::move(rhs));
+    }
+
+    singly_linked_list &operator=(const singly_linked_list &rhs)
+    {
+        if (unlikely(&rhs == this))
             return *this;
-        }
-        iterator operator++(int)
-        {
-            auto old = *this;
-            node = node->next;
-            return old;
-        }
-
-        bool operator==(const iterator &it) { return it.node == node; }
-        bool operator!=(const iterator &it) { return !operator==(it); }
-    };
-
-  private:
-    memory::IAllocator *allocator;
-
-    list_info_node *head, *tail;
-    list_node *back_node;
-    u64 node_count;
-
-    u64 calc_size() const
-    {
-        u64 i = 0;
-        auto iter = begin();
-        while (iter != end())
-        {
-            i++;
-            ++iter;
-        }
-        return i;
+        
+        free();
+        copy(rhs);
+        return *this;
     }
 
-    iterator before_iterator(iterator start, iterator target)
-    {
-        auto n = start.node;
-        do
-        {
-            if (n->next == target.node)
-                break;
-            n = n->next;
-        } while (true);
-        return iterator(n);
+    singly_linked_list &operator=(singly_linked_list &&rhs) {
+
+        if (unlikely(&rhs == this))
+            return *this;
+        
+        free();
+        move(std::move(rhs));
+        return *this;
     }
 
-  public:
-    iterator push_back(const E &e)
+    iterator push_back(E &&e)
     {
-        list_node *node = memory::New<list_node>(allocator, e);
+        list_node *node = memory::New<list_node>(allocator, std::move(e));
         node->next = (list_node *)tail;
         back_node->next = node;
         node_count++;
@@ -100,8 +81,8 @@ template <typename E> class singly_linked_list
 
     E pop_back()
     {
-        if (unlikely(node_count <= 0))
-            return E();
+        cassert(head->next != tail && node_count > 0);
+
         auto iter = before_iterator(iterator((list_node *)head), iterator(back_node));
         iter->next = tail;
         E e = back_node->element;
@@ -111,9 +92,9 @@ template <typename E> class singly_linked_list
         return e;
     }
 
-    iterator push_front(const E &e)
+    iterator push_front(E &&e)
     {
-        list_node *node = memory::New<list_node>(allocator, e);
+        list_node *node = memory::New<list_node>(allocator, std::move(e));
         node->next = head->next;
         head->next = node;
         node_count++;
@@ -126,6 +107,8 @@ template <typename E> class singly_linked_list
 
     E pop_front()
     {
+        cassert(head->next != tail && node_count > 0);
+
         E e = head->next->element;
         list_node *node = head->next;
         head->next = head->next->next;
@@ -140,15 +123,23 @@ template <typename E> class singly_linked_list
 
     u64 size() const { return node_count; }
 
-    iterator begin() const { return iterator(head->next); }
+    iterator begin() const {
+        return iterator(head->next); 
+    }
 
-    iterator end() const { return iterator((list_node *)tail); }
+    iterator end() const { 
+        return iterator((list_node *)tail); 
+    }
 
     bool empty() const { return head->next == (list_node *)tail; }
 
-    E back() const { return back_node->element; }
+    const E& back() const { cassert(node_count > 0); return back_node->element; }
 
-    E front() const { return head->next->element; }
+    const E& front() const { cassert(node_count > 0); return head->next->element; }
+
+    E& back() { cassert(node_count > 0); return back_node->element; }
+
+    E& front() { cassert(node_count > 0); return head->next->element; }
 
     /// return node if element finded else return end()
     iterator find(const E &e)
@@ -165,6 +156,7 @@ template <typename E> class singly_linked_list
         }
         return last;
     }
+
     /// insert node before parameter iter
     iterator insert(iterator iter, const E &e) { return insert_after(before_iterator((list_node *)head, iter), e); }
 
@@ -209,7 +201,7 @@ template <typename E> class singly_linked_list
         }
     }
 
-    void clean()
+    void clear()
     {
         auto node = ((list_node *)head)->next;
         while (node != (list_node *)tail)
@@ -219,78 +211,145 @@ template <typename E> class singly_linked_list
             node = node2;
         }
         head->next = (list_node *)tail;
+        back_node = (list_node *)head;
         node_count = 0;
-        back_node = (list_node *)head;
     }
 
-    singly_linked_list(memory::IAllocator *allocator)
-        : allocator(allocator)
-        , head(memory::New<list_info_node>(allocator))
-        , tail(memory::New<list_info_node>(allocator))
-        , node_count(0)
+    E &at(u64 idx)
     {
-        head->next = (list_node *)tail;
-        tail->next = nullptr;
-        back_node = (list_node *)head;
-    };
-
-    ~singly_linked_list()
-    {
-        list_node *node = (list_node *)head;
-        while (node != nullptr)
+        u64 i = 0;
+        auto it = begin();
+        auto last = end();
+        while (it != last && i < idx)
         {
-            list_node *node2 = node->next;
-            memory::Delete<>(allocator, node);
-            node = node2;
+            ++it;
+            i++;
+        }
+        return *it;
+    }
+
+  private:
+    list_info_node *head, *tail;
+    list_node *back_node;
+    u64 node_count;
+    memory::IAllocator *allocator;
+
+    u64 calc_size() const
+    {
+        u64 i = 0;
+        auto iter = begin();
+        while (iter != end())
+        {
+            i++;
+            ++iter;
+        }
+        return i;
+    }
+
+    iterator before_iterator(iterator start, iterator target)
+    {
+        auto n = start.node;
+        do
+        {
+            if (n->next == target.node)
+                break;
+            n = n->next;
+        } while (true);
+        return iterator(n);
+    }
+
+    void free()
+    {
+        if (head != nullptr)
+        {
+            clear();
+            memory::Delete<>(allocator, head);
+            memory::Delete<>(allocator, tail);
+            head = nullptr;
+            tail = nullptr;
+            back_node = nullptr;
+            node_count = 0;
         }
     }
 
-    singly_linked_list(const singly_linked_list &l)
-        : allocator(l.allocator)
-        , head(memory::New<list_info_node>(allocator))
-        , tail(memory::New<list_info_node>(allocator))
-        , node_count(0)
+    void copy(const singly_linked_list &rhs)
     {
-        head->next = (list_node *)tail;
-        tail->next = nullptr;
-        back_node = (list_node *)head;
-
-        auto iter = l.begin();
-        while (iter != l.end())
-        {
-            push_back(*iter);
-            iter++;
-        }
-    }
-
-    singly_linked_list &operator=(const singly_linked_list &l)
-    {
-        if (&l == this)
-            return *this;
-
-        list_node *node = (list_node *)head;
-        while (node != nullptr)
-        {
-            list_node *node2 = node->next;
-            memory::Delete<>(allocator, node);
-            node = node2;
-        }
-
-        allocator = l.allocator;
+        node_count = 0;
+        allocator = rhs.allocator;
         head = memory::New<list_info_node>(allocator);
         tail = memory::New<list_info_node>(allocator);
-        head->next = (list_node *)tail;
-        tail->next = nullptr;
-        back_node = (list_node *)head;
-        node_count = 0;
 
-        auto iter = l.begin();
-        while (iter != l.end())
+        head->next = (list_node *)tail;
+        back_node = (list_node *)head;
+        tail->next = nullptr;
+
+        auto iter = rhs.begin();
+        while (iter != rhs.end())
         {
-            push_back(*iter);
+            E val = *iter;
+            push_back(std::move(val));
             iter++;
         }
-        return *this;
     }
+
+    void move(singly_linked_list &&rhs)
+    {
+        allocator = rhs.allocator;
+        head = rhs.head;
+        tail = rhs.tail;
+        back_node = rhs.back_node;
+        node_count = rhs.node_count;
+        rhs.head = nullptr;
+        rhs.tail = nullptr;
+        rhs.back_node = nullptr;
+        rhs.node_count = 0;
+    }
+
+  public:
+    struct list_node
+    {
+        E element;
+        list_node *next;
+        list_node(E element)
+            : element(element){};
+    };
+    struct list_info_node
+    {
+        char data[sizeof(list_node) - sizeof(list_node *)];
+        list_node *next;
+        list_info_node(){};
+    };
+    static_assert(sizeof(list_node) == sizeof(list_info_node));
+
+    struct iterator
+    {
+        friend class singly_linked_list;
+
+      private:
+        list_node *node;
+
+        iterator(list_node *node)
+            : node(node){};
+
+      public:
+        E &operator*() { return node->element; }
+        E *operator&() { return &node->element; }
+        E *operator->() { return &node->element; }
+
+        iterator &operator++()
+        {
+            node = node->next;
+            return *this;
+        }
+        iterator operator++(int)
+        {
+            auto old = *this;
+            node = node->next;
+            return old;
+        }
+
+        bool operator==(const iterator &it) { return it.node == node; }
+        bool operator!=(const iterator &it) { return !operator==(it); }
+    };
 };
 } // namespace util

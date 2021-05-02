@@ -42,25 +42,21 @@ irq::request_result _ctx_interrupt_ page_fault_func(const void *regs, u64 extra_
     }
     return irq::request_result::no_handled;
 }
-vm_allocator::list_node_cache_allocator_t *vm_allocator::allocator;
 
-void init()
-{
-    vm_allocator::allocator = memory::New<vm_allocator::list_node_cache_allocator_t>(memory::VirtBootAllocatorV);
-}
+void init() {}
 
 void listen_page_fault() { irq::register_request_func(arch::exception::vector::page_fault, page_fault_func, 0); }
 
 template <typename _T> _T *new_page_table()
 {
     static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
-    return memory::New<_T, memory::page_size>(memory::KernelBuddyAllocatorV);
+    return memory::New<_T, memory::IAllocator *, memory::page_size>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
-    memory::Delete<_T>(memory::KernelBuddyAllocatorV, addr);
+    memory::Delete<_T, memory::IAllocator *>(memory::KernelBuddyAllocatorV, addr);
 }
 
 int search_vma(const vm_t &vm, u64 p)
@@ -179,14 +175,14 @@ void mmu_paging::map_area(const vm_t *vm)
 
     for (char *start = (char *)vm->start; start < (char *)vm->end; start += arch::paging::frame_size::size_4kb)
     {
-        void *phy_addr = memory::kernel_virtaddr_to_phyaddr(memory::malloc_page());
+        phy_addr_t p = memory::va2pa(memory::malloc_page());
 
-        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, phy_addr,
-                          arch::paging::frame_size::size_4kb, 1, attr);
+        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, p, arch::paging::frame_size::size_4kb,
+                          1, attr);
     }
 }
 
-void mmu_paging::map_area_phy(const vm_t *vm, void *phy_address_start)
+void mmu_paging::map_area_phy(const vm_t *vm, phy_addr_t start)
 {
     if (unlikely(vm == nullptr))
         return;
@@ -200,11 +196,10 @@ void mmu_paging::map_area_phy(const vm_t *vm, void *phy_address_start)
         attr |= arch::paging::flags::user_mode;
     }
 
-    char *phy_addr = (char *)phy_address_start;
-    for (byte *start = (byte *)vm->start; start < (byte *)vm->end;
-         start += arch::paging::frame_size::size_4kb, phy_addr += arch::paging::frame_size::size_4kb)
+    for (byte *vstart = (byte *)vm->start; vstart < (byte *)vm->end;
+         vstart += arch::paging::frame_size::size_4kb, start += arch::paging::frame_size::size_4kb)
     {
-        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, phy_addr,
+        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, vstart, start,
                           arch::paging::frame_size::size_4kb, 1, attr);
     }
 }
@@ -220,12 +215,12 @@ void mmu_paging::unmap_area(const vm_t *vm)
         for (u64 i = 0; i < page_count; i++)
         {
             auto vir = (void *)(vm->start + i * page_size);
-            void *phy;
+            phy_addr_t phy;
             if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
             {
                 arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vir,
                                     arch::paging::frame_size::size_4kb, 1);
-                memory::free_page(memory::kernel_phyaddr_to_virtaddr(phy));
+                memory::free_page(memory::pa2va(phy));
             }
         }
     }
@@ -235,10 +230,10 @@ void mmu_paging::unmap_area(const vm_t *vm)
         for (u64 i = 0; i < page_count; i++)
         {
             auto vir = (void *)(vm->start + i * page_size);
-            void *phy;
+            phy_addr_t phy;
             if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
             {
-                memory::free_page(memory::kernel_phyaddr_to_virtaddr(phy));
+                memory::free_page(memory::pa2va(phy));
             }
             else
             {
@@ -250,7 +245,7 @@ void mmu_paging::unmap_area(const vm_t *vm)
     }
 }
 
-void *mmu_paging::get_page_addr() { return base_paging_addr; }
+void *mmu_paging::get_base_page() { return base_paging_addr; }
 
 void mmu_paging::sync_kernel()
 {
@@ -334,7 +329,7 @@ bool info_t::set_brk_now(u64 ptr)
             vm_t vm = *head_vm;
             vm.start = current_map;
             vm.end = current_map + memory::page_size;
-            mmu_paging.map_area_phy(&vm, (void *)ptr);
+            mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
         }
     }
     else
@@ -360,7 +355,7 @@ bool head_expand_vm(u64 page_addr, const vm_t *item)
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
         byte *ptr = (byte *)memory::malloc_page();
-        info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
+        info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
         return true;
     }
     return false;
@@ -376,7 +371,7 @@ bool fill_expand_vm(u64 page_addr, const vm_t *item)
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
         byte *ptr = (byte *)memory::malloc_page();
-        info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
+        info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
         return true;
     }
     return false;
@@ -395,13 +390,13 @@ bool fill_file_vm(u64 page_addr, const vm_t *item)
     vm_t vm = *item;
     vm.start = page_start;
     vm.end = vm.start + memory::page_size;
-    mt->vm_info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
+    mt->vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
 
-    if (mt->vm_info->mmu_paging.get_page_addr() != memory::kernel_vm_info->mmu_paging.get_page_addr())
+    if (mt->vm_info->mmu_paging.get_base_page() != memory::kernel_vm_info->mmu_paging.get_base_page())
     {
         if (page_addr >= memory::kernel_mmap_bottom_address && page_addr <= memory::kernel_mmap_top_address)
         {
-            memory::kernel_vm_info->mmu_paging.map_area_phy(&vm, memory::kernel_virtaddr_to_phyaddr(ptr));
+            memory::kernel_vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
         }
     }
     return true;

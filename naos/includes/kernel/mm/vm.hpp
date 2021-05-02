@@ -4,6 +4,7 @@
 #include "buddy.hpp"
 #include "common.hpp"
 #include "list_node_cache.hpp"
+
 namespace fs::vfs
 {
 class file;
@@ -57,8 +58,6 @@ class vm_allocator
 {
   public:
     using list_t = util::skip_list<vm_t>;
-    using list_node_cache_allocator_t = memory::list_node_cache_allocator<list_t>;
-    static list_node_cache_allocator_t *allocator;
 
   private:
     list_t list;
@@ -67,7 +66,7 @@ class vm_allocator
 
   public:
     vm_allocator(u64 top, u64 bottom)
-        : list(allocator, 2, 32)
+        : list(memory::KernelCommonAllocatorV, 2, 32)
         , range_top(top)
         , range_bottom(bottom)
     {
@@ -101,11 +100,11 @@ class mmu_paging
     void load_paging();
 
     void map_area(const vm_t *vm);
-    void map_area_phy(const vm_t *vm, void *phy_address_start);
+    void map_area_phy(const vm_t *vm, phy_addr_t start);
 
     void unmap_area(const vm_t *vm);
 
-    void *get_page_addr();
+    void *get_base_page();
 
     void *page_map_vir2phy(void *virtual_addr);
 

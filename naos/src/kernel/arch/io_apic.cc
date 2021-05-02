@@ -55,13 +55,12 @@ io_entry *all_entry;
 
 void io_init()
 {
-
     io_map.base_addr = (void *)(u64)0xfec00000;
 
-    u64 start = memory::io_map_start_address + 0x200000; // 2mb
+    u64 start = memory::io_apic_bottom_address;
 
-    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr(), (void *)start,
-                io_map.base_addr, paging::frame_size::size_2mb, 1,
+    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start,
+                phy_addr_t::from(io_map.base_addr), paging::frame_size::size_2mb, 1,
                 paging::flags::uncacheable | paging::flags::writable);
 
     paging::reload();
@@ -100,23 +99,23 @@ void io_init()
     io_out32(0xcf8, 0x80000000 | (0 << 16) | (31 << 11) | (0 << 8) | 0xF0);
     _mfence();
     u32 rcba = io_in32(0xcfc);
-    u32 rcba_address = rcba & 0xFFFFC000;
-    u64 base_addr = rcba_address & ~(paging::frame_size::size_2mb - 1);
+    phy_addr_t rcba_address = phy_addr_t::from(rcba & 0xFFFFC000);
+    phy_addr_t base_addr = memory::align_down(rcba_address, paging::frame_size::size_2mb);
 
-    start += 0x200000; // 2mb
-    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_page_addr(), (void *)start,
-                (void *)base_addr, paging::frame_size::size_2mb, 1,
-                paging::flags::uncacheable | paging::flags::writable);
+    start = memory::rcba_apic_bottom_address;
+    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start, base_addr,
+                paging::frame_size::size_2mb, 1, paging::flags::uncacheable | paging::flags::writable);
 
     paging::reload();
 
-    trace::debug("RCBA register value ", (void *)(u64)rcba, ", Base address ", (void *)(u64)rcba_address);
+    trace::debug("RCBA register value ", (void *)(u64)rcba, ", Base address ",
+                 reinterpret_cast<addr_t>(rcba_address()));
     if (!(rcba & 0x1))
     {
         trace::panic("RCBA isn't an enable address");
     }
 
-    u8 *oic = (u8 *)(start + 0x31FF + rcba_address - base_addr);
+    u8 *oic = (u8 *)(start + 0x31FF + (rcba_address - base_addr));
     u8 v = *oic;
     v |= 1;
     *oic = v;

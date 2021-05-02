@@ -25,7 +25,6 @@ void init(const kernel_start_args *args)
     {
         // init serial device for logger when video device is preparing.
         trace::early_init();
-        device::vga::init();
 
         trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
             " NaOS: Nano Operating System (arch X86_64)\n");
@@ -38,69 +37,57 @@ void init(const kernel_start_args *args)
         }
 
         trace::debug("Arch init");
+
         cpu_info::init();
-        if (!cpu_info::has_feature(cpu_info::feature::system_call_ret))
-        {
-            trace::panic("Syscall/sysret instructions is not supported");
-        }
-        if (!cpu_info::has_feature(cpu_info::feature::apic))
-        {
-            trace::panic("APIC is not supported");
-        }
+        auto cpu_mesh = cpu_info::get_cpu_mesh_info();
+        trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
+
         auto cpuid = cpu::init();
 
         trace::debug("Memory init");
         memory::init(args, 0x0);
-        device::vga::tag_memory();
 
         trace::debug("Paging init");
 
-        // flush video
-        device::vga::flush();
-
         paging::init();
-        void *video_start = device::vga::get_vram();
-        void *video_start_2mb = (void *)(((u64)video_start) & ~(paging::frame_size::size_2mb - 1));
+        cpu::allocate_stack(cpu_mesh.logic_num);
 
-        paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start_2mb,
-                    paging::frame_size::size_2mb,
-                    (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
-                    paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);
-        paging::reload();
+        phy_addr_t video_start =
+            memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
 
-        device::vga::set_vram(
-            (byte *)(memory::kernel_vga_bottom_address + (u64)((byte *)video_start - (byte *)video_start_2mb)));
+        // paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start,
+        //             paging::frame_size::size_2mb,
+        //             (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) /
+        //             paging::frame_size::size_2mb, paging::flags::writable | paging::flags::write_through |
+        //             paging::flags::cache_disable);
 
+        paging::enable_new_paging();
         device::vga::flush();
 
         trace::debug("GDT init");
         gdt::init_after_paging();
 
-        device::vga::flush();
-
         trace::debug("TSS init");
-        tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x80000));
-
-        device::vga::flush();
+        tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2vax(0x80000));
 
         cpu::init_data(cpuid);
         trace::debug("IDT init");
         idt::init_after_paging();
 
-        device::vga::flush();
-
         trace::debug("APIC init");
         APIC::init();
         trace::debug("Arch init done");
 
-        device::vga::flush();
+        device::vga::init();
+        // device::vga::set_vram(
+        //     (byte *)(memory::kernel_vga_bottom_address + (u64)((byte *)video_start - (byte *)video_start_2mb)));
         return;
     }
     // ap
     auto cpuid = cpu::init();
     paging::init();
     gdt::init_after_paging();
-    tss::init(cpuid, (void *)0x0, memory::kernel_phyaddr_to_virtaddr((void *)0x10000));
+    tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2vax(0x10000));
     cpu::init_data(cpuid);
     idt::init_after_paging();
     APIC::init();

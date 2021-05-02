@@ -55,8 +55,6 @@ struct message_queue_t
 
     message_queue_t()
         : msg_count(0)
-        , receiver_wait_queue(memory::KernelCommonAllocatorV)
-        , sender_wait_queue(memory::KernelCommonAllocatorV)
         , msg_packs(memory::KernelCommonAllocatorV)
         , close(false){};
 };

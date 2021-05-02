@@ -9,9 +9,7 @@ device_map_t *unbinding_device_map;
 
 void init()
 {
-    id_gen = memory::New<device_id_gen_t>(memory::KernelCommonAllocatorV, 4096);
-    // alloc 0
-    id_gen->next();
+    id_gen = memory::New<device_id_gen_t>(memory::KernelCommonAllocatorV, 1, 1);
     device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     unbinding_device_map = memory::New<device_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     init_driver();
@@ -31,7 +29,7 @@ int enum_device(device_class *clazz)
                 trace::panic("Too many device register to system");
             }
             dev->id = id;
-            unbinding_device_map->insert(id, dev);
+            unbinding_device_map->insert(std::move(id), std::move(dev));
             dev_index++;
         }
         else

@@ -6,7 +6,7 @@ namespace task
 const u64 file_id_table[] = {128, 4096, 65536};
 
 file_table_t::file_table_t()
-    : file_map(memory::KernelMemoryAllocatorV)
+    : file_map(memory::KernelVirtualAllocatorV)
     , id_gen(file_id_table)
 {
 }

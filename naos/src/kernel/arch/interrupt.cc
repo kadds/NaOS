@@ -8,6 +8,7 @@
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/zone.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
