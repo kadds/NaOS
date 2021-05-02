@@ -4,6 +4,7 @@
 #include "regs.hpp"
 
 extern volatile char base_ap_phy_addr[];
+extern volatile char base_tmp_page_entries[];
 
 extern volatile char base_virtual_addr[];
 extern volatile char base_phy_addr[];

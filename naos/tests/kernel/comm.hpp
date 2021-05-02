@@ -1,10 +1,16 @@
 #pragma once
 #include "kernel/mm/allocator.hpp"
+#include <cstring>
 
 class LibAllocator : public memory::IAllocator
 {
   public:
-    void *allocate(u64 size, u64 align) { return new char[size]; }
+    void *allocate(u64 size, u64 align)
+    {
+        void *p = new char[size];
+        memset(p, 1, size);
+        return p;
+    }
     void deallocate(void *p) { delete[](char *) p; }
 };
 extern LibAllocator LibAllocatorV;

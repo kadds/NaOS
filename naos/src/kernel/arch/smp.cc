@@ -10,10 +10,10 @@
 #include "kernel/util/memory.hpp"
 /**
  * ap startup memory:
- * 0x20000 ap startup code
- * 0x0 ap startup page tables
+ * 0x70000 ap startup code
+ * 0x1000 ap startup page tables
  * kernel bsp stack -> 0x90000
- * ap stack -> allocate
+ * ap stack -> 0x80000
  */
 
 namespace arch::SMP
@@ -45,16 +45,26 @@ void init()
     volatile u64 *stack = (volatile u64 *)memory::pa2va<u64 *>(phy_addr_t::from((u64)_ap_stack));
     volatile u32 *startup_flag = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_startup_spin_flag));
     volatile u32 *ap_count = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_count));
-    
+    *startup_flag = 1;
+    _mfence();
+
     trace::debug("Sending INIT-IPI");
     APIC::local_post_init_IPI();
 
-    trace::debug("Waiting for AP startup");
+    trace::debug("Sending StartUP-IPI");
+    APIC::local_post_start_up((u64)base_ap_phy_addr);
+    // APIC::local_post_start_up((u64)base_ap_phy_addr);
     u32 count = cpu_info::get_cpu_mesh_info().logic_num;
     u32 idx = 1;
+    if (count > cpu::max_cpu_support)
+    {
+        trace::warning("max cpu support ", cpu::max_cpu_support, " but current machine cpus ", count);
+        count = cpu::max_cpu_support;
+    }
     counter = count;
+    trace::debug("Waiting for AP startup");
 
-    do
+    while (idx < count)
     {
         void *virtual_ap_stack = cpu::get_kernel_stack_bottom(idx);
         ap_stack = virtual_ap_stack;
@@ -63,19 +73,15 @@ void init()
         _mfence();
         *stack = cpu_stack + memory::kernel_stack_size;
         _mfence();
-        if (idx == 1)
-        {
-            trace::debug("Sending StartUP-IPI");
-            APIC::local_post_start_up((u64)base_ap_phy_addr);
-            // APIC::local_post_start_up((u64)base_ap_phy_addr);
-        }
+        *startup_flag = 0;
+        _mfence();
+
         while (*stack != 0)
         {
             cpu_pause();
         }
-        *startup_flag = 0;
         idx++;
-    } while (idx < count);
+    }
 
     trace::debug("Bsp is arrived entrypoint");
     trace::debug("Waiting for all processtor to arrive entrypoint");

@@ -172,6 +172,10 @@ cpu_mesh get_cpu_mesh_info_amd()
     u32 eax, ebx, ecx, edx;
     cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
     int core_num = bits(ecx, 0, 7) + 1;
+    if (logic == 0)
+    {
+        logic = core_num;
+    }
     mesh.logic_num = logic;
     mesh.core_num = core_num;
     return mesh;
@@ -184,6 +188,10 @@ cpu_mesh get_cpu_mesh_info_intel()
     u32 eax, ebx, ecx, edx;
     cpu_id(0x4, 0, eax, ebx, ecx, edx);
     int core_num = bits(eax, 26, 31) + 1;
+    if (logic == 0)
+    {
+        logic = core_num;
+    }
     mesh.logic_num = logic;
     mesh.core_num = core_num;
     return mesh;

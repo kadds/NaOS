@@ -54,11 +54,11 @@ Unpaged_Text_Section void set_zero(void *p)
     }
 }
 
-Unpaged_Data_Section u64 page_alloc_position;
+Unpaged_Data_Section u32 page_alloc_position;
 
 Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_addr)
 {
-    u64 *page_entries = (u64 *)0;
+    u64 *page_entries = (u64 *)base_tmp_page_entries;
     u64 pc = memory::kernel_stack_page_count;
     for(u64 i = 0; i < pc; i++) {
         u64 pml4e_index = get_bits_unpaged(base_virtual_addr, 39, 8);
@@ -104,10 +104,10 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
     // map 0xFFFF800000000000 -> 1GB
     // also map cpu_stack_bottom_address[0] -> 0x8XFFF-0x90000
 
-    void *temp_pml4_addr = (void *)0;
+    void *temp_pml4_addr = (void *)base_tmp_page_entries;
     if (is_bsp)
     {
-        page_alloc_position = 0;
+        page_alloc_position = reinterpret_cast<u64>(&base_tmp_page_entries);
         u64 *page_entries = (u64 *)page_alloc_position;
         set_zero(page_entries);
         u64 target_phy = 0x83;

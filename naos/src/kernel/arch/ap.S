@@ -108,7 +108,7 @@ go_to_amd64_ap:
     orl $0x20, %eax
     movl %eax, %cr4
 // set PML4
-    movl $0x0, %eax
+    movl $base_tmp_page_entries, %eax
     movl %eax, %cr3
 
 // open LME. enter ia32e

@@ -43,7 +43,7 @@ void test_hash_map_iterator()
 {
     hash_map<int, int> map(&LibAllocatorV, {{1, 2}, {3, 4}, {5, 6}});
     std::unordered_map<int, int> m;
-    for (int i = 0; i < 6; i += 2)
+    for (int i = 1; i <= 6; i += 2)
     {
         m.insert(std::make_pair(i, i + 1));
     }

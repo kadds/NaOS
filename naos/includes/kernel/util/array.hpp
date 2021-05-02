@@ -17,7 +17,9 @@ template <typename E> class array
     memory::IAllocator *allocator;
 
   public:
-    struct iterator;
+    template <typename CE> struct base_iterator;
+    using const_iterator = base_iterator<const E *>;
+    using iterator = base_iterator<E *>;
 
     array(memory::IAllocator *allocator)
         : buffer(nullptr)
@@ -66,7 +68,7 @@ template <typename E> class array
         check_capacity(count + 1);
         cassert(cap > count);
         buffer[count] = std::move(e);
-        return iterator(buffer[++count]);
+        return iterator(&buffer[++count]);
     }
 
     iterator push_front(E &&e) { return insert_at(0, std::move(e)); }
@@ -156,9 +158,13 @@ template <typename E> class array
 
     u64 capacity() const { return cap; }
 
-    iterator begin() const { return iterator(buffer); }
+    const_iterator begin() const { return const_iterator(buffer); }
 
-    iterator end() const { return iterator(buffer + count); }
+    const_iterator end() const { return const_iterator(buffer + count); }
+
+    iterator begin() { return iterator(buffer); }
+
+    iterator end() { return iterator(buffer + count); }
 
     E &at(u64 index) {
         cassert(index < count);
@@ -187,7 +193,8 @@ template <typename E> class array
     }
 
     void ensure(u64 size) {
-        if (size < cap) {
+        if (size > cap)
+        {
             recapcity(size);
         }
     }
@@ -237,10 +244,10 @@ template <typename E> class array
 
             recapcity(x);
         }
-        else if (unlikely(new_count + 2 <= cap * 2))
-        {
-            recapcity(new_count);
-        }
+        // else if (unlikely(new_count + 2 <= cap * 2))
+        // {
+        //     recapcity(new_count);
+        // }
     }
 
     void free()
@@ -300,50 +307,45 @@ template <typename E> class array
     }
 
   public:
-    struct iterator
+    template <typename CE> struct base_iterator
     {
-        E *current;
+        CE current;
         friend class array;
 
       private:
-        explicit iterator(E *e)
+        explicit base_iterator(CE e)
             : current(e)
-        {
-        }
-        /// 'explicit' keyword for avoid overload error
-        explicit iterator(E &e)
-            : current(&e)
         {
         }
 
       public:
-        E &operator*() { return *current; }
-        E *operator&() { return current; }
-        E *operator->() { return current; }
+        auto &operator*() { return *current; }
+        auto operator&() { return current; }
+        auto operator->() { return current; }
 
-        iterator operator++(int)
+        base_iterator operator++(int)
         {
             current++;
-            return iterator(current - 1);
+            return base_iterator(current - 1);
         }
-        iterator &operator++()
+        base_iterator &operator++()
         {
             current++;
             return *this;
         }
-        iterator operator--(int)
+        base_iterator operator--(int)
         {
             current--;
-            return iterator(current + 1);
+            return base_iterator(current + 1);
         }
-        iterator &operator--()
+        base_iterator &operator--()
         {
             current--;
             return *this;
         }
-        bool operator==(const iterator &it) { return it.current == current; }
+        bool operator==(const base_iterator &it) { return it.current == current; }
 
-        bool operator!=(const iterator &it) { return !operator==(it); }
+        bool operator!=(const base_iterator &it) { return !operator==(it); }
     };
 };
 
