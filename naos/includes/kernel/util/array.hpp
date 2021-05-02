@@ -1,7 +1,8 @@
 #pragma once
 #include "../mm/new.hpp"
-#include "common.hpp"
 #include "assert.hpp"
+#include "common.hpp"
+#include "iterator.hpp"
 #include <utility>
 
 namespace util
@@ -218,6 +219,8 @@ template <typename E> class array
     void clear() { truncate(0); }
 
     E *data() { return buffer; }
+
+    const E *data() const { return buffer; }
 
   private:
     void check_capacity(u64 new_count)

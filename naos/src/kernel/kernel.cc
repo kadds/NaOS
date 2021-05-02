@@ -55,34 +55,25 @@ ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args)
 
 u64 build_version_timestamp = BUILD_VERSION_TS;
 
-ExportC NoReturn void _kstart(kernel_start_args *args)
+NoReturn void kstart_bsp(kernel_start_args *args)
 {
-    if (args == 0) // ap
-    {
-        arch::init(args);
-        cpu::init();
-        irq::init();
-        timer::init();
-        SMP::init();
-        task::init();
-        task::start_task_idle();
-        trace::panic("Unreachable control flow in _kstart");
-    } // else bsp
     util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
-    arch::init(args);
-    cmdline::parse(memory::pa2va<char *>(phy_addr_t::from(kernel_args->command_line)));
+
+    arch::early_init(args);
+
     trace::info("Build version ", build_version_timestamp);
+    cmdline::init();
+
+    arch::init(args);
     cpu::init();
     irq::init();
     memory::listen_page_fault();
     timer::init();
-    trace::debug("SMP init");
     SMP::init();
-    trace::debug("VFS init");
+    // -----spec routine for bsp----
     fs::vfs::init();
-    trace::debug("Root file system init");
     fs::ramfs::init();
     fs::rootfs::init(memory::pa2va<byte*>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
     fs::pipefs::init();
@@ -93,6 +84,33 @@ ExportC NoReturn void _kstart(kernel_start_args *args)
     arch::init_drivers();
     trace::info("Bsp kernel main is running");
     arch::post_init();
+    //  -----------------------------
     task::start_task_idle();
     trace::panic("Unreachable control flow in _kstart");
+}
+
+NoReturn void kstart_ap()
+{
+    arch::early_init(nullptr);
+
+    arch::init(nullptr);
+    cpu::init();
+    irq::init();
+    timer::init();
+    SMP::init();
+    task::init();
+    task::start_task_idle();
+    trace::panic("Unreachable control flow in _kstart");
+}
+
+ExportC NoReturn void _kstart(kernel_start_args *args)
+{
+    if (args == 0) // ap
+    {
+        kstart_ap();
+    }
+    else
+    {
+        kstart_bsp(args);
+    }
 }

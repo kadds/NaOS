@@ -17,13 +17,13 @@ struct cpu_t
   private:
     cpuid_t id;
     /// kernel stack pointer
-    void *volatile kernel_rsp;
+    byte *volatile kernel_rsp;
     void *user_data = nullptr;
 
     /// The interrupt context RSP value
-    void *interrupt_rsp;
-    void *exception_rsp;
-    void *exception_nmi_rsp;
+    byte *interrupt_rsp;
+    byte *exception_rsp;
+    byte *exception_nmi_rsp;
     std::atomic_bool is_in_soft_irq = false;
     volatile u64 soft_irq_pending = 0;
     /// arch apic id
@@ -55,13 +55,13 @@ struct cpu_t
 
     u64 get_apic_id() { return apic_id; }
 
-    void *get_kernel_rsp() { return kernel_rsp; }
+    byte *get_kernel_rsp() { return kernel_rsp; }
 
-    void *get_interrupt_rsp() { return interrupt_rsp; }
+    byte *get_interrupt_rsp() { return interrupt_rsp; }
 
-    void *get_exception_rsp() { return exception_rsp; }
+    byte *get_exception_rsp() { return exception_rsp; }
 
-    void *get_exception_nmi_rsp() { return exception_nmi_rsp; }
+    byte *get_exception_nmi_rsp() { return exception_nmi_rsp; }
 
     bool is_in_exception_context();
     bool is_in_interrupt_context();
@@ -100,9 +100,9 @@ phy_addr_t get_exception_stack_bottom_phy(cpuid_t id);
 phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id);
 phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id);
 
-void *get_kernel_stack_bottom(cpuid_t id);
-void *get_exception_stack_bottom(cpuid_t id);
-void *get_interrupt_stack_bottom(cpuid_t id);
-void *get_exception_nmi_stack_bottom(cpuid_t id);
+byte *get_kernel_stack_bottom(cpuid_t id);
+byte *get_exception_stack_bottom(cpuid_t id);
+byte *get_interrupt_stack_bottom(cpuid_t id);
+byte *get_exception_nmi_stack_bottom(cpuid_t id);
 
 } // namespace arch::cpu

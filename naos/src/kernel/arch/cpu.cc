@@ -22,58 +22,44 @@ void *get_rsp()
     return stack;
 }
 
+// switch task
 void cpu_t::set_context(void *stack)
 {
-    kernel_rsp = stack;
-    tss::set_rsp(cpu::current().get_id(), 0, (void *)kernel_rsp);
+    kernel_rsp = static_cast<byte *>(stack);
+    tss::set_rsp(cpu::current().get_id(), 0, stack);
 }
 
-bool cpu_t::is_in_exception_context()
-{
-    byte *krsp = (byte *)get_exception_rsp();
-    byte *rrsp = (byte *)(((u64)get_rsp() & ~(memory::exception_stack_size - 1)) + memory::exception_stack_size);
+bool cpu_t::is_in_exception_context() { return is_in_exception_context(get_rsp()); }
 
-    return rrsp == krsp;
-}
+bool cpu_t::is_in_kernel_context() { return is_in_kernel_context(get_rsp()); }
 
-bool cpu_t::is_in_kernel_context()
-{
-    byte *krsp = (byte *)get_kernel_rsp();
-    byte *rrsp = (byte *)(((u64)get_rsp() & ~(memory::kernel_stack_size - 1)) + memory::kernel_stack_size);
-
-    return rrsp == krsp;
-}
-
-bool cpu_t::is_in_interrupt_context()
-{
-    byte *krsp = (byte *)get_interrupt_rsp();
-    byte *rrsp = (byte *)(((u64)get_rsp() & ~(memory::interrupt_stack_size - 1)) + memory::interrupt_stack_size);
-
-    return rrsp == krsp;
-}
+bool cpu_t::is_in_interrupt_context() { return is_in_interrupt_context(get_rsp()); }
 
 bool cpu_t::is_in_exception_context(void *rsp)
 {
-    byte *krsp = (byte *)rsp;
-    byte *rrsp = (byte *)(((u64)rsp & ~(memory::exception_stack_size - 1)) + memory::exception_stack_size);
+    byte *t_rsp = get_exception_rsp();
+    byte *b_rsp = t_rsp - memory::exception_stack_size;
+    byte *s_rsp = static_cast<byte *>(rsp);
 
-    return rrsp == krsp;
+    return s_rsp <= t_rsp && s_rsp >= b_rsp;
 }
 
 bool cpu_t::is_in_interrupt_context(void *rsp)
 {
-    byte *krsp = (byte *)get_interrupt_rsp();
-    byte *rrsp = (byte *)(((u64)rsp & ~(memory::interrupt_stack_size - 1)) + memory::interrupt_stack_size);
+    byte *t_rsp = get_interrupt_rsp();
+    byte *b_rsp = t_rsp - memory::interrupt_stack_size;
+    byte *s_rsp = static_cast<byte *>(rsp);
 
-    return rrsp == krsp;
+    return s_rsp <= t_rsp && s_rsp >= b_rsp;
 }
 
 bool cpu_t::is_in_kernel_context(void *rsp)
 {
-    byte *krsp = (byte *)get_kernel_rsp();
-    byte *rrsp = (byte *)(((u64)rsp & ~(memory::kernel_stack_size - 1)) + memory::kernel_stack_size);
+    byte *t_rsp = get_kernel_rsp();
+    byte *b_rsp = t_rsp - memory::kernel_stack_size;
+    byte *s_rsp = static_cast<byte *>(rsp);
 
-    return rrsp == krsp;
+    return s_rsp <= t_rsp && s_rsp >= b_rsp;
 }
 
 cpuid_t init()
@@ -101,19 +87,13 @@ void init_data(cpuid_t cpuid)
     _wrmsr(0xC0000101, (u64)&per_cpu_data[cpuid]);
 
     auto &data = cpu::current();
-    data.interrupt_rsp =
-        (byte *)memory::KernelBuddyAllocatorV->allocate(memory::interrupt_stack_size, 0) + memory::interrupt_stack_size;
-    data.exception_rsp =
-        (byte *)memory::KernelBuddyAllocatorV->allocate(memory::exception_stack_size, 0) + memory::exception_stack_size;
-    data.exception_nmi_rsp = (byte *)memory::KernelBuddyAllocatorV->allocate(memory::exception_nmi_stack_size, 0) +
-                             memory::exception_nmi_stack_size;
+    data.interrupt_rsp = get_interrupt_stack_bottom(cpuid) + memory::interrupt_stack_size;
+    data.exception_rsp = get_exception_stack_bottom(cpuid) + memory::exception_stack_size;
+    data.exception_nmi_rsp = get_exception_nmi_stack_bottom(cpuid) + memory::exception_nmi_stack_size;
 
-    u64 krsp = ~(memory::kernel_stack_size - 1);
-    __asm__ __volatile__("andq %%rsp, %0\n\t" : "+g"(krsp)::"memory");
-    auto kernel_rsp = (void *)(krsp + memory::kernel_stack_size);
-    data.kernel_rsp = kernel_rsp;
-    tss::set_rsp(cpuid, 0, (void *)kernel_rsp);
+    data.kernel_rsp = get_kernel_stack_bottom(cpuid) + memory::kernel_stack_size;
 
+    tss::set_rsp(cpuid, 0, data.kernel_rsp);
     tss::set_ist(cpuid, 1, data.interrupt_rsp);
     tss::set_ist(cpuid, 3, data.exception_rsp);
     tss::set_ist(cpuid, 4, data.exception_nmi_rsp);
@@ -150,7 +130,7 @@ void map(u64 &base, u64 pg, bool is_bsp = false) {
     base += memory::page_size;
     phy_addr_t ks;
     if (is_bsp) {
-        ks = phy_addr_t::from(0x90000 - memory::page_size * pg);
+        ks = phy_addr_t::from(0x90000 - size);
     } else {
         ks = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(size, 0));
     }
@@ -207,7 +187,7 @@ phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id) {
     return phy;
 }
 
-void* get_kernel_stack_bottom(cpuid_t id)
+byte *get_kernel_stack_bottom(cpuid_t id)
 {
     u64 base = memory::kernel_cpu_stack_bottom_address;
     u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
@@ -215,10 +195,10 @@ void* get_kernel_stack_bottom(cpuid_t id)
 
     each_of_cpu_size += memory::page_size * 4; // guard pages
 
-    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size);
+    return reinterpret_cast<byte *>(base + each_of_cpu_size * id + memory::page_size);
 }
 
-void* get_exception_stack_bottom(cpuid_t id)
+byte *get_exception_stack_bottom(cpuid_t id)
 {
     u64 base = memory::kernel_cpu_stack_bottom_address;
     u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
@@ -226,11 +206,10 @@ void* get_exception_stack_bottom(cpuid_t id)
 
     each_of_cpu_size += memory::page_size * 4; // guard pages
 
-    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 2 
-        + memory::kernel_stack_size);
+    return reinterpret_cast<byte *>(base + each_of_cpu_size * id + memory::page_size * 2 + memory::kernel_stack_size);
 }
 
-void* get_interrupt_stack_bottom(cpuid_t id)
+byte *get_interrupt_stack_bottom(cpuid_t id)
 {
     u64 base = memory::kernel_cpu_stack_bottom_address;
     u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
@@ -238,11 +217,11 @@ void* get_interrupt_stack_bottom(cpuid_t id)
 
     each_of_cpu_size += memory::page_size * 4; // guard pages
 
-    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 3 
-        + memory::kernel_stack_size + memory::exception_stack_size);
+    return reinterpret_cast<byte *>(base + each_of_cpu_size * id + memory::page_size * 3 + memory::kernel_stack_size +
+                                    memory::exception_stack_size);
 }
 
-void* get_exception_nmi_stack_bottom(cpuid_t id)
+byte *get_exception_nmi_stack_bottom(cpuid_t id)
 {
     u64 base = memory::kernel_cpu_stack_bottom_address;
     u64 each_of_cpu_size = memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size +
@@ -250,8 +229,8 @@ void* get_exception_nmi_stack_bottom(cpuid_t id)
 
     each_of_cpu_size += memory::page_size * 4; // guard pages
 
-    return reinterpret_cast<void*>(base + each_of_cpu_size * id + memory::page_size * 4 
-        + memory::kernel_stack_size + memory::exception_stack_size + memory::interrupt_stack_size);
+    return reinterpret_cast<byte *>(base + each_of_cpu_size * id + memory::page_size * 4 + memory::kernel_stack_size +
+                                    memory::exception_stack_size + memory::interrupt_stack_size);
 }
 
 } // namespace arch::cpu

@@ -1,3 +1,4 @@
+#pragma once
 #include "../mm/new.hpp"
 #include "common.hpp"
 #include "memory.hpp"
@@ -15,42 +16,6 @@ template <typename T> class circular_buffer
     memory::IAllocator *allocator;
 
   public:
-    struct write_helper
-    {
-        circular_buffer *cb;
-
-        T &operator*() const { return cb->buffer[cb->write_off]; }
-
-        write_helper &operator=(const T &t)
-        {
-            cb->buffer[cb->write_off] = t;
-            return *this;
-        }
-
-        write_helper(circular_buffer *cb)
-            : cb(cb)
-        {
-        }
-
-        ~write_helper()
-        {
-            /// XXX: no thread safety, may loss data
-            if (cb->is_full())
-            {
-                cb->read_off++;
-            }
-
-            if (unlikely(cb->write_off + 1 >= cb->length))
-            {
-                cb->write_off = 0;
-            }
-            else
-            {
-                cb->write_off++;
-            }
-        }
-    };
-
     circular_buffer(memory::IAllocator *allocator, u64 size)
         : buffer(nullptr)
         , length(size)
@@ -73,13 +38,53 @@ template <typename T> class circular_buffer
     circular_buffer &operator=(const circular_buffer &cb) = delete;
     circular_buffer(const circular_buffer &cb) = delete;
 
-    write_helper write_with() { return write_helper(this); }
+    void write(const T &t) { write(&t, 1); }
+
+    void write(const T *t, u64 len)
+    {
+        u64 max_off = write_off + len;
+        u64 rest_off = 0;
+        u64 new_write_off = max_off;
+        if (max_off > length)
+        {
+            max_off = length;
+            rest_off = write_off + len - length;
+            new_write_off = rest_off;
+        }
+
+        for (u64 off = write_off; off < max_off; off++, t++)
+        {
+            buffer[off] = *t;
+        }
+
+        for (u64 off = 0; off < rest_off; off++, t++)
+        {
+            buffer[off] = *t;
+        }
+
+        write_off = new_write_off;
+    }
 
     u64 get_buffer_size() const { return length; }
 
     bool is_full() const { return (write_off + 1) % length == read_off; }
 
     bool is_emtpy() const { return read_off == write_off; }
+
+    bool last(T *t)
+    {
+        if (unlikely(is_emtpy()))
+        {
+            return false;
+        }
+        u64 off = write_off;
+        if (off == 0)
+        {
+            off = length;
+        }
+        *t = buffer[off - 1];
+        return true;
+    }
 
     bool read(T *t)
     {

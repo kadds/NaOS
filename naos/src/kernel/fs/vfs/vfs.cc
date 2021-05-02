@@ -39,7 +39,11 @@ struct data_t
 
 data_t *data;
 
-void init() { data = memory::New<data_t>(memory::KernelCommonAllocatorV); }
+void init()
+{
+    trace::debug("VFS init");
+    data = memory::New<data_t>(memory::KernelCommonAllocatorV);
+}
 
 int register_fs(file_system *fs)
 {

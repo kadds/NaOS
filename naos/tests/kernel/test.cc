@@ -92,10 +92,19 @@ int main(int argc, char *argv[])
                         i.second();
                     }
                     t2 = clockx::now();
-
-                    std::cout << "\r" << std::setw(20) << test_name << std::setw(10)
-                              << std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1).count() << "us"
-                              << std::endl;
+                    auto dt = t2 - t1;
+                    if (dt.count() > 1'000'0000)
+                    {
+                            std::cout << "\r" << std::setw(20) << test_name << std::setw(10)
+                                      << std::chrono::duration_cast<std::chrono::milliseconds>(dt).count() << "ms"
+                                      << std::endl;
+                    }
+                    else
+                    {
+                            std::cout << "\r" << std::setw(20) << test_name << std::setw(10)
+                                      << std::chrono::duration_cast<std::chrono::microseconds>(dt).count() << "us"
+                                      << std::endl;
+                    }                
                 }
                 else
                 {

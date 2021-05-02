@@ -115,13 +115,13 @@ void flush_kbuffer()
     {
         uctx::UninterruptibleContext icu;
         u64 size;
-        byte *buffer = trace::get_kernel_log_buffer().read_buffer(&size);
+        // byte *buffer = trace::get_kernel_log_buffer().read_buffer(&size);
 
-        while (size != 0)
-        {
-            putstring((const char *)buffer, size);
-            buffer = trace::get_kernel_log_buffer().read_buffer(&size);
-        }
+        // while (size != 0)
+        // {
+        //     putstring((const char *)buffer, size);
+        //     buffer = trace::get_kernel_log_buffer().read_buffer(&size);
+        // }
 
         flush();
     }

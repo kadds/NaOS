@@ -60,15 +60,8 @@ test(array, resize);
 
 void test_array_iterator()
 {
-    array<int> vec(&LibAllocatorV);
-    vec.ensure(100);
-    for (int i = 0; i < 100; i++)
-    {
-        int j = i;
-        vec.push_back(std::move(j));
-    }
-    assert(vec.size() == 100);
-    int j = 0;
+    array<int> vec(&LibAllocatorV, {1, 2, 3});
+    int j = 1;
     for (auto i : vec)
     {
         assert(i == j);
@@ -76,6 +69,27 @@ void test_array_iterator()
     }
 }
 test(array, iterator);
+
+void test_array_const_iterator()
+{
+    const array<int> vec(&LibAllocatorV, {1, 2, 3});
+    int j = 1;
+    for (auto &i : vec)
+    {
+        assert(i == j);
+        j++;
+    }
+}
+
+test(array, const_iterator);
+
+void test_array_empty()
+{
+    array<int> vec(&LibAllocatorV);
+    assert(vec.empty());
+    vec.clear();
+}
+test(array, empty);
 
 void test_array_copy()
 {

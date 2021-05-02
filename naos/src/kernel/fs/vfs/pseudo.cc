@@ -30,7 +30,7 @@ i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
             wait_queue.do_wake_up();
             wait_queue.do_wait(pipe_write_func, (u64)this);
         }
-        buffer.write_with() = data[i];
+        buffer.write(data[i]);
     }
     wait_queue.do_wake_up();
     return size;

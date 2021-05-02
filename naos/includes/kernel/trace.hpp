@@ -2,8 +2,8 @@
 #include "./arch/com.hpp"
 #include "./arch/regs.hpp"
 #include "./kernel.hpp"
+#include "./util/circular_buffer.hpp"
 #include "./util/formatter.hpp"
-#include "./util/ring_buffer.hpp"
 #include "common.hpp"
 #include "lock.hpp"
 #include "ucontext.hpp"
@@ -17,7 +17,7 @@ namespace trace
 extern bool output_debug;
 
 void init();
-void early_init();
+void early_init(void *start, void *end);
 
 ///
 /// \brief color namespace includes normal color
@@ -331,11 +331,12 @@ extern lock::spinlock_t spinlock;
 /// print string to screen
 void print_inner(const char *str);
 void print_inner(const char *str, u64 len);
+void print_inner(char ch);
 
 /// the kernel print to the serial device. recv com1
 extern arch::device::com::serial serial_device;
 
-util::ring_buffer &get_kernel_log_buffer();
+util::circular_buffer<byte> &get_kernel_log_buffer();
 
 /// ---------- template functions for kernel print logic ----------------
 
@@ -350,13 +351,13 @@ template <typename Head> Trace_Section void dispatch(const Head &head)
 template <typename Head> Trace_Section void cast_fmt()
 {
     print_inner(Head::t);
-    print_inner("m");
+    print_inner('m');
 }
 
 template <typename Head, typename Second, typename... Args> Trace_Section void cast_fmt()
 {
     print_inner(Head::t);
-    print_inner(";");
+    print_inner(';');
     cast_fmt<Second, Args...>();
 }
 
@@ -373,7 +374,7 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
 {
     if constexpr (sizeof...(Args) != 0)
     {
-        print_inner("\e[");
+        print_inner("\e[", 2);
         cast_fmt<Args...>();
     }
 }
@@ -404,21 +405,25 @@ NoReturn void keep_panic(const regs_t *regs = 0);
 ///\brief stop all cpu and report an error.
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
-    print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
-    print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(std::forward<Args>(args)...);
-    print<>('\n');
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
+        print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
+        print<PrintAttribute<TextAttribute::Reset>>();
+        print<>(std::forward<Args>(args)...);
+        print<>('\n');
+    }
     keep_panic();
 }
 
 template <typename... Args> NoReturn Trace_Section void panic_stack(const regs_t *regs, Args &&... args)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
-    print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
-    print<PrintAttribute<TextAttribute::Reset>>();
-    print<>(std::forward<Args>(args)...);
-    print<>('\n');
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
+        print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
+        print<PrintAttribute<TextAttribute::Reset>>();
+        print<>(std::forward<Args>(args)...);
+        print<>('\n');
+    }
     keep_panic(regs);
 }
 

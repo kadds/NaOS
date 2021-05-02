@@ -29,6 +29,7 @@ irq::request_result ipi_call(const void *regs, u64 data, u64 user_data)
 
 void init()
 {
+    trace::debug("SMP init");
     arch::SMP::init();
     if (cpu::current().is_bsp())
     {

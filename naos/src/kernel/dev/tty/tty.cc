@@ -30,14 +30,15 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
         {
             line_count++;
         }
-        auto wh = buffer.write_with();
 
         if (buffer.is_full())
         {
-            if ((char)*wh == '\n')
+            byte p = (byte)0;
+            buffer.last(&p);
+            if ((char)p == '\n')
                 line_count--;
         }
-        wh = data[i];
+        buffer.write(data[i]);
     }
     wait_queue.do_wake_up();
 

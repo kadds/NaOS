@@ -41,16 +41,12 @@ test(hash_map, remove);
 
 void test_hash_map_iterator()
 {
-    hash_map<int, int> map(&LibAllocatorV);
+    hash_map<int, int> map(&LibAllocatorV, {{1, 2}, {3, 4}, {5, 6}});
     std::unordered_map<int, int> m;
-    for (int i = 0; i < 100; i++)
+    for (int i = 0; i < 6; i += 2)
     {
-        int j = i;
-        int k = i + 10;
-        m.insert(std::make_pair(j, k));
-        map.insert(std::move(j), std::move(k));
+        m.insert(std::make_pair(i, i + 1));
     }
-    assert(map.size() == 100);
     for (auto i : map)
     {
         assert(m[i.key] == i.value);

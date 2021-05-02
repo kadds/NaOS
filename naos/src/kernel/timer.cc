@@ -11,7 +11,6 @@
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/util/array.hpp"
-#include "kernel/util/circular_buffer.hpp"
 #include "kernel/util/linked_list.hpp"
 #include "kernel/util/skip_list.hpp"
 
@@ -46,7 +45,6 @@ struct watcher_t
 
 using watcher_list_t = util::array<watcher_t>;
 using tick_list_t = util::skip_list<watcher_t>;
-using recent_list_t = util::circular_buffer<watcher_t>;
 
 struct cpu_timer_t
 {

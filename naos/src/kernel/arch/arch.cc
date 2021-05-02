@@ -19,12 +19,15 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
     paging::temp_init(args != 0);
 }
 
-void init(const kernel_start_args *args)
+constexpr u64 trace_early_bottom_address = 0x21000;
+constexpr u64 trace_early_top_address = 0x30000;
+
+void early_init(const kernel_start_args *args)
 {
     if (args != nullptr) /// bsp
     {
         // init serial device for logger when video device is preparing.
-        trace::early_init();
+        trace::early_init((void *)trace_early_bottom_address, (void *)trace_early_top_address);
 
         trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
             " NaOS: Nano Operating System (arch X86_64)\n");
@@ -39,17 +42,25 @@ void init(const kernel_start_args *args)
         trace::debug("Arch init");
 
         cpu_info::init();
-        auto cpu_mesh = cpu_info::get_cpu_mesh_info();
-        trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
-
-        auto cpuid = cpu::init();
 
         trace::debug("Memory init");
         memory::init(args, 0x0);
+    }
+}
+
+void init(const kernel_start_args *args)
+{
+    if (args != nullptr) /// bsp
+    {
+        cpu::init();
+
+        trace::init();
 
         trace::debug("Paging init");
-
         paging::init();
+
+        auto cpu_mesh = cpu_info::get_cpu_mesh_info();
+        trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
         cpu::allocate_stack(cpu_mesh.logic_num);
 
         phy_addr_t video_start =
@@ -62,15 +73,14 @@ void init(const kernel_start_args *args)
         //             paging::flags::cache_disable);
 
         paging::enable_new_paging();
-        device::vga::flush();
 
         trace::debug("GDT init");
         gdt::init_after_paging();
 
         trace::debug("TSS init");
-        tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2vax(0x80000));
+        tss::init(0, phy_addr_t::from(0x0), memory::pa2vax(0x80000));
 
-        cpu::init_data(cpuid);
+        cpu::init_data(0);
         trace::debug("IDT init");
         idt::init_after_paging();
 
@@ -93,11 +103,7 @@ void init(const kernel_start_args *args)
     APIC::init();
 }
 
-void post_init()
-{
-    trace::init();
-    device::vga::auto_flush();
-}
+void post_init() { device::vga::auto_flush(); }
 
 void init_drivers() { device::chip8042::init(); }
 

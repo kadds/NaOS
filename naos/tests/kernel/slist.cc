@@ -48,14 +48,8 @@ test(slist, remove);
 
 void test_slist_iterator()
 {
-    singly_linked_list<int> list(&LibAllocatorV);
-    for (int i = 0; i < 100; i++)
-    {
-        int j = i;
-        list.push_back(std::move(j));
-    }
-    assert(list.size() == 100);
-    int j = 0;
+    singly_linked_list<int> list(&LibAllocatorV, {1, 2, 3});
+    int j = 1;
     for (auto i : list)
     {
         assert(i == j);
@@ -63,6 +57,26 @@ void test_slist_iterator()
     }
 }
 test(slist, iterator);
+
+void test_slist_const_iterator()
+{
+    const singly_linked_list<int> list(&LibAllocatorV, {1, 2, 3});
+    int j = 1;
+    for (auto i : list)
+    {
+        assert(i == j);
+        j++;
+    }
+}
+test(slist, const_iterator);
+
+void test_slist_empty()
+{
+    singly_linked_list<int> list(&LibAllocatorV);
+    assert(list.empty());
+    list.clear();
+}
+test(slist, empty);
 
 void test_slist_copy()
 {

@@ -172,7 +172,7 @@ irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data
     data = io_in8(data_port);
     kb_data_t kb_data;
     kb_data.set(timer::get_high_resolution_time(), data);
-    dev->buffer.write_with() = kb_data;
+    dev->buffer.write(kb_data);
 
     irq::raise_tasklet(&dev->tasklet);
 
@@ -488,7 +488,7 @@ irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_d
     mouse_data_t md;
     md.set(timer::get_high_resolution_time(), data);
 
-    dev->buffer.write_with() = md;
+    dev->buffer.write(md);
     irq::raise_tasklet(&dev->tasklet);
 
     return irq::request_result::ok;

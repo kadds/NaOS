@@ -10,9 +10,10 @@ namespace util::formatter
 /// \param in the intger to cast
 /// \param buffer the string buffer to write
 /// \param buffer_len maximum number of characters in the string buffer
-/// \note if the buffer is not large enough, the result is unknown
+/// \note if the buffer is not large enough, the result is undefined
+/// \return buffer used length
 ///
-void int2str(i64 in, char *buffer, int buffer_len);
+int int2str(i64 in, char *buffer, int buffer_len);
 
 ///
 /// \brief cast unsigned intger to string
@@ -20,9 +21,10 @@ void int2str(i64 in, char *buffer, int buffer_len);
 /// \param in the intger to cast
 /// \param buffer the string buffer to write
 /// \param buffer_len maximum number of characters in the string buffer
-/// \note if the buffer is not large enough, the result is unknown
+/// \note if the buffer is not large enough, the result is undefined
+/// \return buffer used length
 ///
-void uint2str(u64 in, char *buffer, int buffer_len);
+int uint2str(u64 in, char *buffer, int buffer_len);
 
 ///
 /// \brief cast pointer address to string (hex)
@@ -30,21 +32,40 @@ void uint2str(u64 in, char *buffer, int buffer_len);
 /// \param in the intger to cast
 /// \param buffer the string buffer to write
 /// \param buffer_len maximum number of characters in the string buffer
-/// \note if the buffer is not large enough, the result is unknown
+/// \note if the buffer is not large enough, the result is undefined
+/// \return buffer used length
 ///
-void pointer2str(const void *in, char *buffer, int buffer_len);
+int pointer2str(const void *in, char *buffer, int buffer_len);
+
+///
+/// \brief cast int like string to int
+///
+/// \param str input string
+/// \param end end of string
+/// \param out result 
+/// \return the first character address not traversed
+const char * str2int(const char *str, const char *end, i64 &out);
+
+///
+/// \brief cast int like string to uint
+///
+/// \param str input string
+/// \param end end of string
+/// \param out result 
+/// \return the first character address not traversed
+const char * str2uint(const char *str, const char *end, u64 &out);
 
 template <typename In> struct format
 {
-    // The buffer length must >= 32, which can fully contain the maximum value of u64 and the maximum str length of
-    // double.
-    // FIXME: default operation
+    /// \brief The buffer length must >= 32 \n
+    /// which can fully contain the maximum value of u64 and the maximum result length of double.
     const char *operator()(const In &in, char *buffer, int buffer_len) { return in; }
 };
 
 template <> struct format<const char *>
 {
     using In = const char *;
+    /// \brief return original input string
     const char *operator()(const In &in, char *buffer, int buffer_len) { return in; }
 };
 

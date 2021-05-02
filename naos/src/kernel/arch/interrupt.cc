@@ -28,7 +28,7 @@ void build(int index, u8 ist)
 {
     byte *buffer_start = (byte *)code_buffer + a_code_len * index;
     util::memcopy((void *)buffer_start, (void *)interrupt_code_start, a_code_len);
-    *(char *)&buffer_start[3] = (u8)index + 32;
+    *(u8 *)&buffer_start[3] = (u8)index + 32;
     idt::set_interrupt_system_gate(index + 32, buffer_start, ist);
 }
 

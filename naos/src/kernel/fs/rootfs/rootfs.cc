@@ -38,6 +38,7 @@ void mkdir(const char *path)
 
 void init(byte *start_root_image, u64 size)
 {
+    trace::debug("Root file system init");
     if (start_root_image == nullptr || size == 0)
     {
         trace::panic("Can't find root image.");

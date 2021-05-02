@@ -1,9 +1,10 @@
 #include "kernel/util/formatter.hpp"
+#include "kernel/util/str.hpp"
 
 namespace util::formatter
 {
 
-void int2str(i64 in, char *buffer, int buffer_len)
+int int2str(i64 in, char *buffer, int buffer_len)
 {
     int index = 0;
     u64 intger;
@@ -33,9 +34,10 @@ void int2str(i64 in, char *buffer, int buffer_len)
         buffer[index - i - 1] = t;
     }
     buffer[index] = 0;
+    return index;
 }
 
-void uint2str(u64 in, char *buffer, int buffer_len)
+int uint2str(u64 in, char *buffer, int buffer_len)
 {
     int index = 0;
     u64 intger = in;
@@ -54,9 +56,10 @@ void uint2str(u64 in, char *buffer, int buffer_len)
         buffer[index - i - 1] = t;
     }
     buffer[index] = 0;
+    return index;
 }
 
-void pointer2str(const void *in, char *buffer, int buffer_len)
+int pointer2str(const void *in, char *buffer, int buffer_len)
 {
     int index = 0;
     u64 intger = (u64)in;
@@ -75,5 +78,66 @@ void pointer2str(const void *in, char *buffer, int buffer_len)
         buffer[index - i - 1] = t;
     }
     buffer[index] = 0;
+    return index;
+}
+
+const char *str2int(const char *str, const char *end, i64 &result)
+{
+    result = 0;
+    if (unlikely(end == nullptr))
+    {
+        end = str + strlen(str);
+    }
+
+    const char *p = str;
+    int fac = 1;
+
+    while (p != end)
+    {
+        char c = *p;
+        if (c >= '0' && c <= '9')
+        {
+            result = result * 10 + (c - '0');
+        }
+        else if ((c == '-' || c == '+') && p == str)
+        {
+            if (c == '-')
+            {
+                fac = -1;
+            }
+        }
+        else
+        {
+            return p;
+        }
+        p++;
+    }
+    result *= fac;
+    return p;
+}
+
+const char *str2uint(const char *str, const char *end, u64 &result)
+{
+    result = 0;
+    if (unlikely(end == nullptr))
+    {
+        end = str + strlen(str);
+    }
+    const char *p = str;
+
+    while (p != end)
+    {
+        char c = *p;
+        if (c >= '0' && c <= '9')
+        {
+            result = result * 10 + (c - '0');
+        }
+        else
+        {
+            return p;
+        }
+        p++;
+    }
+    return p;
 }
 } // namespace util::formatter
