@@ -3,7 +3,9 @@
 #include "assert.hpp"
 #include "common.hpp"
 #include "hash.hpp"
+#include "iterator.hpp"
 #include "kernel/mm/allocator.hpp"
+#include "formatter.hpp"
 #include "memory.hpp"
 #include <utility>
 
@@ -32,33 +34,105 @@ i64 strfind(const char *str, const char *pat);
 
 class string;
 
-class string_view
+template <typename CE> class base_string_view
 {
   public:
-    string_view()
+    using iterator = base_bidirectional_iterator<CE>;
+
+    base_string_view()
         : ptr(nullptr)
         , len(0)
     {
     }
-    string_view(char *ptr, u64 len)
+    base_string_view(CE ptr, u64 len)
         : ptr(ptr)
         , len(len)
     {
     }
 
+    CE data() {
+        return ptr;
+    }
+
     string to_string(memory::IAllocator *allocator);
 
+    iterator begin() { return iterator(ptr); }
+
+    iterator end() { return iterator(ptr + len); }
+
+    bool to_int(i64 &out) const
+    {
+        const char *beg = ptr;
+        const char *end = ptr + len;
+        return formatter::str2int(beg, end, out) != beg;
+    }
+    bool to_uint(u64 &out) const {
+        const char *beg = ptr;
+        const char *end = ptr + len;
+        return formatter::str2uint(beg, end, out) != beg;
+    }
+
+    bool to_int_ext(i64 &out, base_string_view &last) const {
+        CE beg = ptr;
+        CE end = ptr + len;
+        beg = formatter::str2int(beg, end, out);
+        last = base_string_view(beg, len - (beg - ptr));
+        return beg != ptr;
+    }
+
+    bool to_uint_ext(u64 &out, base_string_view &last) const {
+        CE beg = ptr;
+        CE end = ptr + len;
+        beg = const_cast<CE>(formatter::str2uint(beg, end, out));
+        last = base_string_view(beg, len - (beg - ptr));
+        return beg !=  ptr;
+    }
+
+    void split2(base_string_view &v0, base_string_view &v1, iterator iter)
+    {
+        v0 = base_string_view(ptr, &iter - ptr);
+        v1 = base_string_view(&iter + 1, len - (&iter - ptr));
+    }
+
+    array<base_string_view<CE>> split(char c, memory::IAllocator *vec_allocator)
+    {
+        array<base_string_view<CE>> vec(vec_allocator);
+        CE p = ptr;
+        CE prev = p;
+        for (u64 i = 0; i < len; i++)
+        {
+            if (*p == c)
+            {
+                if (prev < p)
+                {
+                    vec.push_back(std::move(base_string_view<CE>(prev, p - prev)));
+                }
+                prev = p + 1;
+            }
+            p++;
+        }
+        if (prev < p)
+        {
+            vec.push_back(std::move(base_string_view<CE>(prev, p - prev)));
+        }
+        return vec;
+    }
+
   private:
-    char *ptr;
+    CE ptr;
     u64 len;
 };
+
+using string_view = base_string_view<char *>;
+using const_string_view = base_string_view<const char *>;
 
 /// \brief kernel string type, use it everywhere
 ///
 class string
 {
   public:
-    class iterator;
+    using const_iterator = base_bidirectional_iterator<const char *>;
+    using iterator = base_bidirectional_iterator<char *>;
 
     string(const string &rhs) { copy(rhs); }
 
@@ -81,14 +155,6 @@ class string
 
     string &operator=(string &&rhs);
 
-    array<string_view> split(char c, memory::IAllocator *vec_allocator);
-
-    bool to_int(i64 &out) const;
-    bool to_uint(u64 &out) const;
-
-    bool to_int_ext(i64 &out, string_view &last_view) const;
-    bool to_uint_ext(u64 &out, string_view &last_view) const;
-
     u64 size() const { return get_count(); }
 
     u64 capacity() const
@@ -108,6 +174,14 @@ class string
     iterator begin() { return iterator(data()); }
 
     iterator end() { return iterator(data() + size()); }
+
+    const_iterator begin() const { return const_iterator(data()); }
+
+    const_iterator end() const { return const_iterator(data() + size()); }
+
+    string_view view() { return string_view(data(), size()); }
+
+    const_string_view view() const { return const_string_view(data(), size()); }
 
     bool is_shared() const
     {
@@ -215,8 +289,8 @@ class string
         memory::IAllocator *allocator;
 
       public:
-        u64 get_count() const { return get_cap() - static_cast<u64>(data[16]); }
-        void set_count(u64 c) { data[16] = static_cast<byte>(get_cap() - c); }
+        u64 get_count() const { return get_cap() - static_cast<u64>(data[23]); }
+        void set_count(u64 c) { data[23] = static_cast<byte>(get_cap() - c); }
         u64 get_cap() const { return 23; }
         char *get_buffer() { return reinterpret_cast<char *>(data); }
         const char *get_buffer() const { return reinterpret_cast<const char *>(data); }
@@ -263,39 +337,11 @@ class string
 
   private:
     bool is_sso() const { return stack.is_stack(); }
-
-  public:
-    class iterator
-    {
-        char *beg;
-
-      public:
-        char &operator*() { return *beg; }
-        char *operator->() { return beg; }
-        char *operator&() { return beg; }
-
-        iterator operator++(int)
-        {
-            auto old = *this;
-            beg++;
-            return old;
-        }
-
-        iterator &operator++()
-        {
-            beg++;
-            return *this;
-        }
-
-        bool operator==(const iterator &it) { return it.beg == beg; }
-
-        bool operator!=(const iterator &it) { return it.beg != beg; }
-
-        explicit iterator(char *t)
-            : beg(t)
-        {
-        }
-    };
 };
+
+template <typename CE> string base_string_view<CE>::to_string(memory::IAllocator *allocator)
+{
+    return string(allocator, ptr, len);
+}
 
 } // namespace util

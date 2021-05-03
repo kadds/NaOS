@@ -1,5 +1,4 @@
 #include "kernel/util/str.hpp"
-#include "kernel/util/formatter.hpp"
 namespace util
 {
 int strcmp(const char *str1, const char *str2)
@@ -69,8 +68,6 @@ i64 strfind(const char *str, const char *pat)
     return -1;
 }
 
-string string_view::to_string(memory::IAllocator *allocator) { return string(allocator, ptr, len); }
-
 string::string(memory::IAllocator *allocator)
 {
     head.init();
@@ -95,73 +92,6 @@ string &string::operator=(string &&rhs)
     free();
     move(std::move(rhs));
     return *this;
-}
-
-array<string_view> string::split(char c, memory::IAllocator *vec_allocator)
-{
-    array<string_view> vec(vec_allocator);
-    char *p;
-    u64 count;
-    if (unlikely(this->is_sso()))
-    {
-        p = stack.get_buffer();
-        count = stack.get_count();
-    }
-    else
-    {
-        p = head.get_buffer();
-        count = head.get_count();
-    }
-    char *prev = p;
-    for (u64 i = 0; i < count; i++)
-    {
-        if (*p == c)
-        {
-            if (prev < p)
-            {
-                vec.push_back(std::move(string_view(prev, p - prev)));
-            }
-            prev = p + 1;
-        }
-        p++;
-    }
-    if (prev < p)
-    {
-        vec.push_back(std::move(string_view(prev, p - prev)));
-    }
-    return vec;
-}
-
-bool string::to_int(i64 &out) const
-{
-    const char *beg = data();
-    const char *end = beg + size();
-    return formatter::str2int(beg, end, out) != beg;
-}
-
-bool string::to_uint(u64 &out) const
-{
-    const char *beg = data();
-    const char *end = beg + size();
-    return formatter::str2uint(beg, end, out) != beg;
-}
-
-bool string::to_int_ext(i64 &out, string_view &last) const
-{
-    const char *beg = data();
-    const char *end = beg + size();
-    beg = formatter::str2int(beg, end, out);
-    // last = string_view(beg, beg - data());
-    return beg != data();
-}
-
-bool string::to_uint_ext(u64 &out, string_view &last) const
-{
-    const char *beg = data();
-    const char *end = beg + size();
-    beg = formatter::str2uint(beg, end, out);
-    // last = string_view(beg, beg - data());
-    return beg != data();
 }
 
 void string::append(const string &rhs)

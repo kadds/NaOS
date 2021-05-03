@@ -92,24 +92,20 @@ int detect_zones(const kernel_start_args *args)
             {
                 continue;
             }
+            // kernel loaded at 0x10000 1Mib
+            if (start <= phy_addr_t::from(100000))
+            {
+                continue;
+            }
             zone_count++;
             i64 len = end - start;
 
             max_memory_available += len;
-            // kernel loaded at 0x10000 1Mib
-            // check space
-            if (end > phy_addr_t::from(0x100000) && start <= phy_addr_t::from(0x100000))
-            {
-                if (len < 0x400000)
-                {
-                    // less than 4MB
-                    trace::panic("Memory map range too small ", reinterpret_cast<addr_t>(start()),
-                                 reinterpret_cast<addr_t>(end()));
-                }
-            }
         }
         if (mm_item->addr + mm_item->len > max_memory_maped)
+        {
             max_memory_maped = mm_item->addr + mm_item->len;
+        }
     }
     trace::info("Memory available ", max_memory_available, "bytes -> ", max_memory_available >> 10, "Kib -> ",
                 max_memory_available >> 20, "Mib -> ", max_memory_available >> 30, "Gib");
@@ -142,12 +138,23 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
         if (mm_item->map_type != map_type_t::available)
+        {
+
             continue;
+        }
 
         phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
         phy_addr_t end = align_down(phy_addr_t::from(mm_item->addr + mm_item->len), page_size);
         if (start >= end)
+        {
+
             continue;
+        }
+        if (start <= phy_addr_t::from(100000))
+        {
+
+            continue;
+        }
 
         zone *z = global_zones->at(zone_id);
         if (end > phy_addr_t::from(0x100000) && start <= phy_addr_t::from(0x100000))

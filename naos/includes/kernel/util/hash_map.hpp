@@ -432,8 +432,8 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         V value;
 
         pair(K &&key, V &&value)
-            : key(key)
-            , value(value){};
+            : key(std::move(key))
+            , value(std::move(value)){};
 
         pair(const K &key, const V &value)
             : key(key)

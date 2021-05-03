@@ -109,16 +109,17 @@ void init()
     cmdmap = memory::New<hash_map<string, string>>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     trace::debug("cmdline address ", reinterpret_cast<coaddr_t>(cmdline), ". ", cmdline);
 
-    string ss(cmdline);
-    const auto arr = ss.split(' ', memory::KernelCommonAllocatorV);
+    const string ss(cmdline);
+    const_string_view sv = ss.view();
+    const auto arr = sv.split(' ', memory::KernelCommonAllocatorV);
     for (auto item : arr)
     {
-        // TODO
-    }
-
-    for (auto item : *cmdmap)
-    {
-        trace::debug("args ", item.key.data(), "=", item.value.data());
+        auto iter = find(item.begin(), item.end(), '=');
+        const_string_view key, value;
+        item.split2(key, value, iter);
+        string k = key.to_string(memory::KernelCommonAllocatorV);
+        string v = value.to_string(memory::KernelCommonAllocatorV);
+        cmdmap->insert(std::move(k), std::move(v));
     }
 }
 
@@ -143,7 +144,7 @@ i64 get_int(const char *key, i64 default_value)
 {
     string value("");
     i64 res;
-    if (!get(key, value) || !value.to_int(res))
+    if (!get(key, value) || !value.view().to_int(res))
     {
         return default_value;
     }
@@ -154,7 +155,7 @@ u64 get_uint(const char *key, u64 default_value)
 {
     string value("");
     u64 res;
-    if (!get(key, value) || !value.to_uint(res))
+    if (!get(key, value) || !value.view().to_uint(res))
     {
         return default_value;
     }
@@ -164,13 +165,32 @@ u64 get_uint(const char *key, u64 default_value)
 space_t get_space(const char *key, space_t default_value)
 {
     string value("");
-    u64 res;
+    u64 num;
     string_view last;
-    if (!get(key, value) || !value.to_uint_ext(res, last))
+    if (!get(key, value) || !value.view().to_uint_ext(num, last))
     {
         return default_value;
     }
-    return default_value;
+    char c = *last.begin();
+
+    space_t ret = default_value;
+    if (c < 'a')
+    {
+        c += 'a' - 'A';
+    }
+    if (c == 'k')
+    {
+        ret = space_t::from_kib(num);
+    }
+    else if (c == 'm')
+    {
+        ret = space_t::from_mib(num);
+    }
+    else if (c == 'g')
+    {
+        ret = space_t::from_gib(num);
+    }
+    return ret;
 }
 
 } // namespace cmdline

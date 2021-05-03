@@ -17,9 +17,8 @@ template <typename E> class array
     memory::IAllocator *allocator;
 
   public:
-    template <typename CE> struct base_iterator;
-    using const_iterator = base_iterator<const E *>;
-    using iterator = base_iterator<E *>;
+    using const_iterator = base_bidirectional_iterator<const E *>;
+    using iterator = base_bidirectional_iterator<E *>;
 
     array(memory::IAllocator *allocator)
         : buffer(nullptr)
@@ -125,7 +124,7 @@ template <typename E> class array
     /// insert before iter
     iterator insert(iterator iter, E &&e)
     {
-        u64 index = iter.current - buffer;
+        u64 index = &iter - buffer;
         return insert_at(index, std::move(e));
     }
 
@@ -148,7 +147,7 @@ template <typename E> class array
     /// remove current iter
     iterator remove(iterator iter)
     {
-        u64 index = iter.current - buffer;
+        u64 index = &iter - buffer;
         return remove_at(index);
     }
 
@@ -305,48 +304,6 @@ template <typename E> class array
         buffer = new_buffer;
         cap = element_count;
     }
-
-  public:
-    template <typename CE> struct base_iterator
-    {
-        CE current;
-        friend class array;
-
-      private:
-        explicit base_iterator(CE e)
-            : current(e)
-        {
-        }
-
-      public:
-        auto &operator*() { return *current; }
-        auto operator&() { return current; }
-        auto operator->() { return current; }
-
-        base_iterator operator++(int)
-        {
-            current++;
-            return base_iterator(current - 1);
-        }
-        base_iterator &operator++()
-        {
-            current++;
-            return *this;
-        }
-        base_iterator operator--(int)
-        {
-            current--;
-            return base_iterator(current + 1);
-        }
-        base_iterator &operator--()
-        {
-            current--;
-            return *this;
-        }
-        bool operator==(const base_iterator &it) { return it.current == current; }
-
-        bool operator!=(const base_iterator &it) { return !operator==(it); }
-    };
 };
 
 } // namespace util

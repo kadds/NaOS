@@ -44,7 +44,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     int i = 0;
     while ((u64)rbp != 0)
     {
-        if (is_user_space_pointer(rbp))
+        if (!is_kernel_space_pointer(rbp))
         {
             break;
         }
