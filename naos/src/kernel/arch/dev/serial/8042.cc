@@ -427,7 +427,7 @@ void kb_driver::on_io_request(io::request_t *request)
             {
                 {
                     uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
-                    dev->io_list.push_back(std::move(req));
+                    dev->io_list.push_back(req);
                 }
                 if (request->poll)
                 {
@@ -725,7 +725,7 @@ void mouse_driver::on_io_request(io::request_t *request)
             {
                 {
                     uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
-                    dev->io_list.push_back(std::move(req));
+                    dev->io_list.push_back(req);
                 }
                 if (request->poll)
                 {

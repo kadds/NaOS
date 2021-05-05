@@ -87,8 +87,7 @@ inline process_t *new_kernel_process()
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
-    auto p = process;
-    global_process_map->insert(std::move(id), std::move(p));
+    global_process_map->insert(id, process);
     return process;
 }
 
@@ -104,8 +103,7 @@ inline process_t *new_process()
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
-    auto p = process;
-    global_process_map->insert(std::move(id), std::move(p));
+    global_process_map->insert(id, process);
 
     return process;
 }
@@ -135,8 +133,7 @@ inline thread_t *new_thread(process_t *p)
 
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
-    auto t = thd;
-    ((thread_list_t *)p->thread_list)->push_back(std::move(t));
+    ((thread_list_t *)p->thread_list)->push_back(thd);
     register_info_t *register_info = memory::New<register_info_t>(register_info_t_allocator);
     thd->register_info = register_info;
     thd->tid = id;
@@ -263,9 +260,9 @@ void init()
         ft->id_gen.tag(1);
         ft->id_gen.tag(2);
         auto tty0 = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
-        ft->file_map[0] = tty0->clone();
-        ft->file_map[1] = tty0->clone();
-        ft->file_map[2] = tty0->clone();
+        ft->file_map.insert(0, tty0->clone());
+        ft->file_map.insert(1, tty0->clone());
+        ft->file_map.insert(2, tty0->clone());
         tty0->close();
         is_init = true;
 
@@ -407,38 +404,25 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
     else // set to parent dir (file directory)
         new_ft->current = file ? file->get_entry()->get_parent() : fs::vfs::global_root;
 
-    if (!(flags & create_process_flags::no_shared_stdin))
+    if (flags & create_process_flags::shared_file_table)
     {
-        auto old_file = old_ft->file_map[0]->value;
-        if (old_file)
-            new_ft->file_map[0] = old_file->clone();
-        else
-            new_ft->file_map[0] = nullptr;
+        new_ft->file_map = old_ft->file_map;
     }
-    else
-        new_ft->file_map[0] = nullptr;
 
-    if (!(flags & create_process_flags::no_shared_stdout))
-    {
-        auto old_file = old_ft->file_map[1]->value;
-        if (old_file)
-            new_ft->file_map[1] = old_file->clone();
-        else
-            new_ft->file_map[1] = nullptr;
-    }
+    if (!(flags & create_process_flags::no_shared_stdin) && old_ft->file_map.get(0, &file))
+        new_ft->file_map.insert(0, file->clone());
     else
-        new_ft->file_map[1] = nullptr;
+        new_ft->file_map.insert(0, nullptr);
 
-    if (!(flags & create_process_flags::no_shared_stderror))
-    {
-        auto old_file = old_ft->file_map[2]->value;
-        if (old_file)
-            new_ft->file_map[2] = old_file->clone();
-        else
-            new_ft->file_map[2] = nullptr;
-    }
+    if (!(flags & create_process_flags::no_shared_stdout) && old_ft->file_map.get(1, &file))
+        new_ft->file_map.insert(1, file->clone());
     else
-        new_ft->file_map[2] = nullptr;
+        new_ft->file_map.insert(1, nullptr);
+
+    if (!(flags & create_process_flags::no_shared_stderror) && old_ft->file_map.get(2, &file))
+        new_ft->file_map.insert(2, file->clone());
+    else
+        new_ft->file_map.insert(2, nullptr);
 }
 
 process_t *create_process(fs::vfs::file *file, thread_start_func start_func, const char *args[], flag_t flags)

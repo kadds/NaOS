@@ -44,7 +44,7 @@ void init()
 
     volatile u64 *stack = (volatile u64 *)memory::pa2va<u64 *>(phy_addr_t::from((u64)_ap_stack));
     volatile u32 *startup_flag = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_startup_spin_flag));
-    volatile u32 *ap_count = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_count));
+    // volatile u32 *ap_count = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_count));
     *startup_flag = 1;
     _mfence();
 

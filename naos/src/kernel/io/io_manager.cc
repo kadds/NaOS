@@ -100,14 +100,14 @@ bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_n
     {
         if (target_dev == 0)
         {
-            chain->push_back(std::move(source_dev));
+            chain->push_back(source_dev);
             return true;
         }
         for (auto it = chain->begin(); it != chain->end(); ++it)
         {
             if (*it == target_dev)
             {
-                chain->insert(it, std::move(source_dev));
+                chain->insert(it, source_dev);
                 return true;
             }
         }
@@ -115,8 +115,8 @@ bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_n
     else
     {
         chain = memory::New<request_chain_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-        chain->push_back(std::move(source_dev));
-        request_map->insert(std::move(request_chain), std::move(chain));
+        chain->push_back(source_dev);
+        request_map->insert(request_chain, chain);
         return true;
     }
     return false;

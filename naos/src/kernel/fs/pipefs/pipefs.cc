@@ -83,7 +83,7 @@ inode *super_block::alloc_inode()
     inode *i = memory::New<inode>(memory::KernelCommonAllocatorV);
     i->set_super_block(this);
     i->set_index(last_inode_index++);
-    inode_map[i->get_index()] = i;
+    inode_map.insert(i->get_index(), i);
     return i;
 }
 

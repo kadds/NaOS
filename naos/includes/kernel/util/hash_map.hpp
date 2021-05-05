@@ -2,9 +2,11 @@
 #include "../mm/new.hpp"
 #include "common.hpp"
 #include "hash.hpp"
-#include <utility>
+#include "iterator.hpp"
 #include "memory.hpp"
 #include <type_traits>
+#include <utility>
+
 namespace util
 {
 
@@ -41,16 +43,95 @@ template <> struct member_hash<int>
     }
 };
 
-template <typename K, typename V, typename hash_func = member_hash<K>> class hash_map
+template <typename K> struct hash_set_pair
+{
+    using Key = K;
+    K key;
+    template<typename ...Args>
+    hash_set_pair(Args && ...args)
+        : key(std::forward<Args>(args)...)
+    {
+    }
+};
+
+template <typename K, typename V> struct hash_map_pair : hash_set_pair<K>
+{
+    V value;
+    template<typename ...Args>
+    hash_map_pair(K key, Args && ...args)
+        : hash_set_pair<K>(key)
+        , value(std::forward<Args>(args)...)
+    {
+    }
+};
+
+template <typename T> concept hash_map_has_value = requires(T t) { t.value; };
+
+template <typename P, typename hash_func> class base_hash_map
 {
   public:
-    struct pair;
-    struct iterator;
-    struct map_helper;
     struct node_t;
     struct entry;
 
-    hash_map(memory::IAllocator *allocator, u64 capacity, u64 factor)
+  protected:
+    template <typename CE, typename NE> struct base_holder
+    {
+        CE table;
+        CE end_table;
+        NE node;
+        base_holder(CE table, CE end_table, NE node)
+            : table(table)
+            , end_table(end_table)
+            , node(node)
+        {
+        }
+        bool operator == (const base_holder &rhs) const {
+            return table == rhs.table && end_table == rhs.end_table && node == rhs.node;
+        }
+        bool operator != (const base_holder &rhs) const {
+            return !operator==(rhs);
+        }
+    };
+
+    template<typename H, typename E>
+    struct value_fn
+    {
+        E operator()(H val) { return &val.node->content; }
+    };
+    template<typename H>
+    struct next_fn
+    {
+        H operator()(H val)
+        {
+            H holder = val;
+            if (!holder.node->next)
+            {
+                holder.node = holder.node->next;
+                while (!holder.node)
+                {
+                    holder.table++;
+                    if (holder.table >= holder.end_table)
+                        break;
+                    holder.node = holder.table->next;
+                }
+            }
+            else
+            {
+                holder.node = holder.node->next;
+            }
+            return holder;
+        }
+    };
+
+    using holder = base_holder<entry *, node_t *>;
+    using const_holder = base_holder<const entry *, const node_t *>;
+    using K = typename P::Key;
+
+  public:
+    using const_iterator = base_forward_iterator<const_holder, value_fn<const_holder, const P *>, next_fn<const_holder>>;
+    using iterator = base_forward_iterator<holder, value_fn<holder, P*>, next_fn<holder>>;
+
+    base_hash_map(memory::IAllocator *allocator, u64 capacity, u64 factor)
         : count(0)
         , table(nullptr)
         , load_factor(factor)
@@ -62,39 +143,39 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         }
     }
 
-    hash_map(memory::IAllocator *allocator, std::initializer_list<pair> il)
-           : hash_map(allocator, il.size()) {
+    base_hash_map(memory::IAllocator *allocator, std::initializer_list<P> il)
+           : base_hash_map(allocator, il.size()) {
         for(auto e : il) 
         {
             insert(std::move(e));
         }
     }
 
-    hash_map(memory::IAllocator *allocator, u64 capacity)
-        : hash_map(allocator, capacity, 75)
+    base_hash_map(memory::IAllocator *allocator, u64 capacity)
+        : base_hash_map(allocator, capacity, 75)
     {
     }
 
-    hash_map(memory::IAllocator *allocator)
-        : hash_map(allocator, 0, 75)
+    base_hash_map(memory::IAllocator *allocator)
+        : base_hash_map(allocator, 0, 75)
     {
     }
 
-    ~hash_map()
+    ~base_hash_map()
     {
         free();
     }
 
-    hash_map(const hash_map &rhs)
+    base_hash_map(const base_hash_map &rhs)
     {
         copy(rhs);
     }
 
-    hash_map(hash_map &&rhs) {
+    base_hash_map(base_hash_map &&rhs) {
         move(std::move(rhs));
     }
 
-    hash_map &operator=(const hash_map &rhs)
+    base_hash_map &operator=(const base_hash_map &rhs)
     {
         if (&rhs == this)
             return *this;
@@ -104,7 +185,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         return *this;
     }
 
-    hash_map &operator=(hash_map &&rhs)
+    base_hash_map &operator=(base_hash_map &&rhs)
     {
         if (&rhs == this)
             return *this;
@@ -114,68 +195,22 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         return *this;
     }
 
-    iterator insert(K && k, V && v)
-    {
-        return insert(std::move(pair(std::move(k), std::move(v))));
-    }
-
-    bool insert_once(K &&k, V && v)
-    {
-        return insert_once(std::move(pair(std::move(k),std::move(v))));
-    } 
-
-    iterator insert(pair && v)
+    template<typename ...Args>
+    iterator insert(Args && ...args)
     {
         check_capacity(count + 1);
-        u64 hash = hash_key(v.key);
-        auto next_node = table[hash].next;
-        table[hash].next = memory::New<node_t>(allocator, std::move(v), next_node);
+        node_t *node = memory::New<node_t>(allocator, nullptr, std::forward<Args>(args)...);
+        u64 hash = hash_key(node->content.key);
+        node->next = table[hash].next;
+        table[hash].next = node;
         count++;
-        return iterator(&table[hash], table + cap, table[hash].next);
-    }
-
-    bool insert_once(pair && v)
-    {
-        check_capacity(count + 1);
-        u64 hash = hash_key(v.key);
-        for (auto it = table[hash].next; it != nullptr; it = it->next)
-        {
-            if (it->key == v.key)
-                return false;
-        }
-        insert(std::move(v));
-        return true;
-    }
-
-    bool get(const K &key, V *v)
-    {
-        if (unlikely(count == 0)) {
-            return false;
-        }
-        u64 hash = hash_key(key);
-        for (auto it = table[hash].next; it != nullptr; it = it->next)
-        {
-            if (it->content.key == key)
-            {
-                *v = it->content.value;
-                return true;
-            }
-        }
-        return false;
+        return iterator(holder(&table[hash], table + cap, table[hash].next));
     }
 
     bool has(const K &key)
     {
-        if (unlikely(count == 0)) {
-            return false;
-        }
-        u64 hash = hash_key(key);
-        for (auto it = table[hash].next; it != nullptr; it = it->next)
-        {
-            if (it->content.key == key)
-                return true;
-        }
-        return false;
+        int count = key_count(key);
+        return count > 0;
     }
 
     int key_count(const K &key)
@@ -194,64 +229,6 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
     }
 
     void remove(const K &key)
-    {
-        if (unlikely(count == 0)) {
-            return;
-        }
-        u64 hash = hash_key(key);
-
-        node_t *prev = nullptr;
-        for (auto it = table[hash].next; it != nullptr;)
-        {
-            if (it->content.key == key)
-            {
-                auto cur_node = it;
-                it = it->next;
-
-                if (likely(prev))
-                    prev->next = it;
-                else
-                    table[hash].next = it;
-                memory::Delete<>(allocator, cur_node);
-                continue;
-            }
-            prev = it;
-            it = it->next;
-        }
-    }
-
-    void remove_value(const K &key, const V &v)
-    {
-        if (unlikely(count == 0)) {
-            return;
-        }
-        u64 hash = hash_key(key);
-        u64 del = 0;
-
-        node_t *prev = nullptr;
-        for (auto it = table[hash].next; it != nullptr;)
-        {
-            if (it->content.key == key && it->content.value == v)
-            {
-                auto cur_node = it;
-                it = it->next;
-
-                if (likely(prev))
-                    prev->next = it;
-                else
-                    table[hash].next = it;
-                del ++;
-                memory::Delete<>(allocator, cur_node);
-                continue;
-            }
-            prev = it;
-            it = it->next;
-        }
-        check_capacity(count - del);
-        count -= del;
-    }
-
-    void remove_once(const K &key)
     {
         if (unlikely(count == 0)) {
             return;
@@ -276,23 +253,6 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             prev = it;
             it = it->next;
         }
-    }
-
-    map_helper operator[](const K &key)
-    {
-        if (likely(count > 0)) {
-            u64 hash = hash_key(key);
-            for (auto it = table[hash].next; it != nullptr; it = it->next)
-            {
-                if (it->content.key == key)
-                {
-                    return map_helper(it);
-                }
-            }
-        }
-
-        K k = key;
-        return map_helper(insert(std::move(k), std::move(V())).node);
     }
 
     u64 size() const { return count; }
@@ -322,7 +282,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
     iterator begin() const
     {
         auto table = this->table;
-        if (table == nullptr) {
+        if (table == nullptr || count == 0) {
             return end();
         }
         auto node = this->table->next;
@@ -334,10 +294,10 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
             }
             node = table->next;
         }
-        return iterator(table, this->table + cap, node);
+        return iterator(holder(table, this->table + cap, node));
     }
 
-    iterator end() const { return iterator(table + cap, table + cap, nullptr); }
+    iterator end() const { return iterator(holder(table + cap, table + cap, nullptr)); }
 
   private:
     u64 count;
@@ -399,7 +359,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         }
     }
 
-    void copy(const hash_map &rhs) {
+    void copy(const base_hash_map &rhs) {
         allocator = rhs.allocator;
         load_factor = rhs.load_factor;
         cap = select_capcity(rhs.count);
@@ -413,7 +373,7 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
         }
     }
 
-    void move(hash_map && rhs) {
+    void move(base_hash_map && rhs) {
         allocator = rhs.allocator;
         table = rhs.table;
         count = rhs.count;
@@ -426,123 +386,64 @@ template <typename K, typename V, typename hash_func = member_hash<K>> class has
     }
 
   public:
-    struct pair
-    {
-        K key;
-        V value;
-
-        pair(K &&key, V &&value)
-            : key(std::move(key))
-            , value(std::move(value)){};
-
-        pair(const K &key, const V &value)
-            : key(key)
-            , value(value){};
-    };
     struct node_t
     {
-        pair content;
+        P content;
         node_t *next;
-        pair &operator*() { return content; }
+        P &operator*() { return content; }
 
-        node_t(pair && p, node_t *next)
-            : content(std::move(p))
+        template<typename ...Args>
+        node_t(node_t *next, Args && ...args)
+            : content(std::forward<Args>(args)...)
             , next(next){};
     };
 
     struct entry
     {
         node_t *next;
-        entry(): next(nullptr) {
-        }
-    };
-
-    struct map_helper
-    {
-        node_t *e;
-        map_helper(node_t *e)
-            : e(e)
-        {
-        }
-        map_helper &operator=(const V &v)
-        {
-            e->content.value = v;
-            return *this;
-        }
-        map_helper &operator=(const map_helper &v)
-        {
-            e->content.value = v.e->content.value;
-            return *this;
-        }
-        pair *operator->() { return &e->content; }
-    };
-
-    struct iterator
-    {
-        entry *table, *end_table;
-        node_t *node;
-        iterator(entry *table, entry *end_table, node_t *node)
-            : table(table)
-            , end_table(end_table)
-            , node(node)
-        {
-        }
-
-        iterator operator++(int)
-        {
-            auto old = *this;
-
-            if (!node->next)
-            {
-                node = node->next;
-                while (!node)
-                {
-                    table++;
-                    if (table >= end_table)
-                        return old;
-                    else
-                        node = table->next;
-                }
-            }
-            else {
-                node = node->next;
-            }
-
-            return old;
-        }
-
-        iterator &operator++()
-        {
-            if (!node->next)
-            {
-                node = node->next;
-                while (!node)
-                {
-                    table++;
-                    if (table >= end_table)
-                        break;
-                    else
-                        node = table->next;
-                }
-            }
-            else {
-                node = node->next;
-            }
-            return *this;
-        }
-
-        bool operator==(const iterator &it) { return node == it.node; }
-
-        bool operator!=(const iterator &it) { return !operator==(it); }
-
-        pair *operator->() { return &node->content; }
-
-        pair &operator*() { return node->content; }
-
-        pair *operator&() { return &node->content; }
+        entry(): next(nullptr) {}
     };
 };
 
-// template <typename K> using hash_set = hash_map<K, std::void_t>;
+template <typename K, typename V, typename hash_func = member_hash<K>>
+class hash_map : public base_hash_map<hash_map_pair<K, V>, hash_func>
+{
+    private:
+      using Parent = base_hash_map<hash_map_pair<K, V>, hash_func>;
+      struct key_find_func
+      {
+          const K &key;
+          key_find_func(const K &key)
+              : key(key)
+          {
+          }
+          bool operator()(const hash_map_pair<K, V> &p) const { return p.key == key; }
+      };
+
+    public:
+      using Parent::Parent;
+      bool get(const K &key, V *v)
+      {
+          auto iter = find_if(Parent::begin(), Parent::end(), key_find_func(key));
+          if (iter != Parent::end())
+          {
+              *v = (*iter).value;
+              return true;
+          }
+          return false;
+    }
+};
+
+
+template <typename K, typename hash_func = member_hash<K>>
+class hash_set : public base_hash_map<hash_set_pair<K>, hash_func>
+{
+    private:
+      using Parent = base_hash_map<hash_set_pair<K>, hash_func>;
+
+    public:
+      using Parent::Parent;
+};
+
 
 } // namespace util

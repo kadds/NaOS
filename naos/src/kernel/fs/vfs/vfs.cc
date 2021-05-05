@@ -55,7 +55,7 @@ int register_fs(file_system *fs)
         }
     }
 
-    data->fs_list.push_back(std::move(fs));
+    data->fs_list.push_back(fs);
     return 0;
 }
 
@@ -666,8 +666,7 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
 
     while (current != root && current != nullptr)
     {
-        auto c = current;
-        array.push_back(std::move(c));
+        array.push_back(current);
         current = current->get_parent();
         if (array.size() > 256)
             return 0;

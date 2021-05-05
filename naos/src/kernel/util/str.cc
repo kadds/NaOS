@@ -94,15 +94,15 @@ string &string::operator=(string &&rhs)
     return *this;
 }
 
-void string::append(const string &rhs)
+void string::append(const string &rhs) { append_buffer(rhs.data(), rhs.size()); }
+
+void string::append_buffer(const char *buf, u64 length)
 {
     cassert(!is_shared());
     u64 count = get_count();
-    u64 rc = rhs.get_count();
-    u64 new_count = count + rc;
+    u64 new_count = count + length;
     char *old_buf = nullptr;
     memory::IAllocator *allocator = nullptr;
-    const char *buf = rhs.data();
     bool is_stack = false;
     if (likely(is_sso()))
     {
@@ -116,15 +116,15 @@ void string::append(const string &rhs)
         }
         else
         {
-            memcopy(old_buf + count, buf, rc);
-            stack.get_buffer()[new_count] = 0;
+            memcopy(old_buf + count, buf, length);
+            old_buf[new_count] = 0;
             stack.set_count(new_count);
             return;
         }
     }
     else if (head.get_cap() > new_count)
     {
-        memcopy(head.get_buffer() + count, buf, rc);
+        memcopy(head.get_buffer() + count, buf, length);
         head.get_buffer()[new_count] = 0;
         head.set_count(new_count);
         return;
@@ -138,7 +138,7 @@ void string::append(const string &rhs)
     u64 cap = select_capacity(new_count + 1);
     char *new_buf = reinterpret_cast<char *>(allocator->allocate(cap, 8));
     memcopy(new_buf, old_buf, count);
-    memcopy(new_buf + count, buf, rc);
+    memcopy(new_buf + count, buf, length);
     new_buf[new_count] = 0;
     if (!is_stack)
     {
@@ -149,6 +149,57 @@ void string::append(const string &rhs)
     head.set_count(new_count);
     head.set_buffer(new_buf);
 }
+
+void string::push_back(char ch) { append_buffer(&ch, 1); }
+
+char string::pop_back()
+{
+    const char *b = data();
+    u64 length = size();
+    char c = b[length - 1];
+    remove_at(length - 1, length);
+    return c;
+}
+
+void string::remove_at(u64 index, u64 end_index)
+{
+    cassert(!is_shared());
+    u64 length = end_index - index;
+    u64 count = get_count();
+    cassert(index < end_index && end_index <= count);
+    u64 new_count = count - length;
+    char *old_buf = nullptr;
+    memory::IAllocator *allocator = nullptr;
+    if (!is_sso())
+    {
+        // head
+        old_buf = head.get_buffer();
+        if (new_count < stack.get_cap())
+        {
+            allocator = head.get_allocator();
+            stack.set_allocator(allocator);
+            memcopy(stack.get_buffer(), old_buf, index);
+            memcopy(stack.get_buffer() + index, old_buf + end_index, new_count - index);
+            stack.get_buffer()[new_count] = 0;
+            allocator->deallocate(old_buf);
+            stack.set_count(new_count);
+        }
+        else
+        {
+            memcopy(old_buf + index, old_buf + end_index, new_count - index);
+            old_buf[new_count] = 0;
+            head.set_count(new_count);
+        }
+    }
+    else
+    {
+        old_buf = stack.get_buffer();
+        memcopy(old_buf + index, old_buf + end_index, length);
+        old_buf[new_count] = 0;
+        stack.set_count(new_count);
+    }
+}
+
 bool string::operator==(const string &rhs) const
 {
     if (unlikely(&rhs == this))

@@ -162,7 +162,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
             {
                 thread->state = state;
                 task_list->runable_list.remove(it);
-                task_list->block_list.push_back(std::move(thread));
+                task_list->block_list.push_back(thread);
                 return;
             }
         }
@@ -182,7 +182,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         if (thread->attributes & thread_attributes::block_to_stop)
         {
             thread->state = thread_state::stop;
-            task_list->block_list.push_back(std::move(thread));
+            task_list->block_list.push_back(thread);
         }
         else
         {
@@ -210,7 +210,7 @@ void completely_fair_scheduler::on_migrate(thread_t *thread)
     if (thread->state == thread_state::ready)
         task_list->runable_list.insert(cfs_thread_t(thread));
     else if (thread->state == thread_state::stop)
-        task_list->block_list.push_back(std::move(thread));
+        task_list->block_list.push_back(thread);
     else
         trace::panic("Unknown thread state when migrate(CFS). state: ", (u64)thread->state);
 }

@@ -43,9 +43,9 @@ struct cpu_t
 
     void enter_soft_irq() { is_in_soft_irq = true; }
 
-    void set_irq_pending(int index) { soft_irq_pending |= (1 << index); }
+    void set_irq_pending(int index) { soft_irq_pending = soft_irq_pending | (1 << index); }
 
-    void clean_irq_pending(int index) { soft_irq_pending &= ~(1 << index); }
+    void clean_irq_pending(int index) { soft_irq_pending = soft_irq_pending & ~(1 << index); }
 
     bool is_irq_pending(int index) { return soft_irq_pending & (1 << index); }
 

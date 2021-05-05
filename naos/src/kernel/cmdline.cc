@@ -117,9 +117,7 @@ void init()
         auto iter = find(item.begin(), item.end(), '=');
         const_string_view key, value;
         item.split2(key, value, iter);
-        string k = key.to_string(memory::KernelCommonAllocatorV);
-        string v = value.to_string(memory::KernelCommonAllocatorV);
-        cmdmap->insert(std::move(k), std::move(v));
+        cmdmap->insert(key.to_string(memory::KernelCommonAllocatorV), value.to_string(memory::KernelCommonAllocatorV));
     }
 }
 

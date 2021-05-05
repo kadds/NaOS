@@ -105,3 +105,13 @@ void test_list_move()
     assert(list3.size() == 4 && list3.at(3) == 4 && list2.size() == 0);
 }
 test(list, move);
+
+void test_list_obj()
+{
+    linked_list<Int> list(&LibAllocatorV, {1, 2, 3});
+    list.push_back(4);
+    list.push_front(0);
+    list.insert(go_iterator(list.begin(), 1), 2, 3);
+    assert(list.at(1) == Int(2, 3));
+}
+test(list, obj);

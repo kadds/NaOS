@@ -38,7 +38,7 @@ file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
     uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
     auto id = f_table->id_gen.next();
     if (id != util::null_id)
-        f_table->file_map[id] = file;
+        f_table->file_map.insert(id, file);
     return id;
 }
 
@@ -46,7 +46,7 @@ void resource_table_t::delete_file_desc(file_desc fd)
 {
     uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
     f_table->id_gen.collect(fd);
-    f_table->file_map.remove_once(fd);
+    f_table->file_map.remove(fd);
 }
 
 fs::vfs::file *resource_table_t::get_file(file_desc fd)
@@ -63,7 +63,7 @@ bool resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
 
     if (!f_table->file_map.has(fd))
     {
-        f_table->file_map[fd] = file;
+        f_table->file_map.insert(fd, file);
         return true;
     }
     return false;

@@ -1,5 +1,6 @@
 #pragma once
 #include "kernel/mm/allocator.hpp"
+#include "test.hpp"
 #include <cstring>
 
 class LibAllocator : public memory::IAllocator

@@ -161,7 +161,7 @@ void remove(thread_t *thread, remove_func func, u64 user_data)
         data.data = user_data;
         data.func = func;
         uctx::RawSpinLockUninterruptibleContext icu(lock);
-        cpu::current().get_microtask_queue().push_back(std::move(data));
+        cpu::current().get_microtask_queue().push_back(data);
     }
     else
     {

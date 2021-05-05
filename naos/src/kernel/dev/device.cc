@@ -29,7 +29,7 @@ int enum_device(device_class *clazz)
                 trace::panic("Too many device register to system");
             }
             dev->id = id;
-            unbinding_device_map->insert(std::move(id), std::move(dev));
+            unbinding_device_map->insert(id, dev);
             dev_index++;
         }
         else

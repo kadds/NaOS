@@ -52,3 +52,16 @@ void test_string_move()
     assert(ss2 == "hi" && ss.size() == 0);
 }
 test(string, move);
+
+void test_string_remove()
+{
+    string ss(&LibAllocatorV, "abcdefghi0123456789");
+    ss += "01234567";
+    ss.remove_at(1, 3);
+    assert(ss == "adefghi012345678901234567");
+    ss.remove_at(18, 23);
+    assert(ss == "adefghi0123456789067");
+    assert(ss.pop_back() == '7');
+    assert(ss == "adefghi012345678906");
+}
+test(string, remove);

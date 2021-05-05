@@ -36,8 +36,22 @@ class string;
 
 template <typename CE> class base_string_view
 {
+  private:
+    struct value_fn
+    {
+        CE operator()(CE val) { return val; }
+    };
+    struct prev_fn
+    {
+        CE operator()(CE val) { return val - 1; }
+    };
+    struct next_fn
+    {
+        CE operator()(CE val) { return val + 1; }
+    };
+
   public:
-    using iterator = base_bidirectional_iterator<CE>;
+    using iterator = base_bidirectional_iterator<CE, value_fn, prev_fn, next_fn>;
 
     base_string_view()
         : ptr(nullptr)
@@ -90,8 +104,8 @@ template <typename CE> class base_string_view
 
     void split2(base_string_view &v0, base_string_view &v1, iterator iter)
     {
-        v0 = base_string_view(ptr, &iter - ptr);
-        v1 = base_string_view(&iter + 1, len - (&iter - ptr));
+        v0 = base_string_view(ptr, iter.get() - ptr);
+        v1 = base_string_view(iter.get() + 1, len - (iter.get() - ptr));
     }
 
     array<base_string_view<CE>> split(char c, memory::IAllocator *vec_allocator)
@@ -105,7 +119,7 @@ template <typename CE> class base_string_view
             {
                 if (prev < p)
                 {
-                    vec.push_back(std::move(base_string_view<CE>(prev, p - prev)));
+                    vec.push_back(base_string_view<CE>(prev, p - prev));
                 }
                 prev = p + 1;
             }
@@ -113,7 +127,7 @@ template <typename CE> class base_string_view
         }
         if (prev < p)
         {
-            vec.push_back(std::move(base_string_view<CE>(prev, p - prev)));
+            vec.push_back(base_string_view<CE>(prev, p - prev));
         }
         return vec;
     }
@@ -130,9 +144,26 @@ using const_string_view = base_string_view<const char *>;
 ///
 class string
 {
+  private:
+    template <typename N> struct value_fn
+    {
+        N operator()(N val) { return val; }
+    };
+    template <typename N> struct prev_fn
+    {
+        N operator()(N val) { return val - 1; }
+    };
+    template <typename N> struct next_fn
+    {
+        N operator()(N val) { return val + 1; }
+    };
+
+    using CE = const char *;
+    using NE = char *;
+
   public:
-    using const_iterator = base_bidirectional_iterator<const char *>;
-    using iterator = base_bidirectional_iterator<char *>;
+    using const_iterator = base_bidirectional_iterator<CE, value_fn<CE>, prev_fn<CE>, next_fn<CE>>;
+    using iterator = base_bidirectional_iterator<NE, value_fn<NE>, prev_fn<NE>, next_fn<NE>>;
 
     string(const string &rhs) { copy(rhs); }
 
@@ -220,6 +251,21 @@ class string
     }
 
     void append(const string &rhs);
+
+    void append_buffer(const char *buf, u64 length);
+
+    void push_back(char ch);
+
+    char pop_back();
+
+    void remove_at(u64 index, u64 end_index);
+
+    void remove(iterator beg, iterator end)
+    {
+        u64 index = beg.get() - data();
+        u64 index_end = end.get() - data();
+        remove_at(index, index_end);
+    }
 
     char at(u64 index) const
     {

@@ -76,8 +76,7 @@ void on_tick(u64 vector, u64 data)
         {
             if (likely(ws.is_enable()))
             {
-                auto w = ws;
-                cpu_timer.tick_list.insert(std::move(w));
+                cpu_timer.tick_list.insert(ws);
             }
         }
         cpu_timer.watcher_list.clear();

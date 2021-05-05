@@ -24,9 +24,7 @@ num_t add_driver(driver *driver)
             it.value->set_driver(driver);
             driver->id = id;
             unbinding_device_map->remove(it.key);
-            auto k = it.key;
-            auto v = it.value;
-            device_map->insert(std::move(k), std::move(v));
+            device_map->insert(it.key, it.value);
             return it.value->get_dev_id();
         }
     }

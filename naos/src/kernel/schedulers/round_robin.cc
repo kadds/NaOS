@@ -36,7 +36,7 @@ void round_robin_scheduler::add(thread_t *thread)
     thread->schedule_data = rr;
     uctx::UninterruptibleContext icu;
 
-    l->runable_list.push_back(std::move(thread));
+    l->runable_list.push_back(thread);
 }
 
 void round_robin_scheduler::remove(thread_t *thread)
@@ -78,7 +78,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
             {
                 thread->state = state;
                 l->runable_list.remove(it);
-                l->block_threads.push_back(std::move(thread));
+                l->block_threads.push_back(thread);
                 return;
             }
         }
@@ -98,7 +98,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
                 thread->state = state;
                 l->block_threads.remove(it);
                 thread->attributes &= ~(thread_attributes::block_to_stop);
-                l->runable_list.push_back(std::move(thread));
+                l->runable_list.push_back(thread);
                 return;
             }
         }
@@ -112,14 +112,14 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         if (thread->attributes & thread_attributes::block_to_stop)
         {
             thread->state = thread_state::stop;
-            l->block_threads.push_back(std::move(thread));
+            l->block_threads.push_back(thread);
         }
         else
         {
             if (thread->state == thread_state::running)
             {
                 thread->state = thread_state::ready;
-                l->runable_list.push_back(std::move(thread));
+                l->runable_list.push_back(thread);
             }
         }
         return;
@@ -141,12 +141,12 @@ void round_robin_scheduler::on_migrate(thread_t *thread)
     thread->schedule_data = rr;
 
     uctx::UninterruptibleContext icu;
-    l->runable_list.push_back(std::move(thread));
+    l->runable_list.push_back(thread);
 
     if (thread->state == thread_state::ready)
-        l->runable_list.push_back(std::move(thread));
+        l->runable_list.push_back(thread);
     else if (thread->state == thread_state::stop)
-        l->block_threads.push_back(std::move(thread));
+        l->block_threads.push_back(thread);
     else
         trace::panic("Unknown thread state when migrate(RR). state: ", (u64)thread->state);
 }
@@ -174,8 +174,7 @@ bool round_robin_scheduler::schedule()
                     if (rr->rest_span <= 0)
                     {
                         rr->rest_span = calc_span(cur);
-                        auto c = cur;
-                        l->runable_list.push_back(std::move(c));
+                        l->runable_list.push_back(cur);
                     }
                 }
                 auto next = l->runable_list.pop_front();

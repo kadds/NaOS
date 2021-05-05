@@ -1,6 +1,7 @@
 #pragma once
 #include "../mm/new.hpp"
 #include "common.hpp"
+#include "iterator.hpp"
 #include "random.hpp"
 #include <utility>
 
@@ -11,9 +12,24 @@ template <typename E> class skip_list
   public:
     struct node_t;
     using list_node = node_t;
-    class iterator;
     using level_t = u16;
 
+  private:
+    template <typename N, typename K> struct value_fn
+    {
+        K operator()(N val) { return &val->element; }
+    };
+    template <typename N> struct next_fn
+    {
+        N operator()(N val) { return val->next; }
+    };
+
+    using NE = list_node *;
+    using CE = const list_node *;
+
+  public:
+    using const_iterator = base_forward_iterator<CE, value_fn<CE, const E *>, next_fn<CE>>;
+    using iterator = base_forward_iterator<NE, value_fn<NE, E *>, next_fn<NE>>;
     /// return -1 walk left
     /// 1 walk right
     /// 0 stop
@@ -62,19 +78,20 @@ template <typename E> class skip_list
         return *this;
     }
 
-    iterator insert(E &&element)
+    template <typename... Args> iterator insert(Args &&...args)
     {
         level_t node_level = this->rand();
 
         if (node_level > level)
             level = node_level;
 
+        auto new_end_node = memory::New<node_t>(allocator, nullptr, std::forward<Args>(args)...);
         // for each level of node
         // find the element path
         auto node = list[max_level - level];
         for (level_t i = 0; i < level; i++)
         {
-            while (node->next && node->next->end_node->element < element)
+            while (node->next && node->next->end_node->element < new_end_node->element)
             {
                 node = node->next;
             }
@@ -84,7 +101,7 @@ template <typename E> class skip_list
 
         // create end node
         auto end_node_prev = stack[level - 1];
-        auto new_end_node = memory::New<node_t>(allocator, end_node_prev->next, std::move(element));
+        new_end_node->next = end_node_prev->next;
         end_node_prev->next = new_end_node;
         count++;
 
@@ -92,8 +109,11 @@ template <typename E> class skip_list
         level_t base = level - node_level;
         for (level_t i = node_level - 1; i > 0; i--)
         {
+            auto next = stack[base + i - 1]->next;
+            auto child = stack[base + i]->next;
             stack[base + i - 1]->next =
-                memory::New<node_t>(allocator, stack[base + i - 1]->next, stack[base + i]->next, new_end_node);
+                memory::New<node_t>(allocator);
+            stack[base + i - 1]->next->set(next, child, new_end_node);
         }
 
         return iterator(new_end_node);
@@ -294,7 +314,8 @@ template <typename E> class skip_list
         node_t *last = nullptr;
         for (level_t i = 0; i < max_level; i++)
         {
-            list[max_level - i - 1] = memory::New<node_t>(allocator, nullptr, last, nullptr);
+            list[max_level - i - 1] = memory::New<node_t>(allocator);
+            list[max_level - i - 1]->set(nullptr, last, nullptr);
             last = list[max_level - i - 1];
         }
     }
@@ -307,7 +328,7 @@ template <typename E> class skip_list
         rand_factor = rhs.rand_factor;
         allocator = rhs.allocator;
         init();
-        // n*log(n)
+        // TODO: n*log(n)
         auto iter = rhs.begin();
         auto end = rhs.end();
         while (iter != end)
@@ -333,39 +354,8 @@ template <typename E> class skip_list
         rhs.list = nullptr;
     }
 
+
   public:
-    class iterator
-    {
-        node_t *node;
-
-      public:
-        E &operator*() { return node->element; }
-        E *operator->() { return &node->element; }
-        E *operator&() { return &node->element; }
-
-        iterator operator++(int)
-        {
-            auto old = *this;
-            node = node->next;
-            return old;
-        }
-
-        iterator &operator++()
-        {
-            node = node->next;
-            return *this;
-        }
-
-        bool operator==(const iterator &it) { return it.node == node; }
-
-        bool operator!=(const iterator &it) { return it.node != node; }
-
-        iterator(node_t *node)
-            : node(node)
-        {
-        }
-    };
-
     struct node_t
     {
         node_t *next;
@@ -376,17 +366,22 @@ template <typename E> class skip_list
             E element;
         };
 
-        node_t(node_t *next, node_t *child, node_t *end_node)
-            : next(next)
-            , end_node(end_node)
-            , child(child)
+        node_t()
         {
         }
 
-        node_t(node_t *next, E &&e)
+        void set(node_t *next, node_t *child, node_t *end_node)
+        {
+            this->next =  next;
+            this->child = child;
+            this->end_node = end_node;
+        }
+
+        template <typename ...Args>
+        node_t(node_t *next, Args &&... args)
             : next(next)
             , end_node(this)
-            , element(std::move(e))
+            , element(std::forward<Args>(args)...)
         {
         }
     };

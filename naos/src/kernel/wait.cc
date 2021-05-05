@@ -14,8 +14,7 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
     uctx::UninterruptibleContext icu;
     {
         uctx::RawSpinLockContext ctx(lock);
-        wait_context_t v = {current(), condition, user_data};
-        list.push_back(std::move(v));
+        list.push_back(current(), condition, user_data);
     }
 
     for (;;)

@@ -1,16 +1,41 @@
 #pragma once
 #include "../mm/new.hpp"
-#include "common.hpp"
-#include <utility>
 #include "assert.hpp"
+#include "common.hpp"
+#include "iterator.hpp"
+#include <utility>
 
 namespace util
 {
 template <typename E> class linked_list
 {
   public:
-    struct iterator;
     struct list_node;
+
+  private:
+    template<typename N, typename K>
+    struct value_fn
+    {
+        K operator()(N val) { return &val->element; }
+    };
+    template<typename N>
+    struct prev_fn
+    {
+        N operator()(N val) { return val->prev; }
+    };
+    template<typename N>
+    struct next_fn
+    {
+        N operator()(N val) { return val->next; }
+    };
+    using NE = list_node *;
+    using CE = const list_node *;
+
+  public:
+    
+    using const_iterator = base_bidirectional_iterator<CE, value_fn<CE, const E*>, prev_fn<CE>, next_fn<CE>>;
+    using iterator = base_bidirectional_iterator<NE, value_fn<NE, E *>, prev_fn<NE>, next_fn<NE>>;
+
     struct list_info_node;
 
     linked_list(memory::IAllocator *allocator)
@@ -28,9 +53,9 @@ template <typename E> class linked_list
     linked_list(memory::IAllocator *allocator, std::initializer_list<E> il)
         : linked_list(allocator)
     {
-        for (E a : il)
+        for (const E &a : il)
         {
-            push_back(std::move(a));
+            push_back(a);
         }
     };
 
@@ -64,9 +89,10 @@ template <typename E> class linked_list
         return *this;
     }
 
-    iterator push_back(E &&e)
+    template<typename ...Args>
+    iterator push_back(Args && ...args)
     {
-        list_node *node = memory::New<list_node>(allocator, std::move(e));
+        list_node *node = memory::New<list_node>(allocator, std::forward<Args>(args)...);
         node->next = (list_node *)tail;
         tail->prev->next = node;
         node->prev = tail->prev;
@@ -75,9 +101,10 @@ template <typename E> class linked_list
         return iterator(node);
     }
 
-    iterator push_front(E &&e)
+    template<typename ...Args>
+    iterator push_front(Args && ...args)
     {
-        list_node *node = memory::New<list_node>(allocator, std::move(e));
+        list_node *node = memory::New<list_node>(allocator, std::forward<Args>(args)...);
         list_node *next = ((list_node *)head)->next;
         ((list_node *)head)->next = node;
         node->next = next;
@@ -163,10 +190,11 @@ template <typename E> class linked_list
     }
 
     /// insert node before parameter iter
-    iterator insert(iterator iter, E &&e)
+    template <typename ...Args>
+    iterator insert(iterator iter, Args ... args)
     {
-        list_node *after_node = iter.node;
-        list_node *node = memory::New<list_node>(allocator, std::move(e));
+        list_node *after_node = iter.get();
+        list_node *node = memory::New<list_node>(allocator, std::forward<Args>(args)...);
         auto last = after_node->prev;
 
         last->next = node;
@@ -182,7 +210,7 @@ template <typename E> class linked_list
         if (unlikely(iter == end() || iter == --begin()))
             return end();
 
-        list_node *node = iter.node;
+        list_node *node = iter.get();
         list_node *next = node->next;
         node->prev->next = node->next;
         node->next->prev = node->prev;
@@ -282,8 +310,6 @@ template <typename E> class linked_list
     {
         E element;
         list_node *prev, *next;
-        explicit list_node(E element)
-            : element(element){};
 
         template <typename... Args>
         list_node(Args &&...args)
@@ -299,46 +325,6 @@ template <typename E> class linked_list
     };
 
     static_assert(sizeof(list_node) == sizeof(list_info_node));
-    struct iterator
-    {
-        friend class linked_list;
-
-      private:
-        list_node *node;
-
-        iterator(list_node *node)
-            : node(node){};
-
-      public:
-        E &operator*() { return node->element; }
-        E *operator&() { return &node->element; }
-        E *operator->() { return &node->element; }
-
-        iterator &operator++()
-        {
-            node = node->next;
-            return *this;
-        }
-        iterator operator++(int)
-        {
-            node = node->next;
-            return iterator(node->prev);
-        }
-
-        iterator &operator--()
-        {
-            node = node->prev;
-            return *this;
-        }
-
-        iterator operator--(int)
-        {
-            node = node->prev;
-            return iterator(node->next);
-        }
-
-        bool operator==(const iterator &it) { return it.node == node; }
-        bool operator!=(const iterator &it) { return !operator==(it); }
-    };
+   
 };
 } // namespace util

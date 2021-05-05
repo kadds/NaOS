@@ -80,3 +80,10 @@ void test_hash_map_move()
     assert(map3.size() == 4 && map3.has(4) && map2.size() == 0);
 }
 test(hash_map, move);
+
+void test_hash_map_set()
+{
+    hash_set<int> map(&LibAllocatorV, {1, 2, 3});
+    assert(map.has(1) && map.has(2) && map.has(3) && !map.has(4));
+}
+test(hash_map, set);

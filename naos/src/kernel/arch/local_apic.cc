@@ -309,7 +309,7 @@ irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u
 
     if (likely(event && !event->is_suspend && event->id == cpu::current().get_apic_id()))
     {
-        event->tick_count++;
+        event->tick_count = event->tick_count + 1;
         irq::raise_soft_irq(irq::soft_vector::timer);
         return irq::request_result::ok;
     }

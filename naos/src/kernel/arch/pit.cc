@@ -22,7 +22,7 @@ irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u
     if (unlikely(ev == nullptr))
         return irq::request_result::no_handled;
     if (!ev->is_suspend)
-        ev->tick_jiff++;
+        ev->tick_jiff = ev->tick_jiff + 1;
     irq::raise_soft_irq(irq::soft_vector::timer);
     return irq::request_result::ok;
 }

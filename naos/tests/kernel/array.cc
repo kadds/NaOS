@@ -37,7 +37,7 @@ test(array, remove);
 void test_array_insert()
 {
     array<int> vec(&LibAllocatorV, {1, 2, 3});
-    vec.insert(++vec.begin(), std::move(-1));
+    vec.insert(++vec.begin(), -1);
     vec.insert(vec.end(), -2);
     assert(vec.size() == 5);
     assert(vec[0] == 1);
@@ -47,6 +47,14 @@ void test_array_insert()
     assert(vec[4] == -2);
 }
 test(array, insert);
+
+void test_array_remove_range()
+{
+    array<int> vec(&LibAllocatorV, {1, 2, 3, 4, 5});
+    vec.remove_at(1, 3);
+    assert(vec.size() == 3 && vec[1] == 4);
+}
+test(array, remove_range);
 
 void test_array_resize()
 {
@@ -62,9 +70,10 @@ void test_array_iterator()
 {
     array<int> vec(&LibAllocatorV, {1, 2, 3});
     int j = 1;
-    for (auto i : vec)
+    for (auto &i : vec)
     {
         assert(i == j);
+        i = j + 1;
         j++;
     }
 }
@@ -96,8 +105,8 @@ void test_array_copy()
     array<int> vec(&LibAllocatorV, {1, 2, 3});
     array<int> vec2 = vec;
     assert(vec2.size() == 3 && vec2[0] == 1 && vec.size() == 3);
-    vec2.push_back(std::move(4));
-    vec.push_back(std::move(5));
+    vec2.push_back(4);
+    vec.push_back(5);
     assert(vec2.size() == 4 && vec2[3] == 4);
     vec2 = vec;
     assert(vec2.size() == 4 && vec2[3] == 5);
@@ -110,8 +119,7 @@ void test_array_expand()
     vec.ensure(10000);
     for (int i = 0; i < 10000; i++)
     {
-        int j = i;
-        vec.push_back(std::move(j));
+        vec.push_back(i);
     }
     vec.truncate(400);
     assert(vec.size() == 400);
@@ -130,7 +138,7 @@ void test_array_move()
     array<int> vec2 = std::move(vec);
     auto d1 = vec2.data();
     assert(vec2.size() == 3 && vec.size() == 0 && d0 == d1);
-    vec2.push_back(std::move(4));
+    vec2.push_back(4);
 
     array<int> vec3(&LibAllocatorV, {4, 5});
     vec3 = std::move(vec2);
@@ -138,3 +146,14 @@ void test_array_move()
     assert(vec3.size() == 4 && vec3[3] == 4 && vec2.size() == 0);
 }
 test(array, move);
+
+void test_array_obj()
+{
+    array<Int> vec(&LibAllocatorV, {1, 2, 3});
+    vec.push_back(4, 6);
+    vec.insert_at(0, 0, 0);
+    vec.ensure(10);
+    vec.remove_at(1);
+    assert(vec[3] == Int(4, 6));
+}
+test(array, obj);

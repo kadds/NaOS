@@ -54,7 +54,7 @@ Unpaged_Text_Section void set_zero(void *p)
     }
 }
 
-Unpaged_Data_Section u32 page_alloc_position;
+Unpaged_Data_Section u64 page_alloc_position;
 
 Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_addr)
 {

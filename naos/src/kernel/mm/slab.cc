@@ -186,8 +186,7 @@ slab_group *slab_cache_pool::create_new_slab_group(u64 size, util::string name, 
 {
     uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
     slab_group *group = memory::New<slab_group>(memory::KernelCommonAllocatorV, size, name.data(), align, flags);
-    auto g = group;
-    map.insert(std::move(name), std::move(g));
+    map.insert(std::move(name), group);
     return group;
 }
 

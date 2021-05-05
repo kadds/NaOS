@@ -35,8 +35,7 @@ message_queue_t *create_msg_queue(u64 maximum_msg_count, u64 maximum_msg_bytes)
     msgq->maximum_msg_count = maximum_msg_count;
     msgq->maximum_msg_bytes = maximum_msg_bytes;
     uctx::RawWriteLockUninterruptibleContext icu(msg_queue_lock);
-    auto q = msgq;
-    msg_hash_map->insert(std::move(id), std::move(q));
+    msg_hash_map->insert(id, msgq);
     return msgq;
 }
 
@@ -135,15 +134,14 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
         if (!queue->msg_packs.get(type, &list))
         {
             list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-            auto l = list;
-            queue->msg_packs.insert(std::move(type), std::move(l));
+            queue->msg_packs.insert(type, list);
         }
-        list->push_back(std::move(msg));
+        list->push_back(msg);
         queue->msg_count++;
     }
     queue->receiver_wait_queue.do_wake_up();
     return length;
-} // namespace memory
+}
 
 bool wait_reader_func(u64 data)
 {
