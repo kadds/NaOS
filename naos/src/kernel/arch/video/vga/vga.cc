@@ -57,6 +57,7 @@ void init()
     /// print video card memory info
     trace::debug("Vram address ", (void *)vram_addr);
     trace::debug("Video backbuffer(VM) ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
+    vram_addr = (byte *)memory::pa2va(phy_addr_t::from(vram_addr));
 }
 
 void test()
@@ -114,14 +115,15 @@ void flush_kbuffer()
     if (likely(vram_addr != nullptr))
     {
         uctx::UninterruptibleContext icu;
-        u64 size;
-        // byte *buffer = trace::get_kernel_log_buffer().read_buffer(&size);
+        u64 size = 64;
+        byte buffer[65];
+        size = trace::get_kernel_log_buffer().read(buffer, size);
 
-        // while (size != 0)
-        // {
-        //     putstring((const char *)buffer, size);
-        //     buffer = trace::get_kernel_log_buffer().read_buffer(&size);
-        // }
+        while (size != 0)
+        {
+            putstring((const char *)buffer, size);
+            size = trace::get_kernel_log_buffer().read(buffer, size);
+        }
 
         flush();
     }
@@ -157,7 +159,7 @@ void auto_flush()
 
         is_auto_flush = true;
         // 60HZ
-        // timer::add_watcher(1000000 / 60, flush_timer, 0);
+        timer::add_watcher(1000000 / 60, flush_timer, 0);
     }
 }
 

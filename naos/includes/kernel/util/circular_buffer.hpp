@@ -103,6 +103,48 @@ template <typename T> class circular_buffer
         }
         return true;
     }
+
+    u64 read(T *t, u64 size)
+    {
+        if (unlikely(is_emtpy()))
+        {
+            return false;
+        }
+        u64 rest = 0;
+        if (read_off < write_off)
+        {
+            rest = write_off - read_off;
+        }
+        else
+        {
+            rest = length - read_off + write_off;
+        }
+        if (size > rest)
+        {
+            size = rest;
+        }
+        u64 max_off = read_off + size;
+        u64 rest_off = 0;
+        u64 new_read = max_off;
+        if (max_off > length)
+        {
+            max_off = length;
+            rest_off = size - (max_off - read_off);
+            new_read = rest_off;
+        }
+
+        for (u64 off = read_off; off < max_off; off++, t++)
+        {
+            *t = buffer[off];
+        }
+
+        for (u64 off = 0; off < rest_off; off++, t++)
+        {
+            *t = buffer[off];
+        }
+        read_off = new_read;
+        return size;
+    }
 };
 
 } // namespace util

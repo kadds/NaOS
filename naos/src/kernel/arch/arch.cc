@@ -63,15 +63,6 @@ void init(const kernel_start_args *args)
         trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
         cpu::allocate_stack(cpu_mesh.logic_num);
 
-        phy_addr_t video_start =
-            memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
-
-        // paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start,
-        //             paging::frame_size::size_2mb,
-        //             (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) /
-        //             paging::frame_size::size_2mb, paging::flags::writable | paging::flags::write_through |
-        //             paging::flags::cache_disable);
-
         paging::enable_new_paging();
 
         trace::debug("GDT init");
@@ -88,9 +79,6 @@ void init(const kernel_start_args *args)
         APIC::init();
         trace::debug("Arch init done");
 
-        device::vga::init();
-        // device::vga::set_vram(
-        //     (byte *)(memory::kernel_vga_bottom_address + (u64)((byte *)video_start - (byte *)video_start_2mb)));
         return;
     }
     // ap
@@ -103,7 +91,18 @@ void init(const kernel_start_args *args)
     APIC::init();
 }
 
-void post_init() { device::vga::auto_flush(); }
+void post_init()
+{
+
+    phy_addr_t video_start =
+        memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
+    paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start, paging::frame_size::size_2mb,
+                (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
+                paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);
+    paging::reload();
+    device::vga::init();
+    device::vga::auto_flush();
+}
 
 void init_drivers() { device::chip8042::init(); }
 
