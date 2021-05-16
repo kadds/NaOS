@@ -45,10 +45,10 @@ template <typename T> class circular_buffer
         u64 max_off = write_off + len;
         u64 rest_off = 0;
         u64 new_write_off = max_off;
-        if (max_off > length)
+        if (max_off >= length)
         {
+            rest_off = max_off - length;
             max_off = length;
-            rest_off = write_off + len - length;
             new_write_off = rest_off;
         }
 
@@ -108,7 +108,7 @@ template <typename T> class circular_buffer
     {
         if (unlikely(is_emtpy()))
         {
-            return false;
+            return 0;
         }
         u64 rest = 0;
         if (read_off < write_off)
@@ -126,10 +126,10 @@ template <typename T> class circular_buffer
         u64 max_off = read_off + size;
         u64 rest_off = 0;
         u64 new_read = max_off;
-        if (max_off > length)
+        if (max_off >= length)
         {
-            max_off = length;
             rest_off = size - (max_off - read_off);
+            max_off = length;
             new_read = rest_off;
         }
 

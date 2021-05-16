@@ -76,7 +76,7 @@ void buddy::free(page *p)
     {
         next->set_buddy_prev(p);
     }
-    orders[order]->set_buddy_next(p);
+    orders[order] = p;
     // merge levels
     merge(order, true);
 }

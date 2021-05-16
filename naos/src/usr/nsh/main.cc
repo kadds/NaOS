@@ -7,6 +7,7 @@ const char help_msg[] = "some commands:\n"
                         "  \e[32mcd\e[0m path  change current directory\n"
                         "  \e[32mmkdir\e[0m path  make directory\n"
                         "  \e[32mrmdir\e[0m path  remove directory\n"
+                        "  \e[32mexit\e[0m exit shell\n"
                         "  \e[32mhelp\e[0m  show this info\n"
                         "enter process name to startup process.\n";
 long front_pid = 0;
@@ -242,6 +243,11 @@ extern "C" void _start(int argc, char **argv)
                 print(cmd + idx);
                 print(" failed. \n");
             }
+            continue;
+        }
+        else if (idx = start_with(cmd, "exit"); idx != -1)
+        {
+            exit(0);
             continue;
         }
         startup_process(cmd);
