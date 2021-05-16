@@ -1,4 +1,5 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
+#include "kernel/common/cursor/cursor.hpp"
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
@@ -22,6 +23,7 @@ font::font *cur_font;
 byte *video_addr;
 u64 window_height;
 byte *video_end;
+cursor::cursor_t last_cursor;
 
 void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp)
 {
@@ -38,9 +40,11 @@ void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp)
     text_count_per_line = width / font_width;
     text_count_vertical = height / font_height;
     video_end = buffer + full_bytes;
+    cursor::init(width, height);
+    last_cursor = cursor::get_cursor();
 }
 
-void cls(cursor_t &cur)
+void cls(text_cursor_t &cur)
 {
     for (u32 i = 0; i < width * height; i++)
         *((u32 *)video_addr + i) = 0;
@@ -51,7 +55,7 @@ void cls(cursor_t &cur)
 
 void set_buffer(byte *buffer) { video_addr = buffer; }
 
-void scroll(cursor_t &cur, i32 n)
+void scroll(text_cursor_t &cur, i32 n)
 {
     if (n <= 0)
         return;
@@ -72,7 +76,7 @@ void scroll(cursor_t &cur, i32 n)
     dirty_rectangle = rectangle(0, 0, width, height);
     cur.py -= n;
 }
-void move_pen(cursor_t &cur, i32 x, i32 y)
+void move_pen(text_cursor_t &cur, i32 x, i32 y)
 {
     if (cur.px + x >= text_count_per_line)
     {
@@ -88,7 +92,7 @@ void move_pen(cursor_t &cur, i32 x, i32 y)
         scroll(cur, cur.py - text_count_vertical + 1);
 }
 
-u32 *get_video_line_start(cursor_t &cur)
+u32 *get_video_line_start(text_cursor_t &cur)
 {
     u64 h = (cur.py * font_height + window_height);
     if (h >= height)
@@ -211,7 +215,7 @@ bool set_state(char ch)
     return false;
 }
 
-void putchar(cursor_t &cur, char ch)
+void putchar(text_cursor_t &cur, char ch)
 {
     void *font_data;
     if (ch != '\n')
@@ -277,7 +281,7 @@ void putchar(cursor_t &cur, char ch)
     }
 }
 
-void draw_placeholder(cursor_t &cur, u32 color)
+void draw_placeholder(text_cursor_t &cur, u32 color)
 {
     u32 *v_start = get_video_line_start(cur) + cur.px * font_width;
 
@@ -298,17 +302,17 @@ void draw_placeholder(cursor_t &cur, u32 color)
                                  cur.py * font_height + font_height);
 }
 
-void flush(byte *vraw)
+void flush_rectangle(byte *vram, const rectangle &rect)
 {
-    u32 left = dirty_rectangle.left;
-    u32 right = dirty_rectangle.right;
+    u32 left = rect.left;
+    u32 right = rect.right;
     if (unlikely(right > width))
         right = width;
     if (unlikely(right <= left))
         return;
 
-    u32 top = dirty_rectangle.top;
-    u32 bottom = dirty_rectangle.bottom;
+    u32 top = rect.top;
+    u32 bottom = rect.bottom;
     if (unlikely(bottom > height))
         bottom = height;
     if (unlikely(bottom <= top))
@@ -317,8 +321,8 @@ void flush(byte *vraw)
     {
         u64 top_bytes = window_height * line_bytes;
         u64 bottom_bytes = line_bytes * height - top_bytes;
-        util::memcopy(vraw, (byte *)video_addr + top_bytes, bottom_bytes);
-        util::memcopy(vraw + bottom_bytes, (void *)video_addr, top_bytes);
+        util::memcopy(vram, (byte *)video_addr + top_bytes, bottom_bytes);
+        util::memcopy(vram + bottom_bytes, (void *)video_addr, top_bytes);
     }
     else
     {
@@ -332,9 +336,59 @@ void flush(byte *vraw)
             {
                 i = 0;
             }
-            util::memcopy((char *)vraw + y * line_bytes + l, (char *)video_addr + i * line_bytes + l, bytes);
+            util::memcopy((char *)vram + y * line_bytes + l, (char *)video_addr + i * line_bytes + l, bytes);
         }
     }
+}
+
+void flush_cursor(byte *vram)
+{
+    auto c = cursor::get_cursor();
+    if (c == last_cursor)
+    {
+        return;
+    }
+    auto img = cursor::get_cursor_image(c.state);
+    rectangle rect(last_cursor.x, last_cursor.y, last_cursor.x + img.size_width, last_cursor.y + img.size_height);
+    flush_rectangle(vram, rect);
+
+    if (likely(c.state != cursor::state_t::hide))
+    {
+        auto w = img.size_width;
+        auto h = img.size_height;
+        if (w + c.x > width)
+        {
+            w = width - c.x;
+        }
+        if (h + c.y > height)
+        {
+            h = height - c.y;
+        }
+        auto offx = img.offset_x;
+        auto offy = img.offset_y;
+        u32 *data = (u32 *)img.data;
+        for (int i = 0; i < h; i++)
+        {
+            byte *beg = (byte *)vram + (c.y + i) * line_bytes;
+            u32 *p = (u32 *)beg + c.x;
+            for (int j = 0; j < w; j++, p++, data++)
+            {
+                if (*data == 0xFF000000)
+                {
+                    continue;
+                }
+                *p = *data;
+            }
+            data += img.size_width - w;
+        }
+    }
+    last_cursor = c;
+}
+
+void flush(byte *vram)
+{
+    flush_rectangle(vram, dirty_rectangle);
+    flush_cursor(vram);
     dirty_rectangle.clean();
 }
 

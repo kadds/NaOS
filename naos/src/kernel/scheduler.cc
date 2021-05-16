@@ -111,8 +111,6 @@ void update_state_ipi(u64 data)
 
 void update_state(thread_t *thread, thread_state state)
 {
-    kassert(thread->state != state, "BUG check failed");
-
     if (thread->cpuid == cpu::current().id())
     {
         thread->scheduler->update_state(thread, state);

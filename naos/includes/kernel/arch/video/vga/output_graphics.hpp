@@ -44,8 +44,8 @@ struct rectangle
 };
 
 void init(u64 w, u64 h, byte *buffer, u64 pitch, u64 bbp);
-void cls(cursor_t &cur);
-void putchar(cursor_t &cur, char ch);
+void cls(text_cursor_t &cur);
+void putchar(text_cursor_t &cur, char ch);
 
 void set_buffer(byte *buffer);
 
@@ -53,7 +53,7 @@ void draw_line(u64 x, u64 y, u64 color);
 void draw_rectangle(const rectangle &rect, u64 color);
 void draw_pixel(u64 px, u64 py, u64 color);
 void draw_text(u64 px, u64 py, const char *text);
-void draw_placeholder(cursor_t &cur, u32 color);
+void draw_placeholder(text_cursor_t &cur, u32 color);
 
 void flush(byte *vraw);
 } // namespace arch::device::vga::graphics

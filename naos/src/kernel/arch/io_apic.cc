@@ -21,18 +21,18 @@ io_map_t io_map;
 u32 io_read_register_32(u16 index)
 {
     u32 rt;
-    *(u16 *)io_map.index_address = index;
+    *(volatile u16 *)io_map.index_address = index;
     _mfence();
-    rt = *(u32 *)io_map.data_address;
+    rt = *(volatile u32 *)io_map.data_address;
     _mfence();
     return rt;
 }
 
 void io_write_register_32(u16 index, u32 v)
 {
-    *(u16 *)io_map.index_address = index;
+    *(volatile u16 *)io_map.index_address = index;
     _mfence();
-    *(u32 *)io_map.data_address = v;
+    *(volatile u32 *)io_map.data_address = v;
     _mfence();
 }
 
@@ -52,6 +52,7 @@ void io_write_register(u16 index, u64 value)
     io_write_register_32(index + 1, value);
 }
 io_entry *all_entry;
+u8 rte_count;
 
 void io_init()
 {
@@ -61,7 +62,7 @@ void io_init()
 
     paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start,
                 phy_addr_t::from(io_map.base_addr), paging::frame_size::size_2mb, 1,
-                paging::flags::uncacheable | paging::flags::writable);
+                paging::flags::uncacheable | paging::flags::writable | paging::flags::write_through);
 
     paging::reload();
 
@@ -76,6 +77,11 @@ void io_init()
     rte++;
     trace::debug("IO/APIC ID ", (io_read_register_32(0) >> 24) & 0xFF, ", Version ", (io_read_register_32(0x1) & 0xFF),
                  ", RTE count ", rte);
+    if (rte == 1)
+    {
+        trace::warning("RTE count maybe invalid");
+    }
+    rte_count = rte;
     all_entry = memory::NewArray<io_entry>(memory::KernelCommonAllocatorV, rte);
     for (u8 i = 0; i < rte; i++)
     {
@@ -122,10 +128,15 @@ void io_init()
     // kassert(*oic == v, "OIC register can't write value ", (void *)(u64)v, ", old value", (void *)(u64)(*oic));
 }
 
-void io_disable(u8 index) { io_write_register(0x10 + index * 2, io_read_register(0x10 + index * 2) | (1 << 16)); }
+void io_disable(u8 index)
+{
+    kassert(index < rte_count, "index check fail");
+    io_write_register(0x10 + index * 2, io_read_register(0x10 + index * 2) | (1 << 16));
+}
 
 u8 io_irq_setup(u8 index, io_entry *entry)
 {
+    kassert(index < rte_count, "index check fail");
     u32 flags = 0;
     if (entry->is_disable)
         flags |= 1 << 16;
@@ -145,12 +156,18 @@ u8 io_irq_setup(u8 index, io_entry *entry)
     return vec;
 }
 
-void io_enable(u8 index) { io_write_register(0x10 + index * 0x2, io_read_register(0x10 + index * 0x2) & ~(1 << 16)); }
+void io_enable(u8 index)
+{
+    kassert(index < rte_count, "index check fail");
+    io_write_register(0x10 + index * 0x2, io_read_register(0x10 + index * 0x2) & ~(1 << 16));
+}
 
 void io_EOI(u8 index)
 {
-    if (all_entry[index - 0x20].is_level_trigger_mode)
-        *(u32 *)io_map.EOI_address = index - 0x20;
+    index -= 0x20;
+    kassert(index < rte_count, "index check fail");
+    if (all_entry[index].is_level_trigger_mode)
+        *(u32 *)io_map.EOI_address = index;
 }
 
 } // namespace arch::APIC

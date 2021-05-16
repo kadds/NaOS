@@ -1,4 +1,5 @@
 #include "kernel/task/builtin/input_task.hpp"
+#include "kernel/common/cursor/cursor.hpp"
 #include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
@@ -7,6 +8,7 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/task.hpp"
+#include "kernel/timer.hpp"
 #include "kernel/util/bit_set.hpp"
 #include "kernel/wait.hpp"
 
@@ -123,45 +125,53 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
     }
 }
 
+time::microsecond_t last_update_mouse_time;
 void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, fs::vfs::file *f)
 {
     if (status.io_is_completion)
     {
-        trace::debug("mouse x:", res.get.movement_x, " y:", res.get.movement_y, " at ", res.get.timestamp);
+        // trace::debug("mouse x:", res.get.movement_x, " y:", res.get.movement_y, " at ", res.get.timestamp);
+        auto current_cursor = cursor::get_cursor();
+        current_cursor.x += res.get.movement_x;
+        current_cursor.y -= res.get.movement_y;
+        current_cursor.state = cursor::state_t::normal;
+
+        cursor::set_cursor(current_cursor);
+        last_update_mouse_time = timer::get_high_resolution_time();
 
         if (res.get.down_x ^ current_mouse_data.down_x)
         {
-            trace::debug(res.get.down_x ? "left button down" : "left button up");
+            // trace::debug(res.get.down_x ? "left button down" : "left button up");
             current_mouse_data.down_x = res.get.down_x;
         }
 
         if (res.get.down_y ^ current_mouse_data.down_y)
         {
-            trace::debug(res.get.down_y ? "right button down" : "right button up");
+            // trace::debug(res.get.down_y ? "right button down" : "right button up");
             current_mouse_data.down_y = res.get.down_y;
         }
 
         if (res.get.down_z ^ current_mouse_data.down_z)
         {
-            trace::debug(res.get.down_z ? "mid button down" : "mid button up");
+            // trace::debug(res.get.down_z ? "mid button down" : "mid button up");
             current_mouse_data.down_z = res.get.down_z;
         }
 
         if (res.get.down_a ^ current_mouse_data.down_a)
         {
-            trace::debug(res.get.down_a ? "button 4 down" : "button 4 up");
+            // trace::debug(res.get.down_a ? "button 4 down" : "button 4 up");
             current_mouse_data.down_a = res.get.down_a;
         }
 
         if (res.get.down_b ^ current_mouse_data.down_b)
         {
-            trace::debug(res.get.down_b ? "button 5 down" : "button 5 up");
+            // trace::debug(res.get.down_b ? "button 5 down" : "button 5 up");
             current_mouse_data.down_b = res.get.down_b;
         }
 
         if (res.get.movement_z)
         {
-            trace::debug("scroll ", res.get.movement_z);
+            // trace::debug("scroll ", res.get.movement_z);
             current_mouse_data.movement_z = res.get.movement_z;
         }
 
@@ -169,49 +179,35 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
     }
 }
 
-io::keyboard_request_t request;
-io::mouse_request_t mreq;
-
-bool wait_condition(u64 user_data) { return request.status.io_is_completion || mreq.status.io_is_completion; }
-
-void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+void sleep_thread_main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
-    fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
+    while (1)
+    {
+        task::do_sleep(1000);
+        if (timer::get_high_resolution_time() - last_update_mouse_time >= 5 * 1000 * 1000)
+        {
+            auto current_cursor = cursor::get_cursor();
+            current_cursor.state = cursor::state_t::hide;
+            cursor::set_cursor(current_cursor);
+        }
+    }
+}
+
+io::keyboard_request_t request;
+void listen_keyboard()
+{
     fs::vfs::file *input_file =
         fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
-
     auto input_tty = (dev::tty::tty_pseudo_t *)input_file->get_pseudo();
-
-    fs::vfs::file *mouse_file =
-        fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
-
     key_down_state.clean_all();
     key_switch_state = 0;
-
-    current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
-        current_mouse_data.down_b = false;
-
-    current_mouse_data.movement_x = 0;
-    current_mouse_data.movement_y = 0;
-    current_mouse_data.movement_z = 0;
-    current_mouse_data.timestamp = 0;
-
-    wait_queue_t input_wait_queue;
-
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;
     request.final_completion_func = complation;
+    request.status.io_is_completion = true;
+    wait_queue_t input_wait_queue;
     request.completion_user_data = (u64)&input_wait_queue;
     request.poll = false;
-
-    mreq.type = io::chain_number::mouse;
-    mreq.cmd_type = io::mouse_request_t::command::get;
-    mreq.final_completion_func = complation;
-    mreq.completion_user_data = (u64)&input_wait_queue;
-    mreq.poll = false;
-    request.status.io_is_completion = true;
-    mreq.status.io_is_completion = true;
-
     while (1)
     {
         if (request.status.io_is_completion)
@@ -222,6 +218,41 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
                 trace::warning("error when send io request");
             }
         }
+        if (!request.status.io_is_completion)
+        {
+            input_wait_queue.do_wait([](u64 data) { return request.status.io_is_completion; }, 0);
+        }
+        print_keyboard(request.result, request.status, &request, input_tty);
+    };
+}
+
+io::mouse_request_t mreq;
+void listen_mouse()
+{
+    fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
+
+    fs::vfs::file *mouse_file =
+        fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+
+    current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
+        current_mouse_data.down_b = false;
+
+    current_mouse_data.movement_x = 0;
+    current_mouse_data.movement_y = 0;
+    current_mouse_data.movement_z = 0;
+    current_mouse_data.timestamp = 0;
+    last_update_mouse_time = timer::get_high_resolution_time();
+
+    mreq.type = io::chain_number::mouse;
+    mreq.cmd_type = io::mouse_request_t::command::get;
+    mreq.final_completion_func = complation;
+    wait_queue_t input_wait_queue;
+    mreq.completion_user_data = (u64)&input_wait_queue;
+    mreq.poll = false;
+    mreq.status.io_is_completion = true;
+
+    while (1)
+    {
         if (mreq.status.io_is_completion)
         {
             mreq.status.io_is_completion = false;
@@ -231,12 +262,19 @@ void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
             }
         }
 
-        if (!request.status.io_is_completion && !mreq.status.io_is_completion)
+        if (!mreq.status.io_is_completion)
         {
-            input_wait_queue.do_wait(wait_condition, 0);
+            input_wait_queue.do_wait([](u64 data) { return mreq.status.io_is_completion; }, 0);
         }
-        print_keyboard(request.result, request.status, &request, input_tty);
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
     };
+}
+
+void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+{
+    // task::create_thread(task::current_process(), sleep_thread_main, 0, 0, 0, create_thread_flags::real_time_rr);
+    task::create_thread(task::current_process(), (task::thread_start_func)listen_mouse, 0, 0, 0,
+                        create_thread_flags::real_time_rr);
+    listen_keyboard();
 }
 } // namespace task::builtin::input

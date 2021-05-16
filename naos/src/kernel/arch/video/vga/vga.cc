@@ -1,4 +1,5 @@
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
@@ -17,7 +18,7 @@ u64 frame_size;
 byte *vram_addr;
 byte *backbuffer_addr = nullptr;
 bool is_auto_flush = false;
-cursor_t cursor;
+text_cursor_t cursor;
 u64 placeholder_times;
 
 void init()
@@ -36,7 +37,7 @@ void init()
 
     vram_addr = (byte *)args->fb_addr;
     frame_size = args->fb_width * args->fb_height * args->fb_bbp / 8;
-    backbuffer_addr = reinterpret_cast<byte *>(memory::KernelBuddyAllocatorV->allocate(frame_size, 8));
+    backbuffer_addr = reinterpret_cast<byte *>(memory::MemoryAllocatorV->allocate(frame_size, 8));
 
     /// XXX: Find memory as backbuffer
     if (unlikely(backbuffer_addr == nullptr))
@@ -54,10 +55,17 @@ void init()
 
     test();
 
+    phy_addr_t video_start =
+        memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
+    paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start, paging::frame_size::size_2mb,
+                (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
+                paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);
+    paging::reload();
+
     /// print video card memory info
-    trace::debug("Vram address ", (void *)vram_addr);
+    trace::debug("Vram address ", (void *)vram_addr, " map to ", (void *)memory::kernel_vga_bottom_address);
     trace::debug("Video backbuffer(VM) ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
-    vram_addr = (byte *)memory::pa2va(phy_addr_t::from(vram_addr));
+    vram_addr = (byte *)memory::kernel_vga_bottom_address;
 }
 
 void test()

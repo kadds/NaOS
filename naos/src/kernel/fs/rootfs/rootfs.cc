@@ -31,6 +31,7 @@ void mkdir(const char *path)
             }
             *p = 0;
             vfs::mkdir(entry_str.get()->name, vfs::global_root, vfs::global_root, 0);
+            p = entry_str.get()->name;
         }
         *p++ = *path++;
     }

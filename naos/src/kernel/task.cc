@@ -536,8 +536,8 @@ void do_sleep(u64 milliseconds)
 
     if (milliseconds != 0)
     {
-        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
         scheduler::update_state(current(), thread_state::stop);
+        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
     }
     else
     {

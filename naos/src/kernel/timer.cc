@@ -43,7 +43,7 @@ struct watcher_t
     bool operator<(const watcher_t &w) { return expires < w.expires; }
 };
 
-using watcher_list_t = util::array<watcher_t>;
+using watcher_list_t = util::linked_list<watcher_t>;
 using tick_list_t = util::skip_list<watcher_t>;
 
 struct cpu_timer_t

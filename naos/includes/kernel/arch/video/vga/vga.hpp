@@ -7,7 +7,7 @@ struct console_attribute;
 namespace arch::device::vga
 {
 
-struct cursor_t
+struct text_cursor_t
 {
     u64 px;
     u64 py;
