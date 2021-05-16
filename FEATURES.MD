@@ -85,11 +85,9 @@ Features / TODO
     - [ ] Kernel modules loader
     - [x] Kernel symbols query
         - [x] Kernel stack trace
-    - [ ] User/Group supported
     - [ ] C++ lib integration  
-    - [ ] Rust integration  
     - [ ] Graphics user interface
     - [x] Kernel logger
-    - [ ] Basic shell
+    - [x] Basic shell
 
 
