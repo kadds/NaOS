@@ -17,7 +17,7 @@ View [Features](./FEATURES.MD) .
 
 ### **Requirement**  
 * **GNU Binutils** *(version 2.33 tested)*
-* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.1.0)*
+* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.1.0, GCC 11 is not supported yet)*
 * **CMake 3.3** or later
 * **Python 3** *(For running utility)*
 * An emulator or virtual machine such as **Bochs**, **QEMU**, **Virtual Box**, **hyper-v** and **VMware Workstation** *(For running OS)*

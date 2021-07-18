@@ -19,7 +19,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-red-zone -Wunreachable-code -fvisib
     -fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
     -ffreestanding -fno-stack-protector -fno-bounds-check \
     -mno-sse -mno-sse2 -fno-omit-frame-pointer \
-    -mno-omit-leaf-frame-pointer")
+    -mno-omit-leaf-frame-pointer -fno-builtin")
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
@@ -27,7 +27,7 @@ set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -n
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
 
-set(CMAKE_CXX_FLAGS_RELEASE "-g -O2 -fvisibility-inlines-hidden")
+set(CMAKE_CXX_FLAGS_RELEASE "-g -O2")
 set(CMAKE_ASM_FLAGS_RELEASE "-g -O2")
 
 set(LINKER_X86 "-Wl,-n -Wl,-melf_i386 -Wl,--no-relax -Wl,--build-id=none")
@@ -46,13 +46,10 @@ set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
 set(UEFI_BASE_INCLUDES "/usr/include/efi/;/usr/include/efi/x86_64/")
 
 if (CMAKE_BUILD_TYPE STREQUAL Debug)
-
     add_definitions(
         -D_DEBUG
     )
-
 endif ()
-
 
 
 if (USE_CLANG)

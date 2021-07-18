@@ -299,33 +299,6 @@ struct NoneAttr
 {
 };
 
-// -------------------- help function------------------
-template <typename T> struct remove_extent
-{
-    using type = T;
-};
-
-template <typename T> struct remove_extent<T[]>
-{
-    using type = T *;
-};
-
-template <typename T, std::size_t N> struct remove_extent<T[N]>
-{
-    using type = T *;
-};
-
-template <typename T> struct remove_extent<const T[]>
-{
-    using type = const T *;
-};
-
-template <typename T, std::size_t N> struct remove_extent<const T[N]>
-{
-    using type = const T *;
-};
-// ---------------------end of help function-------------
-
 extern lock::spinlock_t spinlock;
 
 /// print string to screen
@@ -342,7 +315,7 @@ util::circular_buffer<byte> &get_kernel_log_buffer();
 
 template <typename Head> Trace_Section void dispatch(const Head &head)
 {
-    using RealType = typename remove_extent<std::decay_t<decltype(head)>>::type;
+    using RealType = typename std::remove_extent<std::decay_t<decltype(head)>>::type;
     util::formatter::format<RealType> fmt;
     char fmt_str[64];
     print_inner(fmt(head, fmt_str, 64));
@@ -387,8 +360,6 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
 /// \tparam PrintAttribute<...> the print attribute: color, bold, etc..
 /// \tparam Args
 /// \param args strings to print
-/// \note call begin_print() before print<...>() and call end_print() after print<>(), if not, race conditions may occur
-/// in the print<...>()
 ///
 template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_Section void print(Args &&... args)
 {
