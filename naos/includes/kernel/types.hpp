@@ -35,7 +35,7 @@ struct dirent
     u64 offset;
     u64 inode_index;
 };
-namespace time
+namespace timeclock
 {
 
 struct time_t

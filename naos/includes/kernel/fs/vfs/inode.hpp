@@ -17,10 +17,10 @@ class inode
     u64 link_count;
     u64 ref_count;
     super_block *su_block;
-    time::microsecond_t last_read_time;
-    time::microsecond_t last_write_time;
-    time::microsecond_t last_attr_change_time;
-    time::microsecond_t birth_time;
+    timeclock::microsecond_t last_read_time;
+    timeclock::microsecond_t last_write_time;
+    timeclock::microsecond_t last_attr_change_time;
+    timeclock::microsecond_t birth_time;
     user_id owner;
     group_id group;
     u64 permission;
@@ -58,15 +58,15 @@ class inode
     void set_index(u64 index) { this->index = index; }
     u64 get_index() const { return index; }
 
-    time::microsecond_t get_last_read_time() { return last_read_time; }
-    time::microsecond_t get_last_write_time() { return last_write_time; }
-    time::microsecond_t get_last_attr_change_time() { return last_attr_change_time; }
-    time::microsecond_t get_birth_time() { return birth_time; }
+    timeclock::microsecond_t get_last_read_time() { return last_read_time; }
+    timeclock::microsecond_t get_last_write_time() { return last_write_time; }
+    timeclock::microsecond_t get_last_attr_change_time() { return last_attr_change_time; }
+    timeclock::microsecond_t get_birth_time() { return birth_time; }
 
-    void set_last_read_time(time::microsecond_t t) { last_read_time = t; }
-    void set_last_write_time(time::microsecond_t t) { last_write_time = t; }
-    void set_last_attr_change_time(time::microsecond_t t) { last_attr_change_time = t; }
-    void set_birth_time(time::microsecond_t t) { birth_time = t; }
+    void set_last_read_time(timeclock::microsecond_t t) { last_read_time = t; }
+    void set_last_write_time(timeclock::microsecond_t t) { last_write_time = t; }
+    void set_last_attr_change_time(timeclock::microsecond_t t) { last_attr_change_time = t; }
+    void set_birth_time(timeclock::microsecond_t t) { birth_time = t; }
 
     void update_last_read_time();
     void update_last_write_time();

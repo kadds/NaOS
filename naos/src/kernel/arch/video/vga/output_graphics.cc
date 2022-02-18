@@ -356,16 +356,14 @@ void flush_cursor(byte *vram)
     {
         auto w = img.size_width;
         auto h = img.size_height;
-        if (w + c.x > width)
+        if (static_cast<uint64_t>(w + c.x) > width)
         {
             w = width - c.x;
         }
-        if (h + c.y > height)
+        if (static_cast<uint64_t>(h + c.y) > height)
         {
             h = height - c.y;
         }
-        auto offx = img.offset_x;
-        auto offy = img.offset_y;
         u32 *data = (u32 *)img.data;
         for (int i = 0; i < h; i++)
         {

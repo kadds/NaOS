@@ -3,7 +3,7 @@
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 
-namespace syscall
+namespace naos::syscall
 {
 /// none system call, just print a warning
 u64 none()

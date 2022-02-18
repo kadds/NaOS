@@ -1,4 +1,5 @@
 #pragma once
+#include "../clock.hpp"
 #include "../clock/clock_event.hpp"
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
@@ -38,7 +39,7 @@ u64 local_ID();
 
 class clock_source;
 
-class clock_event : public ::clock::clock_event
+class clock_event : public ::timeclock::clock_event
 {
   private:
     friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
@@ -54,7 +55,7 @@ class clock_event : public ::clock::clock_event
 
   public:
     clock_event()
-        : ::clock::clock_event(90)
+        : ::timeclock::clock_event(90)
     {
     }
     void init(u64 HZ) override;
@@ -68,7 +69,7 @@ class clock_event : public ::clock::clock_event
     bool is_valid() override { return true; }
 };
 
-class clock_source : public ::clock::clock_source
+class clock_source : public ::timeclock::clock_source
 {
   private:
     friend class clock_event;
@@ -78,8 +79,8 @@ class clock_source : public ::clock::clock_source
     void destroy() override;
     u64 current() override;
 
-    void calibrate(::clock::clock_source *cs) override;
-    u64 calibrate_apic(::clock::clock_source *cs);
+    void calibrate(::timeclock::clock_source *cs) override;
+    u64 calibrate_apic(::timeclock::clock_source *cs);
 };
 
 clock_source *make_clock();

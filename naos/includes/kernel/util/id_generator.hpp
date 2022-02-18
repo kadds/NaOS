@@ -24,8 +24,8 @@ class seq_generator
         u64 cur;
         do
         {
-            cur = start.load(std::memory_order_release);
-        } while (!start.compare_exchange_strong(cur, cur + step, std::memory_order_acquire));
+            cur = start.load(std::memory_order_acquire);
+        } while (!start.compare_exchange_strong(cur, cur + step, std::memory_order_release));
         return cur;
     }
 

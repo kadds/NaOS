@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "types.hpp"
-namespace time
+namespace timeclock
 {
 typedef void (*tick_callback_func)(microsecond_t time, u64 user_data);
 

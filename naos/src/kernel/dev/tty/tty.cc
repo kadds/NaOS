@@ -87,7 +87,7 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
             }
             wait_queue.do_wait(tty_read_func, (u64)this);
         }
-        char ch;
+        char ch = '\0';
         buffer.read((byte *)&ch);
         if (ch == '\n') // keep \n
         {

@@ -6,12 +6,12 @@
 namespace arch::TSC
 {
 
-class clock_event : public ::clock::clock_event
+class clock_event : public ::timeclock::clock_event
 {
   private:
   public:
     clock_event()
-        : ::clock::clock_event(0){};
+        : ::timeclock::clock_event(0){};
 
     void init(u64 HZ) override{};
     void destroy() override{};
@@ -23,7 +23,7 @@ class clock_event : public ::clock::clock_event
     bool is_valid() override { return true; }
 };
 
-class clock_source : public ::clock::clock_source
+class clock_source : public ::timeclock::clock_source
 {
 
   private:
@@ -33,8 +33,8 @@ class clock_source : public ::clock::clock_source
   public:
     void init() override;
     void destroy() override;
-    void calibrate(::clock::clock_source *cs) override;
-    u64 calibrate_tsc(::clock::clock_source *cs);
+    void calibrate(::timeclock::clock_source *cs) override;
+    u64 calibrate_tsc(::timeclock::clock_source *cs);
     u64 current() override;
 };
 

@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "kernel/time.hpp"
-namespace clock
+namespace timeclock
 {
 class clock_source;
 class clock_event

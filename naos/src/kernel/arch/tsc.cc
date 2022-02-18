@@ -10,7 +10,7 @@ void clock_source::init() { fill_tsc = _rdtsc(); }
 
 void clock_source::destroy() {}
 
-u64 clock_source::calibrate_tsc(::clock::clock_source *cs)
+u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
 {
     // 5ms
     u64 test_time = 5000;
@@ -31,7 +31,7 @@ u64 clock_source::calibrate_tsc(::clock::clock_source *cs)
     return (end_tsc - start_tsc) * 1000000 / t;
 }
 
-void clock_source::calibrate(::clock::clock_source *cs)
+void clock_source::calibrate(::timeclock::clock_source *cs)
 {
     i64 tsc_hz[5];
     i64 sum = 0;

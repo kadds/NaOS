@@ -9,8 +9,8 @@ namespace task::scheduler
 class completely_fair_scheduler : public scheduler
 {
   private:
-    time::microsecond_t sched_min_granularity_us;
-    time::microsecond_t sched_wakeup_granularity_us;
+    timeclock::microsecond_t sched_min_granularity_us;
+    timeclock::microsecond_t sched_wakeup_granularity_us;
 
   public:
     static const scheduler_class clazz = scheduler_class::cfs;

@@ -7,7 +7,7 @@
 namespace arch::device::PIT
 {
 class clock_source;
-class clock_event : public ::clock::clock_event
+class clock_event : public ::timeclock::clock_event
 {
     friend class clock_source;
     friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
@@ -20,7 +20,7 @@ class clock_event : public ::clock::clock_event
 
   public:
     clock_event()
-        : ::clock::clock_event(50){};
+        : ::timeclock::clock_event(50){};
 
     void init(u64 hz) override;
     void destroy() override;
@@ -31,13 +31,13 @@ class clock_event : public ::clock::clock_event
     bool is_valid() override { return true; }
 };
 
-class clock_source : public ::clock::clock_source
+class clock_source : public ::timeclock::clock_source
 {
 
   public:
     void init() override;
     void destroy() override;
-    void calibrate(clock::clock_source *cs) override;
+    void calibrate(::timeclock::clock_source *cs) override;
     u64 current() override;
 };
 clock_source *make_clock();

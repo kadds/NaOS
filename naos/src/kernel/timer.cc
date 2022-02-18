@@ -17,7 +17,7 @@
 namespace timer
 {
 
-using clock_source_array_t = util::array<clock::clock_source *>;
+using clock_source_array_t = util::array<timeclock::clock_source *>;
 
 struct watcher_t
 {
@@ -58,9 +58,9 @@ struct cpu_timer_t
     }
 };
 
-clock::clock_source *get_clock_source() { return cpu::current().get_clock_source(); }
+timeclock::clock_source *get_clock_source() { return cpu::current().get_clock_source(); }
 
-clock::clock_event *get_clock_event() { return cpu::current().get_clock_event(); }
+timeclock::clock_event *get_clock_event() { return cpu::current().get_clock_event(); }
 
 constexpr u64 tick_us = 1000;
 
@@ -103,7 +103,7 @@ lock::spinlock_t timer_spinlock;
 void init()
 {
     timer_spinlock.lock();
-    clock::clock_source *pit_source;
+    timeclock::clock_source *pit_source;
     clock_source_array_t clock_sources(memory::KernelCommonAllocatorV);
 
     {
@@ -132,15 +132,15 @@ void init()
 
     if (cpu::current().is_bsp())
     {
-        clock::init();
-        clock::start_tick();
+        timeclock::init();
+        timeclock::start_tick();
         irq::register_soft_request_func(irq::soft_vector::timer, on_tick, 0);
     }
 
     timer_spinlock.unlock();
 }
 
-time::microsecond_t get_high_resolution_time() { return get_clock_source()->current(); }
+timeclock::microsecond_t get_high_resolution_time() { return get_clock_source()->current(); }
 
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {

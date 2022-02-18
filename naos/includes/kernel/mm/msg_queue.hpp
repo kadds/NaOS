@@ -22,7 +22,7 @@ struct messsage_seg_t
 
 struct message_pack_t
 {
-    time::microsecond_t put_time;
+    timeclock::microsecond_t put_time;
     msg_type type;
     u64 msg_length;
     messsage_seg_t *rest_msg;

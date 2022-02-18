@@ -7,11 +7,11 @@ namespace task
 {
 struct thread_t;
 } // namespace task
-namespace clock
+namespace timeclock
 {
 class clock_source;
 class clock_event;
-} // namespace clock
+} // namespace timeclock
 
 namespace cpu
 {
@@ -48,8 +48,8 @@ class cpu_data_t
     load_data_t load_data;
     void *timer_queue;
 
-    clock::clock_source *clock_source;
-    clock::clock_event *clock_ev;
+    timeclock::clock_source *clock_source;
+    timeclock::clock_event *clock_ev;
     void *clock_queue;
 
     call_cpu_func_t cpu_func;
@@ -92,11 +92,11 @@ class cpu_data_t
 
     void set_timer_queue(void *timer_queue) { this->timer_queue = timer_queue; }
 
-    void set_clock_source(clock::clock_source *cs) { clock_source = cs; }
-    clock::clock_source *get_clock_source() { return clock_source; }
+    void set_clock_source(timeclock::clock_source *cs) { clock_source = cs; }
+    timeclock::clock_source *get_clock_source() { return clock_source; }
 
-    void set_clock_event(clock::clock_event *ev) { clock_ev = ev; }
-    clock::clock_event *get_clock_event() { return clock_ev; }
+    void set_clock_event(timeclock::clock_event *ev) { clock_ev = ev; }
+    timeclock::clock_event *get_clock_event() { return clock_ev; }
 
     void *get_clock_queue() { return clock_queue; }
 

@@ -32,7 +32,7 @@ struct spinlock_t
 #ifdef _DEBUG
             wait_times++;
 #endif
-        } while (!lock_m.compare_exchange_strong(target, true, std::memory_order_acquire));
+        } while (!lock_m.compare_exchange_strong(target, true, std::memory_order_release));
 #ifdef _DEBUG
         last_stack_pointer = get_stack();
         wait_times = 0;
@@ -42,7 +42,7 @@ struct spinlock_t
     bool try_lock()
     {
         bool target = false;
-        return lock_m.compare_exchange_strong(target, true, std::memory_order_acquire);
+        return lock_m.compare_exchange_strong(target, true, std::memory_order_release);
     }
 
     void unlock() { lock_m.store(false, std::memory_order_release); }
@@ -69,7 +69,7 @@ struct rw_lock_t
             cpu_pause();
 
             exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
-        } while (!lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire));
+        } while (!lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_release));
     }
 
     void lock_write()
@@ -80,25 +80,25 @@ struct rw_lock_t
             // while (lock_m != 0)
             cpu_pause();
             exp = 0;
-        } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_acquire));
+        } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_release));
     }
 
     bool try_lock_read()
     {
-        u64 val = lock_m.load(std::memory_order_release);
+        u64 val = lock_m.load(std::memory_order_acquire);
         if (val == 0x8000000000000000UL)
             return false;
         u64 exp = val & 0x7FFFFFFFFFFFFFFFUL;
-        return lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_acquire);
+        return lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_release);
     }
 
     bool try_lock_write()
     {
         u64 exp;
-        if (lock_m.load(std::memory_order_release) != 0)
+        if (lock_m.load(std::memory_order_acquire) != 0)
             return false;
         exp = 0;
-        return lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_acquire);
+        return lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_release);
     }
 
     void unlock_read()
@@ -112,8 +112,8 @@ struct rw_lock_t
                 /// TODO: state is invalid.
             }
 #endif
-            exp = lock_m.load(std::memory_order_release) & 0x7FFFFFFFFFFFFFFFUL;
-        } while (!lock_m.compare_exchange_strong(exp, exp - 1, std::memory_order_acquire));
+            exp = lock_m.load(std::memory_order_acquire) & 0x7FFFFFFFFFFFFFFFUL;
+        } while (!lock_m.compare_exchange_strong(exp, exp - 1, std::memory_order_release));
     }
 
     void unlock_write()

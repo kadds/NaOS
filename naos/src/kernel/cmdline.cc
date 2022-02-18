@@ -13,7 +13,7 @@ hash_map<string, string> *cmdmap;
 
 bool early_get(const char *key, char *&out_buf, u64 &len)
 {
-    i64 key_len = strlen(key);
+    i64 key_len = util::strlen(key);
     char *p = memory::pa2vax<u64, char *>(kernel_args->command_line);
     int idx = strfind(p, key);
     while (idx >= 0)

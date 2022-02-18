@@ -85,7 +85,7 @@ void clock_source::init() {}
 
 void clock_source::destroy() {}
 
-void clock_source::calibrate(clock::clock_source *cs)
+void clock_source::calibrate(::timeclock::clock_source *cs)
 {
     // nothing to do
 }

@@ -4,7 +4,7 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/syscall.hpp"
 
-namespace syscall
+namespace naos::syscall
 {
 
 /// exit process with return value
@@ -115,7 +115,7 @@ long wait_process(process_id pid, i64 *ret)
 }
 
 /// sleep current thread
-void sleep(time::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
+void sleep(timeclock::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
 
 struct sig_info_t
 {

@@ -5,12 +5,12 @@
 #include "kernel/task.hpp"
 #include "kernel/types.hpp"
 
-namespace syscall
+namespace naos::syscall
 {
 
-int readlink(const char *path, byte *buffer, u64 size) {}
+int readlink(const char *path, byte *buffer, u64 size) { return EFAILED; }
 
-int list_directory(const char *path) {}
+int list_directory(const char *path) { return EFAILED; }
 
 int rename(const char *src, const char *target)
 {

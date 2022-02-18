@@ -125,7 +125,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
     }
 }
 
-time::microsecond_t last_update_mouse_time;
+timeclock::microsecond_t last_update_mouse_time;
 void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, fs::vfs::file *f)
 {
     if (status.io_is_completion)

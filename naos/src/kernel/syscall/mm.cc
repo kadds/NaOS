@@ -6,7 +6,7 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 
-namespace syscall
+namespace naos::syscall
 {
 u64 brk(u64 ptr)
 {

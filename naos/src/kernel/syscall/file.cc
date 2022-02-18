@@ -4,7 +4,7 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/types.hpp"
-namespace syscall
+namespace naos::syscall
 {
 file_desc open(const char *filepath, u64 mode, u64 flags)
 {
@@ -119,7 +119,7 @@ i64 lseek(file_desc fd, i64 offset, u64 type)
     return 0;
 }
 
-i64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) {}
+i64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) { return EFAILED; }
 
 i64 get_pipe(file_desc *fd1, file_desc *fd2)
 {

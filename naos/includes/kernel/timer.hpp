@@ -4,14 +4,14 @@
 namespace timer
 {
 
-typedef void (*watcher_func)(time::microsecond_t expires, u64 user_data);
+typedef void (*watcher_func)(timeclock::microsecond_t expires, u64 user_data);
 void init();
 
 ///
 /// \brief get current time
 ///
 /// \note the time of each CPU is not synchronized
-time::microsecond_t get_high_resolution_time();
+timeclock::microsecond_t get_high_resolution_time();
 
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data);
 

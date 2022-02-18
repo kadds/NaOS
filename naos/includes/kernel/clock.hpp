@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "time.hpp"
-namespace clock
+namespace timeclock
 {
 
 // start 1970
@@ -9,10 +9,10 @@ namespace clock
 void init();
 void start_tick();
 
-time::microsecond_t get_current_clock();
-time::microsecond_t get_startup_clock();
+microsecond_t get_current_clock();
+microsecond_t get_startup_clock();
 
-void time2time_t(time::microsecond_t ms, time::time_t *t);
-time::microsecond_t time_t2time(const time::time_t *t);
+void time2time_t(microsecond_t ms, time_t *t);
+microsecond_t time_t2time(const time_t *t);
 
 } // namespace clock

@@ -393,7 +393,7 @@ u64 clock_source::current()
     return 1000000UL * ev->tick_count / ev->hz + (read_register(timer_current_count_register) * 1000000UL) /
                                                      ev->init_counter / divide_value(ev->divide) / 1000000UL;
 }
-u64 clock_source::calibrate_apic(::clock::clock_source *cs)
+u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
 {
     clock_event *ev = (clock_event *)event;
     // 5ms
@@ -420,7 +420,7 @@ u64 clock_source::calibrate_apic(::clock::clock_source *cs)
 u64 lapic_counter = 0;
 u64 lapic_frq = 0;
 
-void clock_source::calibrate(::clock::clock_source *cs)
+void clock_source::calibrate(::timeclock::clock_source *cs)
 {
     clock_event *ev = (clock_event *)event;
 
