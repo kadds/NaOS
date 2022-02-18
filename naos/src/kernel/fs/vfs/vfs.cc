@@ -711,6 +711,10 @@ bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 siz
         return false;
     if (operator_type == fcntl_type::get)
     {
+        if ((f->get_mode() & fs::mode::read) == 0)
+        {
+            return false;
+        }
         switch (attr)
         {
             case fcntl_attr::mtime:
@@ -753,6 +757,10 @@ bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 siz
     }
     else if (operator_type == fcntl_type::set)
     {
+        if ((f->get_mode() & fs::mode::write) == 0)
+        {
+            return false;
+        }
         switch (attr)
         {
             case fcntl_attr::mtime:

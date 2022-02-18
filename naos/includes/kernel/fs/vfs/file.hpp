@@ -44,6 +44,7 @@ class file
     dentry *get_entry() const;
 
     pseudo_t *get_pseudo();
+    flag_t get_mode() const { return mode; }
 
   protected:
     virtual i64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;

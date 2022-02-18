@@ -175,25 +175,26 @@ thread_t::thread_t()
 
 void create_devs()
 {
-    fs::vfs::create("/dev", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
+    auto root = fs::vfs::global_root;
+    fs::vfs::create("/dev", root, root, fs::create_flags::directory);
 
-    fs::vfs::create("/dev/tty", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::directory);
+    fs::vfs::create("/dev/tty", root, root, fs::create_flags::directory);
 
     char fname[] = "/dev/tty/x";
     for (int i = 1; i < 8; i++)
     {
         fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
-        fs::vfs::create(fname, fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
-        auto *f = fs::vfs::open(fname, fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        fs::vfs::create(fname, root, root, fs::create_flags::chr);
+        auto *f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
         auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
         f->close();
     }
 
-    fs::vfs::link("/dev/tty/0", "/dev/tty/1", fs::vfs::global_root, fs::vfs::global_root);
-    fs::vfs::link("/dev/console", "/dev/tty/1", fs::vfs::global_root, fs::vfs::global_root);
+    fs::vfs::link("/dev/tty/0", "/dev/tty/1", root, root);
+    fs::vfs::link("/dev/console", "/dev/tty/1", root, root);
 
-    auto *f = fs::vfs::open("/dev/console", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+    auto *f = fs::vfs::open("/dev/console", root, root, fs::mode::read | fs::mode::write, 0);
     auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
     fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
 
@@ -204,6 +205,7 @@ std::atomic_bool is_init = false, init_ok = false;
 void init()
 {
     process_t *process;
+    auto root = fs::vfs::global_root;
     if (cpu::current().is_bsp())
     {
         uctx::UninterruptibleContext icu;
@@ -226,8 +228,8 @@ void init()
         // init for kernel process
         process = new_kernel_process();
         process->parent_pid = 0;
-        process->res_table.get_file_table()->root = fs::vfs::global_root;
-        process->res_table.get_file_table()->current = fs::vfs::global_root;
+        process->res_table.get_file_table()->root = root;
+        process->res_table.get_file_table()->current = root;
     }
     else
     {
@@ -259,7 +261,7 @@ void init()
         ft->id_gen.tag(0);
         ft->id_gen.tag(1);
         ft->id_gen.tag(2);
-        auto tty0 = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read, 0);
+        auto tty0 = fs::vfs::open("/dev/tty/0", root, root, fs::mode::read, 0);
         ft->file_map.insert(0, tty0->clone());
         ft->file_map.insert(1, tty0->clone());
         ft->file_map.insert(2, tty0->clone());
@@ -393,16 +395,17 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
     new_ft->id_gen.tag(0);
     new_ft->id_gen.tag(1);
     new_ft->id_gen.tag(2);
+    auto root = fs::vfs::global_root;
 
     if (unlikely(flags & create_process_flags::no_shared_root))
-        new_ft->root = fs::vfs::global_root;
+        new_ft->root = root;
     else
         new_ft->root = old_ft->root;
 
     if (unlikely(flags & create_process_flags::shared_work_dir))
         new_ft->current = old_ft->current;
     else // set to parent dir (file directory)
-        new_ft->current = file ? file->get_entry()->get_parent() : fs::vfs::global_root;
+        new_ft->current = file ? file->get_entry()->get_parent() : root;
 
     if (flags & create_process_flags::shared_file_table)
     {
