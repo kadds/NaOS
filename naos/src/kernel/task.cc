@@ -8,6 +8,7 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 
+#include "kernel/trace.hpp"
 #include "kernel/util/array.hpp"
 #include "kernel/util/hash_map.hpp"
 #include "kernel/util/id_generator.hpp"
@@ -797,5 +798,12 @@ void thread_yield()
 ExportC void kernel_return() { yield_preempt(); }
 
 ExportC void userland_return() { scheduler::schedule(); }
+
+void set_tcb(thread_t *t, void *p)
+{
+    trace::info("update tcb ", trace::hex(p));
+    t->tcb = p;
+    arch::task::update_fs(t);
+}
 
 } // namespace task

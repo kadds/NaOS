@@ -84,8 +84,20 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1)
     regs.rsi = arg1;
 
     uctx::UninterruptibleContext icu;
+    // write fs
+    update_fs(thd);
+
     _call_sys_ret(&regs);
     return 1;
+}
+
+void update_fs(::task::thread_t *thd)
+{
+    u64 tcb = reinterpret_cast<u64>(thd->tcb);
+    _wrmsr(0xC0000100, tcb);
+#ifdef _DEBUG
+    kassert(_rdmsr(0xC0000100) == tcb, "Unreadable fs base ", tcb, " ", _rdmsr(0xC0000100));
+#endif
 }
 
 bool make_signal_context(void *stack, void *func, userland_code_context *context)

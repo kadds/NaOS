@@ -8,7 +8,9 @@
 #include "lock.hpp"
 #include "ucontext.hpp"
 #include <initializer_list>
+#include <source_location>
 #include <type_traits>
+#include <utility>
 
 /// kernel output and debug components
 namespace trace
@@ -407,7 +409,7 @@ template <typename... Args> Trace_Section void warning(Args &&... args)
     print<>('\n');
 }
 
-template <typename... Args> Trace_Section void info(Args &&... args)
+template <typename... Args> Trace_Section void info(Args &&...args)
 {
     uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::Green>>("[info]    ");
@@ -416,7 +418,7 @@ template <typename... Args> Trace_Section void info(Args &&... args)
     print<>('\n');
 }
 
-template <typename... Args> Trace_Section void debug(Args &&... args)
+template <typename... Args> Trace_Section void debug(Args &&...args)
 {
     if (!output_debug)
         return;
@@ -426,6 +428,8 @@ template <typename... Args> Trace_Section void debug(Args &&... args)
     print<>(std::forward<Args>(args)...);
     print<>('\n');
 }
+
+template <typename T> void *hex(T t) { return reinterpret_cast<void *>(t); }
 
 template <typename... Args>
 Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&... args)

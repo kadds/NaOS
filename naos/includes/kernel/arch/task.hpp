@@ -29,6 +29,8 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
 ///\param entry the thread entry address
 u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1);
 
+void update_fs(::task::thread_t *thd);
+
 void *copy_to_return_signal(void *stack, void *ptr, u64 size);
 
 struct userland_code_context

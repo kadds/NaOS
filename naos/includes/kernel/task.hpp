@@ -155,6 +155,7 @@ struct thread_t
     std::atomic_int wait_counter;
     u64 error_code;
     wait_queue_t *do_wait_queue_now;
+    void *tcb;
 
     thread_t();
 };
@@ -240,5 +241,7 @@ static inline cpu_mask_t current_cpu_mask() { return (1ul << cpu::current().id()
 
 void thread_yield();
 void user_schedule();
+
+void set_tcb(thread_t *t, void *p);
 
 } // namespace task

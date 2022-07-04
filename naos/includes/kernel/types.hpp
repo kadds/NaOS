@@ -10,7 +10,15 @@ enum class request_result
     no_handled = 1,
 };
 
-typedef request_result (*request_func)(const void *regs, u64 extra_data, u64 user_data);
+struct interrupt_info
+{
+    bool kernel_space;
+    void *at;
+    void *regs;
+    uint32_t error_code;
+};
+
+typedef request_result (*request_func)(const interrupt_info *inter, u64 extra_data, u64 user_data);
 typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
 
 } // namespace irq

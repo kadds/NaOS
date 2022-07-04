@@ -10,6 +10,7 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 
 const u16 id_register = 2;
@@ -303,7 +304,7 @@ void local_post_IPI_mask(u64 intr, u64 mask0)
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
-irq::request_result _ctx_interrupt_ on_event(const void *regs, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ on_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
     auto event = (clock_event *)user_data;
 

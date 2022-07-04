@@ -32,6 +32,11 @@ const int irq_count = 256;
 
 bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
 {
+    interrupt_info inter;
+    inter.kernel_space = (regs->cs & 0x3) == 0;
+    inter.regs = (void *)regs;
+    inter.at = (void *)regs->rip;
+    inter.error_code = regs->error_code;
     auto &locked_list = irq_list[regs->vector];
     if (!locked_list.list->empty())
     {
@@ -39,7 +44,7 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
         bool ok = false;
         for (auto &it : *locked_list.list)
         {
-            auto ret = it.hard_func(regs, extra_data, it.user_data);
+            auto ret = it.hard_func(&inter, extra_data, it.user_data);
             if (ret == request_result::ok)
                 ok = true;
         }

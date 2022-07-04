@@ -7,18 +7,19 @@
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 
 namespace SMP
 {
 
-irq::request_result flush_tlb_irq(const void *regs, u64 data, u64 user_data)
+irq::request_result flush_tlb_irq(const irq::interrupt_info *inter, u64 data, u64 user_data)
 {
     arch::paging::reload();
     return irq::request_result::ok;
 }
 
-irq::request_result ipi_call(const void *regs, u64 data, u64 user_data)
+irq::request_result ipi_call(const irq::interrupt_info *inter, u64 data, u64 user_data)
 {
     auto &cpu = cpu::current();
     cpu.call_cpu();

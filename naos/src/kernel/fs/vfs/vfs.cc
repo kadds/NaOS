@@ -1,4 +1,5 @@
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/file_system.hpp"
@@ -503,7 +504,7 @@ file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, fla
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
     dentry *entry = path_walk(filepath, root, cur_dir, attr, idata);
-    if (entry == nullptr)
+    while (entry == nullptr)
     {
         if (attr & path_walk_flags::auto_create_file)
         {
@@ -511,16 +512,20 @@ file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, fla
             if (name_len <= 0) // not a file
                 return nullptr;
 
-            entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
-            if (unlikely(entry == nullptr)) // Can't create file
+            if (attr & path_walk_flags::directory)
             {
-                return nullptr;
+                entry = mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+            }
+            else
+            {
+                entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
             }
         }
-        else
-        {
-            return nullptr;
-        }
+        break;
+    }
+    if (unlikely(entry == nullptr)) // Can't create file
+    {
+        return nullptr;
     }
 
     file *f = entry->get_inode()->get_super_block()->alloc_file();

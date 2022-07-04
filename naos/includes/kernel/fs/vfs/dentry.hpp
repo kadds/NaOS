@@ -27,6 +27,7 @@ class dentry
 
     virtual u64 hash() const;
     dentry *find_child(const char *name) const;
+    const dentry_list_t &list_children() { return child_list; }
     void set_inode(inode *node);
     inode *get_inode() const;
 

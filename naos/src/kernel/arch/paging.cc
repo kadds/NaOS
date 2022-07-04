@@ -36,7 +36,10 @@ void base_entry::set_addr(void *ptr)
     data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::va2pa(ptr)()) & 0xFFFFFFFFFF000UL);
 }
 
-void base_entry::set_phy_addr(void *ptr) { data = (data & ~0xFFFFFFFFFF000UL) | (((u64)ptr) & 0xFFFFFFFFFF000UL); }
+void base_entry::set_phy_addr(void *ptr)
+{
+    data = (data & ~0xF'FFFF'FFFF'F000UL) | (((u64)ptr) & 0xF'FFFF'FFFF'F000UL);
+}
 
 u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 

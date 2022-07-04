@@ -161,7 +161,7 @@ void wait_for_read()
 
 bool get_key(kb_device *dev, io::keyboard_data *data);
 
-irq::request_result kb_interrupt(const void *regs, u64 extra_data, u64 user_data)
+irq::request_result kb_interrupt(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
     kb_device *dev = (kb_device *)user_data;
 
@@ -478,7 +478,7 @@ void kb_driver::on_io_request(io::request_t *request)
 //===============================
 bool mouse_get(mouse_device *dev, io::mouse_data *data);
 
-irq::request_result mouse_interrupt(const void *regs, u64 extra_data, u64 user_data)
+irq::request_result mouse_interrupt(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
     auto dev = (mouse_device *)user_data;
     if (unlikely(dev == nullptr))

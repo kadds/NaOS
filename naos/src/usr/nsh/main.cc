@@ -5,6 +5,7 @@ const char unknown_command[] = "unknown command ";
 const char help_msg[] = "some commands:\n"
                         "  \e[32mpwd\e[0m  show current directory\n"
                         "  \e[32mcd\e[0m path  change current directory\n"
+                        "  \e[32mls\e[0m path  list directory\n"
                         "  \e[32mmkdir\e[0m path  make directory\n"
                         "  \e[32mrmdir\e[0m path  remove directory\n"
                         "  \e[32mexit\e[0m exit shell\n"

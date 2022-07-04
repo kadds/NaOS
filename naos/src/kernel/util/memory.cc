@@ -3,6 +3,10 @@ namespace util
 {
 void memset(void *dst, u64 val, u64 size)
 {
+    if (size == 0)
+    {
+        return;
+    }
     u64 arest = (u64)dst % sizeof(u64);
     u64 *start_aligned = (u64 *)((char *)dst + arest);
     size -= arest;
@@ -37,22 +41,35 @@ void memzero(void *dst, u64 size) { memset(dst, 0, size); }
 
 void memcopy(void *dst, const void *src, u64 size)
 {
-    u64 *d = (u64 *)dst;
-    u64 *s = (u64 *)src;
-    u64 count = size / sizeof(u64);
-    u64 rest = size % sizeof(u64);
-    for (u64 i = 0; i < count; i++)
+    if ((reinterpret_cast<u64>(src) & 0x7) == 0)
+    {
+        if ((reinterpret_cast<u64>(dst) & 0x7) == 0)
+        {
+            u64 *d = (u64 *)dst;
+            const u64 *s = (const u64 *)src;
+            u64 count = size / sizeof(u64);
+            u64 rest = size % sizeof(u64);
+            for (u64 i = 0; i < count; i++)
+            {
+                *d++ = *s++;
+            }
+            if (rest != 0)
+            {
+                char *dc = (char *)d;
+                char *sc = (char *)s;
+                do
+                {
+                    *dc++ = *sc++;
+                } while (--rest != 0);
+            }
+            return;
+        }
+    }
+    const char *s = (const char *)src;
+    char *d = (char *)dst;
+    for (uint64_t i = 0; i < size; i++)
     {
         *d++ = *s++;
-    }
-    if (rest != 0)
-    {
-        char *dc = (char *)d;
-        char *sc = (char *)s;
-        do
-        {
-            *dc++ = *sc++;
-        } while (--rest != 0);
     }
 }
 

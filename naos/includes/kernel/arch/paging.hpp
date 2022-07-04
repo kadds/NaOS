@@ -25,6 +25,32 @@ struct flags
     };
 };
 
+struct page_fault_flags
+{
+    enum : u32
+    {
+        // When set, the page fault was caused by a page-protection violation. When not set, it was caused by a
+        // non-present page.
+        present = 1,
+        // When set, the page fault was caused by a write access. When not set, it was caused by a read access.
+        write = 2,
+        // 	When set, the page fault was caused while CPL = 3. This does not necessarily mean that the page fault was a
+        // privilege violation.
+        user = 4,
+        // When set, one or more page directory entries contain reserved bits which are set to 1. This only applies when
+        // the PSE or PAE flags in CR4 are set to 1.
+        reserved_write = 8,
+        // 	When set, the page fault was caused by an instruction fetch. This only applies when the No-Execute bit is
+        // supported and enabled.
+        instruction_fetch = 16,
+        // When set, the page fault was caused by a protection-key violation. The PKRU register (for user-mode accesses)
+        // or PKRS MSR (for supervisor-mode accesses) specifies the protection key rights.
+        protection_key = 32,
+        // When set, the page fault was caused by a shadow stack access.
+        shadow_stack = 64,
+    };
+};
+
 struct base_entry
 {
     u64 data;
@@ -66,31 +92,24 @@ struct base_entry
     void *get_addr() const;
     void *get_phy_addr() const;
 
-    base_entry(void *baseAddr, u32 flags) { data = (((u64)baseAddr) & 0x1FFFFFFFFFF000UL) | (flags & 0x1FF); }
+    base_entry(void *baseAddr, u32 flags) { data = (((u64)baseAddr) & 0x1F'FFFF'FFFF'F000UL) | (flags & 0x1FF); }
     base_entry() { data = 0; }
     void set_addr(void *ptr);
     void set_phy_addr(void *ptr);
-    void add_attributes(u16 attr) { data &= (attr & 0x1FF); }
-    // can only save 14 bits data
+    // can only save 11 bits data
     void set_common_data(u16 dt)
     {
-        dt &= 0x3FFF;
-        data &= 0x800FFFFFFFFFF1FFUL;
-        data |= (((u64)dt & 0x3FF8) << 49) | ((dt & 0x7) << 9);
+        dt &= 0x7FF;
+        u64 d = dt;
+        data &= 0x800F'FFFF'FFFF'F1FFUL;
+        data |= d << 52;
     }
     u16 get_common_data()
     {
         u16 rt;
-        rt = (((data) >> 9) & 0x7) | ((((data) >> 52) & 0xFFF) << 3);
+        rt = (((data) >> 52) & 0x7FF);
         return rt;
     }
-    // can only save 62 bits data, notice: will clean common data
-    void set_unpresent_data(u64 dt)
-    {
-        dt <<= 2;
-        data |= dt;
-    }
-    u64 get_unpresent_data() { return (data & 0x7FFFFFFFFFFFFFFEUL) >> 1; }
 };
 
 struct pt_entry : base_entry

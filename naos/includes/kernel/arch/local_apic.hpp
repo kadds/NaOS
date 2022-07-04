@@ -42,7 +42,7 @@ class clock_source;
 class clock_event : public ::timeclock::clock_event
 {
   private:
-    friend irq::request_result on_event(const void *regs, u64 extra_data, u64 user_data);
+    friend irq::request_result on_event(const irq::interrupt_info *, u64 extra_data, u64 user_data);
     friend class clock_source;
     volatile bool is_suspend;
     volatile u64 tick_count;

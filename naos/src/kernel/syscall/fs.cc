@@ -1,5 +1,7 @@
 #include "kernel/arch/klib.hpp"
+#include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
@@ -10,7 +12,43 @@ namespace naos::syscall
 
 int readlink(const char *path, byte *buffer, u64 size) { return EFAILED; }
 
-int list_directory(const char *path) { return EFAILED; }
+struct list_directory_cursor
+{
+    u32 size;
+    i64 cursor;
+};
+
+struct list_directory_result
+{
+    list_directory_cursor cursor;
+    u32 num_files;
+    char *files_buffer;
+    u32 bytes;
+    char *buffer;
+};
+
+int list_directory(file_desc fd, list_directory_result *result)
+{
+    if (result == nullptr || !is_user_space_pointer(result))
+    {
+        return EPARAM;
+    }
+    auto &res = task::current_process()->res_table;
+    auto file = res.get_file(fd);
+    if (file)
+    {
+        if (file->get_entry()->get_inode()->get_type() != fs::inode_type_t::directory)
+        {
+            return EPARAM;
+        }
+        auto children = file->get_entry()->list_children();
+        for (auto child : children)
+        {
+            child->get_name();
+        }
+    }
+    return ENOEXIST;
+}
 
 int rename(const char *src, const char *target)
 {

@@ -41,7 +41,10 @@ ExportC void _virtualization_exception_wrapper();
 
 void _ctx_interrupt_ dispatch_exception(regs_t *regs)
 {
-    trace::debug("exception occurred at ", (void *)regs->rip, " code ", regs->error_code);
+    if (likely((regs->cs & 0x3) == 0)) // kernel space
+    {
+        trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code);
+    }
     u64 extra_data = 0;
     if (regs->vector == 14)
     {
@@ -186,7 +189,7 @@ ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
     u64 cr2;
     __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : :);
 
-    trace::debug("page fault at ", (void *)cr2, ". ");
+    // trace::debug("page fault at ", (void *)cr2, ". ");
 }
 
 ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs) { trace::debug("X87 fpu error. "); }

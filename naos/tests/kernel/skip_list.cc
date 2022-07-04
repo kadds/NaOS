@@ -1,4 +1,5 @@
 #include "kernel/util/skip_list.hpp"
+#include "comm.hpp"
 #include "test.hpp"
 
 using namespace util;
@@ -66,3 +67,31 @@ void test_skip_list_move()
     assert(list3.size() == 4 && list3.has(4) && list2.size() == 0);
 }
 test(skip_list, move);
+
+void test_skip_list_find()
+{
+    skip_list<int> list(&LibAllocatorV, {1, 2, 4});
+    auto iter = list.find(2);
+    assert(iter.get()->element == 2);
+    iter = list.find(3);
+    assert(iter == list.end());
+    iter = list.find(4);
+    assert(iter.get()->element == 4);
+}
+test(skip_list, find);
+
+void test_skip_list_binary()
+{
+    skip_list<int> list(&LibAllocatorV, {1, 2, 4});
+    auto iter = list.upper_find(2);
+    assert(iter.get()->element == 2);
+
+    iter = list.lower_find(2);
+    assert(iter.get()->element == 4);
+
+    iter = list.upper_find(3);
+    assert(iter.get()->element == 4);
+    iter = list.upper_find(4);
+    assert(iter.get()->element == 4);
+}
+test(skip_list, binary);

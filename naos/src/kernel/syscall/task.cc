@@ -284,11 +284,22 @@ void setcpu_mask(u64 mask0, u64 mask1)
     task::current()->attributes |= task::thread_attributes::need_schedule;
 }
 
-void getcpu_mask(u64 *mask0, u64 *mask1)
+int getcpu_mask(u64 *mask0, u64 *mask1)
 {
     if (!is_user_space_pointer(mask0))
-        return;
+        return EPARAM;
     *mask0 = task::current()->cpumask.mask;
+    return 0;
+}
+
+int set_tcb(void *p)
+{
+    if (!is_user_space_pointer(p))
+        return EPARAM;
+    auto t = task::current();
+    task::set_tcb(t, p);
+
+    return 0;
 }
 
 BEGIN_SYSCALL
@@ -310,6 +321,7 @@ SYSCALL(43, sigmask)
 SYSCALL(47, getcpu_running)
 SYSCALL(48, setcpu_mask)
 SYSCALL(49, getcpu_mask)
+SYSCALL(60, set_tcb)
 END_SYSCALL
 
 } // namespace syscall

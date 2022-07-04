@@ -4,6 +4,7 @@
 #include "kernel/schedulers/round_robin.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/timer.hpp"
+#include "kernel/types.hpp"
 #include "kernel/util/hash_map.hpp"
 
 namespace task::scheduler
@@ -20,7 +21,7 @@ task::thread_t *thread_to_reschedule;
 
 std::atomic_bool reschedule_ready;
 
-irq::request_result reschedule_func(const void *regs, u64 data, u64 user_data)
+irq::request_result reschedule_func(const irq::interrupt_info *inter, u64 data, u64 user_data)
 {
     task::thread_t *thd = thread_to_reschedule;
 

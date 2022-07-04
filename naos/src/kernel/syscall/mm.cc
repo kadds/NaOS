@@ -51,7 +51,7 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
         if (!file)
             return ENOEXIST;
     }
-    auto vm = vm_info->map_file(map_address, file, offset, length, flags);
+    auto vm = vm_info->map_file(map_address, file, offset, length, length, flags);
 
     if (vm)
         return vm->start;
@@ -60,14 +60,14 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     // ((memory::vm::info_t *)(task::current_process()->mm_info))->mmu_paging.map_area();
 }
 
-u64 umap(u64 address)
+u64 umap(u64 address, u64 size)
 {
     if (!is_user_space_pointer(address))
     {
         return EPARAM;
     }
     auto vm_info = ((memory::vm::info_t *)(task::current_process()->mm_info));
-    if (vm_info->umap_file(address))
+    if (vm_info->umap_file(address, size))
         return OK;
     return EFAILED;
 }

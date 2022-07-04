@@ -57,7 +57,7 @@ u64 build_version_timestamp = BUILD_VERSION_TS;
 
 NoReturn void kstart_bsp(kernel_start_args *args)
 {
-    util::memzero((void *)((u64)_bss_start + (u64)base_phy_addr), (u64)_bss_end - (u64)_bss_start);
+    util::memzero((void *)((u64)_bss_start), (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
 

@@ -70,11 +70,14 @@ def pack_image(base_dir, target_file, force):
                                  file.encode('utf-8')))  # file path
         cur_file = open(base_dir + "/" + file, 'rb')
         data = cur_file.read()
-        output.write(struct.pack("L", len(data)))  # file length
+        p = output.tell()
+        output.write(struct.pack("Q", len(data)))  # file length
         output.write(data)
         cache_file.write(file)
         cache_file.write("?")
         cache_file.write(str(time))
+        cache_file.write("?")
+        cache_file.write(str(p))
         cache_file.write("\n")
 
     output.close()

@@ -2,7 +2,9 @@
 #include "../mm/new.hpp"
 #include "common.hpp"
 #include "iterator.hpp"
+#include "kernel/util/id_generator.hpp"
 #include "random.hpp"
+#include <functional>
 #include <utility>
 
 namespace util
@@ -185,15 +187,15 @@ template <typename E> class skip_list
         return iterator(nullptr);
     }
 
-    bool has(const E &element) const { return find(element) != end(); }
+    iterator lower_find(const E &element) const { return lower_find(element, std::greater<E>()); }
 
-    iterator find_before(const E &element) const
+    template <typename CMP = std::greater<E>> iterator lower_find(const E &element, CMP cmp) const
     {
         node_t *node = list[max_level - level], *last_node = nullptr;
 
         for (level_t i = 0; i < level; i++)
         {
-            while (node->next && node->next->end_node->element < element)
+            while (node->next && !cmp(node->next->end_node->element, element))
             {
                 node = node->next;
             }
@@ -203,48 +205,25 @@ template <typename E> class skip_list
         return iterator(last_node);
     }
 
-    iterator for_each(each_func func, u64 user_data)
-    {
-        node_t *node = list[max_level - level];
+    iterator upper_find(const E &element) const { return upper_find(element, std::greater_equal<E>()); }
 
-        for (level_t i = 0; i < level; i++)
-        {
-            while (node->next)
-            {
-                int v = func(node->next->end_node->element, user_data);
-                if (v == 1) // ->
-                    node = node->next;
-                else if (v == 0) // == eq
-                    return iterator(node->next->end_node);
-                else
-                    break;
-            }
-            node = node->child;
-        }
-        return iterator(nullptr);
-    }
-
-    iterator for_each_last(each_func func, u64 user_data)
+    template <typename CMP = std::greater_equal<E>> iterator upper_find(const E &element, CMP cmp) const
     {
         node_t *node = list[max_level - level], *last_node = nullptr;
 
         for (level_t i = 0; i < level; i++)
         {
-            while (node->next)
+            while (node->next && !cmp(node->next->end_node->element, element))
             {
-                int v = func(node->next->end_node->element, user_data);
-                if (v == 1) // ->
-                    node = node->next;
-                else if (v == 0)
-                    return iterator(node->next->end_node);
-                else
-                    break;
+                node = node->next;
             }
             last_node = node;
             node = node->child;
         }
         return iterator(last_node);
     }
+
+    bool has(const E &element) const { return find(element) != end(); }
 
     void clear()
     {

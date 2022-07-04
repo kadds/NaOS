@@ -1,0 +1,3 @@
+[submodule "naos/libc/mlibc"]
+	path = naos/libc/mlibc
+	url = https://github.com/kadds/mlibc

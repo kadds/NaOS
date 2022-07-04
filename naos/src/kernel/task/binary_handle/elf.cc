@@ -1,10 +1,16 @@
 #include "kernel/task/binary_handle/elf.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
+#include "kernel/arch/task.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
+#include "kernel/trace.hpp"
+#include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
+#include <cstdint>
 
 namespace bin_handle
 {
@@ -90,13 +96,33 @@ namespace program_type
 {
 enum : u32
 {
+    // The array element is unused; other members' values are undefined. This type lets the program header table have
+    // ignored entries.
     null,
+    // The array element specifies a loadable segment, described by p_filesz and p_memsz. The bytes from the file are
+    // mapped to the beginning of the memory segment. If the segment's memory size (p_memsz) is larger than the file
+    // size (p_filesz), the ``extra'' bytes are defined to hold the value 0 and to follow the segment's initialized
+    // area. The file size may not be larger than the memory size. Loadable segment entries in the program header table
+    // appear in ascending order, sorted on the p_vaddr member.
     load,
+    // The array element specifies dynamic linking information.
     dynamic,
+    // The array element specifies the location and size of a null-terminated path name to invoke as an interpreter.
+    // This segment type is meaningful only for executable files (though it may occur for shared objects); it may not
+    // occur more than once in a file. If it is present, it must precede any loadable segment entry.
     interp,
+    // The array element specifies the location and size of auxiliary information.
     note,
+    // This segment type is reserved but has unspecified semantics. Programs that contain an array element of this type
+    // do not conform to the ABI.
     shlib,
+    // The array element, if present, specifies the location and size of the program header table itself, both in the
+    // file and in the memory image of the program. This segment type may not occur more than once in a file. Moreover,
+    // it may occur only if the program header table is part of the memory image of the program. If it is present, it
+    // must precede any loadable segment entry.
     phdr,
+    // The array element specifies the Thread-Local Storage template. Implementations need not support this program
+    // table entry.
     tls,
     gnu_eh_frame = 0x6474e550,
     gnu_stack,
@@ -120,13 +146,27 @@ struct section_64
 
 struct program_64
 {
+    // This member tells what kind of segment this array element describes or how to interpret the array element's
+    // information
     u32 type;
+    // This member gives flags relevant to the segment.
     u32 flags;
+    // This member gives the offset from the beginning of the file at which the first byte of the segment resides.
     u64 offset;
+    // This member gives the virtual address at which the first byte of the segment resides in memory.
     u64 vaddr;
+    // On systems for which physical addressing is relevant, this member is reserved for the segment's physical address.
+    // Because System V ignores physical addressing for application programs, this member has unspecified contents for
+    // executable files and shared objects.
     u64 paddr;
+    // This member gives the number of bytes in the file image of the segment; it may be zero.
     u64 file_size;
+    // This member gives the number of bytes in the memory image of the segment; it may be zero.
     u64 mm_size;
+    // As ``Program Loading'' describes in this chapter of the processor supplement, loadable process segments must have
+    // congruent values for p_vaddr and p_offset, modulo the page size. This member gives the value to which the
+    // segments are aligned in memory and in the file. Values 0 and 1 mean no alignment is required. Otherwise, p_align
+    // should be a positive, integral power of 2, and p_vaddr should equal p_offset, modulo p_align.
     u64 align;
 } PackStruct;
 
@@ -186,13 +226,13 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 
     program_64 *program_last = program + elf->phnum;
 
-    u64 max_code = 0;
+    u64 loaded_max_address = 0;
 
     while (program != program_last)
     {
         if (program->type == program_type::load)
         {
-            flag_t flag = 0;
+            flag_t flag = flags::user_mode;
             if (program->flags & 1)
             {
                 flag |= flags::executeable;
@@ -205,28 +245,46 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
             {
                 flag |= flags::readable;
             }
+
             u64 start = program->vaddr & ~(memory::page_size - 1);
-            u64 off = program->offset & ~(memory::page_size - 1);
-            u64 end = start + program->file_size + (program->offset - off);
-            if (max_code < end)
-                max_code = end;
-            new_mm_info->map_file(start, file, off, program->file_size + (program->offset - off), flag);
+            u64 align_offset = program->vaddr - start;
+            // trace::info("va ", trace::hex(program->vaddr), " start ", trace::hex(start), " off ",
+            //             trace::hex(program->offset), " file_size ", trace::hex(program->file_size), " mmsize ",
+            //             trace::hex(program->mm_size), " ba ", trace::hex(align_offset));
+
+            if (program->offset < align_offset)
+            {
+                trace::warning("program offset ", trace::hex(program->offset), " align offset ",
+                               trace::hex(align_offset));
+                return false;
+            }
+
+            u64 offset = program->offset - align_offset;
+            u64 mm_size = program->mm_size + align_offset;
+            u64 fsize = program->file_size + align_offset;
+            u64 end = start + mm_size;
+            if (loaded_max_address < end)
+                loaded_max_address = end;
+            new_mm_info->map_file(start, file, offset, fsize, mm_size, flag);
         }
         else if (program->type == program_type::interp)
         {
         }
         program++;
     }
-    if (max_code == 0)
+    if (loaded_max_address == 0)
     {
+        trace::warning("loaded max address is zero");
+        return false;
+    }
+    u64 brk_beg = ((loaded_max_address + memory::page_size - 1) & ~(memory::page_size - 1));
+
+    if (!new_mm_info->init_brk(brk_beg))
+    {
+        trace::warning("alloc brk fail");
         return false;
     }
 
-    new_mm_info->init_brk(((max_code + memory::page_size - 1) & ~(memory::page_size - 1)) + memory::page_size);
-    if (new_mm_info->get_brk() == 0)
-    {
-        return false;
-    }
     // stack mapping, stack size 8MB
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
@@ -234,8 +292,11 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
                                      memory::vm::fill_expand_vm, 0);
     if (stack_vm == nullptr)
     {
+        trace::warning("empty start_vm");
         return false;
     }
+    // trace::info("max load ", trace::hex(loaded_max_address), " brk ", trace::hex(brk_beg), " stack ",
+    //             trace::hex(stack_vm->end), "-", trace::hex(stack_vm->start));
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;

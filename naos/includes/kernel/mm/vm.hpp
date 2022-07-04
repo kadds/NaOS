@@ -21,6 +21,7 @@ enum flags : u64
     readable = 1ul << 0,
     writeable = 1ul << 1,
     executeable = 1ul << 2,
+    disable_cache = 1ul << 4,
     expand = 1ul << 11,
     user_mode = 1ul << 12,
     lock = 1ul << 13,
@@ -35,8 +36,9 @@ void init();
 void listen_page_fault();
 
 struct vm_t;
+class vm_allocator;
 
-typedef bool (*vm_page_fault_func)(u64 page_addr, const vm_t *vm);
+typedef bool (*vm_page_fault_func)(vm_allocator &vma, u64 page_addr, vm_t *vm);
 struct vm_t
 {
     u64 start;
@@ -44,14 +46,21 @@ struct vm_t
     u64 flags;
     vm_page_fault_func handle;
     u64 user_data;
-    bool operator==(const vm_t &rhs) const { return rhs.end == end; }
-    bool operator<(const vm_t &rhs) const { return end < rhs.end; }
+    u64 alloc_times = 0;
+    bool operator==(const vm_t &rhs) const { return rhs.start == start && rhs.end == end; }
+    bool operator<(const vm_t &rhs) const { return start < rhs.start; }
     vm_t(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data)
         : start(start)
         , end(end)
         , flags(flags)
         , handle(handle)
         , user_data(user_data){};
+    vm_t(u64 start)
+        : start(start)
+        , end(start)
+        , flags(0)
+        , handle(nullptr)
+        , user_data(0){};
 };
 
 class vm_allocator
@@ -83,7 +92,8 @@ class vm_allocator
     bool deallocate_map(u64 p);
 
     const vm_t *add_map(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data);
-    const vm_t *get_vm_area(u64 p);
+
+    vm_t *get_vm_area(u64 p);
 
     list_t &get_list() { return list; }
     lock::rw_lock_t &get_lock() { return list_lock; }
@@ -108,6 +118,8 @@ class mmu_paging
 
     void *page_map_vir2phy(void *virtual_addr);
 
+    bool virtual_address_mapped(void *addr);
+
     void sync_kernel();
 };
 
@@ -129,13 +141,14 @@ struct info_t
     ~info_t();
     info_t(const info_t &) = delete;
     info_t &operator=(const info_t &) = delete;
-    void init_brk(u64 start);
+    bool init_brk(u64 start);
     bool set_brk(u64 ptr);
     bool set_brk_now(u64 ptr);
     u64 get_brk();
 
-    const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_map_offset, u64 map_length, flag_t page_ext_attr);
-    bool umap_file(u64 addr);
+    const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_offset, u64 file_length, u64 mmap_length,
+                         flag_t page_ext_attr);
+    bool umap_file(u64 addr, u64 size);
     void sync_map_file(u64 addr);
 };
 
@@ -143,18 +156,20 @@ struct info_t
 struct map_t
 {
     fs::vfs::file *file;
-    u64 offset;
-    u64 length;
+    u64 file_offset;
+    u64 file_length;
+    u64 mmap_length;
     info_t *vm_info;
-    map_t(fs::vfs::file *f, u64 offset, u64 length, info_t *vmi)
+    map_t(fs::vfs::file *f, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
         : file(f)
-        , offset(offset)
-        , length(length)
+        , file_offset(file_offset)
+        , file_length(file_length)
+        , mmap_length(mmap_length)
         , vm_info(vmi){};
 };
 
-bool fill_file_vm(u64 page_addr, const vm_t *item);
-bool fill_expand_vm(u64 page_addr, const vm_t *item);
+bool fill_file_vm(vm_allocator &vma, u64 page_addr, vm_t *item);
+bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item);
 
 void sync_map_file(u64 addr);
 

@@ -63,6 +63,18 @@ i64 file::iread(byte *buffer, u64 max_size, flag_t flags)
     if (max_size > node->file_size - pointer_offset)
         max_size = node->file_size - pointer_offset;
 
+    if (node->ram_size < pointer_offset + max_size)
+    {
+        if (node->ram_size < (uint64_t)pointer_offset)
+        {
+            max_size = 0;
+        }
+        else
+        {
+            max_size = node->ram_size - pointer_offset;
+        }
+    }
+
     util::memcopy(buffer, node->start_ptr + pointer_offset, max_size);
     pointer_offset += max_size;
     return max_size;
