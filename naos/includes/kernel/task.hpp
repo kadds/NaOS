@@ -2,6 +2,9 @@
 #include "arch/task.hpp"
 #include "common.hpp"
 #include "cpu.hpp"
+#include "kernel/mm/allocator.hpp"
+#include "kernel/mm/new.hpp"
+#include "kernel/util/array.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
 #include "signal.hpp"
@@ -62,6 +65,7 @@ struct process_t
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
+    fs::vfs::file *file;
     signal_pack_t signal_pack;
     process_t();
 };
@@ -197,8 +201,38 @@ enum create_process_flags : flag_t
 };
 } // namespace create_process_flags
 
+struct args_array_item_t
+{
+    u32 size;
+    u32 offset;
+    args_array_item_t(u32 size, u32 offset)
+        : size(size)
+        , offset(offset)
+    {
+    }
+};
+
+struct process_args_t
+{
+    byte *data_ptr;
+    u64 size;
+    util::array<args_array_item_t> argv;
+    util::array<args_array_item_t> env;
+    process_args_t(memory::IAllocator *allocator)
+        : data_ptr(nullptr)
+        , size(0)
+        , argv(allocator)
+        , env(allocator)
+    {
+    }
+};
+
 thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags);
-process_t *create_process(fs::vfs::file *file, thread_start_func start_func, const char *args[], flag_t flags);
+
+process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
+
+process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *args[],
+                          const char *envp[], flag_t flags);
 
 process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t flags);
 
@@ -243,5 +277,13 @@ void thread_yield();
 void user_schedule();
 
 void set_tcb(thread_t *t, void *p);
+
+struct main_stack_data_t
+{
+    int argc;
+    char **argv;
+    char **envp;
+};
+void write_main_stack(thread_t *thread, main_stack_data_t stack);
 
 } // namespace task

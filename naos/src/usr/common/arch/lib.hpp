@@ -103,7 +103,7 @@ SYS_CALL(33, int64_t, current_tid)
 #define CP_FLAG_SHARED_NOROOT 16
 #define CP_FLAG_SHARED_WORK_DIR 32
 
-SYS_CALL(34, int64_t, create_process, const char *filename, char *const args[], uint64_t flags)
+SYS_CALL(34, int64_t, create_process, const char *filename, char *const args[], char *const env[], uint64_t flags)
 
 #define CT_FLAG_IMMEDIATELY 1
 #define CT_FLAG_NORETURN 4

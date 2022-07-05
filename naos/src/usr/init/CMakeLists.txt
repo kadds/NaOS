@@ -11,7 +11,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rfsroot/bin
 
 add_executable(init ${DIR_ALL})
 
-# target_link_libraries(init PUBLIC usr-common)
+target_link_libraries(init PUBLIC usr-common)
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/init)
 Set(To ${DEBUG_OUTPUT_DIRECTORY}/rfsroot/bin/init)

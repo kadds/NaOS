@@ -97,6 +97,8 @@ void init_data(cpuid_t cpuid)
     tss::set_ist(cpuid, 1, data.interrupt_rsp);
     tss::set_ist(cpuid, 3, data.exception_rsp);
     tss::set_ist(cpuid, 4, data.exception_nmi_rsp);
+
+    _enable_sse();
 }
 
 bool cpu_t::is_bsp() { return id == 0; }

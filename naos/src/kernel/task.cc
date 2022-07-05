@@ -308,82 +308,126 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
     return thd;
 }
 
-void copy_args_in_process(int argc, char *argv, char **&userland_argv)
+void befor_run_process(thread_start_func start_func, process_args_t *args, u64 none, void *entry)
 {
-    if (argc == 0)
+    thread_t *thd = current();
+    byte *base = reinterpret_cast<byte *>(thd->user_stack_top);
+    util::memcopy(base - args->size, args->data_ptr, args->size);
+    byte *base_array = base - args->size;
+
+    // bytes
+    // env[0], env[1], nullptr
+    // argv[0], argv[1], nullptr
+    // argv_pointer
+    // argc
+    u64 base_bytes = sizeof(void *) * (args->argv.size() + args->env.size() + 1 + 1 + 1);
+
+    byte **tail = reinterpret_cast<byte **>(base_array - base_bytes);
+    // argc
+    *(reinterpret_cast<u64 *>(tail)) = args->argv.size();
+    tail++;
+    // argv_pointer
+    for (auto item : args->argv)
     {
-        if (argv != nullptr)
-            memory::KernelCommonAllocatorV->deallocate(argv);
-        return;
+        char *ptr = reinterpret_cast<char *>(base_array + item.offset);
+        *(reinterpret_cast<char **>(tail)) = ptr;
+        tail++;
     }
-    if (argv == nullptr)
-        return;
-
-    auto mm_info = (memory::vm::info_t *)current_process()->mm_info;
-    auto ptr = mm_info->get_brk();
-    mm_info->set_brk_now(ptr + sizeof(char *) * argc + *(u16 *)argv);
-    argv += sizeof(u16) / sizeof(char);
-    userland_argv = (char **)ptr;
-    ptr += sizeof(char **) * argc;
-    char *dst = (char *)ptr;
-
-    for (int i = 0; i < argc; i++)
+    // nullptr
+    *(reinterpret_cast<byte **>(tail)) = nullptr;
+    tail++;
+    // envp
+    for (auto item : args->env)
     {
-        int n = util::strcopy(dst, argv) + 1;
-        userland_argv[i] = dst;
-
-        argv += n;
-        dst += n;
+        char *ptr = reinterpret_cast<char *>(base_array + item.offset);
+        *(reinterpret_cast<char **>(tail)) = ptr;
+        tail++;
     }
-    memory::KernelCommonAllocatorV->deallocate(argv);
+    // nullptr
+    *(reinterpret_cast<byte **>(tail)) = nullptr;
+    tail++;
+
+    memory::DeleteArray(memory::KernelCommonAllocatorV, args->data_ptr, args->size);
+    memory::Delete(memory::KernelCommonAllocatorV, args);
+
+    start_func(args->size + base_bytes, 0, 0, (u64)entry);
 }
 
-void befor_run_process(thread_start_func start_func, int argc, char *argv, void *entry)
+struct str_len_t
 {
-    char **userland_argv;
-    copy_args_in_process(argc, argv, userland_argv);
-    start_func(0, argc, (u64)userland_argv, (u64)entry);
-}
+    const char *ptr;
+    int len;
+};
 
-void cast_args(process_t *process, const char *args[], int *argc, char **argv)
+util::array<str_len_t> do_count_string_array(const char *arr[], int *cur_bytes, int max_bytes)
 {
-    /// here: maximum args byte size is 4096bytes (a page) - sizeof(u16)
-    constexpr int max_args_size = memory::page_size - 2;
-    int arg_size = 0;
-    int arg_count = 0;
-    if (args == nullptr)
+    const char **tmp_arr = arr;
+    util::array<str_len_t> args(memory::KernelCommonAllocatorV);
+    if (tmp_arr == nullptr)
     {
-        *argc = 0;
-        *argv = nullptr;
-        return;
+        *cur_bytes = (*cur_bytes + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
+        return args;
     }
-    for (int i = 0; i < 255; i++)
+    while (*tmp_arr != nullptr)
     {
-        if (args[i] == nullptr)
+        int len = util::strlen(*tmp_arr) + 1;
+        *cur_bytes += len;
+        args.push_back(str_len_t{*tmp_arr, len});
+        if (*cur_bytes >= max_bytes)
         {
-            break;
+            return args;
         }
-        int len = util::strlen(args[i]);
-        if (arg_size + len + 1 > max_args_size)
-            break;
-        arg_size += len + 1;
-        arg_count++;
+        tmp_arr++;
     }
-    *argc = arg_count;
+    *cur_bytes = (*cur_bytes + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
+    return args;
+}
 
-    char *ptr = (char *)memory::KernelCommonAllocatorV->allocate(arg_size + sizeof(u16), sizeof(u16));
+process_args_t *copy_args(const char *path, const char *argv[], const char *env[])
+{
+    process_args_t *ret = memory::New<process_args_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+    constexpr int max_args_bytes = memory::page_size * 8 - 2;
 
-    char *cur = ptr;
-    *(u16 *)cur = arg_size;
-    cur += sizeof(u16) / sizeof(char);
+    // argv[0]
+    int path_bytes = util::strlen(path) + 1 + sizeof(u64);
+    int count_bytes = path_bytes;
 
-    for (int i = 0; i < arg_count; i++)
+    util::array<str_len_t> argvs = do_count_string_array(argv, &count_bytes, max_args_bytes);
+    // int argv_bytes = count_bytes - path_bytes;
+
+    util::array<str_len_t> envs = do_count_string_array(env, &count_bytes, max_args_bytes);
+    // int env_bytes = count_bytes - argv_bytes;
+
+    // argv[0] argv[1]
+    // env[0]
+
+    byte *ptr = memory::NewArray<byte>(memory::KernelCommonAllocatorV, count_bytes);
+    byte *cur = ptr;
+
+    // argv
+    util::memcopy(cur, path, path_bytes);
+    ret->argv.push_back(args_array_item_t(path_bytes, cur - ptr));
+    cur += path_bytes;
+
+    for (auto item : argvs)
     {
-        int len = util::strcopy(cur, args[i]);
-        cur += len + 1;
+        ret->argv.push_back(args_array_item_t(item.len, cur - ptr));
+        util::memcopy(cur, item.ptr, item.len);
+        cur += item.len;
     }
 
-    *argv = ptr;
+    // env
+    for (auto item : envs)
+    {
+        ret->env.push_back(args_array_item_t(item.len, cur - ptr));
+        util::memcopy(cur, item.ptr, item.len);
+        cur += item.len;
+    }
+
+    ret->data_ptr = ptr;
+    ret->size = count_bytes;
+
+    return ret;
 }
 
 void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag_t flags)
@@ -429,13 +473,15 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
         new_ft->file_map.insert(2, nullptr);
 }
 
-process_t *create_process(fs::vfs::file *file, thread_start_func start_func, const char *args[], flag_t flags)
+process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *args[],
+                          const char *envp[], flag_t flags)
 {
     auto process = new_process();
     if (!process)
         return nullptr;
 
     process->parent_pid = current_process()->pid;
+    process->file = file;
 
     copy_fd(file, process, current_process(), flags);
 
@@ -471,11 +517,9 @@ process_t *create_process(fs::vfs::file *file, thread_start_func start_func, con
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
 
-    int argc;
-    char *argv;
-    cast_args(process, args, &argc, &argv);
+    auto process_args = copy_args(path, args, envp);
 
-    arch::task::create_thread(thd, (void *)befor_run_process, (u64)start_func, (u64)argc, (u64)argv,
+    arch::task::create_thread(thd, (void *)befor_run_process, (u64)start_func, reinterpret_cast<u64>(process_args), 0,
                               (u64)exec_info.entry_start_address);
 
     thd->user_stack_top = exec_info.stack_top;
@@ -804,6 +848,11 @@ void set_tcb(thread_t *t, void *p)
     trace::info("update tcb ", trace::hex(p));
     t->tcb = p;
     arch::task::update_fs(t);
+}
+
+void write_main_stack(thread_t *thread, main_stack_data_t stack)
+{
+    util::memcopy(thread->user_stack_top, &stack, sizeof(stack));
 }
 
 } // namespace task

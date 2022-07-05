@@ -14,13 +14,13 @@ thread_id current_tid() { return task::current()->tid; }
 
 process_id current_pid() { return task::current_process()->pid; }
 
-void user_process_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+void user_process_thread(u64 offset, u64 arg1, u64 arg2, u64 arg3)
 {
     /// the arg3 is entry address
-    arch::task::enter_userland(task::current(), (void *)arg3, arg1, arg2);
+    arch::task::enter_userland(task::current(), offset, (void *)arg3, arg1, arg2);
 }
 
-process_id create_process(const char *filename, const char *argv[], flag_t flags)
+process_id create_process(const char *filename, const char *argv[], const char *envp[], flag_t flags)
 {
     if (filename == nullptr || !is_user_space_pointer(filename))
     {
@@ -50,7 +50,7 @@ process_id create_process(const char *filename, const char *argv[], flag_t flags
     {
         return ENOEXIST;
     }
-    auto p = task::create_process(file, user_process_thread, argv, flags);
+    auto p = task::create_process(file, filename, user_process_thread, argv, envp, flags);
     if (p)
     {
         return p->pid;

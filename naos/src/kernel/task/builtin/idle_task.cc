@@ -29,7 +29,7 @@ void main()
         if (!file)
             trace::panic("Can't open init program");
 
-        set_init_process(task::create_process(file, init::main, 0, 0));
+        set_init_process(task::create_process(file, "/bin/init", init::main, 0, 0, 0));
         trace::debug("init process created pid=", get_init_process()->pid);
     }
     else

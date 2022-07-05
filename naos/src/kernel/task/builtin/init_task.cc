@@ -8,9 +8,9 @@
 namespace task::builtin::init
 {
 
-void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+void main(u64 offset, u64 arg1, u64 arg2, u64 arg3)
 {
     trace::info("init task running. pid ", task::current_process()->pid);
-    arch::task::enter_userland(current(), (void *)arg3, 0, 0);
+    arch::task::enter_userland(current(), offset, (void *)arg3, 0, 0);
 }
 } // namespace task::builtin::init

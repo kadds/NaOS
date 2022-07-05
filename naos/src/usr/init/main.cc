@@ -20,7 +20,7 @@ void signal_event()
     }
 }
 
-extern "C" void _start(int argc, char **argv)
+extern "C" void main(int argc, char **argv)
 {
     write(STDOUT, hello, sizeof(hello), 0);
     write(STDOUT, startup_shell, sizeof(startup_shell), 0);
@@ -37,7 +37,7 @@ extern "C" void _start(int argc, char **argv)
     // run shell
     while (1)
     {
-        nsh_pid = create_process("/bin/nsh", nullptr, 0);
+        nsh_pid = create_process("/bin/nsh", nullptr, nullptr, 0);
         if (nsh_pid <= 0)
         {
             write(STDOUT, shell_failed, sizeof(shell_failed), 0);

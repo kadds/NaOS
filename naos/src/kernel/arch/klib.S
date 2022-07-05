@@ -1,6 +1,17 @@
 
 .section .text
 
+.globl _enable_sse
+_enable_sse:
+    movq %cr0, %rax
+    andw $0xFFFB, %ax
+    orw $0x2, %ax
+    movq %rax, %cr0
+    movq %cr4, %rax
+    orw $0x300, %ax
+    movq %rax, %cr4
+    ret
+
 .globl _reload_segment
 _reload_segment:
     movq reload_seg_ptr_x(%rip), %rax

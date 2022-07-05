@@ -67,6 +67,30 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     return 0;
 }
 
+u64 enter_userland(::task::thread_t *thd, u64 stack_offset, void *entry, u64 arg0, u64 arg1)
+{
+    regs_t regs;
+    util::memzero(&regs, sizeof(regs));
+    thd->register_info->rip = (void *)&_sys_ret;
+    thd->register_info->task = thd;
+    regs.rcx = (u64)entry;
+    regs.r10 = (u64)(thd->user_stack_top) - stack_offset;
+    regs.rsp = regs.r10;
+    regs.r11 = (1 << 9); // rFLAGS: enable IF
+    regs.ds = gdt::gen_selector(gdt::selector_type::user_data, 3);
+    regs.es = regs.ds;
+    regs.cs = gdt::gen_selector(gdt::selector_type::user_code, 3);
+    regs.rdi = arg0;
+    regs.rsi = arg1;
+
+    uctx::UninterruptibleContext icu;
+    // write fs
+    update_fs(thd);
+
+    _call_sys_ret(&regs);
+    return 1;
+}
+
 u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1)
 {
     regs_t regs;
