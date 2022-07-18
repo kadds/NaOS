@@ -59,7 +59,7 @@ void init()
         memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
     paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start, paging::frame_size::size_2mb,
                 (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
-                paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable);
+                paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable, false);
     paging::reload();
 
     /// print video card memory info

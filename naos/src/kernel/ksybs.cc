@@ -31,7 +31,8 @@ void init()
                            fs::path_walk_flags::file);
     if (f == nullptr)
     {
-        trace::info("Loading kernel symbols file failed.");
+        trace::warning("Loading kernel symbols file failed.");
+        return;
     }
     u64 size = fs::vfs::size(f);
     file_header = reinterpret_cast<header *>(memory::KernelVirtualAllocatorV->allocate(size, 8));

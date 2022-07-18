@@ -62,7 +62,7 @@ void io_init()
 
     paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start,
                 phy_addr_t::from(io_map.base_addr), paging::frame_size::size_2mb, 1,
-                paging::flags::uncacheable | paging::flags::writable | paging::flags::write_through);
+                paging::flags::uncacheable | paging::flags::writable | paging::flags::write_through, false);
 
     paging::reload();
 
@@ -110,7 +110,7 @@ void io_init()
 
     start = memory::rcba_apic_bottom_address;
     paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start, base_addr,
-                paging::frame_size::size_2mb, 1, paging::flags::uncacheable | paging::flags::writable);
+                paging::frame_size::size_2mb, 1, paging::flags::uncacheable | paging::flags::writable, false);
 
     paging::reload();
 

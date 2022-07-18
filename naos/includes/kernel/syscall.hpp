@@ -77,3 +77,8 @@ ExportC void *system_call_table[];
 #undef ECOUNI
 #endif
 #define ECONTI -12ul
+
+#ifdef ENOEXEC
+#undef ENOEXEC
+#endif
+#define NOEXEC -13

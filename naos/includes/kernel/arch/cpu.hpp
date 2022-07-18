@@ -85,6 +85,7 @@ void init_data(cpuid_t id);
 
 cpu_t &get(cpuid_t cpuid);
 cpu_t &current();
+cpu_t &fast_current();
 void *current_user_data();
 
 u64 count();

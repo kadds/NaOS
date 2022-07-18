@@ -4,7 +4,7 @@
 #include "kernel/wait.hpp"
 namespace task::builtin::softirq
 {
-void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+void main(thread_start_info_t *info)
 {
     task::set_cpu_mask(task::current(), task::current_cpu_mask());
     while (1)

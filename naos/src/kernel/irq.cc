@@ -116,7 +116,7 @@ void init()
 {
     if (cpu::current().is_bsp())
     {
-        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, irq_count);
+        irq_list = memory::NewArray<request_lock_list_t>(memory::KernelBuddyAllocatorV, irq_count);
         soft_irq_list = memory::NewArray<request_lock_list_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT);
     }
     arch::exception::set_callback(&do_irq);

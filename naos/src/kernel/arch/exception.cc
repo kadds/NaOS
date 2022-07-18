@@ -43,7 +43,9 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
 {
     if (likely((regs->cs & 0x3) == 0)) // kernel space
     {
-        trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code);
+        ::task::thread_t *task = ::cpu::current().get_task();
+        trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code,
+                     " task ", task != nullptr ? task->process->pid : 0);
     }
     u64 extra_data = 0;
     if (regs->vector == 14)
@@ -70,6 +72,8 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             task->register_info->trap_vector = regs->vector;
             auto &pack = task->process->signal_pack;
             auto p = task->process;
+            trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code,
+                         " pid ", task->process->pid);
             switch (regs->vector)
             {
                 case 0:

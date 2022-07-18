@@ -8,14 +8,16 @@ class dentry;
 class file
 {
   protected:
-    i64 pointer_offset;
+    i64 offset;
     flag_t mode;
     dentry *entry;
     u64 ref_count;
 
   public:
     file()
-        : pointer_offset(0)
+        : offset(0)
+        , mode(0)
+        , entry(nullptr)
         , ref_count(0){};
 
     file(const file &f) = delete;
@@ -34,6 +36,9 @@ class file
     i64 read(byte *ptr, u64 max_size, flag_t flags);
     i64 write(const byte *ptr, u64 size, flag_t flags);
 
+    i64 pread(i64 offset, byte *ptr, u64 max_size, flag_t flags);
+    i64 pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags);
+
     virtual void flush() = 0;
 
     virtual void seek(i64 offset);
@@ -47,7 +52,7 @@ class file
     flag_t get_mode() const { return mode; }
 
   protected:
-    virtual i64 iread(byte *ptr, u64 max_size, flag_t flags) = 0;
-    virtual i64 iwrite(const byte *ptr, u64 size, flag_t flags) = 0;
+    virtual i64 iread(i64 &offset, byte *ptr, u64 max_size, flag_t flags) = 0;
+    virtual i64 iwrite(i64 &offset, const byte *ptr, u64 size, flag_t flags) = 0;
 };
 } // namespace fs::vfs

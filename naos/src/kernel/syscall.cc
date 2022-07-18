@@ -12,12 +12,10 @@ u64 none()
     return 1;
 }
 
-void *system_call_table[128];
+void *system_call_table[256];
 
 BEGIN_SYSCALL
 SYSCALL(0, none)
-SYSCALL(1, none)
-
 END_SYSCALL
 
 } // namespace syscall

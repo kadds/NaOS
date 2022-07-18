@@ -353,7 +353,6 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
     {
         idata.last_scan_url_point = name;
         idata.last_available_entry = prev_entry;
-
         u64 path_entry_len = next_path_entry_str(name, entry_buffer);
 
         if (!prev_entry->is_load_child())
@@ -375,7 +374,9 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
         auto next_entry = prev_entry->find_child(entry_buffer);
 
         if (next_entry == nullptr || next_entry->get_inode()->get_link_count() == 0)
+        {
             return nullptr;
+        }
 
         auto next_type = next_entry->get_inode()->get_type();
         if (next_type == fs::inode_type_t::symbolink)

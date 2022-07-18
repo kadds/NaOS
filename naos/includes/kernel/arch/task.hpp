@@ -31,6 +31,9 @@ u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1);
 
 u64 enter_userland(::task::thread_t *thd, u64 stack_offset, void *entry, u64 arg0, u64 arg1);
 
+void enter_userland(::task::thread_t *thd, regs_t &regs);
+void get_syscall_regs(regs_t &regs);
+
 void update_fs(::task::thread_t *thd);
 
 void *copy_to_return_signal(void *stack, void *ptr, u64 size);
@@ -53,5 +56,7 @@ void set_signal_param(userland_code_context *context, int index, u64 val);
 void set_signal_context(userland_code_context *context);
 
 void return_from_signal_context(userland_code_context *context);
+
+int copy_kernel_thread(::task::thread_t *target, ::task::thread_t *source);
 
 } // namespace arch::task

@@ -99,7 +99,7 @@ void *slab_group::alloc()
     slab *slab = free_head;
     auto &bitmap = slab->bitmap;
     u64 i = bitmap.scan_zero();
-    kassert(i < bitmap.count() && i < node_pre_slab, "Memory leacorruption in slab");
+    kassert(i < bitmap.count() && i < node_pre_slab, "Memory corruption in slab");
     bitmap.set(i);
     kassert(bitmap.get(i), "Can't allocate an address. index: ", i);
 
@@ -136,6 +136,7 @@ void slab_group::free(void *ptr)
     byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size * page_pre_slab - 1));
     slab *s = reinterpret_cast<slab *>(page_addr);
     u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
+    kassert(index < s->bitmap.count(), "s->data_ptr=", trace::hex(s->data_ptr));
     kassert(s->bitmap.get(index), "Not an assigned address or double free.");
     s->bitmap.clean(index);
     s->rest++;
@@ -169,6 +170,7 @@ slab_group *slab_group::get_group_from(void *ptr) {
     byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size - 1));
     page *p = memory::global_zones->get_page(page_addr);
     if (likely(p != nullptr)) {
+        kassert(!p->has_flag(page::buddy_free), "invalid buddy state, maybe double free");
         return p->get_ref_slab();
     }
     return nullptr;
@@ -206,7 +208,14 @@ void *SlabObjectAllocator::allocate(u64 size, u64 align)
     if (unlikely(size > slab_obj->get_size()))
         trace::panic("slab allocator can not alloc a larger size");
 
-    return slab_obj->alloc();
+    auto ptr = slab_obj->alloc();
+#ifdef _DEBUG
+    if (ptr != nullptr)
+    {
+        util::memset(ptr, 0xFFFF'FFFF'FFFF'FFFF, size);
+    }
+#endif
+    return ptr;
 };
 
 void SlabObjectAllocator::deallocate(void *ptr) { slab_obj->free(ptr); };

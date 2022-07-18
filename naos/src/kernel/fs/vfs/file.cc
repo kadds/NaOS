@@ -11,7 +11,7 @@ int file::open(dentry *entry, flag_t mode)
 {
     this->entry = entry;
     this->mode = mode;
-    this->pointer_offset = 0;
+    this->offset = 0;
     add_ref();
     return 0;
 }
@@ -46,15 +46,15 @@ file *file::clone()
     f->entry = entry;
     f->mode = mode;
     f->add_ref();
-    f->pointer_offset = pointer_offset;
+    f->offset = offset;
     return f;
 }
 
-void file::seek(i64 offset) { pointer_offset += offset; }
+void file::seek(i64 offset) { this->offset += offset; }
 
-void file::move(i64 where) { pointer_offset = where; }
+void file::move(i64 where) { this->offset = where; }
 
-i64 file::current_offset() { return pointer_offset; }
+i64 file::current_offset() { return offset; }
 
 u64 file::size() const { return entry->get_inode()->get_size(); }
 
@@ -65,7 +65,7 @@ i64 file::read(byte *ptr, u64 max_size, flag_t flags)
     auto type = entry->get_inode()->get_type();
     if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
     {
-        return iread(ptr, max_size, flags);
+        return iread(offset, ptr, max_size, flags);
     }
     else
     {
@@ -82,7 +82,42 @@ i64 file::write(const byte *ptr, u64 size, flag_t flags)
     auto type = entry->get_inode()->get_type();
     if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
     {
-        return iwrite(ptr, size, flags);
+        return iwrite(offset, ptr, size, flags);
+    }
+    else
+    {
+        auto pd = entry->get_inode()->get_pseudo_data();
+        if (pd)
+            return pd->write(ptr, size, flags);
+        return -1;
+    }
+    return 0;
+}
+
+i64 file::pread(i64 offset, byte *ptr, u64 max_size, flag_t flags)
+{
+    auto type = entry->get_inode()->get_type();
+    if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
+    {
+        return iread(offset, ptr, max_size, flags);
+    }
+    else
+    {
+        auto pd = entry->get_inode()->get_pseudo_data();
+        if (pd)
+            return pd->read(ptr, max_size, flags);
+        return -1;
+    }
+    return 0;
+}
+
+i64 file::pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags)
+{
+
+    auto type = entry->get_inode()->get_type();
+    if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
+    {
+        return iwrite(offset, ptr, size, flags);
     }
     else
     {

@@ -1,6 +1,7 @@
 #include "kernel/task/builtin/init_task.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/task/builtin/input_task.hpp"
@@ -8,9 +9,13 @@
 namespace task::builtin::init
 {
 
-void main(u64 offset, u64 arg1, u64 arg2, u64 arg3)
+void main(task::thread_start_info_t *info)
 {
     trace::info("init task running. pid ", task::current_process()->pid);
-    arch::task::enter_userland(current(), offset, (void *)arg3, 0, 0);
+    u64 offset = info->userland_stack_offset;
+    void *args = info->args;
+    void *entry = info->userland_entry;
+    memory::Delete(memory::KernelCommonAllocatorV, info);
+    arch::task::enter_userland(current(), offset, entry, reinterpret_cast<u64>(args), 0);
 }
 } // namespace task::builtin::init

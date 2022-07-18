@@ -187,7 +187,7 @@ void local_init()
 
             paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(),
                         (void *)memory::local_apic_bottom_address, local_apic_base_addr, paging::frame_size::size_2mb,
-                        1, paging::flags::uncacheable | paging::flags::writable);
+                        1, paging::flags::uncacheable | paging::flags::writable, false);
             paging::reload();
 
             apic_base_addr = (void *)memory::local_apic_bottom_address;

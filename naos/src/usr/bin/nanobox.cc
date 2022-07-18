@@ -1,17 +1,34 @@
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 uint64_t __dso_handle;
 
 int nsh(int argc, char **argv);
 
 int main(int argc, char **argv)
 {
-    if (strcmp(argv[0], "nsh") == 0)
+    if (strstr(argv[0], "nanobox") != nullptr)
     {
-        return nsh(argc - 1, argv + 1);
+        if (argc == 1)
+        {
+            argv[0] = nullptr;
+        }
+        else
+        {
+            argc--;
+            argv++;
+        }
     }
-    printf(R"(nanobox: command line tool box for NanoOs
+    char *cmd = argv[0];
+    if (cmd == nullptr)
+    {
+        printf(R"(nanobox: command line tool box for NanoOs
 )");
+        // return 0;
+    }
+    if (strcmp(cmd, "nsh") == 0)
+    {
+        return nsh(argc, argv);
+    }
     return 0;
 }

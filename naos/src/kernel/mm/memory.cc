@@ -1,7 +1,9 @@
 #include "kernel/mm/memory.hpp"
+#include "common.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
@@ -11,6 +13,8 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
+#include "kernel/util/memory.hpp"
+#include "kernel/util/str.hpp"
 
 namespace memory
 {
@@ -72,7 +76,23 @@ const char *get_type_str(map_type_t type)
     }
 }
 
-int detect_zones(const kernel_start_args *args)
+struct memory_range
+{
+    phy_addr_t beg;
+    phy_addr_t end;
+    void set(phy_addr_t beg, phy_addr_t end)
+    {
+        this->beg = beg;
+        this->end = end;
+    }
+    bool operator<(const memory_range &rhs) const { return beg < rhs.beg; }
+    bool operator<=(const memory_range &rhs) const { return beg <= rhs.beg; }
+    bool operator==(const memory_range &rhs) const { return beg == rhs.beg; }
+    bool operator>(const memory_range &rhs) const { return beg > rhs.beg; }
+    bool operator>=(const memory_range &rhs) const { return beg >= rhs.beg; }
+};
+
+int detect_zones(const kernel_start_args *args, memory_range used, memory_range *zones_range, int max_zones_range_count)
 {
     kernel_memory_map_item *mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
     max_memory_available = 0;
@@ -95,12 +115,24 @@ int detect_zones(const kernel_start_args *args)
             // kernel loaded at 0x10000 1Mib
             if (start <= phy_addr_t::from(100000))
             {
+                // Don't use 0x0 - 0x100000 lower 1MB memory
                 continue;
             }
-            zone_count++;
+            // split it
+            if (used.end <= end)
+            {
+                start = used.end > start ? used.end : start;
+            }
+            start = align_up(start, large_page_size);
+            if (zone_count + 1 > max_zones_range_count)
+            {
+                break;
+            }
             i64 len = end - start;
 
             max_memory_available += len;
+            zones_range[zone_count].set(start, end);
+            zone_count++;
         }
         if (mm_item->addr + mm_item->len > max_memory_maped)
         {
@@ -118,7 +150,7 @@ int detect_zones(const kernel_start_args *args)
     return zone_count;
 }
 
-void init(const kernel_start_args *args, u64 fix_memory_limit)
+void init(kernel_start_args *args, u64 fix_memory_limit)
 {
     if (args->mmap_count == 0)
         trace::panic("memory map shouldn't empty");
@@ -128,47 +160,63 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     VirtBootAllocatorV = New<VirtBootAllocator>(&vb);
     PhyBootAllocatorV = New<PhyBootAllocator>(&vb);
 
-    int zone_count = detect_zones(args);
-    auto mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
+    phy_addr_t start_data = align_down(phy_addr_t::from(args->data_base), page_size);
+    phy_addr_t end_data = phy_addr_t::from(PhyBootAllocator::current_ptr_address());
+
+    constexpr int max_memory_range_support = 32;
+    memory_range result_range[max_memory_range_support];
+    memory_range used_range;
+
+    // copy pointers
+    const char *cmdline = reinterpret_cast<const char *>(args->command_line);
+    u64 cmdlen = util::strlen(cmdline) + 1;
+    auto cmdline_ptr = reinterpret_cast<byte *>(vb.allocate(cmdlen, 1));
+    util::memcopy(cmdline_ptr, cmdline, cmdlen);
+    args->command_line = reinterpret_cast<u64>(va2pa(cmdline_ptr).get());
+
+    const char *bootloader = reinterpret_cast<const char *>(args->boot_loader_name);
+    u64 bootloaderlen = util::strlen(bootloader) + 1;
+    auto bootloader_ptr = reinterpret_cast<byte *>(vb.allocate(bootloaderlen, 1));
+    util::memcopy(bootloader_ptr, bootloader, bootloaderlen);
+    args->boot_loader_name = reinterpret_cast<u64>(va2pa(bootloader_ptr).get());
+
+    u64 image_size = args->rfsimg_size;
+    auto image_ptr = reinterpret_cast<byte *>(vb.allocate(image_size, 8));
+    auto image_phy_addr = va2pa(image_ptr);
+    util::memcopy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
+    args->rfsimg_start = reinterpret_cast<u64>(image_phy_addr.get());
+
+    auto end_used_memory_addr = align_up(image_ptr + image_size + page_size * 2 + fix_memory_limit, page_size);
+
+    // map the kernel and data
+    phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);
+    phy_addr_t end_kernel = align_up(phy_addr_t::from(args->kernel_base) + args->kernel_size, page_size);
+
+    if (start_data < end_kernel)
+    {
+        start_data = end_kernel;
+        trace::warning("Data space is in kernel code space");
+        if (end_data < start_data)
+        {
+            end_data = start_data;
+        }
+    }
+
+    used_range.set(start_kernel, va2pa(end_used_memory_addr));
+
+    int zone_count = detect_zones(args, used_range, result_range, max_memory_range_support);
 
     global_zones = (memory::zones *)VirtBootAllocatorV->allocate(sizeof(zones) + zone_count * sizeof(zone), 8);
     global_zones = new (global_zones) memory::zones(zone_count);
 
-    int zone_id = 0;
-    for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
+    for (int zone_id = 0; zone_id < zone_count; zone_id++)
     {
-        if (mm_item->map_type != map_type_t::available)
-        {
-
-            continue;
-        }
-
-        phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
-        phy_addr_t end = align_down(phy_addr_t::from(mm_item->addr + mm_item->len), page_size);
-        if (start >= end)
-        {
-
-            continue;
-        }
-        if (start <= phy_addr_t::from(100000))
-        {
-
-            continue;
-        }
+        auto range = result_range[zone_id];
 
         zone *z = global_zones->at(zone_id);
-        if (end > phy_addr_t::from(0x100000) && start <= phy_addr_t::from(0x100000))
-        {
-            z = new (z) zone(start, end, phy_addr_t::from(0x100000),
-                             phy_addr_t::from(PhyBootAllocatorV->current_ptr_address()));
-        }
-        else
-        {
-            z = new (z) zone(start, end, nullptr, nullptr);
-        }
-        trace::debug("Memory zone index ", zone_id, " num of page ", z->pages_count(), ", block of buddy ",
-                     z->buddy_blocks_count());
-        zone_id++;
+        z = new (z) zone(range.beg, range.end, nullptr, nullptr);
+        trace::debug("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
+                     " num of page ", z->pages_count(), ", block of buddy ", z->buddy_blocks_count());
     }
 
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
@@ -184,47 +232,15 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
         i.group = New<slab_group>(VirtBootAllocatorV, i.size, i.name, 8, 0);
     }
 
-    // map the kernel and data
-    phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);
-    phy_addr_t end_kernel = align_up(phy_addr_t::from(args->kernel_base) + args->kernel_size, page_size);
-
-    phy_addr_t start_data = align_down(phy_addr_t::from(args->data_base), page_size);
-    phy_addr_t end_data = align_up(
-        phy_addr_t::from(PhyBootAllocator::current_ptr_address()) + sizeof(vm::info_t) + fix_memory_limit, page_size);
-
-    if (start_data < end_kernel)
-    {
-        start_data = end_kernel;
-        trace::warning("Data space is in kernel code space");
-        if (end_data < start_data)
-        {
-            end_data = start_data;
-        }
-    }
-
-    phy_addr_t start_image_data = align_down(phy_addr_t::from(args->rfsimg_start), page_size);
-    phy_addr_t end_image_data = align_up(phy_addr_t::from(args->rfsimg_start + args->rfsimg_size), page_size);
-
-    if (end_image_data <= start_data || start_image_data >= end_data)
-    {
-        global_zones->tag_alloc(start_image_data, end_image_data);
-    }
-    // Don't use 0x0 - 0x100000 lower 1MB memory
-    global_zones->tag_alloc(phy_addr_t::from(0x0), phy_addr_t::from(0x100000));
-    // tell buddy system kernel used
-    global_zones->tag_alloc(start_kernel, end_kernel);
-    global_zones->tag_alloc(start_data, end_data);
-
-    trace::debug("Kernel(code):", reinterpret_cast<addr_t>(start_kernel()), "-", reinterpret_cast<addr_t>(end_kernel()),
+    trace::debug("Kernel(code):", trace::hex(start_kernel()), "-", trace::hex(end_kernel()),
                  ", size:", (end_kernel - start_kernel), " -> ", (end_kernel - start_kernel) >> 10, "Kib");
 
-    trace::debug("Kernel(boot data):", reinterpret_cast<addr_t>(start_data()), "-",
-                 reinterpret_cast<addr_t>(end_data()), ", size:", (end_data - start_data), " -> ",
-                 (end_data - start_data) >> 10, "Kib");
+    trace::debug("Kernel(boot data):", trace::hex(start_data()), "-", trace::hex(end_data()),
+                 ", size:", (end_data - start_data), " -> ", (end_data - start_data) >> 10, "Kib");
 
-    trace::debug("Kernel(image data):", reinterpret_cast<addr_t>(start_image_data()), "-",
-                 reinterpret_cast<addr_t>(end_image_data()), ", size:", (end_image_data - start_image_data), " -> ",
-                 (end_image_data - start_image_data) >> 10, "Kib");
+    trace::debug("Kernel(image data):", trace::hex(image_phy_addr.get()), "-",
+                 trace::hex((image_phy_addr + args->rfsimg_size).get()), ", size:", image_size, " -> ",
+                 (image_size) >> 10, "Kib");
 
     KernelBuddyAllocatorV = global_zones;
 
@@ -235,7 +251,7 @@ void init(const kernel_start_args *args, u64 fix_memory_limit)
     kernel_vm_info->vma.set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
 
     PhyBootAllocatorV->discard();
-    kassert(PhyBootAllocatorV->current_ptr_address() <= end_data(), "BootAllocator is Out of memory");
+    kassert(VirtBootAllocatorV->current_ptr_address() <= end_used_memory_addr, "BootAllocator is Out of memory");
     msg_queue_init();
 }
 
@@ -278,7 +294,9 @@ void *kmalloc(u64 size, u64 align)
     kassert(kmalloc_fixed_slab_size[mid].size >= size, "Kernel malloc check failed!");
 
     SlabObjectAllocator allocator(kmalloc_fixed_slab_size[mid].group);
-    return allocator.allocate(size, align);
+    auto ptr = allocator.allocate(size, align);
+    kassert((reinterpret_cast<u64>(ptr) & (align - 1)) == 0, "check alignment fail");
+    return ptr;
 }
 
 void kfree(void *addr)
@@ -286,7 +304,7 @@ void kfree(void *addr)
     slab_group *s = slab_group::get_group_from(addr);
     if (s == nullptr)
     {
-        trace::warning("address isn't malloc from kmalloc ", reinterpret_cast<addr_t>(addr));
+        trace::panic("address isn't malloc from kmalloc ", trace::hex(addr));
         return;
     }
     SlabObjectAllocator allocator(s);
@@ -302,7 +320,7 @@ void *vmalloc(u64 size, u64 align)
         auto phy = memory::va2pa(KernelBuddyAllocatorV->allocate(1, 0));
         arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(), (void *)start, phy,
                           arch::paging::frame_size::size_4kb, 1,
-                          arch::paging::flags::writable | arch::paging::flags::present);
+                          arch::paging::flags::writable | arch::paging::flags::present, false);
     }
     arch::paging::reload();
     return (void *)vm->start;

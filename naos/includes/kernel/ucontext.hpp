@@ -105,6 +105,8 @@ template <typename Controller> struct Guard_t
     {
         ctrl.begin();
     }
+    Guard_t(const Guard_t &) = delete;
+    Guard_t &operator=(const Guard_t &) = delete;
 
     ~Guard_t() { ctrl.end(); }
 };

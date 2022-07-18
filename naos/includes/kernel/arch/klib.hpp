@@ -35,6 +35,7 @@ ExportC void _cpu_id(u32 *out_eax, u32 *out_ebx, u32 *out_ecx, u32 *out_edx);
 
 ExportC NoReturn void _kernel_thread(regs_t *regs);
 ExportC void _switch_task(void *prev, void *next);
+ExportC void _from_rip();
 
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
 
@@ -68,6 +69,21 @@ ExportC volatile char _sys_ret;
 ExportC NoReturn void _call_sys_ret(regs_t *regs);
 ExportC void _switch_stack(u64 param1, u64 param2, u64 param3, u64 param4, void *func, void *rsp);
 ExportC void _enable_sse();
+
+class stack_frame_t
+{
+  public:
+    void *rip = nullptr;
+    void *rsp = nullptr;
+    void *rbp = nullptr;
+
+  public:
+    const char *get_frame_name();
+};
+
+int get_stackframes(int skip, stack_frame_t *frames, int count);
+
+void get_task_id(u64 &pid, u64 &tid);
 
 inline static u64 get_stack()
 {

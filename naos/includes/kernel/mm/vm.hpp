@@ -3,6 +3,11 @@
 #include "../util/skip_list.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
+#include "kernel/mm/allocator.hpp"
+#include "kernel/mutex.hpp"
+#include "kernel/types.hpp"
+#include "kernel/util/array.hpp"
+#include "kernel/util/hash_map.hpp"
 #include "list_node_cache.hpp"
 
 namespace fs::vfs
@@ -25,10 +30,11 @@ enum flags : u64
     expand = 1ul << 11,
     user_mode = 1ul << 12,
     lock = 1ul << 13,
-    shared = 1ul << 14,
+    cow = 1ul << 14,
     populate = 1ul << 15,
     file = 1ul << 16,
-    huge_page = 1ul << 17,
+    big_page = 1ul << 17,
+    huge_page = 1ul << 18,
 };
 }
 
@@ -62,6 +68,8 @@ struct vm_t
         , handle(nullptr)
         , user_data(0){};
 };
+
+class info_t;
 
 class vm_allocator
 {
@@ -97,6 +105,9 @@ class vm_allocator
 
     list_t &get_list() { return list; }
     lock::rw_lock_t &get_lock() { return list_lock; }
+    void clone(info_t *info, vm_allocator &to, flag_t flag);
+
+  private:
 };
 
 class mmu_paging
@@ -109,10 +120,10 @@ class mmu_paging
     ~mmu_paging();
     void load_paging();
 
-    void map_area(const vm_t *vm);
-    void map_area_phy(const vm_t *vm, phy_addr_t start);
+    void map_area(const vm_t *vm, bool override);
+    void map_area_phy(const vm_t *vm, phy_addr_t start, bool override);
 
-    void unmap_area(const vm_t *vm);
+    void unmap_area(const vm_t *vm, bool free);
 
     void *get_base_page();
 
@@ -121,6 +132,22 @@ class mmu_paging
     bool virtual_address_mapped(void *addr);
 
     void sync_kernel();
+
+    void clone(mmu_paging &to, int deep);
+    int remapping(const vm_t *vm, void *vir, phy_addr_t phy);
+
+    bool has_shared(void *vir);
+    bool clear_shared(void *vir, bool writeable);
+};
+
+struct shared_info_t
+{
+    lock::spinlock_t spin_lock;
+    util::hash_set<process_id> shared_pid;
+    shared_info_t(memory::IAllocator *allocator)
+        : shared_pid(allocator)
+    {
+    }
 };
 
 /// virtual memory info struct.
@@ -132,6 +159,8 @@ struct info_t
     memory::vm::vm_allocator vma;
     memory::vm::mmu_paging mmu_paging;
     const vm_t *head_vm;
+    shared_info_t *shared_info;
+    lock::spinlock_t shared_info_lock;
 
   private:
     u64 current_head_ptr;
@@ -150,6 +179,9 @@ struct info_t
                          flag_t page_ext_attr);
     bool umap_file(u64 addr, u64 size);
     void sync_map_file(u64 addr);
+
+    void share_to(pid_t from_id, pid_t to_id, info_t *info);
+    bool copy_at(u64 vir);
 };
 
 /// map struct

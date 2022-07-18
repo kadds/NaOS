@@ -1,13 +1,17 @@
 #include "kernel/task.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/mm.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 
+#include "kernel/fs/vfs/defines.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 
+#include "kernel/time.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/array.hpp"
 #include "kernel/util/hash_map.hpp"
@@ -109,6 +113,27 @@ inline process_t *new_process()
     return process;
 }
 
+inline process_t *copy_process(process_t *p)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto id = process_id_generator->next();
+    if (id == util::null_id)
+        return nullptr;
+    process_t *process = memory::New<process_t>(process_t_allocator);
+    process->attributes.store(p->attributes.load());
+    process->pid = id;
+    process->file = p->file;
+    process->parent_pid = p->pid;
+    process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+    auto info = memory::New<mm_info_t>(mm_info_t_allocator);
+    reinterpret_cast<mm_info_t *>(p->mm_info)->share_to(p->pid, id, info);
+    process->mm_info = info;
+    process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
+    global_process_map->insert(id, process);
+
+    return process;
+}
+
 inline void delete_process(process_t *p)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
@@ -203,6 +228,8 @@ void create_devs()
 }
 
 std::atomic_bool is_init = false, init_ok = false;
+bool has_init() { return is_init; }
+
 void init()
 {
     process_t *process;
@@ -276,7 +303,7 @@ void init()
         cpu_pause();
 }
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags)
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, void *arg, flag_t flags)
 {
     thread_t *thd = new_thread(process);
     thd->state = thread_state::ready;
@@ -298,7 +325,12 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, u64 ar
 
     thd->cpumask.mask = cpumask_none;
 
-    arch::task::create_thread(thd, (void *)start_func, arg0, arg1, arg2, 0);
+    thread_start_info_t *info = memory::New<thread_start_info_t>(memory::KernelCommonAllocatorV);
+    info->args = arg;
+    info->userland_entry = entry;
+    info->userland_stack_offset = 0;
+
+    arch::task::create_thread(thd, (void *)start_func, reinterpret_cast<u64>(info), 0, 0, 0);
 
     if (flags & create_thread_flags::real_time_rr)
         scheduler::add(thd, scheduler::scheduler_class::round_robin);
@@ -350,7 +382,12 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
     memory::DeleteArray(memory::KernelCommonAllocatorV, args->data_ptr, args->size);
     memory::Delete(memory::KernelCommonAllocatorV, args);
 
-    start_func(args->size + base_bytes, 0, 0, (u64)entry);
+    thread_start_info_t *info = memory::New<thread_start_info_t>(memory::KernelCommonAllocatorV);
+    info->userland_entry = entry;
+    info->userland_stack_offset = args->size + base_bytes;
+    info->args = nullptr;
+
+    start_func(info);
 }
 
 struct str_len_t
@@ -359,9 +396,9 @@ struct str_len_t
     int len;
 };
 
-util::array<str_len_t> do_count_string_array(const char *arr[], int *cur_bytes, int max_bytes)
+util::array<str_len_t> do_count_string_array(const char *const arr[], int *cur_bytes, int max_bytes)
 {
-    const char **tmp_arr = arr;
+    const char *const *tmp_arr = arr;
     util::array<str_len_t> args(memory::KernelCommonAllocatorV);
     if (tmp_arr == nullptr)
     {
@@ -383,7 +420,7 @@ util::array<str_len_t> do_count_string_array(const char *arr[], int *cur_bytes, 
     return args;
 }
 
-process_args_t *copy_args(const char *path, const char *argv[], const char *env[])
+process_args_t *copy_args(const char *path, const char *const argv[], const char *const env[])
 {
     process_args_t *ret = memory::New<process_args_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     constexpr int max_args_bytes = memory::page_size * 8 - 2;
@@ -473,8 +510,8 @@ void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag
         new_ft->file_map.insert(2, nullptr);
 }
 
-process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *args[],
-                          const char *envp[], flag_t flags)
+process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *const args[],
+                          const char *const envp[], flag_t flags)
 {
     auto process = new_process();
     if (!process)
@@ -487,7 +524,7 @@ process_t *create_process(fs::vfs::file *file, const char *path, thread_start_fu
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &vm_paging = mm_info->mmu_paging;
-    // read executeable file header 128 bytes
+    // read file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
     file->move(0);
     file->read(header, 128, 0);
@@ -519,22 +556,26 @@ process_t *create_process(fs::vfs::file *file, const char *path, thread_start_fu
 
     auto process_args = copy_args(path, args, envp);
 
-    arch::task::create_thread(thd, (void *)befor_run_process, (u64)start_func, reinterpret_cast<u64>(process_args), 0,
-                              (u64)exec_info.entry_start_address);
+    arch::task::create_thread(thd, (void *)befor_run_process, reinterpret_cast<u64>(start_func),
+                              reinterpret_cast<u64>(process_args), 0,
+                              reinterpret_cast<u64>(exec_info.entry_start_address));
 
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
     vm_paging.sync_kernel();
 
     if (flags & create_process_flags::real_time_rr)
+    {
+        thd->attributes |= thread_attributes::real_time;
         scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    }
     else
         scheduler::add(thd, scheduler::scheduler_class::cfs);
 
     return process;
 }
 
-process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t flags)
+process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags)
 {
     auto process = new_kernel_process();
     if (!process)
@@ -554,17 +595,115 @@ process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t 
     void *stack_top = (char *)stack + memory::kernel_stack_size;
     thd->kernel_stack_top = stack_top;
 
-    arch::task::create_thread(thd, (void *)start_func, arg0, 0, 0, 0);
+    arch::task::create_thread(thd, (void *)start_func, reinterpret_cast<u64>(arg), 0, 0, 0);
 
     thd->user_stack_top = 0;
     thd->user_stack_bottom = 0;
 
     if (flags & create_process_flags::real_time_rr)
+    {
+        thd->attributes |= thread_attributes::real_time;
         scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    }
     else
         scheduler::add(thd, scheduler::scheduler_class::cfs);
 
     return process;
+}
+
+void fork_start_func(regs_t *regs)
+{
+    regs_t r = *regs;
+    memory::Delete(memory::KernelCommonAllocatorV, regs);
+    arch::task::enter_userland(current(), r);
+}
+
+int fork()
+{
+    auto current_thread = current();
+    auto process = copy_process(current_process());
+    if (!process)
+        return -1;
+
+    copy_fd(current_process()->file, process, current_process(), 0);
+
+    auto mm_info = (mm_info_t *)process->mm_info;
+    auto &vm_paging = mm_info->mmu_paging;
+
+    /// create thread
+    thread_t *thd = new_thread(process);
+    if (!thd)
+        return -1;
+    process->main_thread = thd;
+    thd->attributes |= thread_attributes::main;
+    thd->state = thread_state::ready;
+    thd->cpumask.mask = cpumask_none;
+    void *stack = new_kernel_stack();
+    void *stack_top = (char *)stack + memory::kernel_stack_size;
+    thd->kernel_stack_top = stack_top;
+    thd->user_stack_top = current_thread->user_stack_top;
+    thd->user_stack_bottom = current_thread->user_stack_bottom;
+    thd->tcb = current_thread->tcb;
+
+    regs_t *regs = memory::New<regs_t>(memory::KernelCommonAllocatorV);
+    arch::task::get_syscall_regs(*regs);
+    regs->rax = 0;
+
+    arch::task::create_thread(thd, (void *)fork_start_func, reinterpret_cast<u64>(regs), 0, 0, 0);
+
+    vm_paging.sync_kernel();
+    arch::paging::reload();
+    
+    if (current()->attributes & thread_attributes::real_time)
+    {
+        thd->attributes |= thread_attributes::real_time;
+        scheduler::add(thd, scheduler::scheduler_class::round_robin);
+    }
+    else
+    {
+        scheduler::add(thd, scheduler::scheduler_class::cfs);
+    }
+    return thd->process->pid;
+}
+
+int execve(fs::vfs::file *file, const char *path, thread_start_func start_func, char *const argv[], char *const envp[])
+{
+    auto thd = current();
+    auto process = thd->process;
+    auto process_args = copy_args(path, argv, envp);
+    trace::info("process ", process->pid, " execve with ", path);
+
+    auto mm_info = (mm_info_t *)process->mm_info;
+    auto new_mm_info = memory::New<mm_info_t>(memory::KernelCommonAllocatorV);
+    {
+        uctx::UninterruptibleContext ctx;
+        process->mm_info = new_mm_info;
+        new_mm_info->mmu_paging.sync_kernel();
+        new_mm_info->mmu_paging.load_paging();
+    }
+    process->file = file;
+
+    memory::Delete(memory::KernelCommonAllocatorV, mm_info);
+    mm_info = new_mm_info;
+
+    // read file header 128 bytes
+    byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
+    file->move(0);
+    file->read(header, 128, 0);
+    bin_handle::execute_info exec_info;
+    if (!bin_handle::load(header, file, mm_info, &exec_info))
+    {
+        trace::info("Can't load execute file.");
+        delete_process(process);
+        memory::KernelCommonAllocatorV->deallocate(header);
+        return ENOEXEC;
+    }
+    memory::KernelCommonAllocatorV->deallocate(header);
+    thd->user_stack_top = exec_info.stack_top;
+    thd->user_stack_bottom = exec_info.stack_bottom;
+
+    befor_run_process(start_func, process_args, 0, exec_info.entry_start_address);
+    return 0;
 }
 
 void sleep_callback_func(u64 pass, u64 data)
@@ -578,14 +717,16 @@ void sleep_callback_func(u64 pass, u64 data)
     return;
 }
 
-void do_sleep(u64 milliseconds)
+void do_sleep(const timeclock::time &time)
 {
+    timeclock::time t = time;
+    auto us = t.tv_nsec / 1000 + t.tv_sec * 1000 * 1000;
     uctx::UninterruptibleContext icu;
 
-    if (milliseconds != 0)
+    if (us != 0)
     {
         scheduler::update_state(current(), thread_state::stop);
-        timer::add_watcher(milliseconds * 1000, sleep_callback_func, (u64)current());
+        timer::add_watcher(us, sleep_callback_func, (u64)current());
     }
     else
     {
@@ -687,7 +828,7 @@ void start_task_idle()
         scheduler::init_cpu();
     }
     enable_preempt();
-    task::builtin::idle::main();
+    task::builtin::idle::main(0);
 }
 
 bool wait_process_exit(u64 user_data)
@@ -791,6 +932,27 @@ u64 join_thread(thread_t *thd, i64 &ret)
     return 0;
 }
 
+thread_t *find_kernel_stack_thread(void *stack_ptr)
+{
+    u64 s = reinterpret_cast<u64>(stack_ptr);
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    for (auto p : *global_process_map)
+    {
+        auto process = p.value;
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+        auto &list = *(thread_list_t *)process->thread_list;
+        for (auto thd : list)
+        {
+            if (reinterpret_cast<u64>(thd->kernel_stack_top) > s &&
+                reinterpret_cast<u64>(thd->kernel_stack_top) - memory::kernel_stack_size < s)
+            {
+                return thd;
+            }
+        }
+    }
+    return nullptr;
+}
+
 void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::stop); }
 
 void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
@@ -845,7 +1007,6 @@ ExportC void userland_return() { scheduler::schedule(); }
 
 void set_tcb(thread_t *t, void *p)
 {
-    trace::info("update tcb ", trace::hex(p));
     t->tcb = p;
     arch::task::update_fs(t);
 }

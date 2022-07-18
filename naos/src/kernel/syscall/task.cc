@@ -2,22 +2,63 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/syscall.hpp"
+#include "kernel/time.hpp"
+#include <atomic>
 
 namespace naos::syscall
 {
 
+enum futex_op
+{
+    futex_wake = 1,
+    futex_wait = 2,
+};
+
+int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
+{
+    if (op & futex_op::futex_wait)
+    {
+        return 0;
+    }
+    else if (op & futex_op::futex_wake)
+    {
+        return 0;
+    }
+    else
+    {
+        return EPARAM;
+    }
+}
+
 /// exit process with return value
 void exit(i64 ret_value) { task::do_exit(ret_value); }
+
+void exit_thread(i64 ret)
+{
+    if (task::current()->attributes & task::thread_attributes::main)
+    {
+        task::do_exit(ret);
+    }
+    else
+    {
+        task::do_exit_thread(ret);
+    }
+}
 
 thread_id current_tid() { return task::current()->tid; }
 
 process_id current_pid() { return task::current_process()->pid; }
 
-void user_process_thread(u64 offset, u64 arg1, u64 arg2, u64 arg3)
+void before_user_thread(task::thread_start_info_t *info)
 {
-    /// the arg3 is entry address
-    arch::task::enter_userland(task::current(), offset, (void *)arg3, arg1, arg2);
+    u64 offset = info->userland_stack_offset;
+    void *entry = info->userland_entry;
+    u64 args = reinterpret_cast<u64>(info->args);
+    memory::Delete(memory::KernelCommonAllocatorV, info);
+
+    arch::task::enter_userland(task::current(), offset, entry, args, 0);
 }
 
 process_id create_process(const char *filename, const char *argv[], const char *envp[], flag_t flags)
@@ -50,7 +91,7 @@ process_id create_process(const char *filename, const char *argv[], const char *
     {
         return ENOEXIST;
     }
-    auto p = task::create_process(file, filename, user_process_thread, argv, envp, flags);
+    auto p = task::create_process(file, filename, before_user_thread, argv, envp, flags);
     if (p)
     {
         return p->pid;
@@ -58,36 +99,19 @@ process_id create_process(const char *filename, const char *argv[], const char *
     return EFAILED;
 }
 
-void user_thread(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
-{
-    arch::task::enter_userland(task::current(), (void *)arg1, arg0, 0);
-}
-
-thread_id create_thread(void *entry, u64 arg, flag_t flags)
+thread_id create_thread(void *entry, void *arg, flag_t flags)
 {
     if (entry == nullptr || !is_user_space_pointer(entry))
     {
         return EPARAM;
     }
 
-    auto t = task::create_thread(task::current_process(), user_thread, arg, (u64)entry, 0, flags);
+    auto t = task::create_thread(task::current_process(), before_user_thread, entry, arg, flags);
     if (t)
     {
         return t->tid;
     }
     return EFAILED;
-}
-
-void exit_thread(i64 ret)
-{
-    if (task::current()->attributes & task::thread_attributes::main)
-    {
-        task::do_exit(ret);
-    }
-    else
-    {
-        task::do_exit_thread(ret);
-    }
 }
 
 int detach(thread_id tid) { return task::detach_thread(task::find_tid(task::current_process(), tid)); }
@@ -115,7 +139,7 @@ long wait_process(process_id pid, i64 *ret)
 }
 
 /// sleep current thread
-void sleep(timeclock::millisecond_t milliseconds) { task::do_sleep(milliseconds); }
+void sleep(const timeclock::time *time) { task::do_sleep(*time); }
 
 struct sig_info_t
 {
@@ -302,26 +326,117 @@ int set_tcb(void *p)
     return 0;
 }
 
-BEGIN_SYSCALL
-SYSCALL(30, exit)
-SYSCALL(31, sleep)
-SYSCALL(32, current_pid)
-SYSCALL(33, current_tid)
-SYSCALL(34, create_process)
-SYSCALL(35, create_thread)
-SYSCALL(36, detach)
-SYSCALL(37, join)
-SYSCALL(38, wait_process)
-SYSCALL(39, exit_thread)
-SYSCALL(40, raise)
-SYSCALL(41, sigsend)
-SYSCALL(42, sigwait)
-SYSCALL(43, sigmask)
+int chdir(const char *pathname)
+{
+    if (pathname == nullptr || !is_user_space_pointer(pathname))
+    {
+        return EPARAM;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current, fs::path_walk_flags::directory);
+    if (entry != nullptr)
+    {
+        ft->current = entry;
+        return OK;
+    }
+    return EFAILED;
+}
 
-SYSCALL(47, getcpu_running)
-SYSCALL(48, setcpu_mask)
-SYSCALL(49, getcpu_mask)
-SYSCALL(60, set_tcb)
+u64 current_dir(char *pathname, u64 max_len)
+{
+    if (pathname == nullptr || !is_user_space_pointer(pathname) || !is_user_space_pointer(pathname + max_len))
+    {
+        return EBUFFER;
+    }
+
+    auto ft = task::current_process()->res_table.get_file_table();
+    return fs::vfs::pathname(ft->root, ft->current, pathname, max_len);
+}
+
+int chroot(const char *pathname)
+{
+    if (pathname == nullptr || !is_user_space_pointer(pathname))
+    {
+        return EPARAM;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+
+    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current,
+                                    fs::path_walk_flags::directory | fs::path_walk_flags::cross_root);
+    if (entry != nullptr)
+    {
+        ft->root = entry;
+        return OK;
+    }
+    return EFAILED;
+}
+
+int fork() { return task::fork(); }
+
+int clone(void *entry, void *arg, void *tcb)
+{
+    if (entry == nullptr || !is_user_space_pointer(entry))
+    {
+        return EPARAM;
+    }
+
+    auto t = task::create_thread(task::current_process(), before_user_thread, entry, arg, 0);
+    if (t)
+    {
+        return t->tid;
+    }
+    return EFAILED;
+}
+
+int execve(const char *path, char *const argv[], char *const envp[])
+{
+    if (argv == nullptr || !is_user_space_pointer(argv))
+    {
+        return EPARAM;
+    }
+    if (envp == nullptr || !is_user_space_pointer(envp))
+    {
+        return EPARAM;
+    }
+    auto ft = task::current_process()->res_table.get_file_table();
+    auto file = fs::vfs::open(path, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
+    if (file == nullptr)
+    {
+        return ENOEXIST;
+    }
+    return task::execve(file, path, before_user_thread, argv, envp);
+}
+int yield() { return 0; }
+
+BEGIN_SYSCALL
+
+SYSCALL(31, futex)
+SYSCALL(32, exit)
+SYSCALL(33, exit_thread)
+SYSCALL(34, sleep)
+SYSCALL(35, current_pid)
+SYSCALL(36, current_tid)
+SYSCALL(37, create_process)
+SYSCALL(38, create_thread)
+SYSCALL(39, detach)
+SYSCALL(40, join)
+SYSCALL(41, wait_process)
+SYSCALL(42, raise)
+SYSCALL(43, sigsend)
+SYSCALL(44, sigwait)
+SYSCALL(45, sigmask)
+SYSCALL(46, chdir)
+SYSCALL(47, current_dir)
+SYSCALL(48, chroot)
+SYSCALL(49, getcpu_running)
+SYSCALL(50, setcpu_mask)
+SYSCALL(51, getcpu_mask)
+SYSCALL(52, set_tcb)
+SYSCALL(53, fork)
+SYSCALL(54, execve)
+SYSCALL(55, clone)
+SYSCALL(56, yield)
+
 END_SYSCALL
 
 } // namespace syscall

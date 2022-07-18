@@ -1,51 +1,38 @@
-#include "../common/arch/lib.hpp"
-const char hello[] = "userland init\e[32;44mhi,\e[0minit! \e[1;38;2;255;0;25;49mcolor text\e[0m\n";
-const char shell_failed[] = "execute nsh failed, check rootfs image and memory size in system.\nhlt at init.\n";
-const char startup_shell[] = "startup nsh...\n";
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+uint64_t __dso_handle;
 
-long nsh_pid = 0;
-
-void signal_event()
+void main(int argc, char **argv)
 {
-    int num;
-    sig_info_t info;
     while (1)
     {
-        sigwait(&num, &info);
-        sigtarget_t target;
-        target.id = nsh_pid;
-        target.flags = SIGTGT_PROC;
-        if (target.id)
-            sigsend(&target, SIGINT, nullptr);
-    }
-}
-
-extern "C" void main(int argc, char **argv)
-{
-    write(STDOUT, hello, sizeof(hello), 0);
-    write(STDOUT, startup_shell, sizeof(startup_shell), 0);
-    { /// set signal
-        sig_mask_t mask;
-        sig_mask_init(mask);
-        sig_mask_set(mask, SIGINT);
-
-        sigmask(SIGOPT_OR, &mask, nullptr, nullptr);
-        auto sig_id = create_thread((void *)signal_event, 0, 0);
-        detach(sig_id);
-    }
-
-    // run shell
-    while (1)
-    {
-        nsh_pid = create_process("/bin/nsh", nullptr, nullptr, 0);
-        if (nsh_pid <= 0)
+        int pid = fork();
+        if (pid == 0)
         {
-            write(STDOUT, shell_failed, sizeof(shell_failed), 0);
-            while (1)
-            {
-                sleep(1000000000);
-            }
+            // child
+            // run shell
+            int ret = execl("/bin/nanobox", "nsh", nullptr);
+            printf("execute process %d return %d\n", pid, ret);
+            sleep(5);
+            exit(ret);
         }
-        wait_process(nsh_pid, nullptr);
+        else if (pid > 0)
+        {
+            int status = 0;
+            waitpid(pid, &status, 0);
+            if (status != 0)
+            {
+                printf("process exit %d\n", status);
+            }
+            sleep(1);
+        }
+        else
+        {
+            printf("fork process fail %d\n", pid);
+        }
     }
 }

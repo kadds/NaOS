@@ -43,6 +43,14 @@ microsecond_t get_current_clock() { return current_time_microsecond; }
 
 microsecond_t get_startup_clock() { return start_time_microsecond; }
 
+time to_time(microsecond_t t)
+{
+    return time{
+        static_cast<int64_t>(t / 1000),
+        static_cast<int64_t>(t % 1000 * 1000),
+    };
+}
+
 int monthy_table[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 int cv_monthy_table[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365};
 int cv_leap_monthy_table[] = {0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366};

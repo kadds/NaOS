@@ -59,7 +59,7 @@ _switch_task:
     leaq end_task(%rip), %rax 
     movq %rax, 0x0(%rdi) # prev rip
     pushq 0x0(%rsi) # push new rip
-    jmp switch_task
+    retq
 end_task:
     popq %rax
     popq %r15
@@ -69,6 +69,11 @@ end_task:
     popq %rbx
     popq %rbp
     popf
+    retq
+
+.globl _from_rip
+_from_rip:
+    leave
     retq
 
 .globl _kernel_thread
@@ -135,7 +140,7 @@ _sys_call:
 	pushq %r15
 
 	movq 0x88(%rsp), %rax
-    cmp $128, %rax
+    cmp $256, %rax
     ja sys_call_setlabel
     jmp sys_call_label
 sys_call_setlabel:

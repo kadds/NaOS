@@ -7,7 +7,6 @@
 #include "kernel/io/io_manager.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
-#include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/util/bit_set.hpp"
 #include "kernel/wait.hpp"
@@ -183,7 +182,7 @@ void sleep_thread_main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     while (1)
     {
-        task::do_sleep(1000);
+        task::do_sleep(timeclock::time::make(100));
         if (timer::get_high_resolution_time() - last_update_mouse_time >= 5 * 1000 * 1000)
         {
             auto current_cursor = cursor::get_cursor();
@@ -270,10 +269,9 @@ void listen_mouse()
     };
 }
 
-void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
+void main(task::thread_start_info_t *info)
 {
-    // task::create_thread(task::current_process(), sleep_thread_main, 0, 0, 0, create_thread_flags::real_time_rr);
-    task::create_thread(task::current_process(), (task::thread_start_func)listen_mouse, 0, 0, 0,
+    task::create_thread(task::current_process(), (task::thread_start_func)listen_mouse, nullptr, 0,
                         create_thread_flags::real_time_rr);
     listen_keyboard();
 }

@@ -1,14 +1,17 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/cpu.hpp"
-#include "kernel/arch/smp.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/smp.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/util/memory.hpp"
+#include <termios.h>
+#include <type_traits>
 namespace arch::paging
 {
 
@@ -41,7 +44,7 @@ void base_entry::set_phy_addr(void *ptr)
     data = (data & ~0xF'FFFF'FFFF'F000UL) | (((u64)ptr) & 0xF'FFFF'FFFF'F000UL);
 }
 
-u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
+inline u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
 
 Unpaged_Text_Section u64 get_bits_unpaged(u64 addr, u8 start_bit, u8 bit_count)
 {
@@ -63,7 +66,8 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
 {
     u64 *page_entries = (u64 *)base_tmp_page_entries;
     u64 pc = memory::kernel_stack_page_count;
-    for(u64 i = 0; i < pc; i++) {
+    for (u64 i = 0; i < pc; i++)
+    {
         u64 pml4e_index = get_bits_unpaged(base_virtual_addr, 39, 8);
         u64 pdpe_index = get_bits_unpaged(base_virtual_addr, 30, 8);
         u64 pde_index = get_bits_unpaged(base_virtual_addr, 21, 8);
@@ -71,7 +75,8 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
 
         u64 *page_pdp_entries = (u64 *)(page_entries[pml4e_index] & 0xF'FFFF'FFFF'F000UL);
 
-        if (page_pdp_entries == 0) {
+        if (page_pdp_entries == 0)
+        {
             page_alloc_position += 0x1000;
             page_pdp_entries = (u64 *)page_alloc_position;
             set_zero(page_pdp_entries);
@@ -79,17 +84,19 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
         }
 
         u64 *page_pd_entries = (u64 *)(page_pdp_entries[pdpe_index] & 0xF'FFFF'FFFF'F000UL);
-        if (page_pd_entries == 0) {
+        if (page_pd_entries == 0)
+        {
             page_alloc_position += 0x1000;
-            page_pd_entries = (u64 *) page_alloc_position;
+            page_pd_entries = (u64 *)page_alloc_position;
             set_zero(page_pd_entries);
             page_pdp_entries[pdpe_index] = page_alloc_position | 0x3;
         }
 
         u64 *page_pt_entries = (u64 *)(page_pd_entries[pde_index] & 0xF'FFFF'FFFF'F000UL);
-        if (page_pt_entries == 0) {
+        if (page_pt_entries == 0)
+        {
             page_alloc_position += 0x1000;
-            page_pt_entries = (u64 *) page_alloc_position;
+            page_pt_entries = (u64 *)page_alloc_position;
             set_zero(page_pt_entries);
             page_pd_entries[pde_index] = page_alloc_position | 0x3;
         }
@@ -166,13 +173,13 @@ void init()
     {
         trace::debug("Paging at 1GB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_1gb,
-            (max_maped_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable);
+            (max_maped_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable, false);
     }
     else
     {
         trace::debug("Paging at 2MB granularity");
         map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_2mb,
-            (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable);
+            (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable, false);
     }
     trace::debug("Map address ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
                  (void *)(0xffff800000000000 + max_maped_memory));
@@ -185,7 +192,7 @@ void enable_new_paging()
     load(base_kernel_page_addr);
 }
 
-void check_pml4e(pml4t *base_addr, int pml4_index)
+void check_pml4e(pml4t *base_addr, int pml4_index, bool override)
 {
     auto &pml4e = (*base_addr)[pml4_index];
     if (!pml4e.is_present())
@@ -195,13 +202,21 @@ void check_pml4e(pml4t *base_addr, int pml4_index)
         pml4e.set_writable();
 
         pml4e.set_addr(new_page_table<pdpt>());
-        pml4e.set_common_data(0);
+        pml4e.set_counter(0);
+    }
+    else if (override)
+    {
+        if (pml4e.has_share_flag())
+        {
+            pml4e.clear_share_flag();
+            pml4e.set_writable();
+        }
     }
 }
 
-void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_next_table)
+void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_next_table, bool override)
 {
-    check_pml4e(base_addr, pml4_index);
+    check_pml4e(base_addr, pml4_index, override);
     auto &pml4e = (*base_addr)[pml4_index];
     auto &pdpte = pml4e.next()[pdpt_index];
     if (!pdpte.is_present())
@@ -215,14 +230,22 @@ void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_ne
         else
             pdpte.set_addr(0);
 
-        pdpte.set_common_data(0);
-        pml4e.set_common_data(pml4e.get_common_data() + 1);
+        pdpte.set_counter(0);
+        pml4e.add_counter();
+    }
+    else if (override)
+    {
+        if (pdpte.has_share_flag())
+        {
+            pdpte.clear_share_flag();
+            pdpte.set_writable();
+        }
     }
 }
 
-void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, bool create_next_table)
+void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, bool create_next_table, bool override)
 {
-    check_pdpe(base_addr, pml4_index, pdpt_index, true);
+    check_pdpe(base_addr, pml4_index, pdpt_index, true, override);
     auto &pdpt = (*base_addr)[pml4_index].next()[pdpt_index];
     auto &pdt = pdpt.next()[pt_index];
     if (!pdt.is_present())
@@ -236,8 +259,16 @@ void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, b
         else
             pdt.set_addr(0);
 
-        pdt.set_common_data(0);
-        pdpt.set_common_data(pdpt.get_common_data() + 1);
+        pdt.set_counter(0);
+        pdpt.add_counter();
+    }
+    else if (override)
+    {
+        if (pdt.has_share_flag())
+        {
+            pdt.clear_share_flag();
+            pdt.set_writable();
+        }
     }
 }
 
@@ -254,7 +285,7 @@ NoReturn void error_unmap()
 }
 
 bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_start_addr, u64 frame_size,
-         u64 frame_count, u32 page_ext_flags)
+         u64 frame_count, u32 page_ext_flags, bool override)
 {
     uctx::UninterruptibleContext icu;
     // virtual address doesn't align of 4kb
@@ -273,27 +304,40 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
     switch (frame_size)
     {
         case frame_size::size_1gb: {
-            check_pml4e(&top_page, pml4e_index);
-            for (u32 i = 0; i < frame_count; i++, pdpe_index++, phy_addr += (u32)frame_size)
+            check_pml4e(&top_page, pml4e_index, override);
+            for (u32 i = 0; i < frame_count; i++, pdpe_index++, phy_addr += (u64)frame_size)
             {
                 if (pdpe_index >= 512)
                 {
                     if (++pml4e_index >= 512)
                         error_map();
-                    check_pml4e(&top_page, pml4e_index);
+                    check_pml4e(&top_page, pml4e_index, override);
                     pdpe_index = 0;
                 }
-                auto &pml4e = top_page[pml4e_index];
-                if (pml4e.next()[pdpe_index].is_present())
-                    error_map();
-                pml4e.next()[pdpe_index] = pdpt_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
-                pml4e.set_common_data(pml4e.get_common_data() + 1);
+                auto &prev_entry = top_page[pml4e_index];
+                auto &entry = prev_entry.next()[pdpe_index];
+                if (entry.is_present())
+                {
+                    auto src = entry.get_addr();
+                    if (!override)
+                    {
+                        error_map();
+                    }
+                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memory::KernelBuddyAllocatorV->deallocate(src);
+                }
+                else
+                {
+
+                    prev_entry.add_counter();
+                }
+                entry = pdpt_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
             }
         }
         break;
         case frame_size::size_2mb: {
-            check_pdpe(&top_page, pml4e_index, pdpe_index, true);
-            for (u32 i = 0; i < frame_count; i++, pde_index++, phy_addr += (u32)frame_size)
+            check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
+            for (u32 i = 0; i < frame_count; i++, pde_index++, phy_addr += (u64)frame_size)
             {
                 if (pde_index >= 512)
                 {
@@ -301,24 +345,35 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
                     {
                         if (++pml4e_index >= 512)
                             error_map();
-                        check_pml4e(&top_page, pml4e_index);
+                        check_pml4e(&top_page, pml4e_index, override);
                         pdpe_index = 0;
                     }
-                    check_pdpe(&top_page, pml4e_index, pdpe_index, true);
+                    check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
                     pde_index = 0;
                 }
-                auto &pml4e = top_page[pml4e_index];
-                auto &pdpe = pml4e.next()[pdpe_index];
-                if (pdpe.next()[pde_index].is_present())
-                    error_map();
-                pdpe.next()[pde_index] = pd_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
-                pdpe.set_common_data(pdpe.get_common_data() + 1);
+                auto &prev_entry = top_page[pml4e_index].next()[pdpe_index];
+                auto &entry = prev_entry.next()[pde_index];
+                if (entry.is_present())
+                {
+                    auto src = entry.get_addr();
+                    if (!override)
+                    {
+                        error_map();
+                    }
+                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memory::KernelBuddyAllocatorV->deallocate(src);
+                }
+                else
+                {
+                    prev_entry.add_counter();
+                }
+                entry = pd_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
             }
         }
         break;
         case frame_size::size_4kb: {
-            check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true);
-            for (u32 i = 0; i < frame_count; i++, pte_index++, phy_addr += (u32)frame_size)
+            check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true, override);
+            for (u32 i = 0; i < frame_count; i++, pte_index++, phy_addr += (u64)frame_size)
             {
                 if (pte_index >= 512)
                 {
@@ -328,22 +383,32 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
                         {
                             if (++pml4e_index >= 512)
                                 error_map();
-                            check_pml4e(&top_page, pml4e_index);
+                            check_pml4e(&top_page, pml4e_index, override);
                             pdpe_index = 0;
                         }
-                        check_pdpe(&top_page, pml4e_index, pdpe_index, true);
+                        check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
                         pde_index = 0;
                     }
-                    check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true);
+                    check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true, override);
                     pte_index = 0;
                 }
-                auto &pml4e = top_page[pml4e_index];
-                auto &pdpe = pml4e.next()[pdpe_index];
-                auto &pde = pdpe.next()[pde_index];
-                if (pde.next()[pte_index].is_present())
-                    error_map();
-                pde.next()[pte_index] = pt_entry(phy_addr, flags::present | page_ext_flags);
-                pde.set_common_data(pde.get_common_data() + 1);
+                auto &prev_entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index];
+                auto &entry = prev_entry.next()[pte_index];
+                if (entry.is_present())
+                {
+                    auto src = entry.get_addr();
+                    if (!override)
+                    {
+                        error_map();
+                    }
+                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memory::KernelBuddyAllocatorV->deallocate(src);
+                }
+                else
+                {
+                    prev_entry.add_counter();
+                }
+                entry = pt_entry(phy_addr, flags::present | page_ext_flags);
             }
         }
         break;
@@ -356,7 +421,7 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
 void clean_null_page_pml4e(pml4t &base_page, u64 pml4e_index)
 {
     auto &e = base_page[pml4e_index];
-    if (e.get_common_data() == 0 && e.is_present())
+    if (e.get_counter() == 0 && e.is_present())
     {
         delete_page_table(&e.next());
         e.clear_present();
@@ -366,7 +431,7 @@ void clean_null_page_pml4e(pml4t &base_page, u64 pml4e_index)
 void clean_null_page_pdpe(pml4t &base_page, u64 pml4e_index, u64 pdpe_index)
 {
     auto &e = base_page[pml4e_index].next()[pdpe_index];
-    if (e.get_common_data() == 0 && e.is_present())
+    if (e.get_counter() == 0 && e.is_present())
     {
         delete_page_table(&e.next());
         e.clear_present();
@@ -376,7 +441,7 @@ void clean_null_page_pdpe(pml4t &base_page, u64 pml4e_index, u64 pdpe_index)
 void clean_null_page_pde(pml4t &base_page, u64 pml4e_index, u64 pdpe_index, u64 pde_index)
 {
     auto &e = base_page[pml4e_index].next()[pdpe_index].next()[pde_index];
-    if (e.get_common_data() == 0 && e.is_present())
+    if (e.get_counter() == 0 && e.is_present())
     {
         delete_page_table(&e.next());
         e.clear_present();
@@ -414,8 +479,10 @@ bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_siz
                         error_unmap();
                     pdpe_index = 0;
                 }
-                top_page[pml4e_index].next()[pdpe_index].clear_present();
-                top_page[pml4e_index].set_common_data(top_page[pml4e_index].get_common_data() - 1);
+                auto &entry = top_page[pml4e_index].next()[pdpe_index];
+                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
+                entry.clear_present();
+                entry.sub_counter();
             }
 
             clean_null_page_pml4e(top_page, pml4e_index);
@@ -445,9 +512,10 @@ bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_siz
                         error_unmap();
                     pde_index = 0;
                 }
-                auto &e = top_page[pml4e_index].next()[pdpe_index];
-                e.next()[pde_index].clear_present();
-                e.set_common_data(e.get_common_data() - 1);
+                auto &entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index];
+                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
+                entry.clear_present();
+                entry.sub_counter();
             }
             // clean null page tables
             clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
@@ -487,9 +555,10 @@ bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_siz
                         error_unmap();
                     pte_index = 0;
                 }
-                auto &e = top_page[pml4e_index].next()[pdpe_index].next()[pde_index];
-                e.next()[pte_index].clear_present();
-                e.set_common_data(e.get_common_data() - 1);
+                auto &entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index].next()[pte_index];
+                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
+                entry.clear_present();
+                entry.sub_counter();
             }
             clean_null_page_pde(top_page, pml4e_index, pdpe_index, pde_index);
             clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
@@ -524,7 +593,8 @@ base_paging_t *current()
     return memory::pa2va<base_paging_t *>(phy_addr_t::from(v));
 }
 
-template <typename PageTable> bool copy(PageTable *dst, PageTable *src, int idx)
+// return true if next level paging is needed
+template <typename PageTable> bool clone(PageTable *dst, PageTable *src, int idx, bool override, int deep)
 {
     auto &source = src->entries[idx];
     if (likely(source.is_present()))
@@ -532,24 +602,50 @@ template <typename PageTable> bool copy(PageTable *dst, PageTable *src, int idx)
         auto &to = dst->entries[idx];
         if (to.is_present())
         {
-            if (likely(to.get_addr() != source.get_addr()))
+            if (override)
             {
-                delete_page_table<PageTable>((PageTable *)to.get_addr());
+                if (likely(to.get_addr() != source.get_addr()))
+                {
+                    delete_page_table<PageTable>((PageTable *)to.get_addr());
+                }
+            }
+            else
+            {
+                return true;
+            }
+        }
+        source.add_share_flag();
+        source.clear_writable();
+        to = source;
+        if constexpr (std::is_same_v<PageTable, pt>)
+        {
+            memory::global_zones->add_reference(source.get_addr());
+            return true;
+        }
+        else
+        {
+            if (!to.is_big_page())
+            {
+                auto pt = new_page_table<PageTable>();
+                util::memcopy(pt, source.get_addr(), sizeof(PageTable));
+                to.set_addr(pt);
             }
             else
             {
                 return false;
             }
         }
-        to = source;
-        to.set_addr(new_page_table<PageTable>());
         return true;
+    }
+    else
+    {
+        auto &to = dst->entries[idx];
+        kassert(!to.is_present(), "");
     }
     return false;
 }
 
-/// TODO: fill page table
-void copy_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 end, bool override)
+void share_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 end, bool override, int deep)
 {
     pml4t *dst = (pml4t *)to;
     pml4t *src = (pml4t *)source;
@@ -558,46 +654,86 @@ void copy_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 en
     u64 pdpe_index = get_bits(start, 30, 8);
     u64 pde_index = get_bits(start, 21, 8);
     u64 pte_index = get_bits(start, 12, 8);
+    bool pml4e_changed = override;
+    bool pdpe_changed = override;
+    bool pde_changed = override;
+    bool pte_changed = override;
     u64 page_count = (end - start) / memory::page_size;
-    if (override)
+    for (u64 i = 0; i < page_count;)
     {
-        for (u64 i = 0; i < page_count; i++)
+        if (clone(dst, src, pml4e_index, pml4e_changed, deep))
         {
-            if (copy(dst, src, pml4e_index))
+            pml4e_changed = false;
+            auto &pdpt_src = src->entries[pml4e_index].next();
+            auto &pdpt_dst = dst->entries[pml4e_index].next();
+            if (clone(&pdpt_dst, &pdpt_src, pdpe_index, pdpe_changed, deep - 1))
             {
-                auto &pdpt_src = src->entries[pml4e_index].next();
-                auto &pdpt_dst = dst->entries[pml4e_index].next();
-                if (copy(&pdpt_dst, &pdpt_src, pdpe_index))
+                pdpe_changed = false;
+                auto &pdt_src = pdpt_src.entries[pdpe_index].next();
+                auto &pdt_dst = pdpt_dst.entries[pdpe_index].next();
+                if (clone(&pdt_dst, &pdt_src, pde_index, pde_changed, deep - 2))
                 {
-                    auto &pdt_src = pdpt_src.entries[pdpe_index].next();
-                    auto &pdt_dst = pdpt_dst.entries[pdpe_index].next();
-                    if (copy(&pdt_dst, &pdt_src, pde_index))
-                    {
-                        auto &pet_src = pdt_src.entries[pml4e_index].next();
-                        auto &pet_dst = pdt_dst.entries[pml4e_index].next();
-                        copy(&pet_dst, &pet_src, pte_index);
-                    }
+                    pde_changed = false;
+                    auto &pet_src = pdt_src.entries[pde_index].next();
+                    auto &pet_dst = pdt_dst.entries[pde_index].next();
+                    clone(&pet_dst, &pet_src, pte_index, pte_changed, deep - 3);
+                    i += pt_entry::pages;
+                    pte_index++;
+                    pte_changed = override;
+                }
+                else
+                {
+                    i += pd_entry::pages - pt_entry::pages * pte_index;
+                    pte_index = 0;
+                    pde_index++;
+                    pde_changed = override;
+                    pte_changed = override;
                 }
             }
+            else
+            {
+                i += pdpt_entry::pages - pd_entry::pages * pde_index - pt_entry::pages * pte_index;
+                pte_index = 0;
+                pde_index = 0;
+                pdpe_index++;
+                pdpe_changed = override;
+                pde_changed = override;
+                pte_changed = override;
+            }
         }
-        pte_index++;
+        else
+        {
+            i += pml4_entry::pages - pdpt_entry::pages * pdpe_index - pd_entry::pages * pde_index -
+                 pt_entry::pages * pte_index;
+            pte_index = 0;
+            pde_index = 0;
+            pdpe_index = 0;
+            pml4e_index++;
+            pml4e_changed = override;
+            pdpe_changed = override;
+            pde_changed = override;
+            pte_changed = override;
+        }
         if (pte_index >= 512)
         {
             pte_index = 0;
             pde_index++;
-            if (pde_index >= 512)
-            {
-                pde_index = 0;
-                pdpe_index++;
-                if (pdpe_index >= 512)
-                {
-                    pdpe_index = 0;
-                    pml4e_index++;
-                    if (pml4e_index >= 512)
-                        error_map();
-                }
-            }
+            pde_changed = true;
         }
+        if (pde_index >= 512)
+        {
+            pde_index = 0;
+            pdpe_index++;
+            pdpe_changed = true;
+        }
+        if (pdpe_index >= 512)
+        {
+            pdpe_index = 0;
+            pml4e_index++;
+            pml4e_changed = true;
+        }
+        if (pml4e_index >= 512)
+            error_map();
     }
 }
 
@@ -609,9 +745,12 @@ void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel)
     for (int i = 256; i < 512; i++)
     {
         auto &pml4e_source = src->entries[i];
-        if (pml4e_source.is_present() && unlikely(pml4e_source.get_addr() != dst->entries[i].get_addr()))
+        auto &pml4e_dst = dst->entries[i];
+        if (pml4e_source.is_present() && pml4e_dst.is_present() &&
+            unlikely(pml4e_source.get_addr() != pml4e_dst.get_addr()))
         {
             /// TODO: free page table
+            trace::panic("dest pml4e not empty");
         }
         dst->entries[i] = pml4e_source;
     }
@@ -648,6 +787,165 @@ bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_
                 {
                     *phy_addr = phy_addr_t::from(pe.get_phy_addr());
                     return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool has_map(base_paging_t *base_paging_addr, void *virt_addr)
+{
+    u64 start = (u64)virt_addr;
+    u64 pml4e_index = get_bits(start, 39, 8);
+    u64 pdpe_index = get_bits(start, 30, 8);
+    u64 pde_index = get_bits(start, 21, 8);
+    u64 pte_index = get_bits(start, 12, 8);
+    auto &pml4e = ((pml4t *)base_paging_addr)->entries[pml4e_index];
+    if (likely(pml4e.is_present()))
+    {
+        auto &pdpe = pml4e.next()[pdpe_index];
+        if (likely(pdpe.is_present()))
+        {
+            if (pdpe.is_big_page())
+            {
+                return true;
+            }
+            auto &pde = pdpe.next()[pde_index];
+            if (likely(pde.is_present()))
+            {
+                if (pde.is_big_page())
+                {
+                    return true;
+                }
+                auto &pe = pde.next()[pte_index];
+                if (likely(pe.is_present()))
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool has_flag(base_paging_t *base, void *vir, u64 flags)
+{
+    u64 start = (u64)vir;
+    u64 pml4e_index = get_bits(start, 39, 8);
+    u64 pdpe_index = get_bits(start, 30, 8);
+    u64 pde_index = get_bits(start, 21, 8);
+    u64 pte_index = get_bits(start, 12, 8);
+    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
+    if (likely(pml4e.is_present()))
+    {
+        auto &pdpe = pml4e.next()[pdpe_index];
+        if (likely(pdpe.is_present()))
+        {
+            if (pdpe.is_big_page())
+            {
+                return pdpe.data & flags;
+            }
+            auto &pde = pdpe.next()[pde_index];
+            if (likely(pde.is_present()))
+            {
+                if (pde.is_big_page())
+                {
+                    return pde.data & flags;
+                }
+                auto &pe = pde.next()[pte_index];
+                if (likely(pe.is_present()))
+                {
+                    return pe.data & flags;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool has_shared(base_paging_t *base, void *vir)
+{
+    u64 start = (u64)vir;
+    u64 pml4e_index = get_bits(start, 39, 8);
+    u64 pdpe_index = get_bits(start, 30, 8);
+    u64 pde_index = get_bits(start, 21, 8);
+    u64 pte_index = get_bits(start, 12, 8);
+    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
+    if (likely(pml4e.is_present()))
+    {
+        auto &pdpe = pml4e.next()[pdpe_index];
+        if (likely(pdpe.is_present()))
+        {
+            if (pdpe.is_big_page())
+            {
+                return pdpe.has_share_flag();
+            }
+            auto &pde = pdpe.next()[pde_index];
+            if (likely(pde.is_present()))
+            {
+                if (pde.is_big_page())
+                {
+                    return pde.has_share_flag();
+                }
+                auto &pe = pde.next()[pte_index];
+                if (likely(pe.is_present()))
+                {
+                    return pe.has_share_flag();
+                }
+            }
+        }
+    }
+    return false;
+}
+bool clear_shared(base_paging_t *base, void *vir, bool writeable)
+{
+    u64 start = (u64)vir;
+    u64 pml4e_index = get_bits(start, 39, 8);
+    u64 pdpe_index = get_bits(start, 30, 8);
+    u64 pde_index = get_bits(start, 21, 8);
+    u64 pte_index = get_bits(start, 12, 8);
+    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
+    if (likely(pml4e.is_present()))
+    {
+        pml4e.clear_share_flag();
+        if (writeable)
+        {
+            pml4e.set_writable();
+        }
+        auto &pdpe = pml4e.next()[pdpe_index];
+        if (likely(pdpe.is_present()))
+        {
+            pdpe.clear_share_flag();
+            if (writeable)
+            {
+                pdpe.set_writable();
+            }
+            if (pdpe.is_big_page())
+            {
+                return true;
+            }
+            auto &pde = pdpe.next()[pde_index];
+            if (likely(pde.is_present()))
+            {
+                pde.clear_share_flag();
+                if (writeable)
+                {
+                    pde.set_writable();
+                }
+                if (pde.is_big_page())
+                {
+                    return true;
+                }
+                auto &pe = pde.next()[pte_index];
+                if (likely(pe.is_present()))
+                {
+                    pe.clear_share_flag();
+                    if (writeable)
+                    {
+                        pe.set_writable();
+                    }
+                    return pe.has_share_flag();
                 }
             }
         }

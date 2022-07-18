@@ -81,6 +81,8 @@ class phy_addr_t
     bool operator==(phy_addr_t rhs) const { return ptr == rhs.ptr; }
     bool operator!=(phy_addr_t rhs) const { return ptr != rhs.ptr; }
 
+    byte *get() const { return ptr; }
+
   private:
     phy_addr_t(void *ptr)
         : ptr(reinterpret_cast<byte *>(ptr))

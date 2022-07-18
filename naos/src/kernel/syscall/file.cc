@@ -75,8 +75,7 @@ i64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
     auto file = res.get_file(fd);
     if (file)
     {
-        file->move(offset);
-        return file->write(buffer, max_len, flags);
+        return file->pwrite(offset, buffer, max_len, flags);
     }
     return ENOEXIST;
 }
@@ -87,8 +86,7 @@ i64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
     auto file = res.get_file(fd);
     if (file)
     {
-        file->move(offset);
-        return file->read(buffer, max_len, flags);
+        return file->pread(offset, buffer, max_len, flags);
     }
     return ENOEXIST;
 }
@@ -121,7 +119,7 @@ i64 lseek(file_desc fd, i64 offset, u64 type)
 
 i64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flags) { return EFAILED; }
 
-i64 get_pipe(file_desc *fd1, file_desc *fd2)
+i64 pipe(file_desc *fd1, file_desc *fd2)
 {
     auto file = fs::vfs::open_pipe();
     if (!file)
@@ -149,7 +147,7 @@ i64 get_pipe(file_desc *fd1, file_desc *fd2)
     return OK;
 }
 
-file_desc create_fifo(const char *path, u64 mode)
+file_desc fifo(const char *path, u64 mode)
 {
     if (path == nullptr || !is_user_space_pointer(path))
     {
@@ -189,17 +187,46 @@ i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64
     return OK;
 }
 
+int dup(int fd) { return 0; }
+
+int dup2(int fd, int newfd) { return 0; }
+
+int istty(int fd)
+{
+    if (fd == 2 || fd == 1 || fd == 0)
+    {
+        return 0;
+    }
+    return EINVAL;
+}
+
+int stat(int fd, const char *path, int flags) { return 0; }
+
+int fsync(int fd) { return 0; }
+int ftruncate(int fd) { return 0; }
+
+int fallocate(int fd) { return 0; }
+
 BEGIN_SYSCALL
-SYSCALL(2, open)
-SYSCALL(3, close)
-SYSCALL(4, write)
-SYSCALL(5, read)
-SYSCALL(6, pwrite)
-SYSCALL(7, pread)
+
+SYSCALL(3, open)
+SYSCALL(4, read)
+SYSCALL(5, write)
+SYSCALL(6, pread)
+SYSCALL(7, pwrite)
 SYSCALL(8, lseek)
-SYSCALL(9, select)
-SYSCALL(10, get_pipe)
-SYSCALL(11, create_fifo)
-SYSCALL(12, fcntl)
+SYSCALL(9, close)
+SYSCALL(10, dup)
+SYSCALL(11, dup2)
+SYSCALL(12, istty);
+SYSCALL(13, stat);
+SYSCALL(14, fcntl)
+SYSCALL(15, fsync);
+SYSCALL(16, ftruncate);
+SYSCALL(17, fallocate);
+
+SYSCALL(65, pipe)
+SYSCALL(66, fifo)
+
 END_SYSCALL
 } // namespace syscall

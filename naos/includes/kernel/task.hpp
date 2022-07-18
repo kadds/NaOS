@@ -4,6 +4,7 @@
 #include "cpu.hpp"
 #include "kernel/mm/allocator.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/time.hpp"
 #include "kernel/util/array.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
@@ -23,10 +24,14 @@ class scheduler;
 namespace task
 {
 
-typedef void (*kernel_thread_entry)(u64 arg);
-typedef void (*userland_thread_entry)(u64 arg);
+struct thread_start_info_t
+{
+    void *userland_entry;
+    u64 userland_stack_offset;
+    void *args;
+};
 
-typedef void (*thread_start_func)(u64 arg0, u64 arg1, u64 arg2, u64 arg3);
+typedef void (*thread_start_func)(thread_start_info_t *);
 
 /// 65536
 extern const thread_id max_thread_id;
@@ -100,6 +105,8 @@ struct preempt_t
     bool preemptible() { return preempt_counter == 0; }
     void enable_preempt() { preempt_counter--; }
     void disable_preempt() { preempt_counter++; }
+    int get() const { return preempt_counter.load(); }
+    void set(int val) { preempt_counter.store(val); }
     preempt_t()
         : preempt_counter(0)
     {
@@ -167,6 +174,7 @@ struct thread_t
 inline constexpr u64 cpumask_none = 0xFFFFFFFFFFFFFFFF;
 
 void init();
+bool has_init();
 void start_task_idle();
 void switch_thread(thread_t *old, thread_t *new_task);
 
@@ -227,16 +235,21 @@ struct process_args_t
     }
 };
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, u64 arg0, u64 arg1, u64 arg2, flag_t flags);
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *userland_entry, void *arg,
+                        flag_t flags);
 
 process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
 
-process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *args[],
-                          const char *envp[], flag_t flags);
+process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *const args[],
+                          const char *const envp[], flag_t flags);
 
-process_t *create_kernel_process(thread_start_func start_func, u64 arg0, flag_t flags);
+process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags);
 
-void do_sleep(u64 milliseconds);
+int fork();
+
+int execve(fs::vfs::file *file, const char *path, thread_start_func start_func, char *const argv[], char *const envp[]);
+
+void do_sleep(const timeclock::time &time);
 
 NoReturn void do_exit(i64 value);
 
@@ -245,6 +258,8 @@ u64 wait_process(process_t *process, i64 &ret);
 NoReturn void do_exit_thread(i64 ret);
 u64 detach_thread(thread_t *thd);
 u64 join_thread(thread_t *thd, i64 &ret);
+
+thread_t *find_kernel_stack_thread(void *stack_ptr);
 
 namespace exit_control_flags
 {

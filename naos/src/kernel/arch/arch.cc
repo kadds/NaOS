@@ -22,7 +22,7 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
 constexpr u64 trace_early_bottom_address = 0x21000;
 constexpr u64 trace_early_top_address = 0x30000;
 
-void early_init(const kernel_start_args *args)
+void early_init(kernel_start_args *args)
 {
     if (args != nullptr) /// bsp
     {

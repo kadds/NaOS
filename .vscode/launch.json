@@ -3,82 +3,33 @@
     "configurations": [
         {
             "name": "debug kernel",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug/system/kernel.dbg",
-            "args": [],
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceFolder}/build/debug/system/kernel.dbg",
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/build/debug/system/",
-            "environment": [],
-            "MIMode": "gdb",
-            "miDebuggerServerAddress": "localhost:1234",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-            ],
-            "externalConsole": false,
+            "target": ":1234",
+            "remote": true
+        },
+        {
+            "name": "debug nanobox",
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceFolder}/build/debug/rfsroot/bin/nanobox.dbg",
+            "stopAtEntry": true,
+            "cwd": "${workspaceFolder}/build/debug/system/",
+            "target": ":1234",
+            "remote": true
         },
         {
             "name": "debug init",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug/rfsroot/bin/init.dbg",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/debug/rfsroot/bin",
-            "environment": [],
-            "MIMode": "gdb",
-            "miDebuggerServerAddress": "localhost:1234",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-            ],
-            "externalConsole": false,
-        },
-        {
-            "name": "debug syscall_test",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/debug/rfsroot/bin/syscall_test.dbg",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/build/debug/rfsroot/bin",
-            "environment": [],
-            "MIMode": "gdb",
-            "miDebuggerServerAddress": "localhost:1234",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-            ],
-            "externalConsole": false,
-        },
-        {
-            "name": "debug ktest",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/bin/ktest/ktest",
-            "args": [],
+            "type": "gdb",
+            "request": "attach",
+            "executable": "${workspaceFolder}/build/debug/rfsroot/bin/init.dbg",
             "stopAtEntry": true,
-            "cwd": "${workspaceFolder}/build/bin/ktest",
-            "environment": [],
-            "MIMode": "gdb",
-            "setupCommands": [
-                {
-                    "description": "Enable pretty-printing for gdb",
-                    "text": "-enable-pretty-printing",
-                    "ignoreFailures": true
-                },
-            ],
-            "externalConsole": false,
+            "cwd": "${workspaceFolder}/build/debug/system/",
+            "target": ":1234",
+            "remote": true
         }
     ]
 }

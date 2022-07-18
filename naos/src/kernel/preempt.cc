@@ -12,8 +12,11 @@ void yield_preempt()
     {
         if (thd->preempt_data.preemptible())
         {
-            if (thd->attributes & thread_attributes::need_schedule)
+            if ((thd->attributes & thread_attributes::need_schedule) || thd->process->pid == 0)
+            {
+                thd->attributes |= thread_attributes::need_schedule;
                 scheduler::schedule();
+            }
         }
     }
 }

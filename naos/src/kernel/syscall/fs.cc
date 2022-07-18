@@ -27,7 +27,9 @@ struct list_directory_result
     char *buffer;
 };
 
-int list_directory(file_desc fd, list_directory_result *result)
+int open_dir(const char *path) { return -1; }
+
+int list_dir(file_desc fd, list_directory_result *result)
 {
     if (result == nullptr || !is_user_space_pointer(result))
     {
@@ -95,16 +97,18 @@ u64 create(const char *pathname)
     return EFAILED;
 }
 
-u64 access(const char *filepathname, flag_t mode)
+u64 access(const char *filename, flag_t mode)
 {
-    if (filepathname == nullptr || !is_user_space_pointer(filepathname))
+    if (filename == nullptr || !is_user_space_pointer(filename))
     {
         return EPARAM;
     }
     auto &res = task::current_process()->res_table;
     auto ft = res.get_file_table();
-    if (fs::vfs::access(filepathname, ft->root, ft->current, mode))
+    if (fs::vfs::access(filename, ft->root, ft->current, mode))
+    {
         return OK;
+    }
     return EFAILED;
 }
 
@@ -133,55 +137,6 @@ int rmdir(const char *pathname)
         return OK;
     return EFAILED;
 }
-
-int chdir(const char *pathname)
-{
-    if (pathname == nullptr || !is_user_space_pointer(pathname))
-    {
-        return EPARAM;
-    }
-    auto ft = task::current_process()->res_table.get_file_table();
-    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current, fs::path_walk_flags::directory);
-    if (entry != nullptr)
-    {
-        ft->current = entry;
-        return OK;
-    }
-    return EFAILED;
-}
-
-u64 current_dir(char *pathname, u64 max_len)
-{
-    if (pathname == nullptr || !is_user_space_pointer(pathname) || !is_user_space_pointer(pathname + max_len))
-    {
-        return EBUFFER;
-    }
-
-    auto ft = task::current_process()->res_table.get_file_table();
-    return fs::vfs::pathname(ft->root, ft->current, pathname, max_len);
-}
-
-int chroot(const char *pathname)
-{
-    if (pathname == nullptr || !is_user_space_pointer(pathname))
-    {
-        return EPARAM;
-    }
-    auto ft = task::current_process()->res_table.get_file_table();
-
-    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current,
-                                    fs::path_walk_flags::directory | fs::path_walk_flags::cross_root);
-    if (entry != nullptr)
-    {
-        ft->root = entry;
-        return OK;
-    }
-    return EFAILED;
-}
-
-void set_attr(file_desc fd, const char *name, void *value, u64 size, u64 flags) {}
-
-void get_attr(file_desc fd, const char *name, void *value, u64 max_size) {}
 
 int link(const char *src, const char *target)
 {
@@ -260,21 +215,20 @@ int umount(const char *pathname)
 }
 
 BEGIN_SYSCALL
-SYSCALL(15, readlink)
-SYSCALL(16, list_directory)
-SYSCALL(17, rename)
-SYSCALL(18, symbolink)
-SYSCALL(19, create)
+SYSCALL(18, open_dir)
+SYSCALL(19, list_dir)
 SYSCALL(20, access)
-SYSCALL(21, mkdir)
-SYSCALL(22, rmdir)
-SYSCALL(23, chdir)
-SYSCALL(24, current_dir)
-SYSCALL(25, chroot)
-SYSCALL(26, link)
-SYSCALL(27, unlink)
-SYSCALL(28, mount)
-SYSCALL(29, umount)
+
+SYSCALL(21, readlink)
+SYSCALL(22, unlink);
+SYSCALL(23, mkdir)
+SYSCALL(24, rmdir)
+SYSCALL(25, rename)
+SYSCALL(26, create)
+SYSCALL(27, link)
+SYSCALL(28, symbolink)
+SYSCALL(29, mount)
+SYSCALL(30, umount)
 END_SYSCALL
 
 } // namespace syscall

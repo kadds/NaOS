@@ -24,19 +24,19 @@ bool inode::create_symbolink(vfs::dentry *entry, const char *target)
 
 const char *inode::symbolink() { return (const char *)start_ptr; }
 
-i64 file::iwrite(const byte *buffer, u64 size, flag_t flags)
+i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
 {
     inode *node = (inode *)entry->get_inode();
     super_block *sublock = (super_block *)node->su_block;
 
-    if (unlikely(pointer_offset + size >= node->ram_size || node->start_ptr == nullptr))
+    if (unlikely(offset + size >= node->ram_size || node->start_ptr == nullptr))
     {
         sublock->add_ram_used(-node->ram_size);
         if (node->start_ptr != nullptr)
         {
             memory::KernelBuddyAllocatorV->deallocate(node->start_ptr);
         }
-        auto file_size = pointer_offset + size;
+        auto file_size = offset + size;
         auto ram_size = (file_size + memory::page_size - 1) & ~(memory::page_size - 1);
 
         if (sublock->get_current_used() + ram_size < sublock->get_max_ram_size())
@@ -52,31 +52,31 @@ i64 file::iwrite(const byte *buffer, u64 size, flag_t flags)
         }
     }
 
-    util::memcopy(node->start_ptr + pointer_offset, buffer, size);
-    pointer_offset += size;
+    util::memcopy(node->start_ptr + offset, buffer, size);
+    offset += size;
     return size;
 }
 
-i64 file::iread(byte *buffer, u64 max_size, flag_t flags)
+i64 file::iread(i64 &offset, byte *buffer, u64 max_size, flag_t flags)
 {
     inode *node = (inode *)entry->get_inode();
-    if (max_size > node->file_size - pointer_offset)
-        max_size = node->file_size - pointer_offset;
+    if (max_size > node->file_size - offset)
+        max_size = node->file_size - offset;
 
-    if (node->ram_size < pointer_offset + max_size)
+    if (node->ram_size < offset + max_size)
     {
-        if (node->ram_size < (uint64_t)pointer_offset)
+        if (node->ram_size < (uint64_t)offset)
         {
             max_size = 0;
         }
         else
         {
-            max_size = node->ram_size - pointer_offset;
+            max_size = node->ram_size - offset;
         }
     }
 
-    util::memcopy(buffer, node->start_ptr + pointer_offset, max_size);
-    pointer_offset += max_size;
+    util::memcopy(buffer, node->start_ptr + offset, max_size);
+    offset += max_size;
     return max_size;
 }
 

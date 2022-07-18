@@ -185,4 +185,37 @@ template <typename T, typename P> requires forward_iterator<T> T find_if(T beg, 
     return beg;
 }
 
+template <typename T>
+requires bidirectional_iterator<T>
+void sort(T beg, T end)
+{
+    if (beg >= end)
+    {
+        return;
+    }
+    auto low = beg;
+    auto high = end;
+
+    // quick sort
+    auto &pilot = *beg;
+    while (low < high)
+    {
+        while (*high >= pilot && high > low)
+            --high;
+        if (high > low)
+        {
+            *low = *high;
+        }
+        while (*low <= pilot && high > low)
+            ++low;
+        if (high > low)
+        {
+            *high = low;
+        }
+    }
+    *low = pilot;
+    sort(beg, low - 1);
+    sort(low + 1, end);
+}
+
 } // namespace util

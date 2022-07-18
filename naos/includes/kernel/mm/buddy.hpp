@@ -33,6 +33,7 @@ class buddy
     void free(page *p);
 
     bool mark_unavailable(page *s, page *e);
+    u64 scan_free() const;
 
   private:
     void merge(u8 order, bool fast);

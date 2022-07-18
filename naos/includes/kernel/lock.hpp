@@ -6,14 +6,17 @@
 /// locks aren't disable interrupt, use it by 'ucontext::guard'
 namespace lock
 {
+constexpr int stack_frame_count = 4;
 ///\brief Not nestable, unfair spinlock
 struct spinlock_t
 {
   private:
     std::atomic_bool lock_m;
 #ifdef _DEBUG
-    u64 last_stack_pointer;
+    stack_frame_t frames[stack_frame_count];
     std::atomic_uint64_t wait_times;
+    u64 tid = 0;
+    u64 pid = 0;
 #endif
   public:
     spinlock_t()
@@ -32,9 +35,10 @@ struct spinlock_t
 #ifdef _DEBUG
             wait_times++;
 #endif
-        } while (!lock_m.compare_exchange_strong(target, true, std::memory_order_release));
+        } while (!lock_m.compare_exchange_strong(target, true));
 #ifdef _DEBUG
-        last_stack_pointer = get_stack();
+        get_stackframes(1, frames, stack_frame_count);
+        get_task_id(pid, tid);
         wait_times = 0;
 #endif
     }
@@ -42,10 +46,10 @@ struct spinlock_t
     bool try_lock()
     {
         bool target = false;
-        return lock_m.compare_exchange_strong(target, true, std::memory_order_release);
+        return lock_m.compare_exchange_strong(target, true);
     }
 
-    void unlock() { lock_m.store(false, std::memory_order_release); }
+    void unlock() { lock_m.store(false); }
 };
 
 /// read write lock
@@ -54,6 +58,12 @@ struct rw_lock_t
   private:
     std::atomic_uint64_t lock_m = ATOMIC_FLAG_INIT;
     static_assert(sizeof(lock_m) == 8);
+#ifdef _DEBUG
+    stack_frame_t frames[stack_frame_count];
+    std::atomic_uint64_t wait_times;
+    u64 tid = 0;
+    u64 pid = 0;
+#endif
 
   public:
     rw_lock_t() = default;
@@ -67,9 +77,17 @@ struct rw_lock_t
         {
             // while (lock_m == 0x8000000000000000UL)
             cpu_pause();
+#ifdef _DEBUG
+            wait_times++;
+#endif
 
             exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
-        } while (!lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_release));
+        } while (!lock_m.compare_exchange_strong(exp, exp + 1));
+#ifdef _DEBUG
+        get_stackframes(1, frames, stack_frame_count);
+        get_task_id(pid, tid);
+        wait_times = 0;
+#endif
     }
 
     void lock_write()
@@ -79,8 +97,16 @@ struct rw_lock_t
         {
             // while (lock_m != 0)
             cpu_pause();
+#ifdef _DEBUG
+            wait_times++;
+#endif
             exp = 0;
-        } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_release));
+        } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL));
+#ifdef _DEBUG
+        get_stackframes(1, frames, stack_frame_count);
+        get_task_id(pid, tid);
+        wait_times = 0;
+#endif
     }
 
     bool try_lock_read()
@@ -89,7 +115,7 @@ struct rw_lock_t
         if (val == 0x8000000000000000UL)
             return false;
         u64 exp = val & 0x7FFFFFFFFFFFFFFFUL;
-        return lock_m.compare_exchange_strong(exp, exp + 1, std::memory_order_release);
+        return lock_m.compare_exchange_strong(exp, exp + 1);
     }
 
     bool try_lock_write()
@@ -98,7 +124,7 @@ struct rw_lock_t
         if (lock_m.load(std::memory_order_acquire) != 0)
             return false;
         exp = 0;
-        return lock_m.compare_exchange_strong(exp, 0x8000000000000000UL, std::memory_order_release);
+        return lock_m.compare_exchange_strong(exp, 0x8000000000000000UL);
     }
 
     void unlock_read()
@@ -113,7 +139,7 @@ struct rw_lock_t
             }
 #endif
             exp = lock_m.load(std::memory_order_acquire) & 0x7FFFFFFFFFFFFFFFUL;
-        } while (!lock_m.compare_exchange_strong(exp, exp - 1, std::memory_order_release));
+        } while (!lock_m.compare_exchange_strong(exp, exp - 1));
     }
 
     void unlock_write()
@@ -128,7 +154,7 @@ struct rw_lock_t
             }
 #endif
             exp = 0x8000000000000000UL;
-        } while (!lock_m.compare_exchange_strong(exp, 0, std::memory_order_acquire));
+        } while (!lock_m.compare_exchange_strong(exp, 0));
     }
 };
 

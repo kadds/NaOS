@@ -11,6 +11,7 @@
 #include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
 #include <cstdint>
+#include <type_traits>
 
 namespace bin_handle
 {
@@ -199,7 +200,7 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
     // less than 64Kib
     u64 len = elf_header->phnum * sizeof(program_64);
     u64 start = elf_header->phoff;
-    byte *p = (byte *)memory::MemoryAllocatorV->allocate(len, 0);
+    byte *p = (byte *)memory::MemoryAllocatorV->allocate(len, alignof(program_64));
     if (!p)
         return (program_64 *)p;
     file->move(start);

@@ -40,6 +40,10 @@ class page
     void add_flag(u32 flag) { flags |= flag; }
     void rm_flag(u32 flag) { flags &= ~flag; }
     bool has_flag(u32 flag) { return flags & flag; }
+    u32 get_ref_count() const { return ref_count; }
+    void clear_ref_count() { ref_count = 0; }
+    void add_ref_count() { ref_count++; }
+    void remove_ref_count() { ref_count--; }
 
     void set_buddy_order(u8 order) { buddy_order = order; }
     u8 get_buddy_order() { return buddy_order; }

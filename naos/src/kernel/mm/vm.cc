@@ -9,6 +9,7 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
@@ -18,6 +19,37 @@
 
 namespace memory::vm
 {
+
+irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+{
+    auto *thread = cpu::current().get_task();
+    if (thread != nullptr)
+    {
+        auto info = (info_t *)thread->process->mm_info;
+
+        if (is_kernel_space_pointer(extra_data))
+        {
+            if (!inter->kernel_space)
+            {
+                trace::warning("process ", thread->process->pid, " using kernel space pointer ",
+                               trace::hex(extra_data));
+                auto &pack = thread->process->signal_pack;
+                pack.send(thread->process, ::task::signal::sigstkflt, extra_data, 0, 0);
+                return irq::request_result::ok;
+            }
+            else
+            {
+                trace::panic("kernel space cow");
+            }
+        }
+        if (info->copy_at(extra_data))
+        {
+            arch::paging::reload();
+            return irq::request_result::ok;
+        }
+    }
+    return irq::request_result::no_handled;
+}
 
 irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
@@ -34,9 +66,10 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
         {
             if (!inter->kernel_space)
             {
-                trace::warning("process ", thread->process->pid, " using kernel space pointer");
+                trace::warning("process ", thread->process->pid, " using kernel space pointer ",
+                               trace::hex(extra_data));
                 auto &pack = thread->process->signal_pack;
-                pack.send(thread->process, ::task::signal::sigstkflt, extra_data, 0, 0);
+                pack.send(thread->process, ::task::signal::sigsegv, extra_data, 0, 0);
                 return irq::request_result::ok;
             }
             info = (info_t *)memory::kernel_vm_info;
@@ -62,20 +95,25 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
 irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
     using flags = arch::paging::page_fault_flags;
-    if (!(inter->error_code & flags::present))
-    {
-        return page_fault_present(inter, extra_data, user_data);
-    }
     if (inter->error_code & flags::user)
     {
     }
     if (inter->error_code & flags::write)
     {
-        if (inter->kernel_space)
+        // if (inter->kernel_space)
+        // {
+        //     trace::panic("page ", trace::hex(extra_data), " is not writeable. code ", inter->error_code);
+        // }
+        // is COW page?
+        if (inter->error_code & flags::present)
         {
-            trace::panic("page ", trace::hex(extra_data), " is not writeable. code ", inter->error_code);
+            trace::warning("page ", trace::hex(extra_data), " is not writeable");
+            return page_fault_cow(inter, extra_data, user_data);
         }
-        trace::warning("page ", trace::hex(extra_data), " is not writeable");
+    }
+    if (!(inter->error_code & flags::present))
+    {
+        return page_fault_present(inter, extra_data, user_data);
     }
     if (inter->error_code & flags::instruction_fetch)
     {
@@ -212,6 +250,26 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     // trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
     return nullptr;
 }
+void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
+{
+    uctx::RawReadLockUninterruptibleContext ctx(list_lock);
+    for (auto &item : list)
+    {
+        item.flags |= flag;
+        auto new_item = item;
+        if (item.flags & flags::file)
+        {
+            map_t *mt = (map_t *)item.user_data;
+            new_item.user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, mt->file, mt->file_offset,
+                                                         mt->file_length, mt->mmap_length, info);
+        }
+        else
+        {
+            new_item.user_data = (u64)info;
+        }
+        to.list.insert(new_item);
+    }
+}
 
 mmu_paging::mmu_paging() { base_paging_addr = new_page_table<arch::paging::base_paging_t>(); }
 
@@ -219,56 +277,79 @@ mmu_paging::~mmu_paging() { delete_page_table((arch::paging::base_paging_t *)bas
 
 void mmu_paging::load_paging() { arch::paging::load((arch::paging::base_paging_t *)base_paging_addr); }
 
-void mmu_paging::map_area(const vm_t *vm)
+void fill_attr(u64 flags, u64 &attr, u64 &page_size)
 {
-    if (unlikely(vm == nullptr))
-        return;
-    u64 attr = 0;
-    if (vm->flags & flags::writeable)
+    attr = 0;
+    if (flags & flags::writeable)
     {
         attr |= arch::paging::flags::writable;
     }
-    if (vm->flags & flags::user_mode)
+    if (flags & flags::user_mode)
     {
         attr |= arch::paging::flags::user_mode;
     }
-
-    for (char *start = (char *)vm->start; start < (char *)vm->end; start += arch::paging::frame_size::size_4kb)
-    {
-        phy_addr_t p = memory::va2pa(memory::malloc_page());
-
-        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, p, arch::paging::frame_size::size_4kb,
-                          1, attr);
-    }
-}
-
-void mmu_paging::map_area_phy(const vm_t *vm, phy_addr_t start)
-{
-    if (unlikely(vm == nullptr))
-        return;
-    u64 attr = 0;
-    if (vm->flags & flags::writeable)
-    {
-        attr |= arch::paging::flags::writable;
-    }
-    if (vm->flags & flags::user_mode)
-    {
-        attr |= arch::paging::flags::user_mode;
-    }
-    if (vm->flags & flags::disable_cache)
+    if (flags & flags::disable_cache)
     {
         attr |= arch::paging::flags::cache_disable;
     }
-
-    for (byte *vstart = (byte *)vm->start; vstart < (byte *)vm->end;
-         vstart += arch::paging::frame_size::size_4kb, start += arch::paging::frame_size::size_4kb)
+    page_size = arch::paging::frame_size::size_4kb;
+    if (flags & flags::big_page)
     {
-        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, vstart, start,
-                          arch::paging::frame_size::size_4kb, 1, attr);
+        page_size = arch::paging::frame_size::size_2mb;
+        attr |= arch::paging::flags::big_page;
+    }
+    if (flags & flags::huge_page)
+    {
+        page_size = arch::paging::frame_size::size_1gb;
+        attr |= arch::paging::flags::big_page;
     }
 }
 
-void mmu_paging::unmap_area(const vm_t *vm)
+void mmu_paging::map_area(const vm_t *vm, bool override)
+{
+    if (unlikely(vm == nullptr))
+        return;
+
+    u64 page_size = 0, attr = 0;
+    fill_attr(vm->flags, attr, page_size);
+    for (char *start = (char *)vm->start; start < (char *)vm->end; start += page_size)
+    {
+        phy_addr_t p = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(page_size, page_size));
+
+        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, start, p, page_size, 1, attr, override);
+    }
+}
+
+void mmu_paging::map_area_phy(const vm_t *vm, phy_addr_t start, bool override)
+{
+    if (unlikely(vm == nullptr))
+        return;
+    u64 page_size = 0, attr = 0;
+    fill_attr(vm->flags, attr, page_size);
+
+    for (byte *vstart = (byte *)vm->start; vstart < (byte *)vm->end; vstart += page_size, start += page_size)
+    {
+        arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, vstart, start, page_size, 1, attr, override);
+    }
+}
+
+int mmu_paging::remapping(const vm_t *vm, void *vir, phy_addr_t phy)
+{
+    u64 page_size = 0, attr = 0;
+    fill_attr(vm->flags, attr, page_size);
+    arch::paging::map((arch::paging::base_paging_t *)base_paging_addr, vir, phy, page_size, 1, attr, true);
+    return 0;
+}
+bool mmu_paging::has_shared(void *vir)
+{
+    return arch::paging::has_shared((arch::paging::base_paging_t *)base_paging_addr, vir);
+}
+bool mmu_paging::clear_shared(void *vir, bool writeable)
+{
+    return arch::paging::clear_shared((arch::paging::base_paging_t *)base_paging_addr, vir, writeable);
+}
+
+void mmu_paging::unmap_area(const vm_t *vm, bool free)
 {
     if (unlikely(vm == nullptr))
         return;
@@ -284,7 +365,10 @@ void mmu_paging::unmap_area(const vm_t *vm)
             {
                 arch::paging::unmap((arch::paging::base_paging_t *)base_paging_addr, (void *)vir,
                                     arch::paging::frame_size::size_4kb, 1);
-                memory::free_page(memory::pa2va(phy));
+                if (free)
+                {
+                    memory::free_page(memory::pa2va(phy));
+                }
             }
         }
     }
@@ -297,7 +381,10 @@ void mmu_paging::unmap_area(const vm_t *vm)
             phy_addr_t phy;
             if (arch::paging::get_map_address((arch::paging::base_paging_t *)base_paging_addr, vir, &phy))
             {
-                memory::free_page(memory::pa2va(phy));
+                if (free)
+                {
+                    memory::free_page(memory::pa2va(phy));
+                }
             }
             else
             {
@@ -325,20 +412,49 @@ void mmu_paging::sync_kernel()
         (arch::paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.base_paging_addr);
 }
 
+void mmu_paging::clone(mmu_paging &to, int deep)
+{
+    uctx::UninterruptibleContext icu;
+    arch::paging::share_page_table((arch::paging::base_paging_t *)to.base_paging_addr,
+                                   (arch::paging::base_paging_t *)base_paging_addr, 0, memory::user_mmap_top_address,
+                                   true, deep);
+}
+
 info_t::info_t()
     : vma(memory::user_mmap_top_address, memory::user_code_bottom_address)
     , head_vm(nullptr)
+    , shared_info(nullptr)
     , current_head_ptr(0)
 {
 }
 
 info_t::~info_t()
 {
-    uctx::RawWriteLockUninterruptibleContext ctx(vma.get_lock());
-    auto &list = vma.get_list();
-    for (auto it = list.begin(); it != list.end(); ++it)
+    uctx::RawSpinLockUninterruptibleContext ctx(shared_info_lock);
+    if (shared_info != nullptr)
     {
-        mmu_paging.unmap_area(&it);
+        shared_info->shared_pid.remove(task::current()->process->pid);
+        bool free = false;
+        if (shared_info->shared_pid.size() == 0)
+        {
+            memory::Delete(memory::KernelCommonAllocatorV, shared_info);
+            free = true;
+        }
+        uctx::RawWriteLockUninterruptibleContext ctx(vma.get_lock());
+        auto &list = vma.get_list();
+        for (auto it = list.begin(); it != list.end(); ++it)
+        {
+            mmu_paging.unmap_area(&it, false);
+        }
+    }
+    else
+    {
+        uctx::RawWriteLockUninterruptibleContext ctx(vma.get_lock());
+        auto &list = vma.get_list();
+        for (auto it = list.begin(); it != list.end(); ++it)
+        {
+            mmu_paging.unmap_area(&it, false);
+        }
     }
 }
 
@@ -378,7 +494,7 @@ bool info_t::set_brk(u64 ptr)
         vm_t vm = *head_vm;
         vm.start = ptr;
         vm.end = current_head_ptr;
-        mmu_paging.unmap_area(&vm);
+        mmu_paging.unmap_area(&vm, false);
     }
     current_head_ptr = ptr;
     return true;
@@ -404,7 +520,7 @@ bool info_t::set_brk_now(u64 ptr)
             vm_t vm = *head_vm;
             vm.start = current_map;
             vm.end = current_map + memory::page_size;
-            mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
+            mmu_paging.map_area_phy(&vm, memory::va2pa(ptr), true);
         }
     }
     else
@@ -413,7 +529,7 @@ bool info_t::set_brk_now(u64 ptr)
         vm_t vm = *head_vm;
         vm.start = ptr;
         vm.end = current_head_ptr;
-        mmu_paging.unmap_area(&vm);
+        mmu_paging.unmap_area(&vm, false);
     }
     current_head_ptr = ptr;
     return true;
@@ -430,7 +546,7 @@ bool head_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
         byte *ptr = (byte *)memory::malloc_page();
-        info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
+        info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr), true);
         return true;
     }
     return false;
@@ -468,6 +584,8 @@ bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
                 load_pages = pages - page_index;
             }
         }
+        kassert(!((item->flags & flags::big_page) || (item->flags & flags::huge_page)),
+                "expand vm not allowed big paging");
         int perfect_num = 0;
         for (int index = 0; index < load_pages; index++)
         {
@@ -477,7 +595,7 @@ bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
                 byte *ptr = (byte *)memory::malloc_page();
                 if (ptr != nullptr)
                 {
-                    info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
+                    info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr), true);
                     perfect_num++;
                 }
             }
@@ -500,35 +618,36 @@ bool fill_file_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
 
     u64 length_read = page_start - item->start;
 
-    mt->file->move(mt->file_offset + length_read);
-    byte *ptr = (byte *)memory::malloc_page();
+    byte *buffer = (byte *)memory::malloc_page();
 
     u64 length_can_read = length_read > mt->file_length ? 0 : mt->file_length - length_read;
 
-    auto ksize = mt->file->read(ptr, length_can_read > memory::page_size ? memory::page_size : length_can_read, 0);
+    auto ksize = mt->file->pread(mt->file_offset + length_read, buffer,
+                                 length_can_read > memory::page_size ? memory::page_size : length_can_read, 0);
     if (ksize == -1)
     {
         ksize = 0;
     }
-    // auto *thread = cpu::current().get_task();
+    auto *thread = cpu::current().get_task();
 
     // trace::info("fill ", trace::hex(page_start), " from file ", trace::hex(mt->file_offset + length_read), "+",
     //             trace::hex(ksize), " can read ", trace::hex(length_can_read), " mmap length ",
     //             trace::hex(mt->mmap_length), " process ", thread->process->pid, " cpu ", cpu::current().id(),
     //             " page addr ", trace::hex(page_addr));
 
-    util::memzero(ptr + ksize, memory::page_size - ksize);
+    kassert(!((item->flags & flags::big_page) || (item->flags & flags::huge_page)), "file vm not allowed big paging");
+    util::memzero(buffer + ksize, memory::page_size - ksize);
     vm_t vm = *item;
     vm.start = page_start;
     vm.end = vm.start + memory::page_size;
-    mt->vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
+    mt->vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(buffer), true);
 
     if (mt->vm_info->mmu_paging.get_base_page() != memory::kernel_vm_info->mmu_paging.get_base_page())
     {
         if (page_addr >= memory::kernel_mmap_bottom_address && page_addr <= memory::kernel_mmap_top_address)
         {
             trace::info("map double ", trace::hex(page_addr));
-            memory::kernel_vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr));
+            memory::kernel_vm_info->mmu_paging.map_area_phy(&vm, memory::va2pa(buffer), true);
         }
     }
     return true;
@@ -575,8 +694,89 @@ bool info_t::umap_file(u64 addr, u64 size)
         memory::Delete<>(memory::KernelCommonAllocatorV, mt);
     }
     vma.deallocate_map(vm);
-    mmu_paging.unmap_area(vm);
+    mmu_paging.unmap_area(vm, false);
     arch::paging::reload();
     return true;
 }
+
+void info_t::share_to(pid_t from_id, pid_t to_id, info_t *info)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(shared_info_lock);
+    if (shared_info == nullptr)
+    {
+        shared_info = memory::New<shared_info_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        shared_info->shared_pid.insert(from_id);
+    }
+    {
+        uctx::RawSpinLockUninterruptibleContext ctx2(shared_info->spin_lock);
+        shared_info->shared_pid.insert(to_id);
+        vma.clone(info, info->vma, flags::cow);
+        mmu_paging.clone(info->mmu_paging, 100);
+    }
+    info->shared_info = shared_info;
+}
+
+bool info_t::copy_at(u64 vir)
+{
+    auto vm = vma.get_vm_area(vir);
+    if (vm != nullptr)
+    {
+        // TODO: big page COW
+        void *vir_ptr = reinterpret_cast<void *>(vir & ~(memory::page_size - 1));
+        if (vm->flags & vm::flags::cow)
+        {
+            uctx::RawSpinLockUninterruptibleContext ctx(shared_info_lock);
+            if (shared_info == nullptr)
+            {
+                return false;
+            }
+            bool has_shared = false;
+            uctx::RawSpinLockUninterruptibleContext ctx2(shared_info->spin_lock);
+            // for (auto &pid : shared_info->shared_pid)
+            // {
+            //     auto process = ::task::find_pid(pid.key);
+            //     if (process)
+            //     {
+            //         auto info = (info_t *)process->mm_info;
+            //         if (info != this && info->mmu_paging.has_shared(vir_ptr))
+            //         {
+            //             has_shared = true;
+            //             break;
+            //         }
+            //     }
+            //     else
+            //     {
+            //         trace::panic("no pid found when cow");
+            //     }
+            // }
+            // if (!has_shared)
+            // {
+            //     // reuse page
+            //     for (auto &pid : shared_info->shared_pid)
+            //     {
+            //         auto process = ::task::find_pid(pid.key);
+            //         if (process)
+            //         {
+            //             auto info = (info_t *)process->mm_info;
+            //             auto vm = info->vma.get_vm_area(vir);
+            //             info->mmu_paging.clear_shared(vir_ptr, vm->flags & flags::writeable);
+            //         }
+            //         else
+            //         {
+            //             trace::panic("no pid found when cow");
+            //         }
+            //     }
+            //     return true;
+            // }
+            byte *ptr = (byte *)memory::malloc_page();
+            if (mmu_paging.remapping(vm, vir_ptr, memory::va2pa(ptr)) != 0)
+            {
+                return true;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace memory::vm

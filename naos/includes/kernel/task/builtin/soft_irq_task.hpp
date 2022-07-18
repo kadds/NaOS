@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
+#include "kernel/task.hpp"
 namespace task::builtin::softirq
 {
-void main(u64 arg0, u64 arg1, u64 arg2, u64 arg3);
+void main(task::thread_start_info_t *info);
 } // namespace task::builtin::softirq

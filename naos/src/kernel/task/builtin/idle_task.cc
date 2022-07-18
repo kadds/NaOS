@@ -13,7 +13,7 @@
 namespace task::builtin::idle
 {
 std::atomic_bool is_init = false;
-void main()
+void main(void *arg)
 {
     trace::debug("idle task running at cpu ", cpu::current().id());
     if (cpu::current().is_bsp())
@@ -30,7 +30,6 @@ void main()
             trace::panic("Can't open init program");
 
         set_init_process(task::create_process(file, "/bin/init", init::main, 0, 0, 0));
-        trace::debug("init process created pid=", get_init_process()->pid);
     }
     else
     {
@@ -39,8 +38,8 @@ void main()
             cpu_pause();
         }
         /// soft irq process
-        auto t =
-            task::create_thread(task::find_pid(1), builtin::softirq::main, 0, 0, 0, create_thread_flags::real_time_rr);
+        auto t = task::create_thread(task::find_pid(1), builtin::softirq::main, nullptr, 0,
+                                     create_thread_flags::real_time_rr);
         trace::debug("softirqd created tid=", t->tid);
     }
 

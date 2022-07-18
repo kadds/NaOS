@@ -27,7 +27,7 @@ bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     using namespace arch::task;
     auto new_vm = new_mm_info->map_file(memory::user_code_bottom_address, file, 0, file->size(), file->size(),
                                         memory::vm::flags::readable | memory::vm::flags::writeable |
-                                            memory::vm::flags::executeable);
+                                            memory::vm::flags::executeable | memory::vm::flags::user_mode);
     info->entry_start_address = (void *)new_vm->start;
 
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,

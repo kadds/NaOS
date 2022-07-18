@@ -19,6 +19,8 @@ u64 buddy::next_fit_size(u64 size)
 
 u64 offset(u8 order) { return 1UL << order; }
 
+u64 buddy::scan_free() const { return 0; }
+
 page *buddy::alloc(u64 pages)
 {
     if (pages == 0)

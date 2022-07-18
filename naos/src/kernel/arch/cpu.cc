@@ -115,6 +115,13 @@ cpu_t &current()
     __asm__("movq %%gs:0x0, %0\n\t" : "=r"(cpuid) : :);
     return per_cpu_data[cpuid];
 }
+cpu_t &fast_current()
+{
+    u64 cpuid;
+    __asm__("movq %%gs:0x0, %0\n\t" : "=r"(cpuid) : :);
+    return per_cpu_data[cpuid];
+}
+
 void *current_user_data()
 {
     u64 u;
@@ -136,7 +143,8 @@ void map(u64 &base, u64 pg, bool is_bsp = false) {
     } else {
         ks = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(size, 0));
     }
-    paging::map(c, reinterpret_cast<void*>(base), ks, paging::frame_size::size_4kb, pg, paging::flags::writable);
+    paging::map(c, reinterpret_cast<void *>(base), ks, paging::frame_size::size_4kb, pg, paging::flags::writable,
+                false);
     base += size;
 }
 

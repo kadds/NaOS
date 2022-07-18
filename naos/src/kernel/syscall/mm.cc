@@ -33,6 +33,7 @@ u64 sbrk(i64 offset)
     info->set_brk(r + offset);
     return r;
 }
+
 /// map memory/file
 ///
 /// \param flags 1:read;2:write;4:exec;8:file;16:share
@@ -56,8 +57,6 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     if (vm)
         return vm->start;
     return EFAILED;
-
-    // ((memory::vm::info_t *)(task::current_process()->mm_info))->mmu_paging.map_area();
 }
 
 u64 umap(u64 address, u64 size)
@@ -119,14 +118,14 @@ unsigned long close_msg_queue(unsigned long key)
 
 BEGIN_SYSCALL
 
-SYSCALL(50, brk)
-SYSCALL(51, sbrk)
-SYSCALL(52, map)
-SYSCALL(53, umap)
-SYSCALL(54, create_msg_queue)
-SYSCALL(55, write_msg_queue)
-SYSCALL(56, read_msg_queue)
-SYSCALL(57, close_msg_queue)
+SYSCALL(57, brk)
+SYSCALL(58, sbrk)
+SYSCALL(59, map)
+SYSCALL(60, umap)
+SYSCALL(61, create_msg_queue)
+SYSCALL(62, write_msg_queue)
+SYSCALL(63, read_msg_queue)
+SYSCALL(64, close_msg_queue)
 
 END_SYSCALL
 } // namespace syscall
