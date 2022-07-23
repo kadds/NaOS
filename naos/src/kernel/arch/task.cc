@@ -236,31 +236,4 @@ void return_from_signal_context(userland_code_context *context)
         trace::panic("Unknown rsp value");
     }
 }
-int copy_kernel_thread(::task::thread_t *target, ::task::thread_t *source)
-{
-    void *from = source->kernel_stack_top;
-    void *to = target->kernel_stack_top;
-
-    auto *register_info = target->register_info;
-    register_info->task = target;
-    u64 rsp = 0;
-    u64 rip = 0;
-    u64 top = reinterpret_cast<u64>(from);
-    byte *t = reinterpret_cast<byte *>(to);
-    byte *f = reinterpret_cast<byte *>(from);
-    u64 size = 0;
-    __asm__ __volatile__("movq %%rsp, %0\n\t" : "=g"(rsp) : : "memory");
-    size = top - rsp;
-
-    kassert(top > rsp, "rsp invalid");
-    kassert(size < memory::kernel_stack_size - 0x8f, "size invalid");
-
-    util::memcopy(t - size, f - size, size);
-
-    register_info->rsp = reinterpret_cast<void *>(t - size);
-    __asm__ __volatile__("leaq (%%rip), %0\n\t" : "=g"(rip) : : "memory");
-    register_info->rip = reinterpret_cast<void *>(_from_rip);
-
-    return 0;
-}
 } // namespace arch::task

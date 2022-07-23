@@ -65,8 +65,7 @@ class super_block : public vfs::super_block
     void write_inode(vfs::inode *node) override;
     vfs::inode *get_inode(u64 node_index);
 
-    file *alloc_file() override;
-    void dealloc_file(vfs::file *f) override;
+    handle_t<vfs::file> alloc_file() override;
     inode *alloc_inode() override;
     void dealloc_inode(vfs::inode *node) override;
     dentry *alloc_dentry() override;

@@ -1,5 +1,6 @@
 #include "kernel/fs/ramfs/ramfs.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/handle.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
@@ -134,13 +135,11 @@ void super_block::write_inode(vfs::inode *node) {}
 vfs::inode *super_block::get_inode(u64 node_index)
 {
     inode *node = nullptr;
-    inode_map.get(node_index, &node);
+    inode_map.get(node_index, node);
     return node;
 }
 
-file *super_block::alloc_file() { return memory::New<file>(memory::KernelCommonAllocatorV); }
-
-void super_block::dealloc_file(vfs::file *f) { memory::Delete(memory::KernelCommonAllocatorV, f); }
+handle_t<vfs::file> super_block::alloc_file() { return handle_t<::fs::ramfs::file>::make(); }
 
 inode *super_block::alloc_inode()
 {

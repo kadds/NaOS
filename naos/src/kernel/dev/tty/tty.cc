@@ -11,7 +11,7 @@ bool tty_read_func(u64 data)
 {
     auto *tty = (tty_pseudo_t *)data;
     auto buffer = &tty->buffer;
-    return tty->eof_count > 0 || (tty->line_count > 0 && !buffer->is_emtpy());
+    return tty->eof_count > 0 || (tty->input_chars > 0 && !buffer->is_emtpy() && tty->enter > 0);
 }
 
 /// print to screen
@@ -26,9 +26,11 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
     trace::print_inner((const char *)data, size);
     for (u64 i = 0; i < size; i++)
     {
-        if ((char)data[i] == '\n')
+        auto ch = (char)data[i];
+        if (ch == '\n')
         {
-            line_count++;
+            input_chars++;
+            enter++;
         }
 
         if (buffer.is_full())
@@ -36,11 +38,18 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
             byte p = (byte)0;
             buffer.last(&p);
             if ((char)p == '\n')
-                line_count--;
+                input_chars--;
+        }
+        if (ch == '\b')
+        {
         }
         buffer.write(data[i]);
     }
-    wait_queue.do_wake_up();
+    // trace::print_inner((const char *)data, size);
+    if (enter > 0)
+    {
+        wait_queue.do_wake_up();
+    }
 
     return size;
 }
@@ -53,7 +62,7 @@ void tty_pseudo_t::send_EOF()
 
 i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
 {
-    if (line_count <= 0)
+    if ((input_chars == 0 || enter == 0) && eof_count == 0)
     {
         if (flags & rw_flags::no_block)
         {
@@ -92,7 +101,8 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
         if (ch == '\n') // keep \n
         {
             data[i++] = (byte)ch;
-            line_count--;
+            enter--;
+            input_chars--;
             return i;
         }
         else if (ch == '\b')

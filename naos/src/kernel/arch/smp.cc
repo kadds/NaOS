@@ -1,10 +1,11 @@
 #include "kernel/arch/smp.hpp"
+#include "common.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/mm/vm.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/util/memory.hpp"
@@ -40,7 +41,8 @@ void init()
         return;
     }
     phy_addr_t code_start = phy_addr_t::from((byte *)_ap_code_start), code_end = phy_addr_t::from((byte *)_ap_code_end);
-    util::memcopy(memory::pa2vax((byte *)base_ap_phy_addr), memory::pa2va(code_start), code_end - code_start);
+    phy_addr_t ap_start = phy_addr_t::from((byte *)base_ap_phy_addr);
+    util::memcopy(memory::pa2va(ap_start), memory::pa2va(code_start), code_end - code_start);
 
     volatile u64 *stack = (volatile u64 *)memory::pa2va<u64 *>(phy_addr_t::from((u64)_ap_stack));
     volatile u32 *startup_flag = (volatile u32 *)memory::pa2va<u32 *>(phy_addr_t::from((u64)_ap_startup_spin_flag));

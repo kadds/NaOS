@@ -58,6 +58,11 @@ void memcopy(void *dst, const void *src, u64 size)
             d = reinterpret_cast<char *>(d64);
             s = reinterpret_cast<const char *>(s64);
         }
+        else
+        {
+            s += size;
+            d += size;
+        }
         for (uint64_t i = 0; i < size; i++)
         {
             *--d = *--s;

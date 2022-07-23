@@ -24,7 +24,6 @@ typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
 } // namespace irq
 #endif
 
-using handle_t = u64;
 using thread_id = u64;
 using process_id = u64;
 using group_id = u64;
@@ -32,6 +31,10 @@ using file_desc = i32;
 using user_id = u64;
 using group_id = u64;
 using dev_t = u64;
+
+constexpr file_desc console_in = 0;
+constexpr file_desc console_out = 1;
+constexpr file_desc console_err = 2;
 
 inline constexpr file_desc invalid_file_desc = -1;
 

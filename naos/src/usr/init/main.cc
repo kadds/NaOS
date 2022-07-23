@@ -1,3 +1,4 @@
+#include "common.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -6,14 +7,15 @@
 #include <unistd.h>
 uint64_t __dso_handle;
 
-void main(int argc, char **argv)
+extern "C" void main(int argc, char **argv)
 {
     while (1)
     {
+        printf("fork nsh...\n");
         int pid = fork();
         if (pid == 0)
         {
-            // child
+            // child process
             // run shell
             int ret = execl("/bin/nanobox", "nsh", nullptr);
             printf("execute process %d return %d\n", pid, ret);

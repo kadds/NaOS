@@ -43,7 +43,7 @@ int enum_device(device_class *clazz)
 device *get_device(num_t dev)
 {
     device *pdev = nullptr;
-    device_map->get(dev, &pdev);
+    device_map->get(dev, pdev);
     return pdev;
 }
 

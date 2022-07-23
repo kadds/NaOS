@@ -7,47 +7,30 @@
 namespace fs::vfs
 {
 
+file::~file()
+{
+    auto type = entry->get_inode()->get_type();
+    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
+    {
+        // auto pd = entry->get_inode()->get_pseudo_data();
+        // if (pd)
+        //     pd->close();
+    }
+    auto entry = this->entry;
+    // auto su = entry->get_inode()->get_super_block();
+    if (mode & mode::unlink_on_close)
+    {
+        unlink(entry);
+    }
+    return;
+}
+
 int file::open(dentry *entry, flag_t mode)
 {
     this->entry = entry;
     this->mode = mode;
     this->offset = 0;
-    add_ref();
     return 0;
-}
-
-void file::close()
-{
-    remove_ref();
-    auto type = entry->get_inode()->get_type();
-    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
-    {
-        auto pd = entry->get_inode()->get_pseudo_data();
-        if (pd)
-            pd->close();
-    }
-    if (ref_count == 0)
-    {
-        auto entry = this->entry;
-        auto su = entry->get_inode()->get_super_block();
-        if (mode & mode::unlink_on_close)
-            unlink(entry);
-        su->dealloc_file(this);
-    }
-    return;
-}
-
-file *file::clone()
-{
-    file *f = entry->get_inode()->get_super_block()->alloc_file();
-    if (!f)
-        return nullptr;
-
-    f->entry = entry;
-    f->mode = mode;
-    f->add_ref();
-    f->offset = offset;
-    return f;
 }
 
 void file::seek(i64 offset) { this->offset += offset; }

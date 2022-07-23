@@ -7,17 +7,33 @@ namespace permission_flags
 {
 enum permission : flag_t
 {
-    exec = 1,
+    x = 1,
     write = 2,
     read = 4,
+    xr = x | read,
+    wr = write | read,
+    xwr = wr | x,
 
-    group_exec = 16,
+    group_x = 16,
     group_write = 32,
     group_read = 64,
+    group_xr = group_x | group_read,
+    group_wr = group_write | group_read,
+    group_xwr = group_wr | group_x,
 
-    other_exec = 256,
+    other_x = 256,
     other_write = 512,
     other_read = 1024,
+    other_xr = other_x | other_read,
+    other_wr = other_write | other_read,
+    other_xwr = other_wr | other_x,
+
+    all_x = x | group_x | other_x,
+    all_write = write | group_write | other_write,
+    all_read = read | group_read | other_read,
+    all_xr = xr | group_xr | other_xr,
+    all_wr = all_write | all_read,
+    all_xwr = all_wr | all_x,
 };
 } // namespace permission_flags
 
@@ -43,6 +59,7 @@ enum mode : flag_t
     append = 8,
     no_block = 16,
     unlink_on_close = 32,
+    stand_alone = 64,
 };
 } // namespace mode
 
@@ -165,6 +182,14 @@ enum
 {
     no_block = 1,
     override = 2,
+};
+}
+
+namespace domain
+{
+enum
+{
+    read_dir = 1,
 };
 }
 

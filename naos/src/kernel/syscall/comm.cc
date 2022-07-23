@@ -1,21 +1,14 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/kobject.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/time.hpp"
 #include "kernel/util/str.hpp"
 namespace naos::syscall
 {
-void log(const char *message)
-{
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(2);
-    if (file)
-    {
-        file->write(reinterpret_cast<const byte *>(message), util::strlen(message), 0);
-    }
-}
+void log(const char *message) { trace::print(message); }
 
 int clock_get(int clock_index, timeclock::time *time)
 {

@@ -180,7 +180,7 @@ slab_group *slab_cache_pool::find_slab_group(const util::string &name)
 {
     uctx::RawReadLockUninterruptibleContext ctx(group_lock);
     slab_group *g = nullptr;
-    map.get(name, &g);
+    map.get(name, g);
     return g;
 }
 
@@ -218,6 +218,15 @@ void *SlabObjectAllocator::allocate(u64 size, u64 align)
     return ptr;
 };
 
-void SlabObjectAllocator::deallocate(void *ptr) { slab_obj->free(ptr); };
+void SlabObjectAllocator::deallocate(void *ptr)
+{
+#ifdef _DEBUG
+    if (ptr != nullptr)
+    {
+        util::memset(ptr, 0xFFFF'FFFF'FFFF'FFFF, slab_obj->get_size());
+    }
+#endif
+    slab_obj->free(ptr);
+};
 
 } // namespace memory

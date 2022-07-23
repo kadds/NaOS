@@ -61,13 +61,13 @@ void before_user_thread(task::thread_start_info_t *info)
     arch::task::enter_userland(task::current(), offset, entry, args, 0);
 }
 
-process_id create_process(const char *filename, const char *argv[], const char *envp[], flag_t flags)
+process_id create_process(const char *path, const char *argv[], const char *envp[], flag_t flags)
 {
-    if (filename == nullptr || !is_user_space_pointer(filename))
+    if (!is_user_space_pointer_or_null(path))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer(argv))
+    if (!is_user_space_pointer_or_null(argv))
     {
         return EPARAM;
     }
@@ -84,14 +84,14 @@ process_id create_process(const char *filename, const char *argv[], const char *
         }
     }
 
-    auto ft = task::current_process()->res_table.get_file_table();
+    auto &res = task::current_process()->resource;
     auto file =
-        fs::vfs::open(filename, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
+        fs::vfs::open(path, res.root(), res.current(), fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
     if (!file)
     {
         return ENOEXIST;
     }
-    auto p = task::create_process(file, filename, before_user_thread, argv, envp, flags);
+    auto p = task::create_process(file, path, before_user_thread, argv, envp, flags);
     if (p)
     {
         return p->pid;
@@ -101,7 +101,7 @@ process_id create_process(const char *filename, const char *argv[], const char *
 
 thread_id create_thread(void *entry, void *arg, flag_t flags)
 {
-    if (entry == nullptr || !is_user_space_pointer(entry))
+    if (!is_user_space_pointer_or_null(entry))
     {
         return EPARAM;
     }
@@ -152,8 +152,10 @@ struct sig_info_t
 
 i64 raise(task::signal_num_t num, sig_info_t *info)
 {
-    if (info != nullptr && !is_user_space_pointer(info))
+    if (!is_user_space_pointer(info))
+    {
         return EPARAM;
+    }
     auto proc = task::current_process();
 
     if (info)
@@ -178,9 +180,9 @@ enum target_flags : flag_t
 
 u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 {
-    if (target == nullptr || !is_user_space_pointer(target))
+    if (!is_user_space_pointer_or_null(target))
         return EPARAM;
-    if (info != nullptr && !is_user_space_pointer(info))
+    if (!is_user_space_pointer(info))
         return EPARAM;
 
     if (target->flags & send_to_process)
@@ -203,9 +205,9 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 
 u64 sigwait(task::signal_num_t *num, sig_info_t *info)
 {
-    if (num != nullptr && !is_user_space_pointer(num))
+    if (!is_user_space_pointer(num))
         return EPARAM;
-    if (info != nullptr && !is_user_space_pointer(info))
+    if (!is_user_space_pointer(info))
         return EPARAM;
     task::signal_info_t inf;
     task::current_process()->signal_pack.wait(&inf);
@@ -310,7 +312,7 @@ void setcpu_mask(u64 mask0, u64 mask1)
 
 int getcpu_mask(u64 *mask0, u64 *mask1)
 {
-    if (!is_user_space_pointer(mask0))
+    if (!is_user_space_pointer_or_null(mask0))
         return EPARAM;
     *mask0 = task::current()->cpumask.mask;
     return 0;
@@ -326,46 +328,46 @@ int set_tcb(void *p)
     return 0;
 }
 
-int chdir(const char *pathname)
+int chdir(const char *path)
 {
-    if (pathname == nullptr || !is_user_space_pointer(pathname))
+    if (!is_user_space_pointer_or_null(path))
     {
         return EPARAM;
     }
-    auto ft = task::current_process()->res_table.get_file_table();
-    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current, fs::path_walk_flags::directory);
+    auto &res = task::current_process()->resource;
+    auto entry = fs::vfs::path_walk(path, res.root(), res.current(), fs::path_walk_flags::directory);
     if (entry != nullptr)
     {
-        ft->current = entry;
+        res.set_current(entry);
         return OK;
     }
     return EFAILED;
 }
 
-u64 current_dir(char *pathname, u64 max_len)
+int current_dir(char *path, u64 max_len)
 {
-    if (pathname == nullptr || !is_user_space_pointer(pathname) || !is_user_space_pointer(pathname + max_len))
+    if (!is_user_space_pointer_or_null(path) || !is_user_space_pointer_or_null(path + max_len))
     {
         return EBUFFER;
     }
 
-    auto ft = task::current_process()->res_table.get_file_table();
-    return fs::vfs::pathname(ft->root, ft->current, pathname, max_len);
+    auto &res = task::current_process()->resource;
+    return fs::vfs::pathname(res.root(), res.current(), path, max_len);
 }
 
-int chroot(const char *pathname)
+int chroot(const char *path)
 {
-    if (pathname == nullptr || !is_user_space_pointer(pathname))
+    if (!is_user_space_pointer_or_null(path))
     {
         return EPARAM;
     }
-    auto ft = task::current_process()->res_table.get_file_table();
+    auto &res = task::current_process()->resource;
 
-    auto entry = fs::vfs::path_walk(pathname, ft->root, ft->current,
+    auto entry = fs::vfs::path_walk(path, res.root(), res.current(),
                                     fs::path_walk_flags::directory | fs::path_walk_flags::cross_root);
     if (entry != nullptr)
     {
-        ft->root = entry;
+        res.set_root(entry);
         return OK;
     }
     return EFAILED;
@@ -375,7 +377,7 @@ int fork() { return task::fork(); }
 
 int clone(void *entry, void *arg, void *tcb)
 {
-    if (entry == nullptr || !is_user_space_pointer(entry))
+    if (!is_user_space_pointer_or_null(entry))
     {
         return EPARAM;
     }
@@ -390,17 +392,18 @@ int clone(void *entry, void *arg, void *tcb)
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
-    if (argv == nullptr || !is_user_space_pointer(argv))
+    if (!is_user_space_pointer_or_null(argv))
     {
         return EPARAM;
     }
-    if (envp == nullptr || !is_user_space_pointer(envp))
+    if (!is_user_space_pointer(envp))
     {
         return EPARAM;
     }
-    auto ft = task::current_process()->res_table.get_file_table();
-    auto file = fs::vfs::open(path, ft->root, ft->current, fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
-    if (file == nullptr)
+    auto &res = task::current_process()->resource;
+    auto file =
+        fs::vfs::open(path, res.root(), res.current(), fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
+    if (!file)
     {
         return ENOEXIST;
     }

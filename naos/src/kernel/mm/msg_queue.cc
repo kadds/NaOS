@@ -51,7 +51,7 @@ message_queue_t *get_msg_queue(msg_id id)
 {
     uctx::RawReadLockUninterruptibleContext icu(msg_queue_lock);
     message_queue_t *q = nullptr;
-    msg_hash_map->get(id, &q);
+    msg_hash_map->get(id, q);
     return q;
 }
 
@@ -131,7 +131,7 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
         if (!write_for_write(queue, flags))
             return -1;
 
-        if (!queue->msg_packs.get(type, &list))
+        if (!queue->msg_packs.get(type, list))
         {
             list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
             queue->msg_packs.insert(type, list);
@@ -148,7 +148,7 @@ bool wait_reader_func(u64 data)
     auto *w = reinterpret_cast<wait_t *>(data);
     msg_pack_list_t *pack_list;
     uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
-    if (!w->queue->msg_packs.get(w->type, &pack_list) || pack_list->empty())
+    if (!w->queue->msg_packs.get(w->type, pack_list) || pack_list->empty())
     {
         if (w->queue->close && w->queue->msg_count == 0)
         {
@@ -207,7 +207,7 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
 
         uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
         icu.begin();
-        if (!queue->msg_packs.get(type, &msg_pack_list) || msg_pack_list->empty())
+        if (!queue->msg_packs.get(type, msg_pack_list) || msg_pack_list->empty())
         {
             icu.end();
             if (flags & msg_flags::no_block)

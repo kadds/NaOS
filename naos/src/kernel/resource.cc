@@ -1,69 +1,68 @@
 #include "kernel/resource.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/handle.hpp"
+#include "kernel/kobject.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
+#include "kernel/ucontext.hpp"
 namespace task
 {
-const u64 file_id_table[] = {128, 4096, 65536};
+const u64 id_table[] = {128, 4096, 65536};
 
-file_table_t::file_table_t()
-    : file_map(memory::KernelVirtualAllocatorV)
-    , id_gen(file_id_table)
+resource_table_t::resource_table_t()
+    : handle_map(memory::KernelCommonAllocatorV)
+    , id_gen(id_table)
 {
-}
-
-resource_table_t::resource_table_t(file_table_t *ft)
-{
-    if (ft != nullptr)
-    {
-        f_table = ft;
-    }
-    else
-    {
-        f_table = memory::New<file_table_t>(memory::KernelCommonAllocatorV);
-    }
 }
 
 resource_table_t::~resource_table_t() {}
 
-void resource_table_t::copy_file_table(file_table_t *raw_ft)
+void resource_table_t::clone(resource_table_t *to, filter_func filter, u64 userdata)
 {
-    if (f_table == nullptr)
+    uctx::RawWriteLockUninterruptibleContext icu0(to->map_lock);
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
+
+    for (auto it : handle_map)
     {
-        return;
+        if (filter(it.key, it.value, userdata))
+        {
+            to->id_gen.tag(it.key);
+            to->handle_map.insert(it.key, it.value);
+        }
     }
 }
 
-file_desc resource_table_t::new_file_desc(fs::vfs::file *file)
+file_desc resource_table_t::new_kobject(khandle obj)
 {
-    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
-    auto id = f_table->id_gen.next();
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
+    auto id = id_gen.next();
     if (id != util::null_id)
-        f_table->file_map.insert(id, file);
+        handle_map.insert(id, std::move(obj));
     return id;
 }
 
-void resource_table_t::delete_file_desc(file_desc fd)
+void resource_table_t::delete_kobject(file_desc fd)
 {
-    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
-    f_table->id_gen.collect(fd);
-    f_table->file_map.remove(fd);
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
+    id_gen.collect(fd);
+    handle_map.remove(fd);
 }
 
-fs::vfs::file *resource_table_t::get_file(file_desc fd)
+khandle resource_table_t::get_kobject(file_desc fd)
 {
-    fs::vfs::file *f = nullptr;
-    uctx::RawReadLockUninterruptibleContext icu(f_table->filemap_lock);
-    f_table->file_map.get(fd, &f);
-    return f;
+    khandle handle;
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
+    handle_map.get(fd, handle);
+    return handle;
 }
 
-bool resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
+bool resource_table_t::set_handle(file_desc fd, khandle obj)
 {
-    uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
 
-    if (!f_table->file_map.has(fd))
+    if (!handle_map.has(fd))
     {
-        f_table->file_map.insert(fd, file);
+        handle_map.insert(fd, std::move(obj));
         return true;
     }
     return false;
@@ -71,21 +70,19 @@ bool resource_table_t::set_file(file_desc fd, fs::vfs::file *file)
 
 void resource_table_t::clear()
 {
-    while (f_table->file_map.size() != 0)
+    while (handle_map.size() != 0)
     {
-        fs::vfs::file *file = nullptr;
+        khandle handle;
         {
+            uctx::RawWriteLockUninterruptibleContext icu(map_lock);
 
-            uctx::RawWriteLockUninterruptibleContext icu(f_table->filemap_lock);
-
-            auto it = f_table->file_map.begin();
-            if (it == f_table->file_map.end())
+            auto it = handle_map.begin();
+            if (it == handle_map.end())
                 break;
-            file = it->value;
-            f_table->file_map.remove(it->key);
+            handle = std::move(it->value);
+            handle_map.remove(it->key);
         }
-        if (file != nullptr)
-            file->close();
+        // release handle
     }
 }
 

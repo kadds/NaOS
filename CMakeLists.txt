@@ -13,13 +13,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mno-red-zone -Wunreachable-code -fvisibility-inlines-hidden \
-    -Wframe-larger-than=512 -pipe -std=c++20 -Wno-pedantic \
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++20 -Wno-pedantic \
     -fno-rtti -fno-asynchronous-unwind-tables -fno-common \
     -fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
-    -ffreestanding -fno-stack-protector -fno-bounds-check \
-    -mno-sse -mno-sse2 -fno-omit-frame-pointer \
-    -mno-omit-leaf-frame-pointer -fno-builtin")
+    -ffreestanding -fno-stack-protector -fno-builtin")
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
@@ -55,8 +52,8 @@ endif ()
 if (USE_CLANG)
     SET (CMAKE_C_COMPILER        "/usr/bin/clang")
     SET (CMAKE_CXX_COMPILER      "/usr/bin/clang++")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-unused-const-variable -stdlib=libc++")
-    SET (CMAKE_LINKER  "/usr/bin/llvm-link")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-unused-const-variable")
+    SET (CMAKE_LINKER  "/usr/bin/lld")
 else()
     SET (CMAKE_C_COMPILER        "/usr/bin/gcc")
     SET (CMAKE_CXX_COMPILER      "/usr/bin/g++")

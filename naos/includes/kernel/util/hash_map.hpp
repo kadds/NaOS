@@ -299,7 +299,7 @@ template <typename P, typename hash_func> class base_hash_map
 
     iterator end() const { return iterator(holder(table + cap, table + cap, nullptr)); }
 
-  private:
+  protected:
     u64 count;
     entry *table;
     // fix point 12345.67
@@ -422,16 +422,39 @@ class hash_map : public base_hash_map<hash_map_pair<K, V>, hash_func>
 
     public:
       using Parent::Parent;
-      bool get(const K &key, V *v)
+      bool get(const K &key, V &v)
       {
-          auto iter = find_if(Parent::begin(), Parent::end(), key_find_func(key));
-          if (iter != Parent::end())
+          if (unlikely(this->count == 0))
           {
-              *v = (*iter).value;
-              return true;
+              return 0;
+          }
+          u64 hash = this->hash_key(key);
+          for (auto it = this->table[hash].next; it != nullptr; it = it->next)
+          {
+              if (it->content.key == key)
+              {
+                  v = it->content.value;
+                  return true;
+              }
           }
           return false;
-    }
+      }
+      V *get_ptr(const K &key)
+      {
+          if (unlikely(this->count == 0))
+          {
+              return 0;
+          }
+          u64 hash = this->hash_key(key);
+          for (auto it = this->table[hash].next; it != nullptr; it = it->next)
+          {
+              if (it->content.key == key)
+              {
+                  return &it->content.value;
+              }
+          }
+          return nullptr;
+      }
 };
 
 

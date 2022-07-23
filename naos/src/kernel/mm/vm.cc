@@ -107,7 +107,7 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
         // is COW page?
         if (inter->error_code & flags::present)
         {
-            trace::warning("page ", trace::hex(extra_data), " is not writeable");
+            // trace::warning("page ", trace::hex(extra_data), " is not writeable");
             return page_fault_cow(inter, extra_data, user_data);
         }
     }
@@ -434,11 +434,9 @@ info_t::~info_t()
     if (shared_info != nullptr)
     {
         shared_info->shared_pid.remove(task::current()->process->pid);
-        bool free = false;
         if (shared_info->shared_pid.size() == 0)
         {
             memory::Delete(memory::KernelCommonAllocatorV, shared_info);
-            free = true;
         }
         uctx::RawWriteLockUninterruptibleContext ctx(vma.get_lock());
         auto &list = vma.get_list();
@@ -628,7 +626,7 @@ bool fill_file_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
     {
         ksize = 0;
     }
-    auto *thread = cpu::current().get_task();
+    // auto *thread = cpu::current().get_task();
 
     // trace::info("fill ", trace::hex(page_start), " from file ", trace::hex(mt->file_offset + length_read), "+",
     //             trace::hex(ksize), " can read ", trace::hex(length_can_read), " mmap length ",
@@ -730,7 +728,7 @@ bool info_t::copy_at(u64 vir)
             {
                 return false;
             }
-            bool has_shared = false;
+            // bool has_shared = false;
             uctx::RawSpinLockUninterruptibleContext ctx2(shared_info->spin_lock);
             // for (auto &pid : shared_info->shared_pid)
             // {

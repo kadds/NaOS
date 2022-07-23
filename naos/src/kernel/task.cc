@@ -5,6 +5,8 @@
 #include "kernel/arch/task.hpp"
 
 #include "kernel/fs/vfs/defines.hpp"
+#include "kernel/handle.hpp"
+#include "kernel/kobject.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -13,6 +15,7 @@
 
 #include "kernel/time.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/types.hpp"
 #include "kernel/util/array.hpp"
 #include "kernel/util/hash_map.hpp"
 #include "kernel/util/id_generator.hpp"
@@ -21,6 +24,7 @@
 
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 
@@ -211,20 +215,13 @@ void create_devs()
     {
         fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
         fs::vfs::create(fname, root, root, fs::create_flags::chr);
-        auto *f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
+        auto f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
         auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
-        f->close();
     }
 
     fs::vfs::link("/dev/tty/0", "/dev/tty/1", root, root);
     fs::vfs::link("/dev/console", "/dev/tty/1", root, root);
-
-    auto *f = fs::vfs::open("/dev/console", root, root, fs::mode::read | fs::mode::write, 0);
-    auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
-    fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
-
-    f->close();
 }
 
 std::atomic_bool is_init = false, init_ok = false;
@@ -256,8 +253,8 @@ void init()
         // init for kernel process
         process = new_kernel_process();
         process->parent_pid = 0;
-        process->res_table.get_file_table()->root = root;
-        process->res_table.get_file_table()->current = root;
+        process->resource.set_root(root);
+        process->resource.set_current(root);
     }
     else
     {
@@ -284,16 +281,14 @@ void init()
 
     if (cpu::current().is_bsp())
     {
-        auto ft = current_process()->res_table.get_file_table();
         create_devs();
-        ft->id_gen.tag(0);
-        ft->id_gen.tag(1);
-        ft->id_gen.tag(2);
-        auto tty0 = fs::vfs::open("/dev/tty/0", root, root, fs::mode::read, 0);
-        ft->file_map.insert(0, tty0->clone());
-        ft->file_map.insert(1, tty0->clone());
-        ft->file_map.insert(2, tty0->clone());
-        tty0->close();
+        auto tty0read = fs::vfs::open("/dev/console", root, root, fs::mode::read, 0);
+        auto tty0write = fs::vfs::open("/dev/console", root, root, fs::mode::write, 0);
+        auto tty0err = fs::vfs::open("/dev/console", root, root, fs::mode::write, 0);
+        auto &res = current_process()->resource;
+        res.set_handle(console_in, tty0read);
+        res.set_handle(console_out, tty0write);
+        res.set_handle(console_err, tty0err);
         is_init = true;
 
         bin_handle::init();
@@ -379,12 +374,13 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
     *(reinterpret_cast<byte **>(tail)) = nullptr;
     tail++;
 
+    u64 size = args->size;
     memory::DeleteArray(memory::KernelCommonAllocatorV, args->data_ptr, args->size);
     memory::Delete(memory::KernelCommonAllocatorV, args);
 
     thread_start_info_t *info = memory::New<thread_start_info_t>(memory::KernelCommonAllocatorV);
     info->userland_entry = entry;
-    info->userland_stack_offset = args->size + base_bytes;
+    info->userland_stack_offset = size + base_bytes;
     info->args = nullptr;
 
     start_func(info);
@@ -467,51 +463,59 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
     return ret;
 }
 
-void copy_fd(fs::vfs::file *file, process_t *new_proc, process_t *old_proc, flag_t flags)
+void copy_fd(handle_t<fs::vfs::file> file, process_t *new_proc, process_t *old_proc, flag_t flags)
 {
     kassert(new_proc != old_proc, "2 parameter processes assert failed");
 
-    auto old_ft = old_proc->res_table.get_file_table();
-    auto new_ft = new_proc->res_table.get_file_table();
+    auto &old_res = old_proc->resource;
+    auto &new_res = new_proc->resource;
 
-    new_ft->id_gen.tag(0);
-    new_ft->id_gen.tag(1);
-    new_ft->id_gen.tag(2);
+    struct shared_t
+    {
+        flag_t flags;
+    };
+    shared_t shared{flags};
+
+    old_res.clone(
+        &new_res,
+        [](file_desc fd, khandle handle, u64 u) -> bool {
+            shared_t *s = reinterpret_cast<shared_t *>(u);
+            bool is_console = fd <= console_err;
+            if (s->flags & create_process_flags::no_shared_files)
+            {
+                if (!is_console)
+                {
+                    return false;
+                }
+            }
+            if (is_console)
+            {
+                if (fd == console_in)
+                    return !(s->flags & create_process_flags::no_shared_stdin);
+                if (fd == console_out)
+                    return !(s->flags & create_process_flags::no_shared_stdout);
+                if (fd == console_err)
+                    return !(s->flags & create_process_flags::no_shared_stderror);
+            }
+            return true;
+        },
+        reinterpret_cast<u64>(&shared));
+
     auto root = fs::vfs::global_root;
 
     if (unlikely(flags & create_process_flags::no_shared_root))
-        new_ft->root = root;
+        new_res.set_root(root);
     else
-        new_ft->root = old_ft->root;
+        new_res.set_root(old_res.root());
 
-    if (unlikely(flags & create_process_flags::shared_work_dir))
-        new_ft->current = old_ft->current;
-    else // set to parent dir (file directory)
-        new_ft->current = file ? file->get_entry()->get_parent() : root;
-
-    if (flags & create_process_flags::shared_file_table)
-    {
-        new_ft->file_map = old_ft->file_map;
-    }
-
-    if (!(flags & create_process_flags::no_shared_stdin) && old_ft->file_map.get(0, &file))
-        new_ft->file_map.insert(0, file->clone());
+    if (unlikely(flags & create_process_flags::no_shared_work_dir))
+        new_res.set_current(file ? file->get_entry()->get_parent() : root);
     else
-        new_ft->file_map.insert(0, nullptr);
-
-    if (!(flags & create_process_flags::no_shared_stdout) && old_ft->file_map.get(1, &file))
-        new_ft->file_map.insert(1, file->clone());
-    else
-        new_ft->file_map.insert(1, nullptr);
-
-    if (!(flags & create_process_flags::no_shared_stderror) && old_ft->file_map.get(2, &file))
-        new_ft->file_map.insert(2, file->clone());
-    else
-        new_ft->file_map.insert(2, nullptr);
+        new_res.set_current(old_res.current());
 }
 
-process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *const args[],
-                          const char *const envp[], flag_t flags)
+process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
+                          const char *const args[], const char *const envp[], flag_t flags)
 {
     auto process = new_process();
     if (!process)
@@ -526,14 +530,13 @@ process_t *create_process(fs::vfs::file *file, const char *path, thread_start_fu
     auto &vm_paging = mm_info->mmu_paging;
     // read file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
-    file->move(0);
-    file->read(header, 128, 0);
+    file->pread(0, header, 128, 0);
     bin_handle::execute_info exec_info;
     if (flags & create_process_flags::binary_file)
     {
-        bin_handle::load_bin(header, file, mm_info, &exec_info);
+        bin_handle::load_bin(header, &file, mm_info, &exec_info);
     }
-    else if (!bin_handle::load(header, file, mm_info, &exec_info))
+    else if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
         trace::info("Can't load execute file.");
         delete_process(process);
@@ -663,15 +666,17 @@ int fork()
     {
         scheduler::add(thd, scheduler::scheduler_class::cfs);
     }
+
     return thd->process->pid;
 }
 
-int execve(fs::vfs::file *file, const char *path, thread_start_func start_func, char *const argv[], char *const envp[])
+int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func, char *const argv[],
+           char *const envp[])
 {
     auto thd = current();
     auto process = thd->process;
     auto process_args = copy_args(path, argv, envp);
-    trace::info("process ", process->pid, " execve with ", path);
+    // trace::info("process ", process->pid, " execve with ", path);
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto new_mm_info = memory::New<mm_info_t>(memory::KernelCommonAllocatorV);
@@ -688,10 +693,9 @@ int execve(fs::vfs::file *file, const char *path, thread_start_func start_func, 
 
     // read file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
-    file->move(0);
-    file->read(header, 128, 0);
+    file->pread(0, header, 128, 0);
     bin_handle::execute_info exec_info;
-    if (!bin_handle::load(header, file, mm_info, &exec_info))
+    if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
         trace::info("Can't load execute file.");
         delete_process(process);
@@ -773,7 +777,7 @@ void exit_process_inner(thread_t *thd, i64 ret)
                 else
                 {
                     icu.end();
-                    process->res_table.clear();
+                    process->resource.clear();
                     process->attributes |= process_attributes::no_thread;
                     process->wait_queue.do_wake_up();
                 }
@@ -785,7 +789,7 @@ void exit_process_inner(thread_t *thd, i64 ret)
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
     // TODO: core_dump from flags
-    trace::debug("process ", process->pid, " exit with code ", ret);
+    // trace::debug("process ", process->pid, " exit with code ", ret);
     uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
 
@@ -800,7 +804,7 @@ void exit_process(process_t *process, i64 ret, flag_t flags)
     else
     {
         icu.end();
-        process->res_table.clear();
+        process->resource.clear();
         process->attributes |= process_attributes::no_thread;
         process->wait_queue.do_wake_up();
     }
@@ -961,7 +965,7 @@ process_t *find_pid(process_id pid)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     process_t *process = nullptr;
-    global_process_map->get(pid, &process);
+    global_process_map->get(pid, process);
     return process;
 }
 

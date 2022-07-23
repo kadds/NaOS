@@ -1,5 +1,10 @@
 #pragma once
 #include "fs/vfs/defines.hpp"
+#include "handle.hpp"
+#include "kernel/fs/vfs/dentry.hpp"
+#include "kernel/kobject.hpp"
+#include "kernel/util/array.hpp"
+#include "kernel/util/str.hpp"
 #include "lock.hpp"
 #include "mm/new.hpp"
 #include "types.hpp"
@@ -10,42 +15,45 @@
 namespace task
 {
 
-using file_map_t = util::hash_map<file_desc, fs::vfs::file *>;
+using handle_map_t = util::hash_map<file_desc, khandle>;
 
-struct file_table_t
+class list_dir_functor
 {
-    std::atomic_int64_t count;
-    lock::spinlock_t lock;
-    file_map_t file_map;
-    lock::rw_lock_t filemap_lock;
-    util::id_level_generator<3> id_gen;
-    fs::vfs::dentry *root, *current;
-    file_table_t();
+  public:
+  private:
+    util::array<handle_t<fs::vfs::dentry>> dirs;
 };
 
-struct resource_table_t
+class resource_table_t
 {
   private:
-    file_table_t *f_table;
+    handle_map_t handle_map;
+    lock::rw_lock_t map_lock;
+
+    util::id_level_generator<3> id_gen;
+    fs::vfs::dentry *process_root, *process_current;
 
   public:
-    char **args;
-    int argc;
-    char *env;
-
-  public:
-    resource_table_t(file_table_t *ft = nullptr);
+    resource_table_t();
     ~resource_table_t();
+    using filter_func = bool(file_desc desc, khandle handle, u64 userdata);
 
-    file_table_t *get_file_table() { return f_table; }
-    /// TODO: implement this function
-    void copy_file_table(file_table_t *raw_ft);
+    void clone(resource_table_t *to, filter_func filter, u64 userdata);
 
-    file_desc new_file_desc(fs::vfs::file *);
-    void delete_file_desc(file_desc fd);
-    fs::vfs::file *get_file(file_desc fd);
-    bool set_file(file_desc fd, fs::vfs::file *file);
+    file_desc new_kobject(khandle obj);
+
+    void delete_kobject(file_desc fd);
+
+    khandle get_kobject(file_desc fd);
+
+    bool set_handle(file_desc fd, khandle obj);
 
     void clear();
+
+    fs::vfs::dentry *root() const { return process_root; }
+    fs::vfs::dentry *current() const { return process_current; }
+
+    void set_root(fs::vfs::dentry *root) { process_root = root; }
+    void set_current(fs::vfs::dentry *current) { process_current = current; }
 };
 } // namespace task

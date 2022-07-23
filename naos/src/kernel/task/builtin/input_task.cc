@@ -111,11 +111,14 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                     if (c >= 'a' && c <= 'z')
                         c += 'A' - 'a';
                     else if (c >= 'A' && c <= 'Z')
-                        c += 'a' - 'A';
+                        c -= 'A' - 'a';
 
                     d = (byte)c;
                 }
-                tty->write_to_buffer(&d, 1, fs::rw_flags::override);
+                if (d != (byte)0)
+                {
+                    tty->write_to_buffer(&d, 1, fs::rw_flags::override);
+                }
             }
 
             key_down_state.set(res.get.key);
@@ -125,7 +128,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
 }
 
 timeclock::microsecond_t last_update_mouse_time;
-void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, fs::vfs::file *f)
+void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, handle_t<fs::vfs::file> f)
 {
     if (status.io_is_completion)
     {
@@ -178,25 +181,10 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
     }
 }
 
-void sleep_thread_main(u64 arg0, u64 arg1, u64 arg2, u64 arg3)
-{
-    while (1)
-    {
-        task::do_sleep(timeclock::time::make(100));
-        if (timer::get_high_resolution_time() - last_update_mouse_time >= 5 * 1000 * 1000)
-        {
-            auto current_cursor = cursor::get_cursor();
-            current_cursor.state = cursor::state_t::hide;
-            cursor::set_cursor(current_cursor);
-        }
-    }
-}
-
 io::keyboard_request_t request;
 void listen_keyboard()
 {
-    fs::vfs::file *input_file =
-        fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+    auto input_file = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
     auto input_tty = (dev::tty::tty_pseudo_t *)input_file->get_pseudo();
     key_down_state.clean_all();
     key_switch_state = 0;
@@ -230,8 +218,7 @@ void listen_mouse()
 {
     fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
 
-    fs::vfs::file *mouse_file =
-        fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+    auto mouse_file = fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
 
     current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
         current_mouse_data.down_b = false;

@@ -8,7 +8,7 @@ SET(DIR_SRCS ${DIR_SRCS} "${BEG}/util/hash.cc")
 
 SET(DIR_ALL ${DIR_SRCS} ${DIR_SRCS_S})
 
-set(CMAKE_CXX_FLAGS "-fsanitize=address -std=c++20 -g -fno-inline-small-functions")
+set(CMAKE_CXX_FLAGS "-std=c++20 -g")
 set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64")
 set(CMAKE_EXE_LINKER_FLAGS "-fsanitize=address")
 

@@ -6,20 +6,18 @@
 #include "kernel/types.hpp"
 namespace naos::syscall
 {
-file_desc open(const char *filepath, u64 mode, u64 flags)
+file_desc open(const char *path, u64 mode, u64 flags)
 {
-    if (filepath == nullptr || !is_user_space_pointer(filepath))
+    if (!is_user_space_pointer_or_null(path))
     {
         return EPARAM;
     }
 
-    auto &res = task::current_process()->res_table;
-    auto ft = res.get_file_table();
-
-    auto file = fs::vfs::open(filepath, ft->root, ft->current, mode, flags);
+    auto &res = task::current_process()->resource;
+    auto file = fs::vfs::open(path, res.root(), res.current(), mode, flags);
     if (file)
     {
-        auto fd = res.new_file_desc(file);
+        auto fd = res.new_kobject(file);
         return fd;
     }
     return ENOEXIST;
@@ -27,12 +25,11 @@ file_desc open(const char *filepath, u64 mode, u64 flags)
 
 u64 close(file_desc fd)
 {
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
     {
-        res.delete_file_desc(fd);
-        file->close();
+        res.delete_kobject(fd);
         return OK;
     }
     return ENOEXIST;
@@ -40,53 +37,89 @@ u64 close(file_desc fd)
 
 i64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
-    if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
+    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
     {
         return EBUFFER;
     }
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
     {
-        return file->write(buffer, max_len, flags);
+        if (auto file = obj->get<fs::vfs::file>())
+        {
+            return file->write(buffer, max_len, flags);
+        }
+        else
+        {
+            return ENOTYPE;
+        }
     }
     return ENOEXIST;
 }
 
 i64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
-    if (buffer == nullptr || !is_user_space_pointer(buffer) || !is_user_space_pointer(buffer + max_len))
+    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
     {
         return EBUFFER;
     }
 
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
     {
-        return file->read(buffer, max_len, flags);
+        if (auto file = obj->get<fs::vfs::file>())
+        {
+            return file->read(buffer, max_len, flags);
+        }
+        else
+        {
+            return ENOTYPE;
+        }
     }
     return ENOEXIST;
 }
 
 i64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
     {
-        return file->pwrite(offset, buffer, max_len, flags);
+        return EBUFFER;
+    }
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
+    {
+        if (auto file = obj->get<fs::vfs::file>())
+        {
+            return file->pwrite(offset, buffer, max_len, flags);
+        }
+        else
+        {
+            return ENOTYPE;
+        }
     }
     return ENOEXIST;
 }
 
 i64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
     {
-        return file->pread(offset, buffer, max_len, flags);
+        return EBUFFER;
+    }
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
+    {
+        if (auto file = obj->get<fs::vfs::file>())
+        {
+            return file->pread(offset, buffer, max_len, flags);
+        }
+        else
+        {
+            return ENOTYPE;
+        }
     }
     return ENOEXIST;
 }
@@ -99,20 +132,27 @@ i64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 /// \return old offset
 i64 lseek(file_desc fd, i64 offset, u64 type)
 {
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (file)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj)
     {
-        auto old = file->current_offset();
-        if (type == 0)
-            file->seek(offset);
-        else if (type == 1)
-            file->move(offset);
-        else if (type == 2)
+        if (auto file = obj->get<fs::vfs::file>())
         {
-            file->move(file->size() - offset);
+            auto old = file->current_offset();
+            if (type == 0)
+                file->seek(offset);
+            else if (type == 1)
+                file->move(offset);
+            else if (type == 2)
+            {
+                file->move(file->size() - offset);
+            }
+            return old;
         }
-        return old;
+        else
+        {
+            return ENOTYPE;
+        }
     }
     return 0;
 }
@@ -124,22 +164,20 @@ i64 pipe(file_desc *fd1, file_desc *fd2)
     auto file = fs::vfs::open_pipe();
     if (!file)
         return EFAILED;
-    auto &res = task::current_process()->res_table;
-    auto fdx0 = res.new_file_desc(file);
+
+    auto &res = task::current_process()->resource;
+    auto fdx0 = res.new_kobject(file);
     if (fdx0 == invalid_file_desc)
     {
-        file->close();
         return EFAILED;
     }
 
-    auto fdx1 = res.new_file_desc(file);
+    auto fdx1 = res.new_kobject(file);
     if (fdx1 == invalid_file_desc)
     {
-        file->close();
-        res.delete_file_desc(fdx0);
+        res.delete_kobject(fdx0);
         return EFAILED;
     }
-    file->add_ref();
 
     *fd1 = fdx0;
     *fd2 = fdx1;
@@ -149,42 +187,38 @@ i64 pipe(file_desc *fd1, file_desc *fd2)
 
 file_desc fifo(const char *path, u64 mode)
 {
-    if (path == nullptr || !is_user_space_pointer(path))
+    if (!is_user_space_pointer_or_null(path))
     {
         return EPARAM;
     }
-    auto &res = task::current_process()->res_table;
-    auto ft = res.get_file_table();
-    auto fd = ft->id_gen.next();
-    if (fd == util::null_id)
-    {
-        return EFAILED;
-    }
+    auto &res = task::current_process()->resource;
 
-    auto file = fs::vfs::create_fifo(path, ft->root, ft->current, mode);
+    auto file = fs::vfs::create_fifo(path, res.root(), res.current(), mode);
     if (!file)
     {
-        ft->id_gen.collect(fd);
         return EFAILED;
     }
-    res.set_file(fd, file);
-
+    auto fd = res.new_kobject(file);
     return fd;
 }
 
 i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
 {
-    auto &res = task::current_process()->res_table;
-    auto file = res.get_file(fd);
-    if (!file)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (!obj)
     {
         return EFAILED;
     }
-    if (!fs::vfs::fcntl(file, operator_type, target, attr, value, size))
+    if (obj->is<fs::vfs::file>())
     {
-        return EFAILED;
+        if (!fs::vfs::fcntl(obj.as<fs::vfs::file>(), operator_type, target, attr, value, size))
+        {
+            return EFAILED;
+        }
+        return OK;
     }
-    return OK;
+    return ENOTYPE;
 }
 
 int dup(int fd) { return 0; }

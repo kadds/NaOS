@@ -176,7 +176,7 @@ void remove_watcher(watcher_func func)
     uctx::UninterruptibleContext icu;
     for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
     {
-        if (it->function <= func)
+        if (it->function == func)
         {
             it->clear_enable();
             return;

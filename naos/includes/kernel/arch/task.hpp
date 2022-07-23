@@ -57,6 +57,4 @@ void set_signal_context(userland_code_context *context);
 
 void return_from_signal_context(userland_code_context *context);
 
-int copy_kernel_thread(::task::thread_t *target, ::task::thread_t *source);
-
 } // namespace arch::task

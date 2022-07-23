@@ -82,3 +82,8 @@ ExportC void *system_call_table[];
 #undef ENOEXEC
 #endif
 #define NOEXEC -13
+
+#ifdef ENOTTYPE
+#undef ENOTYPE
+#endif
+#define ENOTYPE -14

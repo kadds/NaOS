@@ -43,13 +43,13 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     {
         return EPARAM;
     }
-    auto &res = task::current_process()->res_table;
+    auto &res = task::current_process()->resource;
     auto vm_info = ((memory::vm::info_t *)(task::current_process()->mm_info));
     fs::vfs::file *file = nullptr;
     if (flags & 8)
     {
-        auto file = res.get_file(fd);
-        if (!file)
+        auto obj = res.get_kobject(fd);
+        if (obj)
             return ENOEXIST;
     }
     auto vm = vm_info->map_file(map_address, file, offset, length, length, flags);

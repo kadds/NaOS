@@ -153,7 +153,7 @@ struct shared_info_t
 /// virtual memory info struct.
 ///
 /// includes head and VMA
-struct info_t
+class info_t
 {
   public:
     memory::vm::vm_allocator vma;

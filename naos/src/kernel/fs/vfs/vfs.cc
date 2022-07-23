@@ -9,6 +9,7 @@
 #include "kernel/fs/vfs/nameidata.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
+#include "kernel/handle.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
@@ -501,7 +502,7 @@ bool umount(const char *path, dentry *path_root, dentry *cur_dir)
     return false;
 }
 
-file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr)
+handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr)
 {
     nameidata idata(&data->dir_entry_allocator, 1, 0);
     dentry *entry = path_walk(filepath, root, cur_dir, attr, idata);
@@ -511,7 +512,9 @@ file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, fla
         {
             i64 name_len = rest_file_name(idata);
             if (name_len <= 0) // not a file
-                return nullptr;
+            {
+                return {};
+            }
 
             if (attr & path_walk_flags::directory)
             {
@@ -526,10 +529,10 @@ file *open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, fla
     }
     if (unlikely(entry == nullptr)) // Can't create file
     {
-        return nullptr;
+        return {};
     }
 
-    file *f = entry->get_inode()->get_super_block()->alloc_file();
+    auto f = entry->get_inode()->get_super_block()->alloc_file();
     f->open(entry, mode);
     return f;
 }
@@ -543,6 +546,19 @@ bool rename(const char *new_dir, const char *old_dir, dentry *root, dentry *cur_
         return false;
 
     return rename(new_dir, entry, root, cur_dir) != nullptr;
+}
+
+bool chmod(const char *dir, dentry *root, dentry *cur_dir, flag_t permission)
+{
+    nameidata idata(&data->dir_entry_allocator, 1, 0);
+
+    auto entry = path_walk(dir, root, cur_dir, 0, idata);
+    if (entry == nullptr)
+        return false;
+
+    entry->get_inode()->set_permission(permission);
+
+    return true;
 }
 
 bool mkdir(const char *dir, dentry *root, dentry *cur_dir, flag_t attr)
@@ -661,7 +677,7 @@ bool symbolink(const char *src, const char *target, dentry *root, dentry *curren
 }
 
 /// get path name from 'root' to 'current'
-u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
+int pathname(dentry *root, dentry *current, char *path, u64 max_len)
 {
     if (unlikely(root == nullptr))
         return 0;
@@ -694,7 +710,7 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
             ptr += rest_len + len - 1;
             *ptr = '\0';
             /// XXX: just return when buffer is too small
-            return max_len;
+            return 0;
         }
         util::memcopy(ptr, entry->get_name(), len);
         ptr += len;
@@ -705,12 +721,12 @@ u64 pathname(dentry *root, dentry *current, char *path, u64 max_len)
         ptr--;
     }
     *ptr = '\0';
-    return max_len - rest_len;
+    return 0;
 }
 
-u64 size(file *f) { return f->get_entry()->get_inode()->get_size(); }
+u64 size(handle_t<file> f) { return f->get_entry()->get_inode()->get_size(); }
 
-bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
+bool fcntl(handle_t<file> f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
 {
     auto inode = f->get_entry()->get_inode();
     if (unlikely(size < sizeof(u64)))
@@ -809,54 +825,74 @@ bool fcntl(file *f, u64 operator_type, u64 target, u64 attr, u64 *value, u64 siz
 
 super_block *pipe_block;
 
-file *open_pipe()
+handle_t<file> open_pipe()
 {
     super_block *su_block = pipe_block;
     dentry *entry = su_block->alloc_dentry();
     if (entry == nullptr)
     {
-        return nullptr;
+        return {};
     }
 
     entry->set_name(nullptr);
     entry->set_parent(nullptr);
 
     if (unlikely(entry == nullptr))
-        return nullptr;
+    {
+        return {};
+    }
 
     inode *node = su_block->alloc_inode();
     if (unlikely(node == nullptr))
-        return nullptr;
+    {
+        return {};
+    }
     node->create_pseudo(entry, inode_type_t::pipe, 4096);
     auto ps = memory::New<fs::vfs::pseudo_pipe_t>(memory::KernelCommonAllocatorV, memory::page_size);
     node->set_pseudo_data(ps);
 
-    file *f = su_block->alloc_file();
+    handle_t<file> f = entry->get_inode()->get_super_block()->alloc_file();
     f->open(entry, mode::read | mode::write | mode::unlink_on_close);
     return f;
 }
 
-file *create_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
+handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
 {
     nameidata src_idata(&data->dir_entry_allocator, 1, 0);
 
     dentry *entry = path_walk(path, root, current, 0, src_idata);
 
     if (entry)
-        return nullptr;
+    {
+        return {};
+    }
 
     i64 name_len = rest_file_name(src_idata);
     if (unlikely(name_len <= 0))
-        return nullptr;
+    {
+        return {};
+    }
 
     entry =
         create_pseudo(inode_type_t::pipe, src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len);
     if (unlikely(entry == nullptr))
-        return nullptr;
+    {
+        return {};
+    }
 
-    file *f = entry->get_inode()->get_super_block()->alloc_file();
+    handle_t<file> f = entry->get_inode()->get_super_block()->alloc_file();
     f->open(entry, mode);
     return f;
+}
+
+bool temporary_dir(int domain, char *buffer, u64 size)
+{
+    if (size < 32)
+    {
+        return false;
+    }
+    // int len = util::strcopy(buffer, "/tmp/");
+    return true;
 }
 
 } // namespace fs::vfs

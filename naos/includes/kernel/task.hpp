@@ -59,7 +59,7 @@ struct process_t
     std::atomic_uint64_t attributes;
     u64 parent_pid;             ///< The parent process id
     void *mm_info;              ///< Memory map infomation
-    resource_table_t res_table; ///< Resource table
+    resource_table_t resource;  ///< Resource table
     void *thread_id_gen;
     wait_queue_t wait_queue;
     std::atomic_int wait_counter;
@@ -70,7 +70,7 @@ struct process_t
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
-    fs::vfs::file *file;
+    handle_t<fs::vfs::file> file;
     signal_pack_t signal_pack;
     process_t();
 };
@@ -193,19 +193,17 @@ namespace create_process_flags
 {
 enum create_process_flags : flag_t
 {
-    noreturn = 1,
-    binary_file = 2,
+    noreturn = 1UL,
+    binary_file = 1UL << 1,
+    real_time_rr = 1UL << 2,
 
-    shared_files = 8,
-    no_shared_root = 16,
-    shared_work_dir = 32,
-    shared_file_table = 64,
-    no_shared_stdin = 128,
-    no_shared_stderror = 256,
-    no_shared_stdout = 512,
+    no_shared_root = 1UL << 20,
+    no_shared_work_dir = 1UL << 21,
 
-    real_time_rr = 4096,
-
+    no_shared_stdin = 1UL << 22,
+    no_shared_stderror = 1UL << 23,
+    no_shared_stdout = 1UL << 24,
+    no_shared_files = 1UL << 25,
 };
 } // namespace create_process_flags
 
@@ -240,14 +238,15 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
 
 process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
 
-process_t *create_process(fs::vfs::file *file, const char *path, thread_start_func start_func, const char *const args[],
-                          const char *const envp[], flag_t flags);
+process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
+                          const char *const args[], const char *const envp[], flag_t flags);
 
 process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags);
 
 int fork();
 
-int execve(fs::vfs::file *file, const char *path, thread_start_func start_func, char *const argv[], char *const envp[]);
+int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func, char *const argv[],
+           char *const envp[]);
 
 void do_sleep(const timeclock::time &time);
 

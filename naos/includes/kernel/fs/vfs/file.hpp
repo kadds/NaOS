@@ -1,37 +1,33 @@
 #pragma once
 #include "common.hpp"
 #include "defines.hpp"
+#include "kernel/kobject.hpp"
 #include "pseudo.hpp"
 namespace fs::vfs
 {
 class dentry;
-class file
+class file : public kobject
 {
   protected:
     i64 offset;
     flag_t mode;
     dentry *entry;
-    u64 ref_count;
 
   public:
     file()
-        : offset(0)
+        : kobject(type_e::file)
+        , offset(0)
         , mode(0)
         , entry(nullptr)
-        , ref_count(0){};
+    {
+    }
 
     file(const file &f) = delete;
     file &operator=(const file &f) = delete;
 
-    virtual ~file(){};
-
-    virtual file *clone();
+    virtual ~file();
 
     virtual int open(dentry *entry, flag_t mode);
-    virtual void close();
-
-    void add_ref() { ref_count++; }
-    void remove_ref() { ref_count--; }
 
     i64 read(byte *ptr, u64 max_size, flag_t flags);
     i64 write(const byte *ptr, u64 size, flag_t flags);
@@ -50,6 +46,8 @@ class file
 
     pseudo_t *get_pseudo();
     flag_t get_mode() const { return mode; }
+
+    static type_e type_of() { return type_e::file; }
 
   protected:
     virtual i64 iread(i64 &offset, byte *ptr, u64 max_size, flag_t flags) = 0;

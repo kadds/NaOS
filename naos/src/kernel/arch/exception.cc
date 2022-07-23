@@ -72,8 +72,8 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             task->register_info->trap_vector = regs->vector;
             auto &pack = task->process->signal_pack;
             auto p = task->process;
-            trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code,
-                         " pid ", task->process->pid);
+            trace::info("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code,
+                        " pid ", task->process->pid);
             switch (regs->vector)
             {
                 case 0:

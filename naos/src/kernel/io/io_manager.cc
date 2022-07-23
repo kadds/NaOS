@@ -23,7 +23,7 @@ bool send_io_request(request_t *request)
 {
     request_chain_t *chain;
 
-    if (request_map->get(request->type, &chain))
+    if (request_map->get(request->type, chain))
     {
         u64 size = chain->size();
         auto stack = memory::NewArray<io_stack_t>(memory::KernelCommonAllocatorV, size);
@@ -73,7 +73,7 @@ void finish_io_request(request_t *request)
 {
     request_chain_t *chain;
 
-    if (request_map->get(request->type, &chain))
+    if (request_map->get(request->type, chain))
     {
         if (request->inner.io_stack != nullptr)
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, request->inner.io_stack,
@@ -96,7 +96,7 @@ bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_n
 {
     request_chain_t *chain;
 
-    if (request_map->get(request_chain, &chain))
+    if (request_map->get(request_chain, chain))
     {
         if (target_dev == 0)
         {

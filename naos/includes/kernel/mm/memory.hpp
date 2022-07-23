@@ -10,7 +10,7 @@ namespace memory
 {
 namespace vm
 {
-struct info_t;
+class info_t;
 } // namespace vm
 
 extern vm::info_t *kernel_vm_info;
@@ -27,11 +27,7 @@ template <typename T> inline phy_addr_t va2pa(T virt_addr)
 
 template <typename T = void *> inline T pa2va(phy_addr_t phy_addr)
 {
-    return reinterpret_cast<T>(phy_addr() + linear_addr_offset);
-}
-template <typename S, typename T = void *> inline T pa2vax(S s)
-{
-    return reinterpret_cast<T>(phy_addr_t::from<S>(s)() + linear_addr_offset);
+    return reinterpret_cast<T>((u64)phy_addr() + linear_addr_offset);
 }
 
 template <typename T> inline Unpaged_Text_Section phy_addr_t unpaged_va2pa(T virt_addr)
@@ -41,7 +37,7 @@ template <typename T> inline Unpaged_Text_Section phy_addr_t unpaged_va2pa(T vir
 
 template <typename T> inline Unpaged_Text_Section T unpaged_pa2va(phy_addr_t phy_addr)
 {
-    return reinterpret_cast<T>(phy_addr() + linear_addr_offset);
+    return reinterpret_cast<T>((u64)phy_addr() + linear_addr_offset);
 }
 
 inline phy_addr_t align_down(phy_addr_t v, u64 m)

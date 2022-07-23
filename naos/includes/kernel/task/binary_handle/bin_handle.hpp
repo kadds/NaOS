@@ -8,7 +8,7 @@ class file;
 
 namespace memory::vm
 {
-struct info_t;
+class info_t;
 
 } // namespace memory::vm
 

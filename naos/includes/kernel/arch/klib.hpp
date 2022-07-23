@@ -106,6 +106,11 @@ template <typename T> static inline bool is_user_space_pointer(T ptr)
     return (u64)ptr >= memory::minimum_user_addr && (u64)ptr <= memory::maximum_user_addr;
 }
 
+template <typename T> static inline bool is_user_space_pointer_or_null(T ptr)
+{
+    return (u64)ptr == 0 || ((u64)ptr >= memory::minimum_user_addr && (u64)ptr <= memory::maximum_user_addr);
+}
+
 template <typename T> static inline bool is_kernel_space_pointer(T ptr)
 {
     return (u64)ptr >= memory::minimum_kernel_addr && (u64)ptr <= memory::maximum_kernel_addr;

@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "defines.hpp"
+#include "kernel/handle.hpp"
 namespace fs::vfs
 {
 
@@ -29,8 +30,8 @@ class super_block
 
     virtual void write_inode(inode *node) = 0;
 
-    virtual file *alloc_file() = 0;
-    virtual void dealloc_file(file *f) = 0;
+    virtual handle_t<vfs::file> alloc_file() = 0;
+
     virtual inode *alloc_inode() = 0;
     virtual void dealloc_inode(inode *node) = 0;
     virtual dentry *alloc_dentry() = 0;

@@ -1,4 +1,5 @@
 #include "kernel/fs/rootfs/rootfs.hpp"
+#include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/file_system.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
@@ -66,9 +67,10 @@ void init(byte *start_root_image, u64 size)
 
             auto file = vfs::open(path, vfs::global_root, vfs::global_root, mode::write | mode::bin,
                                   path_walk_flags::file | path_walk_flags::auto_create_file);
-            kassert(file != nullptr, "file not exist");
+            kassert(file, "file not exist");
             file->write(data, data_size, 0);
-            file->close();
+
+            vfs::chmod(path, vfs::global_root, vfs::global_root, permission_flags::all_xr);
 
             start_of_file = data + data_size;
         }

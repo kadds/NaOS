@@ -1,4 +1,5 @@
 #include "kernel/arch/arch.hpp"
+#include "common.hpp"
 #include "kernel/arch/apic.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
@@ -69,7 +70,7 @@ void init(const kernel_start_args *args)
         gdt::init_after_paging();
 
         trace::debug("TSS init");
-        tss::init(0, phy_addr_t::from(0x0), memory::pa2vax(0x80000));
+        tss::init(0, phy_addr_t::from(0x0), memory::pa2va(phy_addr_t::from(0x80000)));
 
         cpu::init_data(0);
         trace::debug("IDT init");
@@ -85,7 +86,7 @@ void init(const kernel_start_args *args)
     auto cpuid = cpu::init();
     paging::init();
     gdt::init_after_paging();
-    tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2vax(0x10000));
+    tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2va(phy_addr_t::from(0x10000)));
     cpu::init_data(cpuid);
     idt::init_after_paging();
     APIC::init();

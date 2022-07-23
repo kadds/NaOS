@@ -20,10 +20,10 @@ void test_hash_map_insert()
     map.insert(4, 6);
     assert(map.size() == 4);
     int v;
-    assert(map.get(1, &v) && v == 1);
-    assert(map.get(2, &v) && v == -1);
-    assert(map.get(3, &v) && v == 5);
-    assert(map.get(4, &v) && v == 6);
+    assert(map.get(1, v) && v == 1);
+    assert(map.get(2, v) && v == -1);
+    assert(map.get(3, v) && v == 5);
+    assert(map.get(4, v) && v == 6);
 }
 test(hash_map, insert);
 

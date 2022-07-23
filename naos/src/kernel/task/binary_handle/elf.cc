@@ -203,8 +203,7 @@ program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
     byte *p = (byte *)memory::MemoryAllocatorV->allocate(len, alignof(program_64));
     if (!p)
         return (program_64 *)p;
-    file->move(start);
-    file->read(p, len, 0);
+    file->pread(start, p, len, 0);
     return reinterpret_cast<program_64 *>(p);
 }
 

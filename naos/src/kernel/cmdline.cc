@@ -1,4 +1,5 @@
 #include "kernel/cmdline.hpp"
+#include "common.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/trace.hpp"
@@ -14,7 +15,7 @@ hash_map<string, string> *cmdmap;
 bool early_get(const char *key, char *&out_buf, u64 &len)
 {
     i64 key_len = util::strlen(key);
-    char *p = memory::pa2vax<u64, char *>(kernel_args->command_line);
+    char *p = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));
     int idx = strfind(p, key);
     while (idx >= 0)
     {
@@ -105,7 +106,7 @@ bool early_get_bool(const char *key, bool default_value)
 
 void init()
 {
-    char *cmdline = memory::pa2vax<char *, char *>(reinterpret_cast<char *>(kernel_args->command_line));
+    char *cmdline = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));
     cmdmap = memory::New<hash_map<string, string>>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     trace::debug("cmdline address ", reinterpret_cast<coaddr_t>(cmdline), ". ", cmdline);
 
@@ -121,7 +122,7 @@ void init()
     }
 }
 
-bool get(const char *key, string &out) { return cmdmap->get(key, &out); }
+bool get(const char *key, string &out) { return cmdmap->get(key, out); }
 
 bool get_bool(const char *key, bool default_value)
 {
