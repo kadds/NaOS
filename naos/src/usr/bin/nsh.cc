@@ -291,7 +291,7 @@ int nsh(int argc, char **argv)
     char *cmd = reinterpret_cast<char *>(malloc(max_command_chars));
     while (true)
     {
-        printf("nsh>");
+        printf("\e[32;1mnsh>\e[0m");
         fflush(stdout);
         if (wait_input(max_command_chars, cmd) != 0)
         {

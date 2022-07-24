@@ -1,5 +1,5 @@
 #!/bin/bash
-r=./build/bin/rfsroot/bin
+r=${1}/bin
 ln -sf /bin/nanobox ${r}/cat
 ln -sf /bin/nanobox ${r}/mkdir
 ln -sf /bin/nanobox ${r}/ls
