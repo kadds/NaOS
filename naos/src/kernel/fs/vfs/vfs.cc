@@ -162,6 +162,8 @@ dentry *create_dentry(dentry *parent, const char *name, u64 name_len)
     dentry *entry = su_block->alloc_dentry();
     if (unlikely(name_len == 0))
         name_len = util::strlen(name) + 1;
+    else
+        name_len++;
 
     auto cname = (char *)memory::KernelCommonAllocatorV->allocate(name_len, 1);
     util::memcopy(cname, (const void *)name, name_len);
@@ -332,6 +334,10 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
 {
     dentry *prev_entry = cur_dir;
     char *entry_buffer = idata.entry_buffer.get()->name;
+    if (*name == 0)
+    {
+        return cur_dir;
+    }
 
     // check and skip root /
     while (*name == '/')
@@ -382,26 +388,30 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
         auto next_type = next_entry->get_inode()->get_type();
         if (next_type == fs::inode_type_t::symbolink)
         {
+            bool continue_search = true;
             if (unlikely(flags & path_walk_flags::not_resolve_symbolic_link))
             {
                 if (*name == 0) // the last entry is symbolic link entry, return it
                 {
-                    return next_entry;
+                    continue_search = false;
                 }
                 else // else don't resolve symbolic link, can't find file, return null
                 {
                     return nullptr;
                 }
             }
-            u64 old_deep = idata.deep;
+            if (continue_search)
+            {
+                u64 old_deep = idata.deep;
 
-            if (idata.symlink_deep++ > 15) // symbolic link deep overflow
-                return nullptr;
-            next_entry = path_walk(next_entry->get_inode()->symbolink(), root, cur_dir,
-                                   flags | path_walk_flags::continue_parse, idata);
-            idata.deep = old_deep;
-            if (next_entry == nullptr || next_entry->get_inode()->get_link_count() == 0)
-                return nullptr;
+                if (idata.symlink_deep++ > 15) // symbolic link deep overflow
+                    return nullptr;
+                next_entry = path_walk(next_entry->get_inode()->symbolink(), root, cur_dir,
+                                       flags | path_walk_flags::continue_parse, idata);
+                idata.deep = old_deep;
+                if (next_entry == nullptr || next_entry->get_inode()->get_link_count() == 0)
+                    return nullptr;
+            }
         }
         prev_entry = next_entry;
     }

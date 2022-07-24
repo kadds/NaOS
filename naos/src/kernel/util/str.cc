@@ -23,6 +23,10 @@ i64 strcopy(char *dst, const char *src, i64 max_len)
     {
         *dst++ = *src++;
     } while (*src != 0 && i++ < max_len);
+    if (i < max_len)
+    {
+        *dst = 0;
+    }
 
     return i - 1;
 }
@@ -34,6 +38,7 @@ i64 strcopy(char *dst, const char *src)
     {
         *dst++ = *src++;
     } while (*src != 0);
+    *dst = 0;
 
     return src - s - 1;
 }

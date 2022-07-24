@@ -538,9 +538,9 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     }
     else if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
-        trace::info("Can't load execute file.");
-        delete_process(process);
         memory::KernelCommonAllocatorV->deallocate(header);
+        trace::info("Can't load execute file.");
+        exit_process(process, -1, 0);
         return nullptr;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
@@ -697,9 +697,9 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     bin_handle::execute_info exec_info;
     if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
-        trace::info("Can't load execute file.");
-        delete_process(process);
         memory::KernelCommonAllocatorV->deallocate(header);
+        trace::info("Can't load execute file.");
+        exit_process(process, -1, 0);
         return ENOEXEC;
     }
     memory::KernelCommonAllocatorV->deallocate(header);

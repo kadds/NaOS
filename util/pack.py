@@ -20,70 +20,15 @@ cache_file_name = "pack_cache.log"
 
 
 def pack_image(base_dir, target_file, force):
-
-    fileList = {}
     try:
-        os.makedirs(os.path.dirname(os.path.realpath(target_file)))
+        os.makedirs(os.path.dirname(target_file))
     except FileExistsError:
         pass
-    for dirs in os.walk(base_dir):
-        if len(dirs[2]) != 0:
-            basefile = dirs[0]
-            for file in dirs[2]:
-                name = basefile.split(base_dir)[1] + "/" + file
-                full_path = basefile + "/" + file
-                time = datetime.datetime.fromtimestamp(
-                    os.path.getmtime(full_path)).strftime("%Y-%m-%d %H:%M:%S.%f")
-                fileList[name] = time
+    run_shell('tar --format=gnu -cvf "' + target_file + '" "' + base_dir + '"')
 
-    # read cache
-    cache_count = 0
-    if os.path.exists(cache_file_name) and not force:
-        cache_file = open(cache_file_name, "r")
-        cache_line = cache_file.readlines()
-        if len(cache_line) > 0:
-            target = cache_line[0].strip()
-            if target == target_file:
-                for it in cache_line:
-                    line = it.split("?")
-                    if len(line) <= 1:
-                        continue
-                    filename = line[0].strip()
-                    time = line[1].strip()
-                    if filename in fileList:
-                        if fileList[filename] == time:
-                            cache_count += 1
-        cache_file.close()
-        if cache_count == len(fileList):
-            print("%d file(s) is cached. do nothing." % (cache_count))
-            return None
-
-    output = open(target_file, 'wb')
-    output.write(struct.pack("Q", 0xF5EEEE5F))  # magic
-    output.write(struct.pack("Q", 1))  # version
-    output.write(struct.pack("Q", len(fileList)))  # file count
-
-    cache_file = open(cache_file_name, "w")
-    cache_file.write(target_file + "\n")
-    for (file, time) in fileList.items():
-        output.write(struct.pack(str(len(file) + 1) + "s",
-                                 file.encode('utf-8')))  # file path
-        cur_file = open(base_dir + "/" + file, 'rb')
-        data = cur_file.read()
-        p = output.tell()
-        output.write(struct.pack("Q", len(data)))  # file length
-        output.write(data)
-        cache_file.write(file)
-        cache_file.write("?")
-        cache_file.write(str(time))
-        cache_file.write("?")
-        cache_file.write(str(p))
-        cache_file.write("\n")
-
+    output = open(target_file, 'r')
+    print("make %s success size %d" % (os.path.realpath(target_file), os.path.getsize(target_file)))
     output.close()
-    cache_file.close()
-    print("handle %d file(s)" % len(fileList))
-    print("make %s success" % os.path.realpath(target_file))
 
 
 if __name__ == "__main__":
@@ -97,8 +42,12 @@ if __name__ == "__main__":
                         default="../build/bin/rfsroot", help="directory to be packaged")
     args = parser.parse_args()
     try:
-        set_self_dir()
-        pack_image(args.input, args.output, args.force)
+        set_self_dir() 
+        base_dir_abs = os.path.realpath(args.input)
+        target_file_abs = os.path.realpath(args.output)
+
+        os.chdir(base_dir_abs)
+        pack_image('./', target_file_abs, args.force)
     except Exception:
         traceback.print_exc()
         parser.print_help()

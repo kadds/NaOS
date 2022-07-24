@@ -5,38 +5,13 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
 namespace fs::rootfs
 {
 file_system *global_root_file_system;
 
-struct rootfs_head
-{
-    u64 magic;
-    u64 version;
-    u64 file_count;
-};
-
-void mkdir(const char *path)
-{
-    memory::MemoryView<dir_entry_str> entry_str(memory::KernelCommonAllocatorV, sizeof(dir_entry_str),
-                                                alignof(dir_entry_str));
-    char *p = entry_str.get()->name;
-    while (*path != 0)
-    {
-        if (*path == '/')
-        {
-            while (*path == '/')
-            {
-                path++;
-            }
-            *p = 0;
-            vfs::mkdir(entry_str.get()->name, vfs::global_root, vfs::global_root, 0);
-            p = entry_str.get()->name;
-        }
-        *p++ = *path++;
-    }
-}
+void tar_loader(byte *start_root_image, u64 size);
 
 void init(byte *start_root_image, u64 size)
 {
@@ -49,34 +24,8 @@ void init(byte *start_root_image, u64 size)
     vfs::register_fs(global_root_file_system);
     vfs::mount(global_root_file_system, nullptr, "/", vfs::global_root, vfs::global_root, nullptr,
                size + memory::page_size * 4);
-    rootfs_head *head = reinterpret_cast<rootfs_head *>(start_root_image);
-    if (head->magic != 0xF5EEEE5F)
-        trace::panic("rfsimg magic head is invalid");
 
-    if (head->version == 1)
-    {
-        byte *start_of_file = start_root_image + sizeof(rootfs_head);
-        for (u64 i = 0; i < head->file_count; i++)
-        {
-            char *path = (char *)start_of_file;
-            int len = util::strlen(path);
-            u64 data_size = *(u64 *)(start_of_file + len + 1);
-            byte *data = start_of_file + len + 1 + sizeof(u64);
-
-            mkdir(path);
-
-            auto file = vfs::open(path, vfs::global_root, vfs::global_root, mode::write | mode::bin,
-                                  path_walk_flags::file | path_walk_flags::auto_create_file);
-            kassert(file, "file not exist");
-            file->write(data, data_size, 0);
-
-            vfs::chmod(path, vfs::global_root, vfs::global_root, permission_flags::all_xr);
-
-            start_of_file = data + data_size;
-        }
-        if ((u64)(start_of_file - start_root_image) != size)
-            trace::panic("rfsimg has incorrect content!");
-    }
+    tar_loader(start_root_image, size);
 }
 
 file_system::file_system()
@@ -96,4 +45,110 @@ void file_system::unload(vfs::super_block *su_block)
     su_block->save();
     memory::Delete<>(memory::KernelCommonAllocatorV, su_block);
 }
+
+int oct2bin(char *str, int size)
+{
+    int n = 0;
+    char *c = str;
+    while (--size > 0)
+    {
+        n *= 8;
+        n += *c - '0';
+        c++;
+    }
+    return n;
+}
+
+struct tar_header
+{
+    char filename[100];
+    char mode[8];
+    char uid[8];
+    char gid[8];
+    char size[12];
+    char mtime[12];
+    char chksum[8];
+    char typeflag[1];
+    char linkfile[100];
+    char ustar[6];
+    char ustarversion[2];
+    char owner_username[32];
+    char owner_groupname[32];
+    char device_major[8];
+    char device_minor[8];
+    char prefix[155];
+    char pad[12];
+};
+
+char TAR_MAGIC[] = "ustar ";
+
+int parse_single(byte *offset)
+{
+    auto header = reinterpret_cast<tar_header *>(offset);
+    if (util::memcmp(TAR_MAGIC, header->ustar, sizeof(header->ustar)) != 0)
+    {
+        return -1;
+    }
+
+    int file_size = oct2bin(header->size, sizeof(header->size));
+    int mode = oct2bin(header->mode, sizeof(header->mode));
+
+    char filename[256];
+    char to_filename[256];
+    i64 name_offset = 0;
+    if (header->prefix[0] != '\0')
+    {
+        name_offset = util::strcopy(filename, header->prefix, sizeof(header->prefix));
+    }
+    name_offset += util::strcopy(filename + name_offset, header->filename, sizeof(header->filename));
+
+    util::strcopy(to_filename, header->linkfile, sizeof(header->linkfile));
+
+    kassert(name_offset != 256, "filename too long");
+
+    char tag = header->typeflag[0];
+    if (tag == '\0' || tag == '0' || tag == '7')
+    {
+        // normal file
+        auto file = fs::vfs::open(filename, fs::vfs::global_root, fs::vfs::global_root, fs::mode::write,
+                                  fs::path_walk_flags::auto_create_file);
+        kassert(file, "create file ", filename, " fail");
+        file->write(offset + 512, file_size, 0);
+        fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
+    }
+    else if (tag == '1')
+    {
+        // hard link
+        fs::vfs::link(filename, to_filename, fs::vfs::global_root, fs::vfs::global_root);
+        fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
+    }
+    else if (tag == '2')
+    {
+        // symbol link
+        fs::vfs::symbolink(filename, to_filename, fs::vfs::global_root, fs::vfs::global_root, 0);
+        fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
+    }
+    else if (tag == '5')
+    {
+        // dir
+        fs::vfs::mkdir(filename, fs::vfs::global_root, fs::vfs::global_root, 0);
+        fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
+    }
+    return (file_size + 512 + 511) & ~511;
+}
+
+void tar_loader(byte *start_root_image, u64 size)
+{
+    u64 offset = 0;
+    while (offset < size)
+    {
+        int u = parse_single(start_root_image + offset);
+        if (u == -1)
+        {
+            break;
+        }
+        offset += u;
+    }
+}
+
 } // namespace fs::rootfs

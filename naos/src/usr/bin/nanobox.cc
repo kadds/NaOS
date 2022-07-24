@@ -34,31 +34,31 @@ extern "C" int main(int argc, char **argv)
 )");
         return 0;
     }
-    if (strcmp(cmd, "nsh") == 0)
+    if (strstr(cmd, "nsh"))
     {
         return nsh(argc, argv);
     }
-    else if (strcmp(cmd, "cat") == 0)
+    else if (strstr(cmd, "cat"))
     {
         return cat(argc, argv);
     }
-    else if (strcmp(cmd, "ls") == 0)
+    else if (strstr(cmd, "ls"))
     {
         return ls(argc, argv);
     }
-    else if (strcmp(cmd, "mkdir") == 0)
+    else if (strstr(cmd, "mkdir"))
     {
         return mkdir(argc, argv);
     }
-    else if (strcmp(cmd, "rmdir") == 0)
+    else if (strstr(cmd, "rmdir"))
     {
         return rmdir(argc, argv);
     }
-    else if (strcmp(cmd, "touch") == 0)
+    else if (strstr(cmd, "touch"))
     {
         return touch(argc, argv);
     }
-    else if (strcmp(cmd, "rm") == 0)
+    else if (strstr(cmd, "rm"))
     {
         return rm(argc, argv);
     }

@@ -2,6 +2,7 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/util/memory.hpp"
 #include "kernel/util/str.hpp"
 namespace fs::ramfs
@@ -27,6 +28,7 @@ const char *inode::symbolink() { return (const char *)start_ptr; }
 
 i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
 {
+
     inode *node = (inode *)entry->get_inode();
     super_block *sublock = (super_block *)node->su_block;
 
@@ -35,7 +37,7 @@ i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
         sublock->add_ram_used(-node->ram_size);
         if (node->start_ptr != nullptr)
         {
-            memory::KernelBuddyAllocatorV->deallocate(node->start_ptr);
+            memory::KernelVirtualAllocatorV->deallocate(node->start_ptr);
         }
         auto file_size = offset + size;
         auto ram_size = (file_size + memory::page_size - 1) & ~(memory::page_size - 1);
@@ -44,7 +46,7 @@ i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
         {
             node->file_size = file_size;
             node->ram_size = ram_size;
-            node->start_ptr = (byte *)memory::KernelBuddyAllocatorV->allocate(node->ram_size, 0);
+            node->start_ptr = (byte *)memory::KernelVirtualAllocatorV->allocate(node->ram_size, 0);
             sublock->add_ram_used(node->ram_size);
         }
         else

@@ -37,6 +37,7 @@ set(CXX_X64 "-mcmodel=large -m64")
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
 set(UTIL_STRIP ${UTILDIR}/strip.sh)
+set(UTIL_LN ${UTILDIR}/ln.sh)
 set(UTIL_MKIMG ${UTILDIR}/pack.py)
 set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
 
