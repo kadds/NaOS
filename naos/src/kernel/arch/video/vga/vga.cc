@@ -63,8 +63,8 @@ void init()
     paging::reload();
 
     /// print video card memory info
-    trace::debug("Vram address ", (void *)vram_addr, " map to ", (void *)memory::kernel_vga_bottom_address);
-    trace::debug("Video backbuffer(VM) ", (void *)backbuffer_addr, "-", (void *)((char *)backbuffer_addr + frame_size));
+    trace::debug("Vram address ", trace::hex(vram_addr), " map to ", trace::hex(memory::kernel_vga_bottom_address));
+    trace::debug("Video backbuffer(VM) ", trace::hex(backbuffer_addr), "-", trace::hex((backbuffer_addr + frame_size)));
     vram_addr = (byte *)memory::kernel_vga_bottom_address;
 }
 

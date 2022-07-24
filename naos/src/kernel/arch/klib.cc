@@ -63,7 +63,7 @@ int get_stackframes(int skip, stack_frame_t *frames, int count)
 
 const char *stack_frame_t::get_frame_name()
 {
-    const char *func = ksybs::get_symbol_name(reinterpret_cast<addr_t>(rip));
+    const char *func = ksybs::get_symbol_name(trace::hex(rip));
     return func;
 }
 
@@ -116,7 +116,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     {
         /// print stack value
         u64 *val_of_i = reinterpret_cast<u64 *>(i);
-        trace::print("\n    [", reinterpret_cast<addr_t>(i), "]=", reinterpret_cast<addr_t>(*val_of_i));
+        trace::print("\n    [", trace::hex(i), "]=", trace::hex(*val_of_i));
     }
 
     trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("\nend of stack data.\n");
@@ -150,20 +150,16 @@ void *print_stack(const regs_t *regs, int max_depth)
         __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : :);
         trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(with intr regs):");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-        trace::print("\nrax=", reinterpret_cast<addr_t>(regs->rax), ", rbx=", reinterpret_cast<addr_t>(regs->rbx),
-                     ", rcx=", reinterpret_cast<addr_t>(regs->rcx), ", rdx=", reinterpret_cast<addr_t>(regs->rdx),
-                     ", r8=", reinterpret_cast<addr_t>(regs->r8), ", r9=", reinterpret_cast<addr_t>(regs->r9),
-                     ",\n r10=", reinterpret_cast<addr_t>(regs->r10), ", r11=", reinterpret_cast<addr_t>(regs->r11),
-                     ", r12=", reinterpret_cast<addr_t>(regs->r12), ", r13=", reinterpret_cast<addr_t>(regs->r13),
-                     ", r14=", reinterpret_cast<addr_t>(regs->r14), ", r15=", reinterpret_cast<addr_t>(regs->r15),
-                     ",\n rdi=", reinterpret_cast<addr_t>(regs->rdi), ", rsi=", reinterpret_cast<addr_t>(regs->rsi),
-                     ", cs=", reinterpret_cast<addr_t>(regs->cs), ", ds=", reinterpret_cast<addr_t>(regs->ds),
-                     ", es=", reinterpret_cast<addr_t>(regs->es), ", fs=", reinterpret_cast<addr_t>(fs),
-                     ",\n gs=", reinterpret_cast<addr_t>(gs), ", ss=", reinterpret_cast<addr_t>(regs->ss),
-                     ", rip=", reinterpret_cast<addr_t>(regs->rip), ", rsp=", reinterpret_cast<addr_t>(regs->rsp),
-                     ", rbp=", reinterpret_cast<addr_t>(regs->rbp), ", rflags=", reinterpret_cast<addr_t>(regs->rflags),
-                     ",\n vector=", reinterpret_cast<addr_t>(regs->vector),
-                     ", error_code=", reinterpret_cast<addr_t>(regs->error_code), "\n");
+        trace::print("\nrax=", trace::hex(regs->rax), ", rbx=", trace::hex(regs->rbx), ", rcx=", trace::hex(regs->rcx),
+                     ", rdx=", trace::hex(regs->rdx), ", r8=", trace::hex(regs->r8), ", r9=", trace::hex(regs->r9),
+                     ",\n r10=", trace::hex(regs->r10), ", r11=", trace::hex(regs->r11),
+                     ", r12=", trace::hex(regs->r12), ", r13=", trace::hex(regs->r13), ", r14=", trace::hex(regs->r14),
+                     ", r15=", trace::hex(regs->r15), ",\n rdi=", trace::hex(regs->rdi),
+                     ", rsi=", trace::hex(regs->rsi), ", cs=", trace::hex(regs->cs), ", ds=", trace::hex(regs->ds),
+                     ", es=", trace::hex(regs->es), ", fs=", trace::hex(fs), ",\n gs=", trace::hex(gs),
+                     ", ss=", trace::hex(regs->ss), ", rip=", trace::hex(regs->rip), ", rsp=", trace::hex(regs->rsp),
+                     ", rbp=", trace::hex(regs->rbp), ", rflags=", trace::hex(regs->rflags),
+                     ",\n vector=", trace::hex(regs->vector), ", error_code=", trace::hex(regs->error_code), "\n");
     }
     else
     {
@@ -181,21 +177,18 @@ void *print_stack(const regs_t *regs, int max_depth)
 
         trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(without intr regs):");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-        trace::print<>("\ncs=", reinterpret_cast<addr_t>(cs), ", ds=", reinterpret_cast<addr_t>(ds),
-                       ", es=", reinterpret_cast<addr_t>(es), ", fs=", reinterpret_cast<addr_t>(fs),
-                       ", gs=", reinterpret_cast<addr_t>(gs), ", ss=", reinterpret_cast<addr_t>(ss),
-                       ",\n rip=", reinterpret_cast<addr_t>(reg_rip), ", rsp=", reinterpret_cast<addr_t>(reg_rsp),
-                       ", rbp=", reinterpret_cast<addr_t>(reg_rbp), ", rflags=", reinterpret_cast<addr_t>(reg_rflags),
-                       "\n");
+        trace::print<>("\ncs=", trace::hex(cs), ", ds=", trace::hex(ds), ", es=", trace::hex(es),
+                       ", fs=", trace::hex(fs), ", gs=", trace::hex(gs), ", ss=", trace::hex(ss),
+                       ",\n rip=", trace::hex(reg_rip), ", rsp=", trace::hex(reg_rsp), ", rbp=", trace::hex(reg_rbp),
+                       ", rflags=", trace::hex(reg_rflags), "\n");
     }
     u64 gs_base, k_gs_base, fs_base;
 
     k_gs_base = _rdmsr(0xC0000102);
     gs_base = _rdmsr(0xC0000101);
     fs_base = _rdmsr(0xC0000100);
-    trace::print("msr(now): kernel_gs_base=", reinterpret_cast<addr_t>(k_gs_base),
-                 ", gs_base=", reinterpret_cast<addr_t>(gs_base), ", fs_base=", reinterpret_cast<addr_t>(fs_base),
-                 '\n');
+    trace::print("msr(now): kernel_gs_base=", trace::hex(k_gs_base), ", gs_base=", trace::hex(gs_base),
+                 ", fs_base=", trace::hex(fs_base), '\n');
     u64 cr0, cr2, cr3, cr4, cr8;
     __asm__ __volatile__(
         "movq %%cr0, %0 \n\t movq %%cr2, %1\n\t  movq %%cr3, %2\n\t  movq %%cr4,  %3\n\t  movq %%cr8, %4\n\t "
@@ -203,9 +196,8 @@ void *print_stack(const regs_t *regs, int max_depth)
         :
         :);
 
-    trace::print("control registers(now): cr0=", reinterpret_cast<addr_t>(cr0), ", cr2=", reinterpret_cast<addr_t>(cr2),
-                 ", cr3=", reinterpret_cast<addr_t>(cr3), ", cr4=", reinterpret_cast<addr_t>(cr4),
-                 ", cr8=", reinterpret_cast<addr_t>(cr8), '\n');
+    trace::print("control registers(now): cr0=", trace::hex(cr0), ", cr2=", trace::hex(cr2), ", cr3=", trace::hex(cr3),
+                 ", cr4=", trace::hex(cr4), ", cr8=", trace::hex(cr8), '\n');
 
     trace::print("cpu id=", arch::cpu::current().get_id(), " apic id = ", arch::cpu::current().get_apic_id(), " \n");
 
@@ -214,5 +206,5 @@ void *print_stack(const regs_t *regs, int max_depth)
     trace::print<trace::PrintAttribute<trace::CBK::Black, trace::CFG::White>>("system info: \n");
     trace::print("buddy free pages ", free_pages, "\n");
     trace::print_reset();
-    return reinterpret_cast<addr_t>(rbp);
+    return trace::hex(rbp);
 }

@@ -183,7 +183,7 @@ void local_init()
 
             phy_addr_t local_apic_base_addr = phy_addr_t::from(_rdmsr(0x1B) & ~((1 << 13) - 1));
             // local_apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
-            trace::debug("APIC base ", reinterpret_cast<addr_t>(local_apic_base_addr()));
+            trace::debug("APIC base ", trace::hex(local_apic_base_addr()));
 
             paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(),
                         (void *)memory::local_apic_bottom_address, local_apic_base_addr, paging::frame_size::size_2mb,

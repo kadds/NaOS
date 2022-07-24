@@ -114,8 +114,7 @@ void io_init()
 
     paging::reload();
 
-    trace::debug("RCBA register value ", (void *)(u64)rcba, ", Base address ",
-                 reinterpret_cast<addr_t>(rcba_address()));
+    trace::debug("RCBA register value ", trace::hex((u64)rcba), ", Base address ", trace::hex(rcba_address()));
     if (!(rcba & 0x1))
     {
         trace::panic("RCBA isn't an enable address");

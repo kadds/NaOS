@@ -11,7 +11,7 @@ namespace task::builtin::init
 
 void main(task::thread_start_info_t *info)
 {
-    trace::info("init task running. pid ", task::current_process()->pid);
+    trace::info("init task running. ");
     u64 offset = info->userland_stack_offset;
     void *args = info->args;
     void *entry = info->userland_entry;

@@ -108,7 +108,7 @@ void init()
 {
     char *cmdline = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));
     cmdmap = memory::New<hash_map<string, string>>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-    trace::debug("cmdline address ", reinterpret_cast<coaddr_t>(cmdline), ". ", cmdline);
+    trace::debug("cmdline address ", trace::hex(cmdline), ". ", cmdline);
 
     const string ss(cmdline);
     const_string_view sv = ss.view();

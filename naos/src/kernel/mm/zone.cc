@@ -87,7 +87,7 @@ void zones::deallocate(void *ptr)
 {
     phy_addr_t p = va2pa(ptr);
     zone *z = which(p);
-    kassert(z != nullptr, "Not found this zone at ", reinterpret_cast<addr_t>(p()));
+    kassert(z != nullptr, "Not found this zone at ", trace::hex(p()));
     z->free(p);
 }
 
@@ -95,7 +95,7 @@ void zones::add_reference(void *ptr)
 {
     phy_addr_t p = va2pa(ptr);
     zone *z = which(p);
-    kassert(z != nullptr, "Not found this zone at ", reinterpret_cast<addr_t>(p()));
+    kassert(z != nullptr, "Not found this zone at ", trace::hex(p()));
     z->add_reference(p);
 }
 
@@ -221,8 +221,8 @@ zone::zone(phy_addr_t start, phy_addr_t end, phy_addr_t danger_beg, phy_addr_t d
 
     if (page_addr >= danger_beg && page_addr < danger_end)
     {
-        trace::panic("Zone page/buddy allocate failed at ", reinterpret_cast<addr_t>(start()), "-",
-                     reinterpret_cast<addr_t>(end()), ", required ", page_bytes, '.');
+        trace::panic("Zone page/buddy allocate failed at ", trace::hex(start()), "-", trace::hex(end()), ", required ",
+                     page_bytes, '.');
     }
     buddy_block_count = buddy_impl.init(this);
 }

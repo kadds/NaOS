@@ -65,7 +65,7 @@ void flush()
     {
         delay();
         auto d = io_in8(data_port);
-        trace::debug("8042 flush: read ", (void *)(u64)d);
+        trace::debug("8042 flush: read ", trace::hex((u64)d));
         i++;
     }
 }
@@ -346,7 +346,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", (void *)(u64)k);
+                trace::warning("Unknow scan code ", trace::hex((u64)k));
             }
         }
         else if (dev->last_prefix_count == 1)
@@ -373,7 +373,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", (void *)(u64)dev->last_prefix[0], ",", (void *)(u64)k);
+                trace::warning("Unknow scan code ", trace::hex((u64)dev->last_prefix[0]), ",", trace::hex((u64)k));
             }
         }
         else if (dev->last_prefix_count == 2)
@@ -388,8 +388,8 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", (void *)(u64)dev->last_prefix[0], ",",
-                               (void *)(u64)dev->last_prefix[1], ",", (void *)(u64)k);
+                trace::warning("Unknow scan code ", trace::hex((u64)dev->last_prefix[0]), ",",
+                               trace::hex((u64)dev->last_prefix[1]), ",", trace::hex((u64)k));
                 dev->last_prefix_count = 0;
             }
         }
