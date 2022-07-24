@@ -1,5 +1,5 @@
-#include "common.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"

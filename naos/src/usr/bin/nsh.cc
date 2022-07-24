@@ -1,6 +1,11 @@
+#include <asm-generic/errno-base.h>
 #include <stdio.h>
+
+#include <bits/posix/posix_stdlib.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/wait.h>
 #include <unistd.h>
 constexpr int max_command_chars = 8192;
@@ -118,6 +123,70 @@ int wait_input(size_t max, char *&input)
     return 0;
 }
 
+int echo(int arg_num, char **args)
+{
+    for (int i = 1; i < arg_num; i++)
+    {
+        auto beg = args[i];
+        while (*beg != 0)
+        {
+            char *symbol_beg = strchr(beg, '$');
+            bool mask = false;
+            char *env_beg = nullptr;
+            if (symbol_beg != nullptr)
+            {
+                if (*(symbol_beg + 1) == '{')
+                {
+                    mask = true;
+                    env_beg = symbol_beg + 2;
+                }
+                else
+                {
+                    env_beg = symbol_beg + 1;
+                }
+            }
+            char *env_end = env_beg;
+
+            if (env_beg != nullptr)
+            {
+                while (*env_end != 0)
+                {
+                    if (*env_end == ' ')
+                    {
+                        break;
+                    }
+                    else if (mask && *env_end == '}')
+                    {
+                        break;
+                    }
+                    env_end++;
+                }
+            }
+
+            if (env_beg != nullptr)
+            {
+                *symbol_beg = 0;
+                printf("%s", beg);
+                *env_end = 0;
+                if (*&env_beg != nullptr)
+                {
+                    // print envvar
+                    char *envvalue = getenv(env_beg);
+                    printf("%s", envvalue);
+                }
+                beg = env_end + 1;
+            }
+            else
+            {
+                printf("%s", beg);
+                break;
+            }
+        }
+    }
+    printf("\n");
+    return 0;
+}
+
 int process(char **args, int arg_num)
 {
     if (arg_num == 0)
@@ -129,7 +198,9 @@ int process(char **args, int arg_num)
     if (strcmp(program, "help") == 0)
     {
         printf(R"(nsh: nano shell: 
-    command args            
+    command <args>
+  or  
+    export ENV=VALUE
 )");
         return 0;
     }
@@ -160,20 +231,46 @@ int process(char **args, int arg_num)
         else
         {
             printf("execute fail\n");
+            return errno;
         }
         return 0;
     }
-
-    if (access(program, F_OK | X_OK | R_OK) != 0)
+    if (strcmp(program, "export") == 0)
     {
-        printf("command '%s' not found\n", program);
+        auto p = strchr(args[1], '=');
+        if (p != nullptr)
+        {
+            auto size = p - args[1];
+            char *buffer = (char *)malloc(size);
+            memcpy(buffer, args[1], size);
+            buffer[size] = '\0';
+            setenv(buffer, p + 1, 1);
+            free(buffer);
+        }
+        else
+        {
+            printf("usage: export ENV=VALUE:VALUE2\n");
+            return -1;
+        }
         return 0;
+    }
+    if (strcmp(program, "echo") == 0)
+    {
+        return echo(arg_num, args);
     }
 
     int pid = fork();
     if (pid == 0)
     {
-        int ret = execve(program, args + 1, nullptr);
+        int ret = execvp(program, args + 1);
+        if (errno == EACCES)
+        {
+            printf("command '%s' not found\n", program);
+        }
+        else
+        {
+            printf("command '%s' returns %d\n", program, ret);
+        }
         exit(ret);
     }
     else if (pid > 0)
@@ -183,6 +280,7 @@ int process(char **args, int arg_num)
         if (status != 0)
         {
             // todo print it
+            return status;
         }
     }
     return 0;

@@ -12,6 +12,7 @@ entry(mkdir);
 entry(rmdir);
 entry(touch);
 entry(rm);
+entry(env);
 
 extern "C" int main(int argc, char **argv)
 {
@@ -62,9 +63,13 @@ extern "C" int main(int argc, char **argv)
     {
         return rm(argc, argv);
     }
+    else if (strstr(cmd, "env"))
+    {
+        return env(argc, argv);
+    }
     else
     {
-        printf("unknown command %s\n", cmd);
+        printf("nanobox: unknown command %s\n", cmd);
     }
     return 0;
 }

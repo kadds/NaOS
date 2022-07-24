@@ -16,8 +16,6 @@ namespace trace
 {
 bool output_debug = true;
 
-const u32 slow_level = 0;
-
 util::circular_buffer<byte> *kernel_log_buffer = nullptr;
 
 arch::device::com::serial serial_device;

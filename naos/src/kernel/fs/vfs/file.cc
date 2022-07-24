@@ -1,4 +1,5 @@
 #include "kernel/fs/vfs/file.hpp"
+#include "common.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
@@ -55,7 +56,7 @@ i64 file::read(byte *ptr, u64 max_size, flag_t flags)
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
             return pd->read(ptr, max_size, flags);
-        return -1;
+        return EINVAL;
     }
     return 0;
 }

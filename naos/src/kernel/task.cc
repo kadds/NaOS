@@ -540,7 +540,6 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     {
         memory::KernelCommonAllocatorV->deallocate(header);
         trace::info("Can't load execute file.");
-        exit_process(process, -1, 0);
         return nullptr;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
@@ -699,7 +698,6 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     {
         memory::KernelCommonAllocatorV->deallocate(header);
         trace::info("Can't load execute file.");
-        exit_process(process, -1, 0);
         return ENOEXEC;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
@@ -741,65 +739,20 @@ void do_sleep(const timeclock::time &time)
 struct process_data_t
 {
     thread_t *thd;
-    i64 ret;
 };
 
-void exit_process_inner(thread_t *thd, i64 ret)
+void exit_process_inner(thread_t *thd);
+void exit_process_thread(process_t *process)
 {
-    if (thd->state != thread_state::destroy)
-    {
-        process_data_t *data = memory::New<process_data_t>(memory::KernelCommonAllocatorV);
-        data->thd = thd;
-        data->ret = ret;
-
-        scheduler::remove(
-            thd,
-            [](u64 data) {
-                auto *dt = reinterpret_cast<process_data_t *>(data);
-                auto ret = dt->ret;
-                auto process = dt->thd->process;
-                auto list = (thread_list_t *)process->thread_list;
-
-                dt->thd->user_stack_top = (void *)dt->ret;
-                dt->thd->state = thread_state::destroy;
-                dt->thd->wait_queue.do_wake_up();
-                delete_thread(dt->thd);
-
-                memory::Delete<>(memory::KernelCommonAllocatorV, dt);
-                uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
-                icu.begin();
-                if (!list->empty())
-                {
-                    auto thd = list->front();
-                    icu.end();
-                    exit_process_inner(thd, ret);
-                }
-                else
-                {
-                    icu.end();
-                    process->resource.clear();
-                    process->attributes |= process_attributes::no_thread;
-                    process->wait_queue.do_wake_up();
-                }
-            },
-            (u64)data);
-    }
-}
-
-void exit_process(process_t *process, i64 ret, flag_t flags)
-{
-    // TODO: core_dump from flags
-    // trace::debug("process ", process->pid, " exit with code ", ret);
     uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
 
-    process->ret_val = ret;
     icu.begin();
     if (!list.empty())
     {
         auto thd = list.front();
         icu.end();
-        exit_process_inner(thd, ret);
+        exit_process_inner(thd);
     }
     else
     {
@@ -808,6 +761,38 @@ void exit_process(process_t *process, i64 ret, flag_t flags)
         process->attributes |= process_attributes::no_thread;
         process->wait_queue.do_wake_up();
     }
+}
+
+void exit_process_inner(thread_t *thd)
+{
+    if (thd->state != thread_state::destroy)
+    {
+        process_data_t *data = memory::New<process_data_t>(memory::KernelCommonAllocatorV);
+        data->thd = thd;
+
+        scheduler::remove(
+            thd,
+            [](u64 data) {
+                auto *dt = reinterpret_cast<process_data_t *>(data);
+                auto process = dt->thd->process;
+
+                dt->thd->state = thread_state::destroy;
+                dt->thd->wait_queue.do_wake_up();
+                delete_thread(dt->thd);
+
+                memory::Delete<>(memory::KernelCommonAllocatorV, dt);
+                exit_process_thread(process);
+            },
+            (u64)data);
+    }
+}
+
+void exit_process(process_t *process, i64 ret, flag_t flags)
+{
+    // TODO: write core_dump from flags
+    // trace::debug("process ", process->pid, " exit with code ", ret);
+    process->ret_val = ret;
+    exit_process_thread(process);
 }
 
 void do_exit(i64 ret)
@@ -850,8 +835,7 @@ u64 wait_process(process_t *process, i64 &ret)
     process->wait_counter++;
     process->wait_queue.do_wait(wait_process_exit, (u64)process);
     ret = (i64)process->ret_val;
-    process->wait_counter--;
-    if (process->wait_counter == 0)
+    if (--process->wait_counter == 0)
     {
         process->attributes |= process_attributes::destroy;
         delete_process(process);

@@ -7,3 +7,4 @@ ln -sf /bin/nanobox ${r}/nsh
 ln -sf /bin/nanobox ${r}/rmdir
 ln -sf /bin/nanobox ${r}/touch
 ln -sf /bin/nanobox ${r}/rm
+ln -sf /bin/nanobox ${r}/env

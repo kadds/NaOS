@@ -1,5 +1,6 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/syscall.hpp"
@@ -8,7 +9,13 @@
 #include "kernel/util/str.hpp"
 namespace naos::syscall
 {
-void log(const char *message) { trace::print(message); }
+void log(const char *message)
+{
+#ifdef _DEBUG
+    trace::print(message);
+    trace::print("\n");
+#endif
+}
 
 int clock_get(int clock_index, timeclock::time *time)
 {

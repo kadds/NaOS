@@ -78,6 +78,11 @@ i64 file::iread(i64 &offset, byte *buffer, u64 max_size, flag_t flags)
         }
     }
 
+    if (max_size == 0)
+    {
+        return EOF;
+    }
+
     util::memcopy(buffer, node->start_ptr + offset, max_size);
     offset += max_size;
     return max_size;

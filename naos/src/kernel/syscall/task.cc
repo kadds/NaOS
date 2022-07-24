@@ -1,5 +1,6 @@
 #include "kernel/task.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/new.hpp"
@@ -405,7 +406,7 @@ int execve(const char *path, char *const argv[], char *const envp[])
         fs::vfs::open(path, res.root(), res.current(), fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
     if (!file)
     {
-        return ENOEXIST;
+        return EACCES;
     }
     return task::execve(file, path, before_user_thread, argv, envp);
 }

@@ -1,4 +1,5 @@
 #include "kernel/arch/klib.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/msg_queue.hpp"
