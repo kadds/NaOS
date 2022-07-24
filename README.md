@@ -16,9 +16,10 @@ View [Features](./FEATURES.MD) .
 ## Quick Start  
 
 ### **Requirement**  
-* **GNU Binutils** *(version 2.33 tested)*
-* **GCC** or **Clang** supports *C++17* version  *(GCC 9.2.0 & Clang 9.0.0 tested on [Manjaro](https://manjaro.org/) 18.1.0, GCC 11 is not supported yet)*
+* **GNU Binutils** *(version 2.38 tested)*
+* **GCC** or **Clang** supports *C++20* version  *(GCC 12.1.0 & Clang 13.0.1 tested on archlinux)*
 * **CMake 3.3** or later
+* **ninja** and **meson** is needed for build libc   
 * **Python 3** *(For running utility)*
 * An emulator or virtual machine such as **Bochs**, **QEMU**, **Virtual Box**, **hyper-v** and **VMware Workstation** *(For running OS)*
 * **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting raw disk without root privilege)*
@@ -29,21 +30,49 @@ View [Features](./FEATURES.MD) .
 ### **Recommend**  
 * **clang-format**: Code formatter 
 * **cpp-check**: Code static analyzer 
-* [**VSCode**](https://code.visualstudio.com/): Development environment
 
 ### 1. Download source code
-Clone this repo ```git clone https://url/path/to/repo``` 
+Clone this repo 
+```bash
+git clone https://url/path/to/repo
+git submodule update --init
+``` 
 
 ### 2. Compile
-```Bash
+```bash
 cd /path/to/repo
 
+# build libc first
+cd naos/libc/mlibc/
+cat << EOF >> cross_file.txt
+[host_machine]
+system = 'naos'
+cpu_family = 'x86_64'
+cpu = 'i686'
+endian = 'little'
+
+[binaries]
+c = '/usr/bin/x86_64-pc-linux-gnu-gcc' 
+cpp = '/usr/bin/x86_64-pc-linux-gnu-g++'
+ar = '/usr/bin/ar'
+strip = '/usr/bin/strip'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+
+meson setup build --cross-file cross_file.txt
+cd build
+ninja 
+
+cd ../../../
+
+# build kernel & nanobox binary
 mkdir build
 cd build
 # CMAKE_BUILD_TYPE: Debug\Release
 # USE_CLANG: OFF (GCC); ON (Clang)
 cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
-# Then make
 make -j
 ```
 
@@ -134,7 +163,7 @@ After ```make``` success, you will get these files
 ```
 build
 ├── bin # Binary executable files without debug info
-│   ├── rfsroot # root file system image files (the root folder)
+│   ├── rfsroot # root file system image files (the root folder when kernel running)
 │   └── system
 │       ├── rfsimg # root file system image
 │       └── kernel # kernel binary file
@@ -181,7 +210,7 @@ NaOS
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── usr
 │           ├── init # the userland init program 
-│           └── syscall_test # kernel test program 
+│           └── bin # nanobox program, like busybox
 ├── run
 │   ├── cfg # include emulator config file: bochsrc
 │   └── image

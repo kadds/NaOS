@@ -85,6 +85,7 @@ Features / TODO
     - [ ] Kernel modules loader
     - [x] Kernel symbols query
         - [x] Kernel stack trace
+    - [ ] libc integration
     - [ ] C++ lib integration  
     - [ ] Graphics user interface
     - [x] Kernel logger
