@@ -44,7 +44,9 @@ cd /path/to/repo
 
 # build libc first
 cd naos/libc/mlibc/
-cat << EOF >> cross_file.txt
+
+# clang/clang++ is also supported
+cat > cross_file.txt << EOF
 [host_machine]
 system = 'naos'
 cpu_family = 'x86_64'
