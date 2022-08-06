@@ -272,7 +272,7 @@ void *kmalloc(u64 size, u64 align)
         trace::panic("allocate size is too large");
     }
 
-    u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid;
+    u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid = 0;
 
     while (left < right)
     {

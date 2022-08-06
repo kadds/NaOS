@@ -1,14 +1,16 @@
-#include "freelibcxx/allocator.hpp"
-#include "freelibcxx/string.hpp"
+#include "nanobox.hpp"
+#include <cstddef>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 extern char __executable_start[];
 
 [[gnu::weak]] void *__dso_handle;
 [[gnu::weak]] void *__ehdr_start = __executable_start;
 
+using entry_function = int(int, char **);
 #define entry(name) int name(int argc, char **argv)
 
 entry(nsh);
@@ -20,24 +22,28 @@ entry(touch);
 entry(rm);
 entry(env);
 
-using entry_function = int(int, char **);
-using namespace freelibcxx;
+#define entry_p(name)                                                                                                  \
+    {                                                                                                                  \
+#name, name                                                                                                    \
+    }
 
+struct
+{
+    const char *name;
+    entry_function *fn;
+} static_commands[] = {
+    entry_p(nsh), entry_p(cat), entry_p(ls), entry_p(mkdir), entry_p(rmdir), entry_p(touch), entry_p(rm), entry_p(env),
+};
+
+using namespace freelibcxx;
 DefaultAllocator alloc;
+
+// void *operator new(size_t t) { return alloc.allocate(t, sizeof(std::max_align_t)); }
+
+// void operator delete(void *p) { alloc.deallocate(p); }
 
 extern "C" int main(int argc, char **argv)
 {
-    vector<string> args(&alloc);
-    for (int i = 0; i < argc; i++)
-    {
-        args.push_back(string_view(argv[i]).to_string(&alloc));
-    }
-
-    if (args[0] == "nanobox")
-    {
-        printf("args %s", args[1].data());
-    }
-
     if (strstr(argv[0], "nanobox") != nullptr)
     {
         if (argc == 1)
@@ -50,48 +56,29 @@ extern "C" int main(int argc, char **argv)
             argv++;
         }
     }
+
     char *cmd = argv[0];
+
     if (argc == 0 || cmd == nullptr)
     {
         printf(R"(nanobox: command line tool box for NanoOs
 )");
         return 0;
     }
-    if (strstr(cmd, "nsh"))
+    auto last_ch = strrchr(cmd, '/');
+    if (last_ch != nullptr)
     {
-        return nsh(argc, argv);
+        cmd = last_ch + 1;
     }
-    else if (strstr(cmd, "cat"))
+
+    for (auto s : static_commands)
     {
-        return cat(argc, argv);
+        if (strcmp(s.name, cmd) == 0)
+        {
+            return s.fn(argc, argv);
+        }
     }
-    else if (strstr(cmd, "ls"))
-    {
-        return ls(argc, argv);
-    }
-    else if (strstr(cmd, "mkdir"))
-    {
-        return mkdir(argc, argv);
-    }
-    else if (strstr(cmd, "rmdir"))
-    {
-        return rmdir(argc, argv);
-    }
-    else if (strstr(cmd, "touch"))
-    {
-        return touch(argc, argv);
-    }
-    else if (strstr(cmd, "rm"))
-    {
-        return rm(argc, argv);
-    }
-    else if (strstr(cmd, "env"))
-    {
-        return env(argc, argv);
-    }
-    else
-    {
-        printf("nanobox: unknown command %s\n", cmd);
-    }
+
+    printf("nanobox: unknown command '%s'\n", cmd);
     return 0;
 }

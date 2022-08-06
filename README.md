@@ -38,14 +38,13 @@ git clone https://url/path/to/repo
 git submodule update --init
 ``` 
 
-### 2. Compile
+### 2. Compile 
+* GCC
 ```bash
 cd /path/to/repo
 
 # build libc first
 cd naos/libc/mlibc/
-
-# gcc
 cat > cross_file.txt << EOF
 [host_machine]
 system = 'naos'
@@ -63,7 +62,25 @@ strip = '/usr/bin/strip'
 needs_exe_wrapper = true
 EOF
 
-# or clang
+meson setup build --cross-file cross_file.txt
+cd build && ninja
+
+cd /path/to/repo
+# build kernel & nanobox binary
+mkdir build
+cd build
+# CMAKE_BUILD_TYPE: Debug\Release
+cmake -DCMAKE_BUILD_TYPE=Debug -DFREELIBCXX_TEST=OFF ..
+make -j
+```
+
+* Clang
+(Not tested yet)
+```bash
+cd /path/to/repo
+
+# build libc first
+cd naos/libc/mlibc/
 cat > cross_file.txt << EOF
 [host_machine]
 system = 'naos'
@@ -82,28 +99,23 @@ strip = '/usr/bin/strip'
 [properties]
 needs_exe_wrapper = true
 EOF
-
 meson setup build --cross-file cross_file.txt
-cd build
-ninja 
+cd build && ninja 
 
-cd ../../../
-
+cd /path/to/repo
 # build kernel & nanobox binary
 mkdir build
 cd build
-# CMAKE_BUILD_TYPE: Debug\Release
-# 
-# clang: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFREELIBCXX_TEST=OFF  -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DCMAKE_CXX_FLAGS="-fuse-ld=lld" -DCMAKE_C_FLAGS="-fuse-ld=lld" ..
 
-# or gcc
-cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
+# CMAKE_BUILD_TYPE: Debug\Release
+cmake -DCMAKE_BUILD_TYPE=Release -DFREELIBCXX_TEST=OFF  -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DCMAKE_CXX_FLAGS="-fuse-ld=lld" -DCMAKE_C_FLAGS="-fuse-ld=lld" ..
+
 make -j
 ```
 
-### 3. Make a raw disk
+### 3. Creating artifact
 
-> NaOS requires to boot from multiboot2, which is GRUB supported. [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html).   
+> NaOS requires multiboot2 loader, which is GRUB supported. [multiboot2 (spec)](https://www.gnu.org/software/grub/manual/multiboot2/multiboot.html).   
 #### A. ISO target
 To get kernel iso image:
 ```sh

@@ -3,7 +3,9 @@ Features / TODO
 
 * - [x] X86-64 Architecture
     - [x] Four-level Paging
+        - [x] Copy on write
     - [x] VGA display
+      - [x] Kernel Console
     - [x] System call
     - [x] Context switch
     - [x] multiboot2 loader
@@ -28,7 +30,7 @@ Features / TODO
             - [x] Semaphore
             - [ ] Condition wait
         - [x] Sleep
-        - [ ] Thread local storage
+        - [x] Thread local storage
     - [ ] IPC
         - [x] PIPE
         - [x] FIFO
@@ -37,16 +39,21 @@ Features / TODO
         - [x] Signal
     - [x] Memory map
         - [x] Virtual address allocator
+        - [x] File-based mapping
+        - [x] Anon-based mapping
+        - [x] Copy on write
     - [ ] Elf loader
         - [X] Static binary loader
         - [ ] Dynamic link elf loader
     - [ ] Resource limit
+        - [ ] Control-Group
 * - [ ] File subsystem
     - [ ] Virtual File system
         - [x] Read, Write, Seek
         - [x] Hard link, Symbolic link
-        - [ ] Time
+        - [ ] Time 
         - [ ] Authority identification
+            - [x] Read, Write, Exec
     - [ ] NFS
     - [ ] Ext2
     - [ ] FAT
@@ -77,6 +84,10 @@ Features / TODO
 * - [ ] Compatibility layer
     - [x] UEFI boot
     - [ ] POSIX API
+        - [x] fork/exec/waitpid
+        - [ ] pthread
+        - [x] mmap
+        - [x] file
 * - [ ] Multi-core support (SMP)
     - [x] AP Startup
     - [x] Load balancing
@@ -86,9 +97,13 @@ Features / TODO
     - [x] Kernel symbols query
         - [x] Kernel stack trace
     - [ ] libc integration
+        - [x] mlibc
     - [ ] C++ lib integration  
+        - [x] freelibcxx
     - [ ] Graphics user interface
+        - [ ] Window manager
     - [x] Kernel logger
-    - [x] Basic shell
+    - [ ] Basic commands
+      - [ ] nanobox
 
 
