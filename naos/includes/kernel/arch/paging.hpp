@@ -238,7 +238,7 @@ bool has_shared(base_paging_t *base, void *vir);
 bool clear_shared(base_paging_t *base, void *vir, bool writeable);
 
 /// get phy addr
-bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_t *phy_addr);
+[[maybe_unused]] bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_t *phy_addr);
 
 base_paging_t *current();
 

@@ -3,8 +3,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-[[gnu::weak]] int __dso_handle;
-[[gnu::weak]] int __ehdr_start;
+
+extern char __executable_start[];
+
+[[gnu::weak]] void *__dso_handle;
+[[gnu::weak]] void *__ehdr_start = __executable_start;
 
 #define entry(name) int name(int argc, char **argv)
 

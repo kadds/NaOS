@@ -12,7 +12,6 @@
 namespace arch::idt
 {
 
-Unpaged_Data_Section ptr_t idt_before_ptr = {0, 0};
 ptr_t idt_after_ptr = {0, 0};
 
 const u8 interrupt_type = 0b1110;

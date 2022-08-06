@@ -52,7 +52,7 @@ void Unpaged_Text_Section memcpy_2(void *dst, const void *source, u32 len)
     }
 }
 
-Unpaged_Data_Section const char rfsimage[] = "";
+Unpaged_Data_Section(0) static const char rfsimage[] = "";
 
 bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *end)
 {

@@ -21,10 +21,10 @@ set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64 -Wl,--no-relax -Wl,--build-id=none")
 
 set(CXX_X64 "-mcmodel=large -m64")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-g")
+set(CMAKE_CXX_FLAGS_DEBUG "-g -Og")
 set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
 
-set(CMAKE_CXX_FLAGS_RELEASE "-g -O2")
+set(CMAKE_CXX_FLAGS_RELEASE "-g -Os")
 set(CMAKE_ASM_FLAGS_RELEASE "-g -O2")
 
 # dirs
@@ -38,7 +38,7 @@ set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 set(FREE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++20 -Wno-pedantic \
 -fno-rtti -fno-asynchronous-unwind-tables -fno-common \
 -fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
--ffreestanding -fno-stack-protector -fno-builtin -fno-use-cxa-atexit")
+-ffreestanding -fno-stack-protector -fno-builtin")
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(FREE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
@@ -56,6 +56,10 @@ if (CMAKE_BUILD_TYPE STREQUAL Debug)
     add_definitions(
         -D_DEBUG
     )
+else()
+    set (FREE_CXX_FLAGS "${FREE_CXX_FLAGS} -flto")
+    # set (FREE_CXX_FLAGS "${FREE_CXX_FLAGS} -flto -fno-align-jumps -fno-align-functions \
+    # -fno-align-labels  -fno-align-loops -freorder-blocks-algorithm=simple -fno-prefetch-loop-arrays")
 endif ()
 
 string(TIMESTAMP BUILD_VERSION_TS "%s")

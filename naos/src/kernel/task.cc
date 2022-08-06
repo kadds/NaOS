@@ -208,6 +208,7 @@ void create_devs()
     fs::vfs::create("/dev", root, root, fs::create_flags::directory);
 
     fs::vfs::create("/dev/tty", root, root, fs::create_flags::directory);
+    dev::tty::tty_pseudo_t *ps;
 
     char fname[] = "/dev/tty/x";
     for (int i = 1; i < 8; i++)
@@ -215,8 +216,9 @@ void create_devs()
         fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
         fs::vfs::create(fname, root, root, fs::create_flags::chr);
         auto f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
-        auto ps = memory::New<dev::tty::tty_pseudo_t>(memory::KernelCommonAllocatorV, memory::page_size);
-        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, (u64 *)&ps, 8);
+
+        ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(memory::page_size * 2);
+        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&ps), 8);
     }
 
     fs::vfs::link("/dev/tty/0", "/dev/tty/1", root, root);

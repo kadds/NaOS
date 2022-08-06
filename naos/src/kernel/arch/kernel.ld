@@ -19,7 +19,7 @@ SECTIONS
     . = ALIGN(8);
     .unpaged.data : 
     {
-        *(.unpaged.data)
+        *(.unpaged.data.*)
     }
 
     . += kernel_offset;

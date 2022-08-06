@@ -53,8 +53,10 @@ struct vm_t
     vm_page_fault_func handle;
     u64 user_data;
     u64 alloc_times = 0;
-    bool operator==(const vm_t &rhs) const { return rhs.start == start && rhs.end == end; }
-    bool operator<(const vm_t &rhs) const { return start < rhs.start; }
+    bool operator==(const vm_t &rhs) const { return rhs.end == end; }
+    bool operator<(const vm_t &rhs) const { return end < rhs.end; }
+    bool operator<=(const vm_t &rhs) const { return end <= rhs.end; }
+    bool operator>(const vm_t &rhs) const { return end > rhs.end; }
     vm_t(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data)
         : start(start)
         , end(end)

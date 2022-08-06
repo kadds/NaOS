@@ -1,28 +1,30 @@
 #include "common.hpp"
 #include "kernel/trace.hpp"
+#include <cstdint>
+#include <sys/types.h>
 
 extern "C" void *memset(void *dst, int val, u64 size) noexcept
 {
     const char *s = reinterpret_cast<const char *>(&val);
     char *d = reinterpret_cast<char *>(dst);
 
-    if ((reinterpret_cast<u64>(dst) & 0x7) == 0)
+    if ((reinterpret_cast<uintptr_t>(dst) & 0x4) == 0)
     {
-        u64 *d64 = (u64 *)dst;
-        u64 count = size / sizeof(u64);
-        u64 rest = size % sizeof(u64);
-        for (u64 i = 0; i < count; i++)
+        u32 *d32 = (u32 *)dst;
+        u32 count = size / sizeof(u32);
+        u32 rest = size % sizeof(u32);
+        for (u32 i = 0; i < count; i++)
         {
-            *d64++ = val;
+            *d32++ = val;
         }
-        d = reinterpret_cast<char *>(d64);
+        d = reinterpret_cast<char *>(d32);
         size = rest;
     }
     size_t n = 0;
     for (uint64_t i = 0; i < size; i++)
     {
         *d++ = *s++;
-        if (n++ >= sizeof(u64))
+        if (n++ >= sizeof(u32))
         {
             s = reinterpret_cast<const char *>(&val);
             n = 0;
@@ -33,60 +35,37 @@ extern "C" void *memset(void *dst, int val, u64 size) noexcept
 
 extern "C" void *memcpy(void *__restrict dst, const void *__restrict src, size_t size) noexcept
 {
+    const char *s = reinterpret_cast<const char *>(src);
+    char *d = reinterpret_cast<char *>(dst);
+    uintptr_t dst_address = reinterpret_cast<uintptr_t>(dst);
+    uintptr_t src_address = reinterpret_cast<uintptr_t>(src);
+#ifdef _DEBUG
     if (unlikely(dst == src))
     {
         return dst;
     }
-    const char *s = reinterpret_cast<const char *>(src);
-    char *d = reinterpret_cast<char *>(dst);
-    u64 dst_address = reinterpret_cast<u64>(dst);
-    u64 src_address = reinterpret_cast<u64>(src);
-    if (unlikely(dst_address < src_address + size))
+    if (dst_address >= src_address && dst_address < src_address + size)
     {
-        if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
-        {
-            u64 *d64 = reinterpret_cast<u64 *>(dst_address + size);
-            const u64 *s64 = reinterpret_cast<const u64 *>(src_address + size);
-            u64 count = size / sizeof(u64);
-            u64 rest = size % sizeof(u64);
-            for (u64 i = 0; i < count; i++)
-            {
-                *--d64 = *--s64;
-            }
-            size = rest;
-            d = reinterpret_cast<char *>(d64);
-            s = reinterpret_cast<const char *>(s64);
-        }
-        else
-        {
-            s += size;
-            d += size;
-        }
-        for (uint64_t i = 0; i < size; i++)
-        {
-            *--d = *--s;
-        }
+        trace::panic("memcpy check fail");
     }
-    else
+#endif
+    if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
     {
-        if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
+        u64 *d64 = reinterpret_cast<u64 *>(dst);
+        const u64 *s64 = reinterpret_cast<const u64 *>(src);
+        u64 count = size / sizeof(u64);
+        u64 rest = size % sizeof(u64);
+        for (u64 i = 0; i < count; i++)
         {
-            u64 *d64 = reinterpret_cast<u64 *>(dst);
-            const u64 *s64 = reinterpret_cast<const u64 *>(src);
-            u64 count = size / sizeof(u64);
-            u64 rest = size % sizeof(u64);
-            for (u64 i = 0; i < count; i++)
-            {
-                *d64++ = *s64++;
-            }
-            size = rest;
-            d = reinterpret_cast<char *>(d64);
-            s = reinterpret_cast<const char *>(s64);
+            *d64++ = *s64++;
         }
-        for (uint64_t i = 0; i < size; i++)
-        {
-            *d++ = *s++;
-        }
+        size = rest;
+        d = reinterpret_cast<char *>(d64);
+        s = reinterpret_cast<const char *>(s64);
+    }
+    for (uint64_t i = 0; i < size; i++)
+    {
+        *d++ = *s++;
     }
     return dst;
 }
@@ -117,8 +96,8 @@ extern "C" void *memmove(void *dst, const void *src, size_t size) noexcept
     }
     const char *s = reinterpret_cast<const char *>(src);
     char *d = reinterpret_cast<char *>(dst);
-    u64 dst_address = reinterpret_cast<u64>(dst);
-    u64 src_address = reinterpret_cast<u64>(src);
+    uintptr_t dst_address = reinterpret_cast<uintptr_t>(dst);
+    uintptr_t src_address = reinterpret_cast<uintptr_t>(src);
     if (unlikely(dst_address < src_address + size))
     {
         if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
@@ -147,24 +126,7 @@ extern "C" void *memmove(void *dst, const void *src, size_t size) noexcept
     }
     else
     {
-        if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
-        {
-            u64 *d64 = reinterpret_cast<u64 *>(dst);
-            const u64 *s64 = reinterpret_cast<const u64 *>(src);
-            u64 count = size / sizeof(u64);
-            u64 rest = size % sizeof(u64);
-            for (u64 i = 0; i < count; i++)
-            {
-                *d64++ = *s64++;
-            }
-            size = rest;
-            d = reinterpret_cast<char *>(d64);
-            s = reinterpret_cast<const char *>(s64);
-        }
-        for (uint64_t i = 0; i < size; i++)
-        {
-            *d++ = *s++;
-        }
+        return memcpy(dst, src, size);
     }
     return dst;
 }
@@ -239,8 +201,9 @@ extern "C" void __cxa_pure_virtual()
         ;
 }
 
-void operator delete(void *p, u64 log) // or delete(void *, std::size_t)
+void operator delete(void *p, size_t size) // or delete(void *, std::size_t)
 {
+    trace::info("delete ", trace::hex(p), " size ", size);
 }
 
-void operator delete(void *p) {}
+void operator delete(void *p) { trace::info("delete ", trace::hex(p)); }

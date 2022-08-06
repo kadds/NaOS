@@ -10,7 +10,8 @@ namespace memory
 template <typename T, typename I, int align = alignof(T), typename... Args> T *New(I allocator, Args &&...args)
 {
     T *ptr = (T *)allocator->allocate(sizeof(T), align);
-    return new (ptr) T(std::forward<Args>(args)...);
+    new (ptr) T(std::forward<Args>(args)...);
+    return ptr;
 }
 
 template <typename T, typename I> void Delete(I allocator, T *t)

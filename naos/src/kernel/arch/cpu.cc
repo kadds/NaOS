@@ -167,7 +167,7 @@ void allocate_stack(int logic_num)
 phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {
     void *vir = get_kernel_stack_bottom(id);
     phy_addr_t phy = nullptr;
-    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
     kassert(ret, "");
     return phy;
 }
@@ -175,7 +175,7 @@ phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {
 phy_addr_t get_exception_stack_bottom_phy(cpuid_t id) {
     void *vir = get_exception_stack_bottom(id);
     phy_addr_t phy = nullptr;
-    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
     kassert(ret, "");
     return phy;
 }
@@ -184,7 +184,7 @@ phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id) {
 
     void *vir = get_interrupt_stack_bottom(id);
     phy_addr_t phy = nullptr;
-    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
     kassert(ret, "");
     return phy;
 }
@@ -192,7 +192,7 @@ phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id) {
 phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id) {
     void *vir = get_exception_nmi_stack_bottom(id);
     phy_addr_t phy = nullptr;
-    bool ret = paging::get_map_address(paging::current(), vir, &phy);
+    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
     kassert(ret, "");
     return phy;
 }

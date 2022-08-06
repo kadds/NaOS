@@ -185,7 +185,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     memcpy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
     args->rfsimg_start = reinterpret_cast<u64>(image_phy_addr.get());
 
-    auto end_used_memory_addr = align_up(image_ptr + image_size + page_size * 2 + fix_memory_limit, page_size);
+    auto end_used_memory_addr = align_up(image_ptr + image_size + page_size * 3 + fix_memory_limit, page_size);
 
     // map the kernel and data
     phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);

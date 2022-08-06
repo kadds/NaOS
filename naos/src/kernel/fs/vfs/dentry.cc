@@ -19,7 +19,7 @@ dentry *dentry::find_child(const char *name) const
 {
     for (auto &d : child_list)
     {
-        if (name == d->name)
+        if (strcmp(name, d->name) == 0)
         {
             return d;
         }

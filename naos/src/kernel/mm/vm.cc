@@ -186,7 +186,7 @@ bool vm_allocator::deallocate_map(u64 p)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     vm_t vm(p);
-    auto it = list.lower_find(vm, [](const vm_t &lhs, const vm_t &rhs) { return lhs.start > rhs.start; });
+    auto it = list.lower_find(vm);
     if (it != list.end())
     {
         if (it->start == p)
@@ -217,12 +217,12 @@ const vm_t *vm_allocator::add_map(u64 start, u64 end, u64 flags, vm_page_fault_f
 
     // check if exist
     vm_t vm(start, end, flags, func, user_data);
-    auto it = list.upper_find(vm, [](const vm_t &lhs, const vm_t &rhs) { return lhs.start >= rhs.start; });
+    auto it = list.upper_find(vm);
     if (it != list.end() && it->start == start)
     {
         return nullptr;
     }
-    it = list.upper_find(vm, [](const vm_t &lhs, const vm_t &rhs) { return lhs.end >= rhs.end; });
+    it = list.upper_find(vm);
     if (it != list.end() && it->end == end)
     {
         return nullptr;
@@ -236,8 +236,8 @@ vm_t *vm_allocator::get_vm_area(u64 p)
 {
     uctx::RawReadLockUninterruptibleContext ctx(list_lock);
 
-    vm_t vm(p);
-    auto it = list.lower_find(vm, [](const vm_t &lhs, const vm_t &rhs) { return lhs.start > rhs.start; });
+    vm_t vm(p, p, 0, nullptr, 0);
+    auto it = list.lower_find(vm);
     if (it == list.end())
     {
         return nullptr;
@@ -246,7 +246,7 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     {
         return &it;
     }
-    // trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
+    trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
     return nullptr;
 }
 void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)

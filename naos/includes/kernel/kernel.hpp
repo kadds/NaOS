@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
 #define Unpaged_Text_Section Section(".unpaged.text")
-#define Unpaged_Data_Section Section(".unpaged.data")
+#define Unpaged_Data_Section(i) Section(".unpaged.data." #i)
 #define Unpaged_Bss_Section Section(".unpaged.bss")
 #define Trace_Section Section(".data.trace")
 

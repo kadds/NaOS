@@ -5,8 +5,8 @@
 namespace arch::gdt
 {
 
-Unpaged_Data_Section Aligned(8) descriptor temp_gdt_init[3];
-Unpaged_Data_Section ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
+Unpaged_Data_Section(3) Aligned(8) descriptor temp_gdt_init[3];
+Unpaged_Data_Section(4) ptr_t gdt_before_ptr = {sizeof(temp_gdt_init) - 1, (u64)temp_gdt_init};
 
 Aligned(8) descriptor gdt_after_init[cpu::max_cpu_support * 2 + 10] = {
     0,                  // null

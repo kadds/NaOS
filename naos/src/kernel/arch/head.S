@@ -22,7 +22,7 @@ _start:
     movq %rax, (%rsp)
     addq %rdx, %rsp
     addq %rdx, %rdi
-    lretq
+    retfq
 jmp_kernel_ptr_x:
     .quad loop
 loop:

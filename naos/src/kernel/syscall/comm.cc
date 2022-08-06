@@ -11,8 +11,8 @@ namespace naos::syscall
 void log(const char *message)
 {
 #ifdef _DEBUG
-    trace::print(message);
-    trace::print("\n");
+    // trace::print(message);
+    // trace::print("\n");
 #endif
 }
 
