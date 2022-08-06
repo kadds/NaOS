@@ -1,4 +1,5 @@
 #include "kernel/arch/interrupt.hpp"
+#include "freelibcxx/linked_list.hpp"
 #include "kernel/arch/apic.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/gdt.hpp"
@@ -12,8 +13,6 @@
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/linked_list.hpp"
-#include "kernel/util/memory.hpp"
 extern volatile char interrupt_code_end[], interrupt_code_start[];
 
 namespace arch::interrupt
@@ -27,7 +26,8 @@ int a_code_len;
 void build(int index, u8 ist)
 {
     byte *buffer_start = (byte *)code_buffer + a_code_len * index;
-    util::memcopy((void *)buffer_start, (void *)interrupt_code_start, a_code_len);
+    memcpy((void *)buffer_start, (void *)interrupt_code_start, a_code_len);
+
     *(u8 *)&buffer_start[3] = (u8)index + 32;
     idt::set_interrupt_system_gate(index + 32, buffer_start, ist);
 }

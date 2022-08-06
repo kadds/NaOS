@@ -2,7 +2,6 @@
 #include "kernel/common/cursor/cursor.hpp"
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
 #include <new>
 
 namespace arch::device::vga::graphics
@@ -65,12 +64,12 @@ void scroll(text_cursor_t &cur, i32 n)
     window_height = (window_height + n * font_height) % height;
     if (old_window_height > window_height)
     {
-        util::memzero(video_addr + old_window_height * line_bytes, full_bytes - old_window_height * line_bytes);
-        util::memzero(video_addr, window_height * line_bytes);
+        memset(video_addr + old_window_height * line_bytes, 0, full_bytes - old_window_height * line_bytes);
+        memset(video_addr, 0, window_height * line_bytes);
     }
     else
     {
-        util::memzero(video_addr + old_window_height * line_bytes, (window_height - old_window_height) * line_bytes);
+        memset(video_addr + old_window_height * line_bytes, 0, (window_height - old_window_height) * line_bytes);
     }
 
     dirty_rectangle = rectangle(0, 0, width, height);
@@ -321,8 +320,8 @@ void flush_rectangle(byte *vram, const rectangle &rect)
     {
         u64 top_bytes = window_height * line_bytes;
         u64 bottom_bytes = line_bytes * height - top_bytes;
-        util::memcopy(vram, (byte *)video_addr + top_bytes, bottom_bytes);
-        util::memcopy(vram + bottom_bytes, (void *)video_addr, top_bytes);
+        memcpy(vram, (byte *)video_addr + top_bytes, bottom_bytes);
+        memcpy(vram + bottom_bytes, (void *)video_addr, top_bytes);
     }
     else
     {
@@ -336,7 +335,7 @@ void flush_rectangle(byte *vram, const rectangle &rect)
             {
                 i = 0;
             }
-            util::memcopy((char *)vram + y * line_bytes + l, (char *)video_addr + i * line_bytes + l, bytes);
+            memcpy((char *)vram + y * line_bytes + l, (char *)video_addr + i * line_bytes + l, bytes);
         }
     }
 }

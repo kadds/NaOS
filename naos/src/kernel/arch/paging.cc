@@ -9,7 +9,6 @@
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
 #include <termios.h>
 #include <type_traits>
 namespace arch::paging
@@ -21,13 +20,13 @@ static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) =
 template <typename _T> _T *new_page_table()
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    return memory::New<_T, memory::IAllocator *, 0x1000>(memory::KernelBuddyAllocatorV);
+    return memory::New<_T, freelibcxx::Allocator *, 0x1000>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    memory::Delete<_T, memory::IAllocator *>(memory::KernelBuddyAllocatorV, addr);
+    memory::Delete<_T, freelibcxx::Allocator *>(memory::KernelBuddyAllocatorV, addr);
 }
 
 void *base_entry::get_addr() const { return memory::pa2va(phy_addr_t::from((u64)data & 0xFFFFFFFFFF000UL)); }
@@ -323,7 +322,7 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
                     {
                         error_map();
                     }
-                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
                     memory::KernelBuddyAllocatorV->deallocate(src);
                 }
                 else
@@ -360,7 +359,7 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
                     {
                         error_map();
                     }
-                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
                     memory::KernelBuddyAllocatorV->deallocate(src);
                 }
                 else
@@ -401,7 +400,7 @@ bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_
                     {
                         error_map();
                     }
-                    util::memcopy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
+                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
                     memory::KernelBuddyAllocatorV->deallocate(src);
                 }
                 else
@@ -627,7 +626,7 @@ template <typename PageTable> bool clone(PageTable *dst, PageTable *src, int idx
             if (!to.is_big_page())
             {
                 auto pt = new_page_table<PageTable>();
-                util::memcopy(pt, source.get_addr(), sizeof(PageTable));
+                memcpy(pt, source.get_addr(), sizeof(PageTable));
                 to.set_addr(pt);
             }
             else

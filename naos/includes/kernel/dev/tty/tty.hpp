@@ -8,7 +8,7 @@ namespace dev::tty
 class tty_pseudo_t : public fs::vfs::pseudo_t
 {
   private:
-    util::circular_buffer<byte> buffer;
+    freelibcxx::circular_buffer<byte> buffer;
     task::wait_queue_t wait_queue;
     std::atomic_int input_chars;
     std::atomic_int eof_count;

@@ -3,8 +3,6 @@
 #include "kernel/handle.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
 namespace fs::ramfs
 {
 
@@ -18,7 +16,7 @@ bool inode::create_symbolink(vfs::dentry *entry, const char *target)
     {
         file f;
         f.open(entry, mode::write);
-        u64 len = util::strlen(target) + 1;
+        u64 len = strlen(target) + 1;
         f.write((const byte *)target, len, 0);
     }
     return ok;
@@ -55,7 +53,7 @@ i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
         }
     }
 
-    util::memcopy(node->start_ptr + offset, buffer, size);
+    memcpy(node->start_ptr + offset, buffer, size);
     offset += size;
     return size;
 }
@@ -83,7 +81,7 @@ i64 file::iread(i64 &offset, byte *buffer, u64 max_size, flag_t flags)
         return EOF;
     }
 
-    util::memcopy(buffer, node->start_ptr + offset, max_size);
+    memcpy(buffer, node->start_ptr + offset, max_size);
     offset += max_size;
     return max_size;
 }
@@ -111,7 +109,7 @@ super_block::super_block(u64 max_ram_size, file_system *fs)
     , block_size(memory::page_size)
     , max_ram_size(max_ram_size)
     , current_ram_used(0)
-    , inode_map(memory::MemoryAllocatorV, 20, 500)
+    , inode_map(memory::MemoryAllocatorV)
     , last_inode_index(0)
 {
 }

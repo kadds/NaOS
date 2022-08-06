@@ -1,10 +1,10 @@
 #include "kernel/util/assert.hpp"
-namespace util
+#include "kernel/kernel.hpp"
+#include "kernel/trace.hpp"
+namespace freelibcxx
 {
-void cassert_fail(const char *expr, const char *file, int line)
+void assert_fail(const char *expr, const char *file, int line, const char *msg)
 {
-    for (;;)
-    {
-    }
+    trace::panic(expr, " assert fail at ", file, ":", line, " with ", msg);
 }
 } // namespace util

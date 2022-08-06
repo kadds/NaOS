@@ -13,8 +13,7 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
+#include "kernel/trace.hpp"
 
 namespace memory
 {
@@ -169,21 +168,21 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
     // copy pointers
     const char *cmdline = reinterpret_cast<const char *>(args->command_line);
-    u64 cmdlen = util::strlen(cmdline) + 1;
+    u64 cmdlen = ::strlen(cmdline) + 1;
     auto cmdline_ptr = reinterpret_cast<byte *>(vb.allocate(cmdlen, 1));
-    util::memcopy(cmdline_ptr, cmdline, cmdlen);
+    memcpy(cmdline_ptr, cmdline, cmdlen);
     args->command_line = reinterpret_cast<u64>(va2pa(cmdline_ptr).get());
 
     const char *bootloader = reinterpret_cast<const char *>(args->boot_loader_name);
-    u64 bootloaderlen = util::strlen(bootloader) + 1;
+    u64 bootloaderlen = ::strlen(bootloader) + 1;
     auto bootloader_ptr = reinterpret_cast<byte *>(vb.allocate(bootloaderlen, 1));
-    util::memcopy(bootloader_ptr, bootloader, bootloaderlen);
+    memcpy(bootloader_ptr, bootloader, bootloaderlen);
     args->boot_loader_name = reinterpret_cast<u64>(va2pa(bootloader_ptr).get());
 
     u64 image_size = args->rfsimg_size;
     auto image_ptr = reinterpret_cast<byte *>(vb.allocate(image_size, 8));
     auto image_phy_addr = va2pa(image_ptr);
-    util::memcopy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
+    memcpy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
     args->rfsimg_start = reinterpret_cast<u64>(image_phy_addr.get());
 
     auto end_used_memory_addr = align_up(image_ptr + image_size + page_size * 2 + fix_memory_limit, page_size);
@@ -343,15 +342,15 @@ void *malloc_page() { return KernelBuddyAllocatorV->allocate(1, 0); }
 
 void free_page(void *addr) { KernelBuddyAllocatorV->deallocate(addr); }
 
-void *KernelCommonAllocator::allocate(u64 size, u64 align) { return kmalloc(size, align); }
+void *KernelCommonAllocator::allocate(u64 size, u64 align) noexcept { return kmalloc(size, align); }
 
-void KernelCommonAllocator::deallocate(void *p) { kfree(p); }
+void KernelCommonAllocator::deallocate(void *p) noexcept { kfree(p); }
 
-void *KernelVirtualAllocator::allocate(u64 size, u64 align) { return vmalloc(size, align); }
+void *KernelVirtualAllocator::allocate(u64 size, u64 align) noexcept { return vmalloc(size, align); }
 
-void KernelVirtualAllocator::deallocate(void *p) { vfree(p); }
+void KernelVirtualAllocator::deallocate(void *p) noexcept { vfree(p); }
 
-void *MemoryAllocator::allocate(u64 size, u64 align)
+void *MemoryAllocator::allocate(u64 size, u64 align) noexcept
 {
     if (size > 4096)
     {
@@ -360,7 +359,7 @@ void *MemoryAllocator::allocate(u64 size, u64 align)
     return kmalloc(size, align);
 }
 
-void MemoryAllocator::deallocate(void *p)
+void MemoryAllocator::deallocate(void *p) noexcept
 {
     auto vm = kernel_vm_info->vma.get_vm_area((u64)p);
     if (!vm)

@@ -149,3 +149,4 @@ bochsout.txt
 /run/image/mnt/disk
 !/run/image/mnt/boot/.gitkeep
 !/run/image/mnt/disk/.gitkeep
+build-*/

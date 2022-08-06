@@ -1,5 +1,6 @@
 #pragma once
-#include "allocator.hpp"
+#include "common.hpp"
+#include "freelibcxx/allocator.hpp"
 #include <new>
 #include <utility>
 
@@ -41,33 +42,33 @@ template <typename T, typename I> void DeleteArray(I allocator, T *t, u64 count)
 }
 
 /// kmalloc and kfree
-class KernelCommonAllocator : public IAllocator
+class KernelCommonAllocator : public freelibcxx::Allocator
 {
   private:
   public:
     KernelCommonAllocator(){};
     ~KernelCommonAllocator(){};
-    void *allocate(u64 size, u64 align) override;
-    void deallocate(void *p) override;
+    void *allocate(u64 size, u64 align) noexcept override;
+    void deallocate(void *p) noexcept override;
 };
 
 /// vmalloc and vfree
-class KernelVirtualAllocator : public IAllocator
+class KernelVirtualAllocator : public freelibcxx::Allocator
 {
   private:
   public:
     KernelVirtualAllocator(){};
     ~KernelVirtualAllocator(){};
-    void *allocate(u64 size, u64 align) override;
-    void deallocate(void *p) override;
+    void *allocate(u64 size, u64 align) noexcept override;
+    void deallocate(void *p) noexcept override;
 };
 
 /// Allocate virtual memory or fixed kernel memory depends on allocate size
-class MemoryAllocator : public IAllocator
+class MemoryAllocator : public freelibcxx::Allocator
 {
   public:
-    void *allocate(u64 size, u64 align) override;
-    void deallocate(void *p) override;
+    void *allocate(u64 size, u64 align) noexcept override;
+    void deallocate(void *p) noexcept override;
 };
 
 extern KernelCommonAllocator *KernelCommonAllocatorV;
@@ -77,8 +78,8 @@ extern MemoryAllocator *MemoryAllocatorV;
 template <typename T> struct MemoryView
 {
     T *ptr;
-    IAllocator *allocator;
-    MemoryView(IAllocator *allocator, u64 size, u64 align)
+    freelibcxx::Allocator *allocator;
+    MemoryView(freelibcxx::Allocator *allocator, u64 size, u64 align)
         : allocator(allocator)
     {
         ptr = (T *)allocator->allocate(size, align);

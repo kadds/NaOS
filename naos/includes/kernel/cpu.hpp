@@ -58,7 +58,7 @@ class cpu_data_t
 
     task::wait_queue_t *soft_irq_wait_queue;
 
-    util::linked_list<next_schedule_microtask_data_t> schedule_microtask_queue;
+    freelibcxx::linked_list<next_schedule_microtask_data_t> schedule_microtask_queue;
     lock::spinlock_t microtask_lock;
 
   public:
@@ -114,7 +114,7 @@ class cpu_data_t
 
     task::wait_queue_t *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
 
-    util::linked_list<next_schedule_microtask_data_t> &get_microtask_queue() { return schedule_microtask_queue; }
+    freelibcxx::linked_list<next_schedule_microtask_data_t> &get_microtask_queue() { return schedule_microtask_queue; }
     lock::spinlock_t &get_microtask_lock() { return microtask_lock; }
 };
 cpu_data_t &current();

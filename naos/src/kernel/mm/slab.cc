@@ -1,9 +1,11 @@
 #include "kernel/mm/slab.hpp"
+#include "freelibcxx/string.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
-#include "kernel/ucontext.hpp"
-#include "kernel/util/str.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/page.hpp"
+#include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 
 namespace memory
 {
@@ -16,7 +18,7 @@ slab *slab_group::new_memory_node()
 
     s->data_ptr = (char *)s + sizeof(slab);
     s->data_ptr = (char *)(((u64)s->data_ptr + align - 1) & ~(align - 1));
-    s->bitmap.clean_all();
+    s->bitmap.reset_all();
     page *p = memory::global_zones->get_page(s);
     for(u32 i = 0; i < page_pre_slab; i++, p++) {
         p->set_ref_slab(this);
@@ -41,7 +43,7 @@ void slab_group::delete_memory_node(slab *s)
 slab_group::slab_group(u64 size, const char *name, u64 align, u64 flags)
     : obj_align_size((size + align - 1) & ~(align - 1))
     , size(size)
-    , name(name)
+    , name(freelibcxx::const_string_view(name).to_string(memory::KernelCommonAllocatorV))
     , flags(flags)
     , align(align)
     , all_obj_count(0)
@@ -100,8 +102,8 @@ void *slab_group::alloc()
     auto &bitmap = slab->bitmap;
     u64 i = bitmap.scan_zero();
     kassert(i < bitmap.count() && i < node_pre_slab, "Memory corruption in slab");
-    bitmap.set(i);
-    kassert(bitmap.get(i), "Can't allocate an address. index: ", i);
+    bitmap.set_bit(i);
+    kassert(bitmap.get_bit(i), "Can't allocate an address. index: ", i);
 
     slab->rest--;
     all_obj_used++;
@@ -137,8 +139,8 @@ void slab_group::free(void *ptr)
     slab *s = reinterpret_cast<slab *>(page_addr);
     u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
     kassert(index < s->bitmap.count(), "s->data_ptr=", trace::hex(s->data_ptr));
-    kassert(s->bitmap.get(index), "Not an assigned address or double free.");
-    s->bitmap.clean(index);
+    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free.");
+    s->bitmap.reset_bit(index);
     s->rest++;
     all_obj_used--;
     if (s->rest == 1)
@@ -176,7 +178,7 @@ slab_group *slab_group::get_group_from(void *ptr) {
     return nullptr;
 }
 
-slab_group *slab_cache_pool::find_slab_group(const util::string &name)
+slab_group *slab_cache_pool::find_slab_group(const freelibcxx::string &name)
 {
     uctx::RawReadLockUninterruptibleContext ctx(group_lock);
     slab_group *g = nullptr;
@@ -184,7 +186,7 @@ slab_group *slab_cache_pool::find_slab_group(const util::string &name)
     return g;
 }
 
-slab_group *slab_cache_pool::create_new_slab_group(u64 size, util::string name, u64 align, u64 flags)
+slab_group *slab_cache_pool::create_new_slab_group(u64 size, freelibcxx::string name, u64 align, u64 flags)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(group_lock);
     slab_group *group = memory::New<slab_group>(memory::KernelCommonAllocatorV, size, name.data(), align, flags);
@@ -203,7 +205,7 @@ slab_cache_pool::slab_cache_pool()
 {
 }
 
-void *SlabObjectAllocator::allocate(u64 size, u64 align)
+void *SlabObjectAllocator::allocate(u64 size, u64 align) noexcept
 {
     if (unlikely(size > slab_obj->get_size()))
         trace::panic("slab allocator can not alloc a larger size");
@@ -212,18 +214,18 @@ void *SlabObjectAllocator::allocate(u64 size, u64 align)
 #ifdef _DEBUG
     if (ptr != nullptr)
     {
-        util::memset(ptr, 0xFFFF'FFFF'FFFF'FFFF, size);
+        memset(ptr, 0xFFFF'FFFF, size);
     }
 #endif
     return ptr;
 };
 
-void SlabObjectAllocator::deallocate(void *ptr)
+void SlabObjectAllocator::deallocate(void *ptr) noexcept
 {
 #ifdef _DEBUG
     if (ptr != nullptr)
     {
-        util::memset(ptr, 0xFFFF'FFFF'FFFF'FFFF, slab_obj->get_size());
+        memset(ptr, 0xFFFF'FFFF, slab_obj->get_size());
     }
 #endif
     slab_obj->free(ptr);

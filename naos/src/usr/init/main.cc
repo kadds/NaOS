@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
-uint64_t __dso_handle;
+[[gnu::weak]] int __dso_handle;
+[[gnu::weak]] int __ehdr_start;
 
 extern "C" void main(int argc, char **argv)
 {

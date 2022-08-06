@@ -15,7 +15,6 @@
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/memory.hpp"
 
 namespace memory::vm
 {
@@ -132,13 +131,13 @@ void listen_page_fault() { irq::register_request_func(arch::exception::vector::p
 template <typename _T> _T *new_page_table()
 {
     static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
-    return memory::New<_T, memory::IAllocator *, memory::page_size>(memory::KernelBuddyAllocatorV);
+    return memory::New<_T, freelibcxx::Allocator *, memory::page_size>(memory::KernelBuddyAllocatorV);
 }
 
 template <typename _T> void delete_page_table(_T *addr)
 {
     static_assert(sizeof(_T) == memory::page_size, "type _T must be a page table");
-    memory::Delete<_T, memory::IAllocator *>(memory::KernelBuddyAllocatorV, addr);
+    memory::Delete<_T, freelibcxx::Allocator *>(memory::KernelBuddyAllocatorV, addr);
 }
 
 int search_vma(const vm_t &vm, u64 p)
@@ -634,7 +633,7 @@ bool fill_file_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
     //             " page addr ", trace::hex(page_addr));
 
     kassert(!((item->flags & flags::big_page) || (item->flags & flags::huge_page)), "file vm not allowed big paging");
-    util::memzero(buffer + ksize, memory::page_size - ksize);
+    memset(buffer + ksize, 0, memory::page_size - ksize);
     vm_t vm = *item;
     vm.start = page_start;
     vm.end = vm.start + memory::page_size;

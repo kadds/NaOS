@@ -25,8 +25,7 @@ void init_after_paging()
     if (cpu::current().is_bsp())
     {
         idt_after_ptr.limit = sizeof(entry) * 256 - 1;
-        idt_after_ptr.addr =
-            (u64)memory::NewArray<entry, memory::IAllocator *, 16>(memory::KernelCommonAllocatorV, 256);
+        idt_after_ptr.addr = (u64)memory::KernelCommonAllocatorV->NewArray<entry>(256);
         exception::init();
         interrupt::init();
         device::chip8259A::init();

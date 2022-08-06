@@ -39,7 +39,7 @@ void file_system::unload(vfs::super_block *su_block)
 
 super_block::super_block(file_system *fs)
     : vfs::super_block(fs)
-    , inode_map(memory::MemoryAllocatorV, 20, 500)
+    , inode_map(memory::MemoryAllocatorV)
     , last_inode_index(0)
 {
 }

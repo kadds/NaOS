@@ -1,6 +1,5 @@
 #pragma once
 #include "common.hpp"
-#include "kernel/util/memory.hpp"
 #include <type_traits>
 
 namespace arch::paging
@@ -154,7 +153,7 @@ struct pt_entry : base_entry
 };
 struct pt
 {
-    pt() { util::memzero(entries, sizeof(entries)); }
+    pt() { memset(entries, 0, sizeof(entries)); }
     pt_entry entries[512];
     pt_entry &operator[](size_t index) { return entries[index]; }
 };
@@ -169,7 +168,7 @@ struct pd_entry : public base_entry
 };
 struct pdt
 {
-    pdt() { util::memzero(entries, sizeof(entries)); }
+    pdt() { memset(entries, 0, sizeof(entries)); }
     pd_entry entries[512];
     pd_entry &operator[](size_t index) { return entries[index]; }
 };
@@ -190,7 +189,7 @@ struct pdpt_entry : public base_entry
 };
 struct pdpt
 {
-    pdpt() { util::memzero(entries, sizeof(entries)); }
+    pdpt() { memset(entries, 0, sizeof(entries)); }
     pdpt_entry entries[512];
     pdpt_entry &operator[](size_t index) { return entries[index]; }
 };
@@ -204,7 +203,7 @@ struct pml4_entry : public base_entry
 
 struct pml4t
 {
-    pml4t() { util::memzero(entries, sizeof(entries)); }
+    pml4t() { memset(entries, 0, sizeof(entries)); }
     pml4_entry entries[512];
     pml4_entry &operator[](size_t index) { return entries[index]; }
 };

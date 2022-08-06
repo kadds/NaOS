@@ -1,7 +1,7 @@
 #pragma once
-#include "allocator.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
+#include "freelibcxx/allocator.hpp"
 #include "kernel/lock.hpp"
 #include "ucontext.h"
 
@@ -48,7 +48,7 @@ class zone
     lock::spinlock_t spin;
 };
 
-class zones : public IAllocator
+class zones : public freelibcxx::Allocator
 {
   public:
     zones(int count)
@@ -72,9 +72,9 @@ class zones : public IAllocator
     void tag_alloc(phy_addr_t start, phy_addr_t end);
 
     // virtual address
-    void *allocate(u64 size, u64 align) override;
+    void *allocate(u64 size, u64 align) noexcept override;
     // virtual address
-    void deallocate(void *ptr) override;
+    void deallocate(void *ptr) noexcept override;
 
     void add_reference(void *ptr);
 

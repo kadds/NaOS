@@ -12,7 +12,7 @@ struct thread_data_rr_t
 
 struct cpu_task_rr_t
 {
-    using thread_list_t = util::linked_list<task::thread_t *>;
+    using thread_list_t = freelibcxx::linked_list<task::thread_t *>;
 
     thread_list_t runable_list;
     thread_list_t block_threads;

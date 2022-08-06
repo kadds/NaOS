@@ -45,7 +45,7 @@ cd /path/to/repo
 # build libc first
 cd naos/libc/mlibc/
 
-# clang/clang++ is also supported
+# gcc
 cat > cross_file.txt << EOF
 [host_machine]
 system = 'naos'
@@ -63,6 +63,26 @@ strip = '/usr/bin/strip'
 needs_exe_wrapper = true
 EOF
 
+# or clang
+cat > cross_file.txt << EOF
+[host_machine]
+system = 'naos'
+cpu_family = 'x86_64'
+cpu = 'i686'
+endian = 'little'
+
+[binaries]
+c = '/usr/bin/clang'
+c_ld = '/usr/bin/lld'
+cpp = '/usr/bin/clang++'
+cpp_ld = '/usr/bin/lld'
+ar = '/usr/bin/ar'
+strip = '/usr/bin/strip'
+
+[properties]
+needs_exe_wrapper = true
+EOF
+
 meson setup build --cross-file cross_file.txt
 cd build
 ninja 
@@ -73,7 +93,10 @@ cd ../../../
 mkdir build
 cd build
 # CMAKE_BUILD_TYPE: Debug\Release
-# USE_CLANG: OFF (GCC); ON (Clang)
+# 
+# clang: cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=1 -DFREELIBCXX_TEST=OFF  -DCMAKE_CXX_COMPILER="/usr/bin/clang++" -DCMAKE_C_COMPILER="/usr/bin/clang" -DCMAKE_CXX_FLAGS="-fuse-ld=lld" -DCMAKE_C_FLAGS="-fuse-ld=lld" ..
+
+# or gcc
 cmake -DCMAKE_BUILD_TYPE=Debug -DUSE_CLANG=OFF ..
 make -j
 ```

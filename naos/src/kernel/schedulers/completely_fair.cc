@@ -1,4 +1,5 @@
 #include "kernel/schedulers/completely_fair.hpp"
+#include "freelibcxx/skip_list.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/mm/list_node_cache.hpp"
@@ -6,7 +7,6 @@
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/skip_list.hpp"
 
 namespace task::scheduler
 {
@@ -35,7 +35,7 @@ struct cfs_thread_t
     }
 };
 
-using thread_skip_list_t = util::skip_list<cfs_thread_t>;
+using thread_skip_list_t = freelibcxx::skip_list<cfs_thread_t>;
 struct cpu_task_list_cf_t
 {
     thread_skip_list_t runable_list;

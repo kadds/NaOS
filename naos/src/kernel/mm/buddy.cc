@@ -1,9 +1,10 @@
 #include "kernel/mm/buddy.hpp"
+#include "freelibcxx/bit_set.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/page.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/bit_set.hpp"
 namespace memory
 {
 

@@ -1,12 +1,11 @@
 #include "kernel/fs/rootfs/rootfs.hpp"
+#include "freelibcxx/string.hpp"
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/file_system.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
 namespace fs::rootfs
 {
 file_system *global_root_file_system;
@@ -85,7 +84,7 @@ char TAR_MAGIC[] = "ustar ";
 int parse_single(byte *offset)
 {
     auto header = reinterpret_cast<tar_header *>(offset);
-    if (util::memcmp(TAR_MAGIC, header->ustar, sizeof(header->ustar)) != 0)
+    if (memcmp(TAR_MAGIC, header->ustar, sizeof(header->ustar)) != 0)
     {
         return -1;
     }
@@ -98,11 +97,13 @@ int parse_single(byte *offset)
     i64 name_offset = 0;
     if (header->prefix[0] != '\0')
     {
-        name_offset = util::strcopy(filename, header->prefix, sizeof(header->prefix));
+        memcpy(filename, header->prefix, sizeof(header->prefix));
+        name_offset += sizeof(header->prefix);
     }
-    name_offset += util::strcopy(filename + name_offset, header->filename, sizeof(header->filename));
+    memcpy(filename + name_offset, header->filename, sizeof(header->filename));
+    name_offset += sizeof(header->filename);
 
-    util::strcopy(to_filename, header->linkfile, sizeof(header->linkfile));
+    memcpy(to_filename, header->linkfile, sizeof(header->linkfile));
 
     kassert(name_offset != 256, "filename too long");
 

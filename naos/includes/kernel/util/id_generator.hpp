@@ -2,8 +2,9 @@
 #include "../lock.hpp"
 #include "../mm/new.hpp"
 #include "../ucontext.hpp"
-#include "bit_set.hpp"
 #include "common.hpp"
+#include "freelibcxx/bit_set.hpp"
+#include "kernel/trace.hpp"
 #include <atomic>
 namespace util
 {
@@ -42,7 +43,7 @@ class id_generator
     lock::spinlock_t spinlock;
     u64 max;
     volatile u64 last_index;
-    bit_set bitmap;
+    freelibcxx::bit_set bitmap;
 
   public:
     id_generator(u64 max)
@@ -50,21 +51,21 @@ class id_generator
         , last_index(0)
         , bitmap(memory::KernelCommonAllocatorV, max)
     {
-        bitmap.clean_all();
+        bitmap.reset_all();
     };
 
     u64 next()
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
-        if (!bitmap.get(last_index))
+        if (!bitmap.get_bit(last_index))
         {
-            bitmap.set(last_index);
+            bitmap.set_bit(last_index);
             return last_index;
         }
         u64 index = bitmap.scan_zero();
         if (likely(index < max))
         {
-            bitmap.set(index);
+            bitmap.set_bit(index);
             return index;
         }
         return null_id;
@@ -75,7 +76,7 @@ class id_generator
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return;
-        bitmap.set(i);
+        bitmap.set_bit(i);
     }
 
     void collect(u64 i)
@@ -83,12 +84,12 @@ class id_generator
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return;
-        if (!bitmap.get(last_index))
+        if (!bitmap.get_bit(last_index))
             last_index = last_index > i ? last_index : i; /// save maximum
         else
             last_index = i;
 
-        bitmap.clean(i);
+        bitmap.reset_bit(i);
     };
 
     bool has_use(u64 i)
@@ -96,7 +97,7 @@ class id_generator
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         if (unlikely(i == null_id))
             return false;
-        return bitmap.get(last_index);
+        return bitmap.get_bit(last_index);
     }
 };
 /// multi-level id generator
@@ -108,7 +109,7 @@ template <u8 levels> class id_level_generator
         u64 max;
         u64 base;
         u64 rest;
-        bit_set *bitmap;
+        freelibcxx::bit_set *bitmap;
         volatile u64 last_index;
     };
 
@@ -123,9 +124,9 @@ template <u8 levels> class id_level_generator
             {
                 if (pack[i].bitmap == nullptr)
                 {
-                    pack[i].bitmap = memory::New<bit_set>(memory::KernelCommonAllocatorV,
-                                                          memory::KernelCommonAllocatorV, pack[0].rest);
-                    pack[i].bitmap->clean_all();
+                    pack[i].bitmap = memory::New<freelibcxx::bit_set>(memory::KernelCommonAllocatorV,
+                                                                      memory::KernelCommonAllocatorV, pack[0].rest);
+                    pack[i].bitmap->reset_all();
                 }
                 return &pack[i];
             }
@@ -147,9 +148,9 @@ template <u8 levels> class id_level_generator
             base = pack[i].max;
             pack[i].last_index = 0;
         }
-        pack[0].bitmap =
-            memory::New<bit_set>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV, pack[0].rest);
-        pack[0].bitmap->clean_all();
+        pack[0].bitmap = memory::New<freelibcxx::bit_set>(memory::KernelCommonAllocatorV,
+                                                          memory::KernelCommonAllocatorV, pack[0].rest);
+        pack[0].bitmap->reset_all();
         current_pack = &pack[0];
     };
 
@@ -164,17 +165,17 @@ template <u8 levels> class id_level_generator
                 return null_id;
             current_pack = next_pack;
         }
-        if (!current_pack->bitmap->get(current_pack->last_index))
+        if (!current_pack->bitmap->get_bit(current_pack->last_index))
         {
             auto index = current_pack->last_index;
-            current_pack->bitmap->set(index);
+            current_pack->bitmap->set_bit(index);
             current_pack->rest--;
             return index;
         }
         auto index = current_pack->bitmap->scan_zero();
         if (likely(index < current_pack->max))
         {
-            current_pack->bitmap->set(index);
+            current_pack->bitmap->set_bit(index);
             current_pack->rest--;
         }
         return index;
@@ -189,11 +190,11 @@ template <u8 levels> class id_level_generator
         {
             if (id < pack[i].max)
             {
-                if (!pack[i].bitmap->get(id - pack[i].base))
+                if (!pack[i].bitmap->get_bit(id - pack[i].base))
                 {
                     pack[i].rest--;
                 }
-                pack[i].bitmap->set(id - pack[i].base);
+                pack[i].bitmap->set_bit(id - pack[i].base);
                 break;
             }
         }
@@ -208,9 +209,9 @@ template <u8 levels> class id_level_generator
         {
             if (id < pack[i].max)
             {
-                pack[i].bitmap->clean(id - pack[i].base);
+                pack[i].bitmap->reset_bit(id - pack[i].base);
                 pack[i].rest++;
-                if (!pack[i].bitmap->get(pack[i].last_index))
+                if (!pack[i].bitmap->get_bit(pack[i].last_index))
                     pack[i].last_index = pack[i].last_index > id ? pack[i].last_index : id; /// save maximum
                 else
                     pack[i].last_index = id;
@@ -228,7 +229,7 @@ template <u8 levels> class id_level_generator
         {
             if (i < pack[i].max)
             {
-                return pack[i].bitmap->get(i);
+                return pack[i].bitmap->get_bit(i);
             }
         }
         return false;

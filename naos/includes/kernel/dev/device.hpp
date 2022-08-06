@@ -1,7 +1,7 @@
 #pragma once
 #include "common.hpp"
+#include "freelibcxx/hash_map.hpp"
 #include "kernel/types.hpp"
-#include "kernel/util/hash_map.hpp"
 #include "kernel/util/id_generator.hpp"
 
 namespace dev
@@ -46,7 +46,7 @@ struct device_class
     virtual device *try_scan(int index) = 0;
 };
 
-using device_map_t = util::hash_map<num_t, device *>;
+using device_map_t = freelibcxx::hash_map<num_t, device *>;
 using device_id_gen_t = util::seq_generator;
 
 extern device_map_t *device_map, *unbinding_device_map;

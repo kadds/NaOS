@@ -13,14 +13,13 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/string.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/time.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/hash_map.hpp"
 #include "kernel/util/id_generator.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
 
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -52,7 +51,7 @@ const process_id max_process_id = 0x100000;
 
 const group_id max_group_id = 0x10000;
 
-using thread_list_t = util::linked_list<thread_t *>;
+using thread_list_t = freelibcxx::linked_list<thread_t *>;
 
 using process_id_generator_t = util::seq_generator;
 process_id_generator_t *process_id_generator;
@@ -74,8 +73,8 @@ struct thread_hash
     u64 operator()(thread_id tid) { return tid; }
 };
 
-using process_map_t = util::hash_map<process_id, process_t *, process_hash>;
-using thread_map_t = util::hash_map<process_id, process_t *, process_hash>;
+using process_map_t = freelibcxx::hash_map<process_id, process_t *, process_hash>;
+using thread_map_t = freelibcxx::hash_map<process_id, process_t *, process_hash>;
 
 process_map_t *global_process_map;
 // process_list_t *global_process_list;
@@ -339,7 +338,7 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
 {
     thread_t *thd = current();
     byte *base = reinterpret_cast<byte *>(thd->user_stack_top);
-    util::memcopy(base - args->size, args->data_ptr, args->size);
+    memcpy(base - args->size, args->data_ptr, args->size);
     byte *base_array = base - args->size;
 
     // bytes
@@ -392,10 +391,10 @@ struct str_len_t
     int len;
 };
 
-util::array<str_len_t> do_count_string_array(const char *const arr[], int *cur_bytes, int max_bytes)
+freelibcxx::vector<str_len_t> do_count_string_array(const char *const arr[], int *cur_bytes, int max_bytes)
 {
     const char *const *tmp_arr = arr;
-    util::array<str_len_t> args(memory::KernelCommonAllocatorV);
+    freelibcxx::vector<str_len_t> args(memory::KernelCommonAllocatorV);
     if (tmp_arr == nullptr)
     {
         *cur_bytes = (*cur_bytes + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
@@ -403,7 +402,7 @@ util::array<str_len_t> do_count_string_array(const char *const arr[], int *cur_b
     }
     while (*tmp_arr != nullptr)
     {
-        int len = util::strlen(*tmp_arr) + 1;
+        int len = strlen(*tmp_arr) + 1;
         *cur_bytes += len;
         args.push_back(str_len_t{*tmp_arr, len});
         if (*cur_bytes >= max_bytes)
@@ -422,13 +421,13 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
     constexpr int max_args_bytes = memory::page_size * 8 - 2;
 
     // argv[0]
-    int path_bytes = util::strlen(path) + 1 + sizeof(u64);
+    int path_bytes = strlen(path) + 1 + sizeof(u64);
     int count_bytes = path_bytes;
 
-    util::array<str_len_t> argvs = do_count_string_array(argv, &count_bytes, max_args_bytes);
+    freelibcxx::vector<str_len_t> argvs = do_count_string_array(argv, &count_bytes, max_args_bytes);
     // int argv_bytes = count_bytes - path_bytes;
 
-    util::array<str_len_t> envs = do_count_string_array(env, &count_bytes, max_args_bytes);
+    freelibcxx::vector<str_len_t> envs = do_count_string_array(env, &count_bytes, max_args_bytes);
     // int env_bytes = count_bytes - argv_bytes;
 
     // argv[0] argv[1]
@@ -438,14 +437,14 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
     byte *cur = ptr;
 
     // argv
-    util::memcopy(cur, path, path_bytes);
+    memcpy(cur, path, path_bytes);
     ret->argv.push_back(args_array_item_t(path_bytes, cur - ptr));
     cur += path_bytes;
 
     for (auto item : argvs)
     {
         ret->argv.push_back(args_array_item_t(item.len, cur - ptr));
-        util::memcopy(cur, item.ptr, item.len);
+        memcpy(cur, item.ptr, item.len);
         cur += item.len;
     }
 
@@ -453,7 +452,7 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
     for (auto item : envs)
     {
         ret->env.push_back(args_array_item_t(item.len, cur - ptr));
-        util::memcopy(cur, item.ptr, item.len);
+        memcpy(cur, item.ptr, item.len);
         cur += item.len;
     }
 
@@ -1001,7 +1000,7 @@ void set_tcb(thread_t *t, void *p)
 
 void write_main_stack(thread_t *thread, main_stack_data_t stack)
 {
-    util::memcopy(thread->user_stack_top, &stack, sizeof(stack));
+    memcpy(thread->user_stack_top, &stack, sizeof(stack));
 }
 
 } // namespace task

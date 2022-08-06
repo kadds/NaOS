@@ -3,6 +3,7 @@
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"

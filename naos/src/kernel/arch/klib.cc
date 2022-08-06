@@ -9,7 +9,6 @@
 #include "kernel/mm/zone.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
 
 int get_stackframes_by(u64 rbp, u64 rsp, u64 rip, int skip, stack_frame_t *frames, int count)
 {

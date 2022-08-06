@@ -1,11 +1,11 @@
 #pragma once
 #include "common.hpp"
-#include "kernel/util/linked_list.hpp"
+#include "freelibcxx/linked_list.hpp"
 #include "task.hpp"
 
 namespace task::scheduler
 {
-using thread_list_t = util::linked_list<task::thread_t *>;
+using thread_list_t = freelibcxx::linked_list<task::thread_t *>;
 
 enum class scheduler_class : flag_t
 {

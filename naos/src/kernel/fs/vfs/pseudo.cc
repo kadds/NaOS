@@ -6,20 +6,20 @@ namespace fs::vfs
 bool pipe_write_func(u64 data)
 {
     auto *pipe = (pseudo_pipe_t *)data;
-    return pipe->is_close || !pipe->buffer.is_full();
+    return pipe->is_close || !pipe->buffer.full();
 }
 
 bool pipe_read_func(u64 data)
 {
     auto *pipe = (pseudo_pipe_t *)data;
-    return pipe->is_close || !pipe->buffer.is_emtpy();
+    return pipe->is_close || !pipe->buffer.empty();
 }
 
 i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
 {
     for (u64 i = 0; i < size; i++)
     {
-        while ((buffer.is_full() && !(flags & rw_flags::override)) || is_close)
+        while ((buffer.full() && !(flags & rw_flags::override)) || is_close)
         {
             if (i > 0)
                 return i;
@@ -40,7 +40,7 @@ i64 pseudo_pipe_t::read(byte *data, u64 max_size, flag_t flags)
 {
     for (u64 i = 0; i < max_size; i++)
     {
-        while (buffer.is_emtpy())
+        while (buffer.empty())
         {
             if (i > 0)
                 return i;

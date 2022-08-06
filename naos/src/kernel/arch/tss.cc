@@ -16,7 +16,7 @@ void init(int core_index, phy_addr_t base_addr, void *ist)
 {
     if (core_index == 0) // bsp
     {
-        tss = memory::NewArray<tss_t, memory::IAllocator *, 8>(memory::KernelCommonAllocatorV, cpu::max_cpu_support);
+        tss = memory::KernelCommonAllocatorV->NewArray<tss_t>(cpu::max_cpu_support);
     }
 
     descriptor &tss_descriptor = gdt::get_tss_descriptor(core_index);

@@ -8,7 +8,6 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
 
 namespace arch::task
 {
@@ -45,7 +44,7 @@ ExportC void do_exit(u64 exit_code)
 u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64 arg2, u64 arg3)
 {
     regs_t regs;
-    util::memzero(&regs, sizeof(regs));
+    memset(&regs, 0, sizeof(regs));
 
     regs.rbx = (u64)function;
     regs.rdi = arg0;
@@ -64,7 +63,7 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
     register_info.rsp = (void *)((u64)thd->kernel_stack_top - sizeof(regs));
     register_info.task = thd;
 
-    util::memcopy((void *)((u64)thd->kernel_stack_top - sizeof(regs)), &regs, sizeof(regs_t));
+    memcpy((void *)((u64)thd->kernel_stack_top - sizeof(regs)), &regs, sizeof(regs_t));
 
     return 0;
 }
@@ -72,7 +71,7 @@ u64 create_thread(::task::thread_t *thd, void *function, u64 arg0, u64 arg1, u64
 u64 enter_userland(::task::thread_t *thd, u64 stack_offset, void *entry, u64 arg0, u64 arg1)
 {
     regs_t regs;
-    util::memzero(&regs, sizeof(regs));
+    memset(&regs, 0, sizeof(regs));
     thd->register_info->rip = (void *)&_sys_ret;
     thd->register_info->task = thd;
     regs.rcx = (u64)entry;
@@ -96,7 +95,7 @@ u64 enter_userland(::task::thread_t *thd, u64 stack_offset, void *entry, u64 arg
 u64 enter_userland(::task::thread_t *thd, void *entry, u64 arg0, u64 arg1)
 {
     regs_t regs;
-    util::memzero(&regs, sizeof(regs));
+    memset(&regs, 0, sizeof(regs));
     thd->register_info->rip = (void *)&_sys_ret;
     thd->register_info->task = thd;
     regs.rcx = (u64)entry;
@@ -130,7 +129,7 @@ void get_syscall_regs(regs_t &regs)
 {
     uctx::UninterruptibleContext icu;
     auto thread = ::task::current();
-    util::memcopy(&regs, reinterpret_cast<byte *>(thread->kernel_stack_top) - sizeof(regs), sizeof(regs));
+    memcpy(&regs, reinterpret_cast<byte *>(thread->kernel_stack_top) - sizeof(regs), sizeof(regs));
 }
 
 void update_fs(::task::thread_t *thd)
@@ -211,7 +210,7 @@ u64 copy_signal_param(userland_code_context *context, const void *ptr, u64 size)
 {
     size = (size + 7) & ~(7); // align
     context->data_stack_rsp -= size;
-    util::memcopy((void *)context->data_stack_rsp, ptr, size);
+    memcpy((void *)context->data_stack_rsp, ptr, size);
     return context->data_stack_rsp;
 }
 

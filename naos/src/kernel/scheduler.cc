@@ -1,11 +1,11 @@
 #include "kernel/scheduler.hpp"
+#include "freelibcxx/hash_map.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/schedulers/completely_fair.hpp"
 #include "kernel/schedulers/round_robin.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/types.hpp"
-#include "kernel/util/hash_map.hpp"
 
 namespace task::scheduler
 {

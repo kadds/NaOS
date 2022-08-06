@@ -1,7 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
-#include "allocator.hpp"
 #include "common.hpp"
+#include "freelibcxx/allocator.hpp"
 #include "mm.hpp"
 #include "zone.hpp"
 #include <utility>
@@ -59,7 +59,7 @@ template <typename T> inline T *align_up(T *v, u64 m)
     return reinterpret_cast<T *>((reinterpret_cast<u64>(v) + (m - 1)) & ~(m - 1));
 }
 
-class PhyBootAllocator : public IAllocator
+class PhyBootAllocator : public freelibcxx::Allocator
 {
   private:
     /// address to start allocation
@@ -78,7 +78,7 @@ class PhyBootAllocator : public IAllocator
 
     static inline void discard() { available = false; }
 
-    void *allocate(u64 size, u64 align) override
+    void *allocate(u64 size, u64 align) noexcept override
     {
         if (unlikely(!available))
             return nullptr;
@@ -88,7 +88,7 @@ class PhyBootAllocator : public IAllocator
         return start;
     }
     /// do nothing
-    void deallocate(void *) override {}
+    void deallocate(void *) noexcept override {}
 
     static void *current_ptr_address() { return current_ptr(); }
 };
@@ -96,12 +96,12 @@ class PhyBootAllocator : public IAllocator
 class VirtBootAllocator : public PhyBootAllocator
 {
   public:
-    void *allocate(u64 size, u64 align) override
+    void *allocate(u64 size, u64 align) noexcept override
     {
         return pa2va(phy_addr_t::from(PhyBootAllocator::allocate(size, align)));
     }
     /// do nothing. Same as PhyBootAllocator
-    void deallocate(void *) override {}
+    void deallocate(void *) noexcept override {}
 
     static void *current_ptr_address() { return pa2va(phy_addr_t::from(PhyBootAllocator::current_ptr_address())); }
 };

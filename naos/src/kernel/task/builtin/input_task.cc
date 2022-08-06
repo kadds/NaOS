@@ -1,4 +1,5 @@
 #include "kernel/task/builtin/input_task.hpp"
+#include "freelibcxx/bit_set.hpp"
 #include "kernel/common/cursor/cursor.hpp"
 #include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -8,16 +9,15 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/util/bit_set.hpp"
 #include "kernel/wait.hpp"
 
 namespace task::builtin::input
 {
-util::bit_set_inplace<256> key_down_state;
+freelibcxx::bit_set_inplace<256> key_down_state;
 
 io::mouse_data current_mouse_data;
 
-util::bit_set_inplace<32> key_switch_state;
+freelibcxx::bit_set_inplace<32> key_switch_state;
 
 char key_char_table[256] = {
     0,   0,   '1', '2', '3', '4', '5',  '6', '7', '8', '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e',  'r', 't',  'y',
@@ -47,17 +47,17 @@ enum class switchable_key
 };
 using ::input::key;
 
-bool get_key_switch_state(switchable_key k) { return key_switch_state.get((u8)k); }
+bool get_key_switch_state(switchable_key k) { return key_switch_state.get_bit((u8)k); }
 
 void set_key_switch_state(switchable_key k, bool enable)
 {
     if (enable)
-        key_switch_state.set((u8)k);
+        key_switch_state.set_bit((u8)k);
     else
-        key_switch_state.clean((i8)k);
+        key_switch_state.reset_bit((i8)k);
 }
 
-bool is_key_down(key k) { return key_down_state.get((u64)k); }
+bool is_key_down(key k) { return key_down_state.get_bit((u64)k); }
 
 void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req, dev::tty::tty_pseudo_t *tty)
 {
@@ -65,7 +65,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
     {
         if (res.get.release)
         {
-            key_down_state.clean(res.get.key);
+            key_down_state.reset_bit(res.get.key);
         }
         else
         {
@@ -121,7 +121,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 }
             }
 
-            key_down_state.set(res.get.key);
+            key_down_state.set_bit(res.get.key);
         }
         io::finish_io_request(req);
     }
@@ -186,7 +186,7 @@ void listen_keyboard()
 {
     auto input_file = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
     auto input_tty = (dev::tty::tty_pseudo_t *)input_file->get_pseudo();
-    key_down_state.clean_all();
+    key_down_state.reset_all();
     key_switch_state = 0;
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;

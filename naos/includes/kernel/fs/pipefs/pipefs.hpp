@@ -1,11 +1,11 @@
 #pragma once
-#include "../../util/hash_map.hpp"
 #include "../vfs/dentry.hpp"
 #include "../vfs/file.hpp"
 #include "../vfs/file_system.hpp"
 #include "../vfs/inode.hpp"
 #include "../vfs/super_block.hpp"
 #include "common.hpp"
+#include "freelibcxx/hash_map.hpp"
 namespace fs::pipefs
 {
 void init();
@@ -50,7 +50,7 @@ class super_block : public vfs::super_block
 {
   private:
     friend class file_system;
-    util::hash_map<u64, inode *> inode_map;
+    freelibcxx::hash_map<u64, inode *> inode_map;
     int last_inode_index;
 
   public:

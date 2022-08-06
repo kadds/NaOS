@@ -1,27 +1,27 @@
 #pragma once
+#include "freelibcxx/hash.hpp"
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/string.hpp"
+#include "freelibcxx/vector.hpp"
 #include "fs/vfs/defines.hpp"
 #include "handle.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/kobject.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/str.hpp"
 #include "lock.hpp"
 #include "mm/new.hpp"
 #include "types.hpp"
-#include "util/hash.hpp"
-#include "util/hash_map.hpp"
 #include "util/id_generator.hpp"
 #include <atomic>
 namespace task
 {
 
-using handle_map_t = util::hash_map<file_desc, khandle>;
+using handle_map_t = freelibcxx::hash_map<file_desc, khandle>;
 
 class list_dir_functor
 {
   public:
   private:
-    util::array<handle_t<fs::vfs::dentry>> dirs;
+    freelibcxx::vector<handle_t<fs::vfs::dentry>> dirs;
 };
 
 class resource_table_t

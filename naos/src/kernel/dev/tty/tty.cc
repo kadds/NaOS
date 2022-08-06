@@ -11,7 +11,7 @@ bool tty_read_func(u64 data)
 {
     auto *tty = (tty_pseudo_t *)data;
     auto buffer = &tty->buffer;
-    return tty->eof_count > 0 || (tty->input_chars > 0 && !buffer->is_emtpy() && tty->enter > 0);
+    return tty->eof_count > 0 || (tty->input_chars > 0 && !buffer->empty() && tty->enter > 0);
 }
 
 /// print to screen
@@ -33,7 +33,7 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
             enter++;
         }
 
-        if (buffer.is_full())
+        if (buffer.full())
         {
             byte p = (byte)0;
             buffer.last(&p);
@@ -72,7 +72,7 @@ i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
     }
     for (u64 i = 0; i < max_size;)
     {
-        if (buffer.is_emtpy())
+        if (buffer.empty())
         {
             if (i > 0)
                 return i;

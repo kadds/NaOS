@@ -1,14 +1,14 @@
 #pragma once
 #include "../lock.hpp"
-#include "../util/skip_list.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
-#include "kernel/mm/allocator.hpp"
-#include "kernel/mutex.hpp"
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/skip_list.hpp"
+#include "freelibcxx/vector.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/types.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/hash_map.hpp"
 #include "list_node_cache.hpp"
+#include "vm.hpp"
 
 namespace fs::vfs
 {
@@ -74,7 +74,7 @@ class info_t;
 class vm_allocator
 {
   public:
-    using list_t = util::skip_list<vm_t>;
+    using list_t = freelibcxx::skip_list<vm_t>;
 
   private:
     list_t list;
@@ -83,7 +83,7 @@ class vm_allocator
 
   public:
     vm_allocator(u64 top, u64 bottom)
-        : list(memory::KernelCommonAllocatorV, 2, 32)
+        : list(memory::KernelCommonAllocatorV)
         , range_top(top)
         , range_bottom(bottom)
     {
@@ -143,8 +143,8 @@ class mmu_paging
 struct shared_info_t
 {
     lock::spinlock_t spin_lock;
-    util::hash_set<process_id> shared_pid;
-    shared_info_t(memory::IAllocator *allocator)
+    freelibcxx::hash_set<process_id> shared_pid;
+    shared_info_t(freelibcxx::Allocator *allocator)
         : shared_pid(allocator)
     {
     }

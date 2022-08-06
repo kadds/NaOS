@@ -11,7 +11,7 @@ struct nameidata
     const char *last_scan_url_point;
     memory::MemoryView<dir_path_str> entry_buffer;
 
-    nameidata(memory::IAllocator *allocator, u64 size, u64 align)
+    nameidata(freelibcxx::Allocator *allocator, u64 size, u64 align)
         : entry_buffer(allocator, size, align)
     {
     }

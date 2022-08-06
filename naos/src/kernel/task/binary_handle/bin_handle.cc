@@ -1,12 +1,11 @@
 #include "kernel/task/binary_handle/bin_handle.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/str.hpp"
 namespace bin_handle
 {
 struct handle_data
@@ -41,7 +40,7 @@ bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     return true;
 }
 
-using array_t = util::array<handle_data>;
+using array_t = freelibcxx::vector<handle_data>;
 
 array_t *handles;
 bin_handle *bin_handle_ptr;
@@ -59,7 +58,7 @@ bool unregister_handle(handle *handle_class, const char *name)
 {
     for (auto it = handles->begin(); it != handles->end(); ++it)
     {
-        if (it->handle_ptr == handle_class && util::strcmp(name, it->name) == 0)
+        if (it->handle_ptr == handle_class && strcmp(name, it->name) == 0)
         {
             handles->remove(it);
             return true;

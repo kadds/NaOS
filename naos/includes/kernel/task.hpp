@@ -2,10 +2,10 @@
 #include "arch/task.hpp"
 #include "common.hpp"
 #include "cpu.hpp"
-#include "kernel/mm/allocator.hpp"
+#include "freelibcxx/allocator.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/time.hpp"
-#include "kernel/util/array.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
 #include "signal.hpp"
@@ -222,9 +222,9 @@ struct process_args_t
 {
     byte *data_ptr;
     u64 size;
-    util::array<args_array_item_t> argv;
-    util::array<args_array_item_t> env;
-    process_args_t(memory::IAllocator *allocator)
+    freelibcxx::vector<args_array_item_t> argv;
+    freelibcxx::vector<args_array_item_t> env;
+    process_args_t(freelibcxx::Allocator *allocator)
         : data_ptr(nullptr)
         , size(0)
         , argv(allocator)

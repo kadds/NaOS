@@ -2,7 +2,6 @@
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/mm.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
-#include "kernel/util/str.hpp"
 
 namespace fs::vfs
 {
@@ -20,7 +19,7 @@ dentry *dentry::find_child(const char *name) const
 {
     for (auto &d : child_list)
     {
-        if (util::strcmp(name, d->name) == 0)
+        if (name == d->name)
         {
             return d;
         }

@@ -1,3 +1,4 @@
+#include "freelibcxx/vector.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/vfs/defines.hpp"
@@ -11,9 +12,6 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/types.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
 
 namespace naos::syscall
 {
@@ -64,14 +62,14 @@ class list_entries : public kobject
         for (; offset < entries.size() && i < entry_limit; offset++, i++)
         {
             auto name = entries[offset]->get_name();
-            auto len = util::strlen(name) + 1;
+            auto len = strlen(name) + 1;
             if (len + buffer_used < buffer_limit)
             {
                 auto &d = dentries->entry[i];
                 d.type = 0;
                 d.inode = 1;
                 d.name_offset = buffer_used;
-                util::memcopy(buf + buffer_used, name, len);
+                memcpy(buf + buffer_used, name, len);
             }
             else
             {
@@ -85,7 +83,7 @@ class list_entries : public kobject
     static type_e type_of() { return type_e::list_entries; }
 
   private:
-    util::array<fs::vfs::dentry *> entries;
+    freelibcxx::vector<fs::vfs::dentry *> entries;
 };
 
 int open_dir(const char *path)

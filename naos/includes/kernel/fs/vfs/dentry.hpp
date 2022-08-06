@@ -1,8 +1,8 @@
 #pragma once
 #include "../../mm/list_node_cache.hpp"
-#include "../../util/linked_list.hpp"
 #include "common.hpp"
 #include "defines.hpp"
+#include "freelibcxx/linked_list.hpp"
 
 namespace fs::vfs
 {
@@ -10,7 +10,7 @@ namespace fs::vfs
 class dentry
 {
   public:
-    using dentry_list_t = util::linked_list<dentry *>;
+    using dentry_list_t = freelibcxx::linked_list<dentry *>;
 
   protected:
     const char *name;

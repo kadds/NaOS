@@ -4,8 +4,6 @@
 #include "kernel/mm/page.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/memory.hpp"
-#include <sys/ucontext.h>
 
 namespace memory
 {
@@ -65,7 +63,7 @@ zone *zones::which(phy_addr_t ptr)
     return nullptr;
 }
 
-void *zones::allocate(u64 size, u64 align)
+void *zones::allocate(u64 size, u64 align) noexcept
 {
     // select one zone
     for (int i = 0; i < count; i++)
@@ -75,7 +73,7 @@ void *zones::allocate(u64 size, u64 align)
         {
             auto ptr = pa2va(p);
 #ifdef _DEBUG
-            util::memset(ptr, 0xFEFF'FEFF'FEFF'FEFF, size);
+            memset(ptr, 0xFEFF'FEFF, size);
 #endif
             return ptr;
         }
@@ -83,7 +81,7 @@ void *zones::allocate(u64 size, u64 align)
     trace::panic("Kernel OOM allocate size ", size);
 }
 
-void zones::deallocate(void *ptr)
+void zones::deallocate(void *ptr) noexcept
 {
     phy_addr_t p = va2pa(ptr);
     zone *z = which(p);
@@ -217,7 +215,7 @@ zone::zone(phy_addr_t start, phy_addr_t end, phy_addr_t danger_beg, phy_addr_t d
     allocate_end = start + page_count * page_size;
 
     pages = memory::pa2va<page *>(end - page_bytes);
-    util::memzero(pages, page_bytes);
+    memset(pages, 0, page_bytes);
 
     if (page_addr >= danger_beg && page_addr < danger_end)
     {

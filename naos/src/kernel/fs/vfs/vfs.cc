@@ -1,4 +1,5 @@
 #include "kernel/fs/vfs/vfs.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -14,15 +15,12 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/linked_list.hpp"
-#include "kernel/util/str.hpp"
 
 namespace fs::vfs
 {
 
 dentry *global_root = nullptr;
-using mount_list_t = util::linked_list<mount_t>;
+using mount_list_t = freelibcxx::linked_list<mount_t>;
 
 struct data_t
 {
@@ -51,7 +49,7 @@ int register_fs(file_system *fs)
 {
     for (auto &lfs : data->fs_list)
     {
-        if (util::strcmp(fs->get_name(), lfs->get_name()) == 0)
+        if (strcmp(fs->get_name(), lfs->get_name()) == 0)
         {
             return -1;
         }
@@ -65,7 +63,7 @@ int unregister_fs(file_system *fs)
 {
     for (auto it = data->fs_list.begin(); it != data->fs_list.end(); ++it)
     {
-        if (util::strcmp(fs->get_name(), (*it)->get_name()) == 0)
+        if (strcmp(fs->get_name(), (*it)->get_name()) == 0)
         {
             data->fs_list.remove(it);
             return 0;
@@ -78,7 +76,7 @@ file_system *get_file_system(const char *name)
 {
     for (auto &lfs : data->fs_list)
     {
-        if (util::strcmp(name, lfs->get_name()) == 0)
+        if (strcmp(name, lfs->get_name()) == 0)
         {
             return lfs;
         }
@@ -161,12 +159,12 @@ dentry *create_dentry(dentry *parent, const char *name, u64 name_len)
     super_block *su_block = parent->get_inode()->get_super_block();
     dentry *entry = su_block->alloc_dentry();
     if (unlikely(name_len == 0))
-        name_len = util::strlen(name) + 1;
+        name_len = strlen(name) + 1;
     else
         name_len++;
 
     auto cname = (char *)memory::KernelCommonAllocatorV->allocate(name_len, 1);
-    util::memcopy(cname, (const void *)name, name_len);
+    memcpy(cname, (const void *)name, name_len);
     entry->set_name(cname);
     entry->set_parent(parent);
     parent->add_child(entry);
@@ -301,7 +299,7 @@ dentry *rename(const char *new_path, dentry *old, dentry *root, dentry *cur_dir)
     }
 
     auto cname = (char *)memory::KernelCommonAllocatorV->allocate(name_len, 1);
-    util::memcopy(cname, (const void *)idata.entry_buffer.get()->name, name_len);
+    memcpy(cname, (const void *)idata.entry_buffer.get()->name, name_len);
     old->set_name(cname);
     old->get_parent()->remove_child(old);
     old->set_parent(idata.last_available_entry);
@@ -366,9 +364,9 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
             prev_entry->load_child();
         idata.deep++;
 
-        if (path_entry_len == 1 && util::strcmp(".", entry_buffer) == 0) // dir ./
+        if (path_entry_len == 1 && strcmp(".", entry_buffer) == 0) // dir ./
             continue;
-        else if (path_entry_len == 2 && util::strcmp("..", entry_buffer) == 0) // dir ../
+        else if (path_entry_len == 2 && strcmp("..", entry_buffer) == 0) // dir ../
         {
             if (prev_entry != root)
                 prev_entry = prev_entry->get_parent();
@@ -439,7 +437,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
            u64 max_len)
 {
 
-    if (util::strcmp(path, "/") == 0 && path_root == nullptr && cur_dir == nullptr)
+    if (strcmp(path, "/") == 0 && path_root == nullptr && cur_dir == nullptr)
     {
         if (global_root != nullptr)
         {
@@ -694,7 +692,7 @@ int pathname(dentry *root, dentry *current, char *path, u64 max_len)
 
     char *ptr = path;
     i64 rest_len = max_len - 1;
-    util::array<dentry *> array(memory::MemoryAllocatorV);
+    freelibcxx::vector<dentry *> array(memory::MemoryAllocatorV);
 
     while (current != root && current != nullptr)
     {
@@ -712,17 +710,17 @@ int pathname(dentry *root, dentry *current, char *path, u64 max_len)
     {
         auto entry = array[i];
 
-        int len = util::strlen(entry->get_name());
+        int len = strlen(entry->get_name());
         rest_len -= len + 1;
         if (rest_len < 0)
         {
-            util::memcopy(ptr, entry->get_name(), rest_len + len - 1);
+            memcpy(ptr, entry->get_name(), rest_len + len - 1);
             ptr += rest_len + len - 1;
             *ptr = '\0';
             /// XXX: just return when buffer is too small
             return 0;
         }
-        util::memcopy(ptr, entry->get_name(), len);
+        memcpy(ptr, entry->get_name(), len);
         ptr += len;
         *ptr++ = '/';
     }

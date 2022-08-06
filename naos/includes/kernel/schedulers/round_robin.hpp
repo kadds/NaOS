@@ -1,6 +1,6 @@
 #pragma once
 #include "../scheduler.hpp"
-#include "../util/linked_list.hpp"
+#include "freelibcxx/linked_list.hpp"
 namespace task::scheduler
 {
 class round_robin_scheduler : public scheduler

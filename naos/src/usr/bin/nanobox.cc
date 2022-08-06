@@ -1,7 +1,10 @@
+#include "freelibcxx/allocator.hpp"
+#include "freelibcxx/string.hpp"
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-uint64_t __dso_handle;
+[[gnu::weak]] int __dso_handle;
+[[gnu::weak]] int __ehdr_start;
 
 #define entry(name) int name(int argc, char **argv)
 
@@ -14,8 +17,24 @@ entry(touch);
 entry(rm);
 entry(env);
 
+using entry_function = int(int, char **);
+using namespace freelibcxx;
+
+DefaultAllocator alloc;
+
 extern "C" int main(int argc, char **argv)
 {
+    vector<string> args(&alloc);
+    for (int i = 0; i < argc; i++)
+    {
+        args.push_back(string_view(argv[i]).to_string(&alloc));
+    }
+
+    if (args[0] == "nanobox")
+    {
+        printf("args %s", args[1].data());
+    }
+
     if (strstr(argv[0], "nanobox") != nullptr)
     {
         if (argc == 1)

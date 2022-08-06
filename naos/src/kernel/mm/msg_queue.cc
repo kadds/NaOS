@@ -1,23 +1,23 @@
 #include "kernel/mm/msg_queue.hpp"
+#include "freelibcxx/hash_map.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/util/hash_map.hpp"
 
 namespace memory
 {
 u64 lev[] = {2048, max_message_queue_count};
 util::seq_generator *msg_queue_id_generator = nullptr;
-util::hash_map<msg_id, message_queue_t *> *msg_hash_map = nullptr;
+freelibcxx::hash_map<msg_id, message_queue_t *> *msg_hash_map = nullptr;
 lock::rw_lock_t msg_queue_lock;
 
 void msg_queue_init()
 {
     msg_queue_id_generator = memory::New<util::seq_generator>(memory::KernelCommonAllocatorV, 1, 1);
 
-    msg_hash_map = memory::New<util::hash_map<msg_id, message_queue_t *>>(memory::KernelCommonAllocatorV,
-                                                                          memory::KernelCommonAllocatorV, 7, 100);
+    msg_hash_map = memory::New<freelibcxx::hash_map<msg_id, message_queue_t *>>(memory::KernelCommonAllocatorV,
+                                                                                memory::KernelCommonAllocatorV);
 }
 
 message_queue_t *create_msg_queue(u64 maximum_msg_count, u64 maximum_msg_bytes)
@@ -78,11 +78,11 @@ u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
 
     if (len <= length)
     {
-        util::memcopy(msg->buffer, buffer, len);
+        memcpy(msg->buffer, buffer, len);
     }
     else
     {
-        util::memcopy(msg->buffer, buffer, length);
+        memcpy(msg->buffer, buffer, length);
     }
 
     messsage_seg_t *last_seg = nullptr;
@@ -90,7 +90,7 @@ u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
     {
         messsage_seg_t *msgs = (messsage_seg_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
         u64 mlen = (plen > length - len) ? length - len : plen;
-        util::memcopy(msgs->buffer + len, buffer + len, mlen);
+        memcpy(msgs->buffer + len, buffer + len, mlen);
         len += mlen;
         msgs->next = nullptr;
         if (msg->rest_msg == nullptr)
@@ -172,11 +172,11 @@ u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
 
     if (len < length)
     {
-        util::memcopy(buffer, msg->buffer, len);
+        memcpy(buffer, msg->buffer, len);
     }
     else
     {
-        util::memcopy(buffer, msg->buffer, length);
+        memcpy(buffer, msg->buffer, length);
     }
 
     messsage_seg_t *seg = msg->rest_msg;
@@ -184,7 +184,7 @@ u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
     while (len < length && seg)
     {
         u64 mlen = plen > length - len ? length - len : plen;
-        util::memcopy(buffer + len, seg->buffer, mlen);
+        memcpy(buffer + len, seg->buffer, mlen);
         len += mlen;
         auto next = seg->next;
         memory::Delete<>(memory::KernelBuddyAllocatorV, seg);

@@ -19,7 +19,7 @@ void *Unpaged_Text_Section alloca_data(u32 size, u32 align)
     return (void *)(u64)start;
 }
 
-int Unpaged_Text_Section strcmp(const char *str1, const char *str2)
+int Unpaged_Text_Section strcmp_2(const char *str1, const char *str2)
 {
     while (1)
     {
@@ -34,7 +34,7 @@ int Unpaged_Text_Section strcmp(const char *str1, const char *str2)
     return 0;
 }
 
-int Unpaged_Text_Section strlen(const char *str)
+int Unpaged_Text_Section strlen_2(const char *str)
 {
     int i = 0;
     while (*str++ != 0)
@@ -42,7 +42,7 @@ int Unpaged_Text_Section strlen(const char *str)
     return i++;
 }
 
-void Unpaged_Text_Section memcpy(void *dst, const void *source, u32 len)
+void Unpaged_Text_Section memcpy_2(void *dst, const void *source, u32 len)
 {
     char *d = (char *)dst;
     const char *s = (const char *)source;
@@ -62,7 +62,7 @@ bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *en
         if (tags->type == MULTIBOOT_TAG_TYPE_MODULE)
         {
             multiboot_tag_module *md = (multiboot_tag_module *)tags;
-            if (strcmp((char *)md->cmdline, rfsimage) == 0)
+            if (strcmp_2((char *)md->cmdline, rfsimage) == 0)
             {
                 *start = (u64)md->mod_start;
                 *end = (u64)md->mod_end;
@@ -114,18 +114,18 @@ void Unpaged_Text_Section set_args_fb(kernel_start_args *args, multiboot_tag *ta
 void Unpaged_Text_Section set_args_cmdline(kernel_start_args *args, multiboot_tag *tags)
 {
     multiboot_tag_string *str = (multiboot_tag_string *)tags;
-    int str_len = strlen(str->string);
+    int str_len = strlen_2(str->string);
     void *p = alloca_data(str_len + 1, 1);
-    memcpy(p, str->string, str_len);
+    memcpy_2(p, str->string, str_len);
     args->command_line = (u64)p;
 }
 
 void Unpaged_Text_Section set_args_boot(kernel_start_args *args, multiboot_tag *tags)
 {
     multiboot_tag_string *str = (multiboot_tag_string *)tags;
-    int str_len = strlen(str->string);
+    int str_len = strlen_2(str->string);
     void *p = alloca_data(str_len + 1, 1);
-    memcpy(p, str->string, str_len);
+    memcpy_2(p, str->string, str_len);
     args->boot_loader_name = (u64)p;
 }
 

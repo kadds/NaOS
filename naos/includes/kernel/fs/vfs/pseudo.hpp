@@ -1,7 +1,7 @@
 #pragma once
-#include "../../util/circular_buffer.hpp"
 #include "../../wait.hpp"
 #include "common.hpp"
+#include "freelibcxx/circular_buffer.hpp"
 namespace fs::vfs
 {
 /// pseudo device interface
@@ -16,7 +16,7 @@ class pseudo_t
 
 class pseudo_pipe_t : public pseudo_t
 {
-    util::circular_buffer<byte> buffer;
+    freelibcxx::circular_buffer<byte> buffer;
     task::wait_queue_t wait_queue;
     std::atomic_bool is_close;
     friend bool pipe_write_func(u64 data);

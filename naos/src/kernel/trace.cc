@@ -1,22 +1,22 @@
 #include "kernel/trace.hpp"
+#include "freelibcxx/circular_buffer.hpp"
+#include "freelibcxx/string.hpp"
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/cmdline.hpp"
-#include "kernel/util/circular_buffer.hpp"
-#include "kernel/util/str.hpp"
 #include <stdarg.h>
 
 namespace trace
 {
 bool output_debug = true;
 
-util::circular_buffer<byte> *kernel_log_buffer = nullptr;
+freelibcxx::circular_buffer<byte> *kernel_log_buffer = nullptr;
 
 arch::device::com::serial serial_device;
 bool serial_device_enable = false;
@@ -40,7 +40,8 @@ void early_init(void *address, void *top_address)
 void init()
 {
     cmdline::space_t space = cmdline::early_get_space("kernel_log_buffer_size", cmdline::space_t(memory::page_size * 4));
-    kernel_log_buffer = memory::New<util::circular_buffer<byte>>(memory::KernelCommonAllocatorV, memory::KernelBuddyAllocatorV, space.space);
+    kernel_log_buffer = memory::New<freelibcxx::circular_buffer<byte>>(memory::KernelCommonAllocatorV,
+                                                                       memory::KernelBuddyAllocatorV, space.space);
     // copy early_init_log
     kernel_log_buffer->write(early_address, early_pointer - early_address);
     early_address = nullptr;
@@ -48,7 +49,7 @@ void init()
     early_top_address = nullptr;
 }
 
-util::circular_buffer<byte> &get_kernel_log_buffer() { return *kernel_log_buffer; }
+freelibcxx::circular_buffer<byte> &get_kernel_log_buffer() { return *kernel_log_buffer; }
 
 lock::spinlock_t spinlock;
 
@@ -56,7 +57,7 @@ void print_inner(char ch) { print_inner(&ch, 1); }
 
 void print_inner(const char *str)
 {
-    u64 len = util::strlen(str);
+    u64 len = strlen(str);
     print_inner(str, len);
 }
 
@@ -67,7 +68,7 @@ void write_to_early_buffer(const byte *buf, u64 len)
         // overflow
         return;
     }
-    util::memcopy(early_pointer, buf, len);
+    memcpy(early_pointer, buf, len);
     early_pointer += len;
 }
 

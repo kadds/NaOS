@@ -1,20 +1,22 @@
 #pragma once
-#include "../util/bit_set.hpp"
-#include "../util/hash_map.hpp"
-#include "../util/linked_list.hpp"
-#include "../util/str.hpp"
+#include "../lock.hpp"
 #include "buddy.hpp"
 #include "common.hpp"
+#include "freelibcxx/bit_set.hpp"
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/linked_list.hpp"
+#include "freelibcxx/string.hpp"
 #include "list_node_cache.hpp"
 
 #define NewSlabGroup(domain, struct, align, flags)                                                                     \
-    domain->create_new_slab_group(sizeof(struct), util::string(memory::KernelCommonAllocatorV, #struct), align, flags)
+    domain->create_new_slab_group(sizeof(struct), freelibcxx::string(memory::KernelCommonAllocatorV, #struct), align,  \
+                                  flags)
 
 namespace memory
 {
 struct slab
 {
-    using bitmap_t = util::bit_set_inplace<512>;
+    using bitmap_t = freelibcxx::bit_set_inplace<512>;
     bitmap_t bitmap; // max 512 element
     u32 rest;
     u32 color_offset;
@@ -42,7 +44,7 @@ class slab_group
     lock::rw_lock_t slab_lock;
     const u64 obj_align_size;
     const u64 size;
-    util::string name;
+    freelibcxx::string name;
     u32 color_offset;
     u64 flags;
     u64 align;
@@ -59,7 +61,7 @@ class slab_group
   public:
     slab_group(u64 size, const char *name, u64 align, u64 flags);
 
-    const util::string get_name() const { return name; }
+    const freelibcxx::string &get_name() const { return name; }
     u64 get_size() const { return size; }
     void *alloc();
     void free(void *ptr);
@@ -72,12 +74,12 @@ struct slab_cache_pool
 {
   private:
     lock::rw_lock_t group_lock;
-    util::hash_map<util::string, slab_group *> map;
+    freelibcxx::hash_map<freelibcxx::string, slab_group *> map;
 
   public:
-    slab_group *find_slab_group(const util::string &name);
+    slab_group *find_slab_group(const freelibcxx::string &name);
 
-    slab_group *create_new_slab_group(u64 size, util::string name, u64 align, u64 flags);
+    slab_group *create_new_slab_group(u64 size, freelibcxx::string name, u64 align, u64 flags);
     void remove_slab_group(slab_group *group);
 
     slab_cache_pool();
@@ -88,7 +90,7 @@ extern slab_cache_pool *global_dma_slab_domain;
 extern slab_cache_pool *global_object_slab_domain;
 
 /// An object allocator
-struct SlabObjectAllocator : IAllocator
+struct SlabObjectAllocator : freelibcxx::Allocator
 {
   private:
     slab_group *slab_obj;
@@ -97,8 +99,8 @@ struct SlabObjectAllocator : IAllocator
     SlabObjectAllocator(slab_group *obj)
         : slab_obj(obj){};
 
-    void *allocate(u64 size, u64 align) override;
-    void deallocate(void *ptr) override;
+    void *allocate(u64 size, u64 align) noexcept override;
+    void deallocate(void *ptr) noexcept override;
 };
 
 } // namespace memory

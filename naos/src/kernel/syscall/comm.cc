@@ -6,7 +6,6 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/time.hpp"
-#include "kernel/util/str.hpp"
 namespace naos::syscall
 {
 void log(const char *message)

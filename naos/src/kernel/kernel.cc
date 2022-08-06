@@ -3,6 +3,7 @@
 #include "kernel/arch/arch.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/dev/device.hpp"
 #include "kernel/fs/pipefs/pipefs.hpp"
@@ -16,8 +17,6 @@
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/cmdline.hpp"
 
 kernel_start_args *kernel_args;
 
@@ -57,7 +56,7 @@ u64 build_version_timestamp = BUILD_VERSION_TS;
 
 NoReturn void kstart_bsp(kernel_start_args *args)
 {
-    util::memzero((void *)((u64)_bss_start), (u64)_bss_end - (u64)_bss_start);
+    memset((void *)((u64)_bss_start), 0, (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
 

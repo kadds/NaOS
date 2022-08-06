@@ -1,15 +1,7 @@
 #pragma once
 #include "common.hpp"
-namespace util
+#include "freelibcxx/assert.hpp"
+namespace freelibcxx
 {
-void cassert_fail(const char *expr, const char *file, int line);
+void assert_fail(const char *expr, const char *file, int line, const char *msg);
 }
-
-#define cassert(expr)                                                                                                  \
-    do                                                                                                                 \
-    {                                                                                                                  \
-        if (unlikely(!(expr)))                                                                                         \
-        {                                                                                                              \
-            ::util::cassert_fail(#expr, __FILE__, __LINE__);                                                           \
-        }                                                                                                              \
-    } while (0)

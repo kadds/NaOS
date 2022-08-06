@@ -1,7 +1,7 @@
 #pragma once
-#include "lock.hpp"
-#include "mm/allocator.hpp"
-#include "util/linked_list.hpp"
+#include "freelibcxx/linked_list.hpp"
+#include "kernel/lock.hpp"
+#include "mm/vm.hpp"
 namespace task
 {
 struct process_t;
@@ -30,7 +30,7 @@ struct wait_context_t
 
 struct wait_queue_t
 {
-    util::linked_list<wait_context_t> list;
+    freelibcxx::linked_list<wait_context_t> list;
     lock::spinlock_t lock;
     wait_queue_t()
         : list(memory::KernelCommonAllocatorV)

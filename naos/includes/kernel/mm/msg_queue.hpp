@@ -1,11 +1,11 @@
 #pragma once
 #include "../mutex.hpp"
 #include "../types.hpp"
-#include "../util/hash_map.hpp"
 #include "../util/id_generator.hpp"
-#include "../util/linked_list.hpp"
 #include "../wait.hpp"
 #include "common.hpp"
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/linked_list.hpp"
 #include "new.hpp"
 #include <atomic>
 
@@ -29,8 +29,8 @@ struct message_pack_t
     byte buffer[1];
 };
 
-using msg_pack_list_t = util::linked_list<message_pack_t *>;
-using msg_pack_hash_map_t = util::hash_map<msg_type, msg_pack_list_t *>;
+using msg_pack_list_t = freelibcxx::linked_list<message_pack_t *>;
+using msg_pack_hash_map_t = freelibcxx::hash_map<msg_type, msg_pack_list_t *>;
 
 inline constexpr u64 max_message_queue_count = 65536;
 inline constexpr u64 max_message_count = 1024;

@@ -1,4 +1,5 @@
 #include "kernel/irq.hpp"
+#include "freelibcxx/linked_list.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
@@ -9,11 +10,10 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/tasklet.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/linked_list.hpp"
 #include "kernel/wait.hpp"
 namespace irq
 {
-using request_list_t = util::linked_list<request_func_data>;
+using request_list_t = freelibcxx::linked_list<request_func_data>;
 
 struct request_lock_list_t
 {

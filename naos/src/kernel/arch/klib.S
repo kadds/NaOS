@@ -18,7 +18,7 @@ _reload_segment:
     sub $16, %rsp
     movq %rdi, 8(%rsp)
     movq %rax, (%rsp)
-    retfq
+    lretq
 reload_seg_ptr_x:
     .quad reload_seg_x
 reload_seg_x:
@@ -220,7 +220,7 @@ _unpaged_reload_segment:
     sub $16, %rsp
     movq %rdi, 8(%rsp)
     movq %rax, (%rsp)
-    retfq
+    lretq
 reload_unpaged_seg_ptr_x:
     .quad reload_unpaged_seg_x
 reload_unpaged_seg_x:

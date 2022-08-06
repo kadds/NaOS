@@ -2,9 +2,9 @@
 #include "./arch/com.hpp"
 #include "./arch/regs.hpp"
 #include "./kernel.hpp"
-#include "./util/circular_buffer.hpp"
-#include "./util/formatter.hpp"
 #include "common.hpp"
+#include "freelibcxx/circular_buffer.hpp"
+#include "freelibcxx/formatter.hpp"
 #include "lock.hpp"
 #include "ucontext.hpp"
 #include <initializer_list>
@@ -19,6 +19,146 @@ extern bool output_debug;
 
 void init();
 void early_init(void *start, void *end);
+
+template <typename T> using span = freelibcxx::span<T>;
+
+template <typename In> struct format
+{
+    /// \brief The buffer length must >= 32 \n
+    /// which can fully contain the maximum value of u64 and the maximum result length of double.
+    const char *operator()(const In &in, span<char> buf) { return in; }
+};
+
+template <> struct format<const char *>
+{
+    using In = const char *;
+    /// \brief return original input string
+    const char *operator()(const char *in, span<char> buf) { return in; }
+};
+
+template <> struct format<char *>
+{
+    using In = char *;
+    const char *operator()(const In &in, span<char> buf) { return in; }
+};
+
+template <> struct format<i64>
+{
+    const char *operator()(const i64 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::int642str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<i32>
+{
+    const char *operator()(const i32 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::int2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<i16>
+{
+    const char *operator()(const i16 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::int2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<i8>
+{
+    const char *operator()(const i8 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::int2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<u64>
+{
+    const char *operator()(const u64 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::uint642str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<u32>
+{
+    const char *operator()(const u32 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::uint2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<u16>
+{
+    const char *operator()(const u16 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::uint2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<u8>
+{
+    const char *operator()(const u8 &in, span<char> buf)
+    {
+        auto pos = freelibcxx::uint2str(buf, in).value_or(0);
+        buf[pos] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<char>
+{
+    const char *operator()(const char &in, span<char> buf)
+    {
+        buf[0] = in;
+        buf[1] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<void *>
+{
+    using In = void *;
+    const char *operator()(const In &in, span<char> buf)
+    {
+        buf[0] = '0';
+        buf[1] = 'x';
+
+        auto pos = freelibcxx::uint642str(buf.subspan(2), (uint64_t)in, 16).value_or(0);
+        buf[pos + 2] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<const void *>
+{
+    using In = const void *;
+    const char *operator()(const In &in, span<char> buf)
+    {
+        buf[0] = '0';
+        buf[1] = 'x';
+
+        auto pos = freelibcxx::uint642str(buf.subspan(2), (uint64_t)in, 16).value_or(0);
+        buf[pos + 2] = 0;
+        return buf.get();
+    }
+};
 
 ///
 /// \brief color namespace includes normal color
@@ -310,16 +450,17 @@ void print_inner(char ch);
 /// the kernel print to the serial device. recv com1
 extern arch::device::com::serial serial_device;
 
-util::circular_buffer<byte> &get_kernel_log_buffer();
+freelibcxx::circular_buffer<byte> &get_kernel_log_buffer();
 
 /// ---------- template functions for kernel print logic ----------------
 
 template <typename Head> Trace_Section void dispatch(const Head &head)
 {
     using RealType = typename std::remove_extent<std::decay_t<decltype(head)>>::type;
-    util::formatter::format<RealType> fmt;
+    format<RealType> fmt;
     char fmt_str[64];
-    print_inner(fmt(head, fmt_str, 64));
+    span<char> buf(fmt_str, sizeof(fmt_str) - 1);
+    print_inner(fmt(head, buf));
 }
 
 template <typename Head> Trace_Section void cast_fmt()

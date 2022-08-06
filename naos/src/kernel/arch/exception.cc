@@ -138,8 +138,8 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
                 task->register_info->trap_vector = regs->vector;
             }
             ::task::thread_t *task = ::cpu::current().get_task();
-            trace::debug("exception ", regs->vector, " occurred at ", (void *)regs->rip, " code ", regs->error_code,
-                         " task ", task != nullptr ? task->process->pid : 0);
+            trace::warning("exception ", regs->vector, " occurred at ", trace::hex(regs->rip), " code ",
+                           regs->error_code, " task ", task != nullptr ? task->process->pid : 0);
             trace::panic_stack(regs, "Kernel Oops ->");
         }
     }

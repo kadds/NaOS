@@ -1,4 +1,7 @@
 #include "kernel/timer.hpp"
+#include "freelibcxx/linked_list.hpp"
+#include "freelibcxx/skip_list.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/arch/rtc.hpp"
@@ -10,14 +13,11 @@
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/linked_list.hpp"
-#include "kernel/util/skip_list.hpp"
 
 namespace timer
 {
 
-using clock_source_array_t = util::array<timeclock::clock_source *>;
+using clock_source_array_t = freelibcxx::vector<timeclock::clock_source *>;
 
 struct watcher_t
 {
@@ -43,8 +43,8 @@ struct watcher_t
     bool operator<(const watcher_t &w) { return expires < w.expires; }
 };
 
-using watcher_list_t = util::linked_list<watcher_t>;
-using tick_list_t = util::skip_list<watcher_t>;
+using watcher_list_t = freelibcxx::linked_list<watcher_t>;
+using tick_list_t = freelibcxx::skip_list<watcher_t>;
 
 struct cpu_timer_t
 {
@@ -53,7 +53,7 @@ struct cpu_timer_t
 
     cpu_timer_t()
         : watcher_list(memory::KernelCommonAllocatorV)
-        , tick_list(memory::KernelCommonAllocatorV, 2, 16)
+        , tick_list(memory::KernelCommonAllocatorV)
     {
     }
 };

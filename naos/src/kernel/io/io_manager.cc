@@ -1,6 +1,6 @@
 #include "kernel/io/io_manager.hpp"
-#include "kernel/util/array.hpp"
-#include "kernel/util/hash_map.hpp"
+#include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/vector.hpp"
 
 namespace io
 {
@@ -9,8 +9,8 @@ struct hash
     u64 operator()(const u32 &id) { return id; }
 };
 
-using request_chain_t = util::array<u32>;
-using request_map_t = util::hash_map<u32, request_chain_t *, hash>;
+using request_chain_t = freelibcxx::vector<u32>;
+using request_map_t = freelibcxx::hash_map<u32, request_chain_t *, hash>;
 
 request_map_t *request_map;
 

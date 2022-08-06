@@ -8,8 +8,6 @@
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
-#include "kernel/util/memory.hpp"
-#include "kernel/util/str.hpp"
 #include <cstdint>
 #include <type_traits>
 

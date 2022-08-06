@@ -4,9 +4,9 @@
 #include "../../../io/pkg.hpp"
 #include "../../../lock.hpp"
 #include "../../../tasklet.hpp"
-#include "../../../util/array.hpp"
-#include "../../../util/circular_buffer.hpp"
 #include "../../../wait.hpp"
+#include "freelibcxx/circular_buffer.hpp"
+#include "freelibcxx/vector.hpp"
 
 namespace arch::device::chip8042
 {
@@ -45,9 +45,9 @@ struct kb_data_t
 };
 
 inline constexpr u64 kb_cache_count = 32;
-using kb_buffer_t = util::circular_buffer<kb_data_t>;
+using kb_buffer_t = freelibcxx::circular_buffer<kb_data_t>;
 
-using keyboard_io_list_t = util::array<io::keyboard_request_t *>;
+using keyboard_io_list_t = freelibcxx::vector<io::keyboard_request_t *>;
 
 class kb_device : public ::dev::device
 {
@@ -108,9 +108,9 @@ struct mouse_data_t
     }
 };
 
-using mouse_buffer_t = util::circular_buffer<mouse_data_t>;
+using mouse_buffer_t = freelibcxx::circular_buffer<mouse_data_t>;
 
-using mouse_io_list_t = util::array<io::mouse_request_t *>;
+using mouse_io_list_t = freelibcxx::vector<io::mouse_request_t *>;
 
 class mouse_device : public ::dev::device
 {
