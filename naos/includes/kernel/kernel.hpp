@@ -3,7 +3,7 @@
 #define Unpaged_Text_Section Section(".unpaged.text")
 #define Unpaged_Data_Section(i) Section(".unpaged.data." #i)
 #define Unpaged_Bss_Section Section(".unpaged.bss")
-#define Trace_Section Section(".data.trace")
+#define Trace_Section
 
 static_assert(sizeof(void *) == 8, "Just 64-bit code generation is supported.");
 

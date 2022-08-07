@@ -10,7 +10,7 @@ set(ASM_X64 "-mcmodel=large -Wa,--64")
 if (NOT CMAKE_COMPILER_IS_GNUCXX)
     # clang
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-unused-const-variable")
-    set(ASM_X64 "-mcmodel=large")
+    set(ASM_X64 "-mcmodel=large -m64")
 endif()
 
 set(LINKER_X86 "-Wl,-n -Wl,-melf_i386 -Wl,--no-relax -Wl,--build-id=none")

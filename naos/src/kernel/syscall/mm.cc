@@ -56,7 +56,9 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     auto vm = vm_info->map_file(map_address, file, offset, length, length, flags);
 
     if (vm)
+    {
         return vm->start;
+    }
     return EFAILED;
 }
 

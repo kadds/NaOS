@@ -1,6 +1,20 @@
 
 .section .text
 
+.globl _check_sse
+_check_sse:
+    pushq %rdx
+    movq %cr4, %rax
+    orq $0x40000, %rax
+    movq %rax, %cr4
+    # check os
+    xorl %ecx, %ecx
+    XGETBV 
+    orl $0x3, %eax
+    XSETBV
+    popq %rdx
+    ret
+
 .globl _enable_sse
 _enable_sse:
     movq %cr0, %rax
@@ -99,7 +113,7 @@ _kernel_thread:
 	popq %rax
     addq $0x28, %rsp
 
-    sti
+    sti 
     callq *%rbx
     movq %rax, %rdi
     callq do_exit
@@ -139,7 +153,20 @@ _sys_call:
 	pushq %r14
 	pushq %r15
 
+
+    movabs $save_sse_context, %rdx
+    callq *%rdx
+
 	movq 0x88(%rsp), %rax
+    movq 0x60(%rsp), %rdi
+    movq 0x58(%rsp), %rsi
+    movq 0x50(%rsp), %rdx
+    movq 0x48(%rsp), %rcx
+    movq 0x38(%rsp), %r8
+    movq 0x30(%rsp), %r9
+    movq 0x28(%rsp), %r10
+    movq 0x20(%rsp), %r11
+
     cmp $256, %rax
     ja sys_call_setlabel
     jmp sys_call_label
@@ -159,8 +186,14 @@ sys_call_label2:
 
     movabs $userland_return, %rdx
 	callq *%rdx
+
+    cli
+    movabs $load_sse_context, %rdx
+    callq *%rdx
+
 .globl _sys_ret
 _sys_ret:
+    sti
     popq %r15
 	popq %r14
 	popq %r13

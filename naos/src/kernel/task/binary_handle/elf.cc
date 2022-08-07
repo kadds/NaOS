@@ -1,10 +1,12 @@
 #include "kernel/task/binary_handle/elf.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
@@ -223,8 +225,26 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
         return false;
 
     program_64 *program_last = program + elf->phnum;
-
     u64 loaded_max_address = 0;
+
+    struct map_info
+    {
+        u64 start;       // alignment offset
+        u64 end;         // alignment offset
+        u64 file_offset; // file offset on 'start' address
+        u64 file_length;
+        u64 flags;
+
+        void move_start(i64 offset)
+        {
+            start += offset;
+            file_offset += offset;
+        }
+
+        void move_end(i64 offset) { end += offset; }
+    };
+    freelibcxx::vector<map_info> mmap_programs(memory::KernelCommonAllocatorV);
+    mmap_programs.ensure(8);
 
     while (program != program_last)
     {
@@ -246,9 +266,6 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 
             u64 start = program->vaddr & ~(memory::page_size - 1);
             u64 align_offset = program->vaddr - start;
-            // trace::info("va ", trace::hex(program->vaddr), " start ", trace::hex(start), " off ",
-            //             trace::hex(program->offset), " file_size ", trace::hex(program->file_size), " mmsize ",
-            //             trace::hex(program->mm_size), " ba ", trace::hex(align_offset));
 
             if (program->offset < align_offset)
             {
@@ -258,18 +275,124 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
             }
 
             u64 offset = program->offset - align_offset;
+
+            if (start >= memory::user_mmap_top_address || offset >= memory::user_mmap_top_address)
+            {
+                trace::warning("map ", trace::hex(start), " fail");
+                return false;
+            }
+
             u64 mm_size = program->mm_size + align_offset;
             u64 fsize = program->file_size + align_offset;
-            u64 end = start + mm_size;
+            u64 end = (start + mm_size + memory::page_size - 1) & ~(memory::page_size - 1);
             if (loaded_max_address < end)
                 loaded_max_address = end;
-            new_mm_info->map_file(start, file, offset, fsize, mm_size, flag);
+
+            mmap_programs.push_back(map_info{start, end, offset, fsize, flag});
         }
         else if (program->type == program_type::interp)
         {
         }
         program++;
     }
+
+    // merge it
+    for (int i = 0; mmap_programs.size() > 0 && i < (int)mmap_programs.size() - 1; i++)
+    {
+        auto &cur = mmap_programs[i];
+        auto &next = mmap_programs[i + 1];
+        if (cur.end > next.start)
+        {
+            i64 oversize = cur.end - next.start;
+            if (cur.start > next.start)
+            {
+                trace::warning("map address ", trace::hex(cur.start), ">", trace::hex(next.start));
+                return false;
+            }
+            if (cur.end > next.end)
+            {
+                trace::warning("map address ", trace::hex(cur.end), ">", trace::hex(next.end));
+                return false;
+            }
+            if ((i64)cur.start - (i64)cur.file_offset != (i64)next.start - (i64)next.file_offset)
+            {
+                trace::warning("map address can't merge", trace::hex(cur.start), " ", trace::hex(next.start));
+                return false;
+            }
+            if (cur.flags & ~next.flags)
+            {
+                if (next.flags & ~cur.flags)
+                {
+                    // insert new mmap range
+                    u64 start = next.start;
+                    u64 file_offset = next.file_offset;
+                    u64 end = cur.end;
+                    u64 flags = cur.flags | next.flags;
+                    cur.move_end(-oversize);
+                    cur.file_length = freelibcxx::max(cur.file_length - oversize, cur.end - cur.start);
+
+                    next.move_start(oversize);
+                    next.file_length -= oversize;
+
+                    mmap_programs.insert_at(i + 1, map_info{start, end, file_offset, (u64)oversize, flags});
+                    // skip new mmap item
+                    i++;
+                }
+                else
+                {
+                    next.move_start(oversize);
+                    cur.file_length -= oversize;
+                }
+            }
+            else
+            {
+                if (next.flags & ~cur.flags)
+                {
+                    cur.move_end(-oversize);
+                    cur.file_length = freelibcxx::min(cur.file_length - oversize, cur.end - cur.start);
+                }
+                else
+                {
+                    // safe to merge
+                    cur.move_end(next.end - cur.end);
+                    cur.file_length = next.file_offset + next.file_length - cur.file_offset;
+
+                    mmap_programs.remove_at(i + 1);
+                }
+            }
+        }
+    }
+
+    char flag_str[8];
+    for (auto &item : mmap_programs)
+    {
+        char *flag_ptr = flag_str;
+        if (item.flags & flags::readable)
+        {
+            *flag_ptr++ = 'r';
+        }
+        if (item.flags & flags::writeable)
+        {
+            *flag_ptr++ = 'w';
+        }
+        if (item.flags & flags::executeable)
+        {
+            *flag_ptr++ = 'x';
+        }
+        *flag_ptr = 0;
+
+        // trace::debug("map ", trace::hex(item.start), "-", trace::hex(item.end), " mm size ",
+        //              trace::hex(item.end - item.start), " off ", trace::hex(item.file_offset), " file_size ",
+        //              trace::hex(item.file_length), " flags ", flag_str);
+        auto vm = new_mm_info->map_file(item.start, file, item.file_offset, item.file_length, item.end - item.start,
+                                        item.flags);
+        if (vm == nullptr)
+        {
+            trace::warning("map file ", trace::hex(item.start), "-", trace::hex(item.end), " fail");
+            return false;
+        }
+    }
+
     if (loaded_max_address == 0)
     {
         trace::warning("loaded max address is zero");

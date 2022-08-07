@@ -91,7 +91,7 @@ plugin_ctrl: iodebug=1
 #display_library: vncsrv
 #display_library: win32
 #display_library: wx
-display_library: x
+display_library: term
 
 #=======================================================================
 # CPU:
@@ -185,7 +185,7 @@ display_library: x
 #  2.2.6 2.6Ghz Intel Core 2 Duo with WinXP/g++ 3.4       21 to 25 Mips
 #  2.2.6 2.1Ghz Athlon XP with Linux 2.6/g++ 3.4          12 to 15 Mips
 #=======================================================================
-cpu: model=bx_generic, count=2, ips=20000000, reset_on_triple_fault=1, ignore_bad_msrs=0, msrs="msrs.def"
+cpu: model=corei7_sandy_bridge_2600k, count=2, ips=20000000, reset_on_triple_fault=1, ignore_bad_msrs=0, msrs="msrs.def"
 cpu: cpuid_limit_winnt=0
 
 #=======================================================================

@@ -19,7 +19,14 @@ target_include_directories(init SYSTEM PUBLIC  ${MLIBC}/subprojects/frigg/includ
 
 target_link_directories(init PRIVATE ${CMAKE_SOURCE_DIR}/naos/libc/mlibc/build/)
 target_link_directories(init PRIVATE ${CMAKE_SOURCE_DIR}/naos/libc/mlibc/build/sysdeps/naos)
-set_target_properties(init PROPERTIES LINK_FLAGS "${CXX_X64} ${FREE_CXX_FLAGS} ${LINKER_X64} ${FREE_LINKER_FLAGS}")
+
+set(EXTEND_LDS "")
+
+if(CMAKE_COMPILER_IS_GNUCXX)
+  set(EXTEND_LDS "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/../link.ld")
+endif()
+
+set_target_properties(init PROPERTIES LINK_FLAGS "${CXX_X64} ${FREE_CXX_FLAGS} ${LINKER_X64} ${FREE_LINKER_FLAGS} ${EXTEND_LDS}")
 target_link_libraries(init c)
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/init)

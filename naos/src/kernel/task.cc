@@ -61,7 +61,6 @@ using thread_id_generator_t = util::seq_generator;
 memory::SlabObjectAllocator *thread_t_allocator;
 memory::SlabObjectAllocator *process_t_allocator;
 memory::SlabObjectAllocator *mm_info_t_allocator;
-memory::SlabObjectAllocator *register_info_t_allocator;
 
 struct process_hash
 {
@@ -106,7 +105,7 @@ inline process_t *new_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
-    process->attributes = 0;
+    process->attributes = process_attributes::userspace;
     process->pid = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
@@ -163,10 +162,15 @@ inline thread_t *new_thread(process_t *p)
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
     ((thread_list_t *)p->thread_list)->push_back(thd);
-    register_info_t *register_info = memory::New<register_info_t>(register_info_t_allocator);
-    thd->register_info = register_info;
+    thd->register_info = arch::task::new_register(p->attributes & process_attributes::userspace);
     thd->tid = id;
     thd->attributes = 0;
+    thd->cpumask.mask = cpumask_none;
+
+    void *stack = new_kernel_stack();
+    void *stack_top = (char *)stack + memory::kernel_stack_size;
+    thd->kernel_stack_top = stack_top;
+
     return thd;
 }
 
@@ -187,7 +191,7 @@ void delete_thread(thread_t *thd)
         delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
 
     // ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
-    memory::Delete<>(register_info_t_allocator, thd->register_info);
+    arch::task::delete_register(thd->register_info);
     memory::Delete<>(thread_t_allocator, thd);
 }
 
@@ -246,10 +250,6 @@ void init()
         mm_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
             memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, mm_info_t, 8, 0));
 
-        using arch::task::register_info_t;
-        register_info_t_allocator = memory::New<memory::SlabObjectAllocator>(
-            memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, register_info_t, 8, 0));
-
         process_id_generator = memory::New<process_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
         // init for kernel process
         process = new_kernel_process();
@@ -303,9 +303,7 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
 {
     thread_t *thd = new_thread(process);
     thd->state = thread_state::ready;
-    void *stack = new_kernel_stack();
-    void *stack_top = (char *)stack + memory::kernel_stack_size;
-    thd->kernel_stack_top = stack_top;
+
     auto &vma = ((mm_info_t *)process->mm_info)->vma;
 
     if (process->mm_info != memory::kernel_vm_info)
@@ -552,10 +550,6 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     process->main_thread = thd;
     thd->attributes |= thread_attributes::main;
     thd->state = thread_state::ready;
-    thd->cpumask.mask = cpumask_none;
-    void *stack = new_kernel_stack();
-    void *stack_top = (char *)stack + memory::kernel_stack_size;
-    thd->kernel_stack_top = stack_top;
 
     auto process_args = copy_args(path, args, envp);
 
@@ -594,9 +588,6 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
     process->main_thread = thd;
     thd->attributes |= thread_attributes::main;
     thd->state = thread_state::ready;
-    void *stack = new_kernel_stack();
-    void *stack_top = (char *)stack + memory::kernel_stack_size;
-    thd->kernel_stack_top = stack_top;
 
     arch::task::create_thread(thd, (void *)start_func, reinterpret_cast<u64>(arg), 0, 0, 0);
 
@@ -641,9 +632,7 @@ int fork()
     thd->attributes |= thread_attributes::main;
     thd->state = thread_state::ready;
     thd->cpumask.mask = cpumask_none;
-    void *stack = new_kernel_stack();
-    void *stack_top = (char *)stack + memory::kernel_stack_size;
-    thd->kernel_stack_top = stack_top;
+
     thd->user_stack_top = current_thread->user_stack_top;
     thd->user_stack_bottom = current_thread->user_stack_bottom;
     thd->tcb = current_thread->tcb;
@@ -760,6 +749,10 @@ void exit_process_thread(process_t *process)
         icu.end();
         process->resource.clear();
         process->attributes |= process_attributes::no_thread;
+        if (process == get_init_process())
+        {
+            trace::panic("init process startup fail");
+        }
         process->wait_queue.do_wake_up();
     }
 }

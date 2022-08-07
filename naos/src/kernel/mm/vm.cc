@@ -87,6 +87,14 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
             arch::paging::reload();
             return irq::request_result::ok;
         }
+        else
+        {
+            trace::info("vm area not found ", trace::hex(extra_data));
+            for (auto item : info->vma.get_list())
+            {
+                trace::warning(trace::hex(item.start), "-", trace::hex(item.end), " ", trace::hex(item.flags));
+            }
+        }
     }
     return irq::request_result::no_handled;
 }
@@ -186,7 +194,7 @@ bool vm_allocator::deallocate_map(u64 p)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     vm_t vm(p);
-    auto it = list.lower_find(vm);
+    auto it = list.upper_find(vm);
     if (it != list.end())
     {
         if (it->start == p)
@@ -237,7 +245,7 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     uctx::RawReadLockUninterruptibleContext ctx(list_lock);
 
     vm_t vm(p, p, 0, nullptr, 0);
-    auto it = list.lower_find(vm);
+    auto it = list.upper_find(vm);
     if (it == list.end())
     {
         return nullptr;
@@ -246,12 +254,14 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     {
         return &it;
     }
-    trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
+    // trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
     return nullptr;
 }
 void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
 {
     uctx::RawReadLockUninterruptibleContext ctx(list_lock);
+    to.range_bottom = this->range_bottom;
+    to.range_top = this->range_top;
     for (auto &item : list)
     {
         item.flags |= flag;
@@ -513,7 +523,7 @@ bool info_t::set_brk_now(u64 ptr)
         while (ptr < current_map)
         {
             byte *ptr = (byte *)memory::malloc_page();
-            // util::memzero(ptr, memory::page_size);
+            memset(ptr, 0, memory::page_size);
             vm_t vm = *head_vm;
             vm.start = current_map;
             vm.end = current_map + memory::page_size;
@@ -543,6 +553,7 @@ bool head_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
         vm.start = (page_addr) & ~(memory::page_size - 1);
         vm.end = vm.start + memory::page_size;
         byte *ptr = (byte *)memory::malloc_page();
+        memset(ptr, 0, memory::page_size);
         info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr), true);
         return true;
     }
@@ -581,6 +592,10 @@ bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
                 load_pages = pages - page_index;
             }
         }
+        if (vm.start == 0x11028c000)
+        {
+            trace::info("a");
+        }
         kassert(!((item->flags & flags::big_page) || (item->flags & flags::huge_page)),
                 "expand vm not allowed big paging");
         int perfect_num = 0;
@@ -592,8 +607,13 @@ bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item)
                 byte *ptr = (byte *)memory::malloc_page();
                 if (ptr != nullptr)
                 {
+                    memset(ptr, 0, memory::page_size);
                     info->mmu_paging.map_area_phy(&vm, memory::va2pa(ptr), true);
                     perfect_num++;
+                }
+                else
+                {
+                    trace::panic("OOM");
                 }
             }
             vm.start += memory::page_size;
@@ -667,15 +687,26 @@ const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_offset, u6
     {
         cflags |= flags::file;
         func = fill_file_vm;
-        user_data =
-            (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, file, file_offset, file_length, mmap_length, this);
+        user_data = (u64)memory::KernelCommonAllocatorV->New<map_t>(file, file_offset, file_length, mmap_length, this);
     }
 
+    const vm_t *vm = nullptr;
     if (start == 0)
     {
-        return vma.allocate_map(alen, cflags, func, user_data);
+        vm = vma.allocate_map(alen, cflags, func, user_data);
     }
-    return vma.add_map(start, start + alen, cflags, func, user_data);
+    else
+    {
+        vm = vma.add_map(start, start + alen, cflags, func, user_data);
+    }
+    if (!vm)
+    {
+        if (file)
+        {
+            memory::KernelCommonAllocatorV->Delete(reinterpret_cast<map_t *>(user_data));
+        }
+    }
+    return vm;
 }
 
 void info_t::sync_map_file(u64 addr) {}

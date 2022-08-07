@@ -24,7 +24,10 @@ enum class feature
     popcnt_i,
     max_phy_addr,
     max_virt_addr,
-    htt
+    htt,
+    xsave,
+    osxsave,
+    avx,
 };
 
 void init();

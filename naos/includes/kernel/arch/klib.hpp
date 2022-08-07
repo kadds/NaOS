@@ -9,12 +9,8 @@ extern volatile char base_tmp_page_entries[];
 extern volatile char base_virtual_addr[];
 extern volatile char base_phy_addr[];
 
-extern volatile char _file_start[];
-
 extern volatile char _start_of_kernel_data[];
 extern volatile char _end_kernel_data[];
-
-extern volatile char _file_end[];
 
 extern volatile char _bss_start[];
 extern volatile char _bss_end[];
@@ -69,6 +65,7 @@ ExportC volatile char _sys_ret;
 ExportC NoReturn void _call_sys_ret(regs_t *regs);
 ExportC void _switch_stack(u64 param1, u64 param2, u64 param3, u64 param4, void *func, void *rsp);
 ExportC void _enable_sse();
+ExportC void _check_sse();
 
 class stack_frame_t
 {
@@ -115,3 +112,6 @@ template <typename T> static inline bool is_kernel_space_pointer(T ptr)
 {
     return (u64)ptr >= memory::minimum_kernel_addr && (u64)ptr <= memory::maximum_kernel_addr;
 }
+
+ExportC void save_sse_context();
+ExportC void load_sse_context();

@@ -49,6 +49,7 @@ enum attributes : flag_t
 {
     destroy = 1,
     no_thread = 2,
+    userspace = 4,
 };
 } // namespace process_attributes
 

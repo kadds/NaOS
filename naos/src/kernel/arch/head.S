@@ -9,7 +9,8 @@ _text_start_addr:
 _start: 
     movl $0x8000, %esp
     push %rdi
-    call _init_unpaged
+    movabsq $_init_unpaged, %rax
+    call *%rax
     pop %rdi
     # rax is _kstart addr
     # jmp to _kstart

@@ -31,6 +31,11 @@ call_code_interrupt:
     movq %rax, %ds
     movq %rax, %es
 
+	testb $3, 0xa8(%rsp)
+	je no_sse
+	movabs $save_sse_context, %rdx
+	callq *%rdx
+no_sse:
     movq %rsp, %rdi
 	movq 0x80(%rsp), %rdx
     callq *%rdx
@@ -39,6 +44,9 @@ return_code_interrupt:
 	testb $3, 0xa8(%rsp)
 	je need_preempt
     movabs $userland_return, %rdx
+	callq *%rdx
+
+    movabs $load_sse_context, %rdx
 	callq *%rdx
 	jmp endjmp
  need_preempt:

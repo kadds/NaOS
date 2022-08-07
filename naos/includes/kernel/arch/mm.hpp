@@ -56,7 +56,7 @@ constexpr u64 user_stack_size = memory_size_mb(4);
 constexpr u64 user_stack_maximum_size = memory_size_mb(256);
 
 constexpr u64 user_mmap_top_address = 0x0000'8000'0000'0000UL;
-constexpr u64 user_code_bottom_address = 0x40'0000UL;
+constexpr u64 user_code_bottom_address = 0x20'0000UL;
 /// 4G
 constexpr u64 user_head_size = memory_size_gb(4);
 

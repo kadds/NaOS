@@ -154,7 +154,8 @@ _gdt_ptr:
 _ap_64:
     andq $0xFFFFFFFFFFFFFFF0, %rsp
     xorq %rdi, %rdi
-    callq _init_unpaged
+    movabsq $_init_unpaged, %rax
+    call *%rax
     movq $_ap_stack, %rax
     movq (%rax), %rsp
     mfence

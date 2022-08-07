@@ -5,6 +5,7 @@
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/regs.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
@@ -235,4 +236,76 @@ void return_from_signal_context(userland_code_context *context)
         trace::panic("Unknown rsp value");
     }
 }
+
+struct xsave_header_t
+{
+    u64 state_bv;
+    u64 comp_bv;
+    char pad[48];
+};
+
+static_assert(sizeof(xsave_header_t) == 64, "");
+
+register_info_t *new_register(bool init_sse)
+{
+    auto info = memory::KernelCommonAllocatorV->New<register_info_t>();
+    memset(info, 0, sizeof(register_info_t));
+    if (init_sse)
+    {
+        info->sse_context = memory::KernelBuddyAllocatorV->allocate(4096, 64);
+        memset(info->sse_context, 0, 4096);
+        auto ptr = reinterpret_cast<char *>(info->sse_context);
+        auto header = reinterpret_cast<xsave_header_t *>(ptr + 512);
+        // state_bv must same as XSETBV (sdm 13.8.1)
+        // else GP(0) is raised
+        // only sse registers is supported
+        header->state_bv = 0x3;
+        header->comp_bv = 0;
+    }
+    return info;
+}
+
+void delete_register(register_info_t *info)
+{
+    if (info->sse_context)
+    {
+        memory::KernelBuddyAllocatorV->deallocate(info->sse_context);
+    }
+    memory::KernelCommonAllocatorV->Delete(info);
+}
 } // namespace arch::task
+
+ExportC void save_sse_context()
+{
+
+    auto current = task::current();
+    auto reg = current->register_info;
+    if (reg->sse_context && !reg->sse_saved)
+    {
+        void *save_to = reg->sse_context;
+        __asm__ __volatile__("movl $0xFFFFFFFF, %%eax\n\t"
+                             "movl $0xFFFFFFFF, %%edx\n\t"
+                             "XSAVE (%0)\n\t"
+                             :
+                             : "c"(save_to)
+                             : "rax", "rdx");
+        reg->sse_saved = true;
+    }
+}
+
+ExportC void load_sse_context()
+{
+    auto current = task::current();
+    auto reg = current->register_info;
+    if (reg->sse_context && reg->sse_saved)
+    {
+        void *restore_from = reg->sse_context;
+        __asm__ __volatile__("movl $0xFFFFFFFF, %%eax\n\t"
+                             "movl $0xFFFFFFFF, %%edx\n\t"
+                             "XRSTOR (%0)\n\t"
+                             :
+                             : "c"(restore_from)
+                             : "rax", "rdx");
+        reg->sse_saved = false;
+    }
+}

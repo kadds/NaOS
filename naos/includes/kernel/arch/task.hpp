@@ -19,7 +19,12 @@ struct register_info_t
     void *cr2;
     u64 trap_vector;
     u64 error_code;
+    void *sse_context;
+    bool sse_saved;
 };
+
+register_info_t *new_register(bool init_sse);
+void delete_register(register_info_t *);
 
 void init(::task::thread_t *thd, register_info_t *first_task_reg_info);
 

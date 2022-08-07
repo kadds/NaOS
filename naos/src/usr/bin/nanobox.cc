@@ -5,10 +5,12 @@
 #include <string.h>
 #include <unistd.h>
 
-extern char __executable_start[];
-
 [[gnu::weak]] void *__dso_handle;
+
+#ifdef __GNUC__
+extern char __executable_start[];
 [[gnu::weak]] void *__ehdr_start = __executable_start;
+#endif
 
 using entry_function = int(int, char **);
 #define entry(name) int name(int argc, char **argv)
@@ -21,6 +23,7 @@ entry(rmdir);
 entry(touch);
 entry(rm);
 entry(env);
+entry(simd_test);
 
 #define entry_p(name)                                                                                                  \
     {                                                                                                                  \
@@ -32,15 +35,12 @@ struct
     const char *name;
     entry_function *fn;
 } static_commands[] = {
-    entry_p(nsh), entry_p(cat), entry_p(ls), entry_p(mkdir), entry_p(rmdir), entry_p(touch), entry_p(rm), entry_p(env),
+    entry_p(nsh),   entry_p(cat), entry_p(ls),  entry_p(mkdir),     entry_p(rmdir),
+    entry_p(touch), entry_p(rm),  entry_p(env), entry_p(simd_test),
 };
 
 using namespace freelibcxx;
 DefaultAllocator alloc;
-
-// void *operator new(size_t t) { return alloc.allocate(t, sizeof(std::max_align_t)); }
-
-// void operator delete(void *p) { alloc.deallocate(p); }
 
 extern "C" int main(int argc, char **argv)
 {

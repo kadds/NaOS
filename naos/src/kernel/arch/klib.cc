@@ -14,8 +14,6 @@ int get_stackframes_by(u64 rbp, u64 rsp, u64 rip, int skip, stack_frame_t *frame
 {
     int i = 0;
     int used = 0;
-    // u64 end = (u64)_file_end + (u64)base_virtual_addr;
-    // u64 start = (u64)_file_start + (u64)base_virtual_addr;
     while ((u64)rbp != 0)
     {
         if (++i > skip)

@@ -98,6 +98,7 @@ void init_data(cpuid_t cpuid)
     tss::set_ist(cpuid, 3, data.exception_rsp);
     tss::set_ist(cpuid, 4, data.exception_nmi_rsp);
 
+    _check_sse();
     _enable_sse();
 }
 

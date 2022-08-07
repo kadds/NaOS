@@ -66,16 +66,13 @@ void init()
     max_extend_number = a;
     trace_debug_info();
     feature required_feature[] = {
-        feature::system_call_ret,
-        feature::msr,
-        feature::tsc,
-        feature::apic,
+        feature::system_call_ret, feature::msr, feature::tsc, feature::apic, feature::xsave,
     };
     for (auto feat : required_feature)
     {
         if (!has_feature(feat))
         {
-            trace::panic("Unsupported feature");
+            trace::panic("Unsupported feature ", (int)feat);
         }
     }
 }
@@ -130,6 +127,12 @@ bool has_feature(feature f)
             ret_cpu_feature(0x1, ecx, 23);
         case feature::htt:
             ret_cpu_feature(0x1, edx, 28);
+        case feature::xsave:
+            ret_cpu_feature(0x1, ecx, 26);
+        case feature::osxsave:
+            ret_cpu_feature(0x1, ecx, 27);
+        case feature::avx:
+            ret_cpu_feature(0x1, ecx, 28);
         default:
             trace::panic("Unknown feature");
     }

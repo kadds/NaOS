@@ -50,12 +50,18 @@ def gen_symbols(file, target_file, force):
     offset = 0
     list = []
     for line in lines:
-        v = line.split(" ")
+        if line.strip() == '':
+            continue
+        v = line.strip().split(" ")
         addr = v[0].strip()
         name = " ".join(v[2:])
         type_name = v[1].strip()
+        try:
+            addrint = int(addr, 16)
+        except Exception as e:
+            raise Exception(line + ' ', e)
 
-        output.write(struct.pack("Q", int(addr, 16)))
+        output.write(struct.pack("Q", addrint))
         output.write(struct.pack("Q", offset))
         list.append((name,  offset, type_name))
         offset += len(name.encode("utf-8")) + 2

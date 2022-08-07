@@ -12,7 +12,7 @@ dir=`dirname ${DBGTarget}`
 mkdir -p ${dir}
 mv ${Target} ${DBGTarget}
 if [ "$Debug"x == "Debug"x ]; then
-    objcopy -O binary -R .note -R .comment -S ${DBGTarget} ${Target}
+   objcopy -O binary -R .note -R .comment -R .dyn*  -R .interp  -R .debug* -K .unpaged.* -S ${DBGTarget} ${Target}
 else
-    objcopy -O binary -R .note -R .comment -g -S ${DBGTarget} ${Target}
+   objcopy -O binary -R .note -R .comment -R .dyn*  -R .interp -R .debug* -K .unpaged.* -S -g ${DBGTarget} ${Target}
 fi

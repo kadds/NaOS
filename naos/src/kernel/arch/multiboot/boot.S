@@ -57,11 +57,12 @@ _module_end:
 .short 0
 .long 8
 _header_multiboot_end:
+magic:
+    .long MULTIBOOT2_BOOTLOADER_MAGIC
 
 .code32
 .section .unpaged.text
-magic:
-    .long MULTIBOOT2_BOOTLOADER_MAGIC
+.align  16
 _multiboot_start:
     cmpl (magic), %eax
     jnz jmp_label    
@@ -72,7 +73,8 @@ _multiboot_start:
     movl %ebx, %esi
     push %esi
     push %edi
-    call go_to_amd64
+    movl $go_to_amd64, %eax
+    call *%eax
 jmp_label:
     pause
     jmp  jmp_label
