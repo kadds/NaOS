@@ -50,9 +50,7 @@ void delete_msg_queue(message_queue_t *q)
 message_queue_t *get_msg_queue(msg_id id)
 {
     uctx::RawReadLockUninterruptibleContext icu(msg_queue_lock);
-    message_queue_t *q = nullptr;
-    msg_hash_map->get(id, q);
-    return q;
+    return msg_hash_map->get(id).value_or(nullptr);
 }
 
 struct wait_t
@@ -126,15 +124,20 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
     write_msg_data(msg, buffer, length);
 
     {
-        msg_pack_list_t *list;
         uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
         if (!write_for_write(queue, flags))
             return -1;
+        auto list_opt = queue->msg_packs.get(type);
+        msg_pack_list_t *list;
 
-        if (!queue->msg_packs.get(type, list))
+        if (!list_opt.has_value())
         {
             list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
             queue->msg_packs.insert(type, list);
+        }
+        else
+        {
+            list = list_opt.value();
         }
         list->push_back(msg);
         queue->msg_count++;
@@ -146,9 +149,9 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
 bool wait_reader_func(u64 data)
 {
     auto *w = reinterpret_cast<wait_t *>(data);
-    msg_pack_list_t *pack_list;
     uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
-    if (!w->queue->msg_packs.get(w->type, pack_list) || pack_list->empty())
+    auto list_opt = w->queue->msg_packs.get(w->type);
+    if (!list_opt.has_value() || list_opt.value()->empty())
     {
         if (w->queue->close && w->queue->msg_count == 0)
         {
@@ -207,7 +210,8 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
 
         uctx::RawSpinLockUninterruptibleController icu(queue->spinlock);
         icu.begin();
-        if (!queue->msg_packs.get(type, msg_pack_list) || msg_pack_list->empty())
+        auto list_opt = queue->msg_packs.get(type);
+        if (!list_opt.has_value() || list_opt.value()->empty())
         {
             icu.end();
             if (flags & msg_flags::no_block)

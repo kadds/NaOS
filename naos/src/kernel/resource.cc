@@ -50,10 +50,8 @@ void resource_table_t::delete_kobject(file_desc fd)
 
 khandle resource_table_t::get_kobject(file_desc fd)
 {
-    khandle handle;
     uctx::RawWriteLockUninterruptibleContext icu(map_lock);
-    handle_map.get(fd, handle);
-    return handle;
+    return handle_map.get(fd).value_or(khandle());
 }
 
 bool resource_table_t::set_handle(file_desc fd, khandle obj)

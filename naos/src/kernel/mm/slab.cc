@@ -181,9 +181,7 @@ slab_group *slab_group::get_group_from(void *ptr) {
 slab_group *slab_cache_pool::find_slab_group(const freelibcxx::string &name)
 {
     uctx::RawReadLockUninterruptibleContext ctx(group_lock);
-    slab_group *g = nullptr;
-    map.get(name, g);
-    return g;
+    return map.get(name).value_or(nullptr);
 }
 
 slab_group *slab_cache_pool::create_new_slab_group(u64 size, freelibcxx::string name, u64 align, u64 flags)

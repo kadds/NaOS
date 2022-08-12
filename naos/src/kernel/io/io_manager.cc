@@ -22,9 +22,11 @@ void init()
 bool send_io_request(request_t *request)
 {
     request_chain_t *chain;
+    auto chain_opt = request_map->get(request->type);
 
-    if (request_map->get(request->type, chain))
+    if (chain_opt.has_value())
     {
+        chain = chain_opt.value();
         u64 size = chain->size();
         auto stack = memory::NewArray<io_stack_t>(memory::KernelCommonAllocatorV, size);
         request->inner.stack_size = (u32)size;
@@ -71,9 +73,9 @@ bool send_io_request(request_t *request)
 
 void finish_io_request(request_t *request)
 {
-    request_chain_t *chain;
+    auto chain_opt = request_map->get(request->type);
 
-    if (request_map->get(request->type, chain))
+    if (chain_opt.has_value())
     {
         if (request->inner.io_stack != nullptr)
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, request->inner.io_stack,
@@ -94,10 +96,10 @@ void call_next_io_request_chain(request_t *request)
 
 bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_number_t request_chain)
 {
-    request_chain_t *chain;
-
-    if (request_map->get(request_chain, chain))
+    auto chain_opt = request_map->get(request_chain);
+    if (chain_opt.has_value())
     {
+        auto chain = chain_opt.value();
         if (target_dev == 0)
         {
             chain->push_back(source_dev);
@@ -114,7 +116,7 @@ bool attach_request_chain_device(u32 source_dev, u32 target_dev, request_chain_n
     }
     else
     {
-        chain = memory::New<request_chain_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        auto chain = memory::New<request_chain_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
         chain->push_back(source_dev);
         request_map->insert(request_chain, chain);
         return true;

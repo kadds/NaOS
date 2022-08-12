@@ -129,17 +129,20 @@ void init()
     }
 }
 
-bool get(const char *key, freelibcxx::string &out) { return cmdmap->get(freelibcxx::string::from_cstr(key), out); }
+freelibcxx::optional<freelibcxx::string> get(const char *key)
+{
+    return cmdmap->get(freelibcxx::string::from_cstr(key));
+}
 
 bool get_bool(const char *key, bool default_value)
 {
-    freelibcxx::string value(memory::KernelCommonAllocatorV);
     bool res = false;
-    if (!get(key, value))
+    auto value = get(key);
+    if (!value.has_value())
     {
         return default_value;
     }
-    if (value == "on" || value == "true")
+    if (value.value() == "on" || value.value() == "true")
     {
         res = true;
     }
@@ -148,32 +151,32 @@ bool get_bool(const char *key, bool default_value)
 
 i64 get_int(const char *key, i64 default_value)
 {
-    freelibcxx::string value(memory::KernelCommonAllocatorV);
-    if (get(key, value))
+    auto value = get(key);
+    if (value.has_value())
     {
-        return value.view().to_int64().value_or(default_value);
+        return value.value().view().to_int64().value_or(default_value);
     }
     return default_value;
 }
 
 u64 get_uint(const char *key, u64 default_value)
 {
-    freelibcxx::string value(memory::KernelCommonAllocatorV);
-    if (get(key, value))
+    auto value = get(key);
+    if (value.has_value())
     {
-        return value.view().to_uint64().value_or(default_value);
+        return value.value().view().to_uint64().value_or(default_value);
     }
     return default_value;
 }
 
 space_t get_space(const char *key, space_t default_value)
 {
-    freelibcxx::string value(memory::KernelCommonAllocatorV);
-    if (!get(key, value))
+    auto value = get(key);
+    if (!value.has_value())
     {
         return default_value;
     }
-    auto val = value.view();
+    auto val = value.value().view();
     auto iter = freelibcxx::find_if(val.begin(), val.end(), [](const char ch) { return !(ch >= '0' && ch <= '9'); });
     auto index = iter.get() - val.begin().get();
     auto numval = val.substr(0, index).to_uint64();

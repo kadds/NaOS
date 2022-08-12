@@ -26,7 +26,8 @@ bool early_get_bool(const char *key, bool default_value);
 
 void init();
 
-bool get(const char *key, freelibcxx::string &out);
+freelibcxx::optional<freelibcxx::string> get(const char *key);
+
 i64 get_int(const char *key, i64 default_value);
 u64 get_uint(const char *key, u64 default_value);
 bool get_bool(const char *key, bool default_value);

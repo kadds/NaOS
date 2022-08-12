@@ -942,9 +942,7 @@ void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(t
 process_t *find_pid(process_id pid)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    process_t *process = nullptr;
-    global_process_map->get(pid, process);
-    return process;
+    return global_process_map->get(pid).value_or(nullptr);
 }
 
 thread_t *find_tid(process_t *process, thread_id tid)

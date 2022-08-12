@@ -1,5 +1,7 @@
 #pragma once
 #include "common.hpp"
+#include "freelibcxx/optional.hpp"
+#include "freelibcxx/span.hpp"
 
 #ifdef OS_KERNEL
 namespace irq
@@ -61,6 +63,13 @@ struct time_t
     u8 wday;         ///< 0 - ?
     u16 yday;        ///< 0 - 364(365)
     u16 year;        ///< 2000 - ?
+
+    // Y-m-d H:M:S
+    // like strftime
+    void format(freelibcxx::span<char> buf, const char *format = "Y-m-d H:M:S");
+
+    // like strptime
+    static freelibcxx::optional<time_t> from(freelibcxx::span<char> buf, const char *format);
 };
 
 typedef u64 microsecond_t;

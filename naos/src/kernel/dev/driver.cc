@@ -35,8 +35,7 @@ void remove_driver(driver *driver) {}
 
 driver *get_driver(num_t dri)
 {
-    driver *pdri = nullptr;
-    driver_map->get(dri, pdri);
-    return pdri;
+    auto pdri = driver_map->get(dri);
+    return pdri.value_or(nullptr);
 }
 } // namespace dev

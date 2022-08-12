@@ -145,11 +145,12 @@ extern "C" size_t strlen(const char *s) noexcept
 
 extern "C" char *strcpy(char *dest, const char *src) noexcept
 {
-    char *d = dest;
-    if (src == nullptr || dest == nullptr)
+    if (src == nullptr || dest == nullptr) [[unlikely]]
     {
         return dest;
     }
+
+    char *d = dest;
     while (*src != 0)
     {
         *dest++ = *src++;
@@ -160,21 +161,26 @@ extern "C" char *strcpy(char *dest, const char *src) noexcept
 
 extern "C" const char *strstr(const char *haystack, const char *needle) noexcept
 {
-    size_t len = strlen(haystack);
-    size_t pos = 0;
-    while (pos < len)
+    for (size_t i = 0; haystack[i]; i++)
     {
-        int i = 0;
-        for (; needle[i] != 0 && haystack[i] == needle[i]; i++)
+        bool found = true;
+        for (size_t j = 0; needle[j]; j++)
         {
+            if (!needle[j] || haystack[i + j] == needle[j])
+            {
+                continue;
+            }
+
+            found = false;
+            break;
         }
-        if (needle[i] == 0)
+
+        if (found) [[unlikely]]
         {
-            return haystack;
+            return const_cast<char *>(haystack + i);
         }
-        pos += i + 1;
-        haystack += i + 1;
     }
+
     return nullptr;
 }
 

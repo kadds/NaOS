@@ -1,6 +1,9 @@
 #include "kernel/clock.hpp"
+#include "freelibcxx/formatter.hpp"
+#include "freelibcxx/string.hpp"
 #include "kernel/arch/rtc.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
@@ -30,7 +33,7 @@ void init()
     time_t t;
     time2time_t(current_time_microsecond, &t);
     trace::debug("Current time: ", 2000 + t.year, ".", t.month + 1, ".", t.mday + 1, " ", t.hour, ":", t.minute, ":",
-                 t.second, ":", t.second, ":", t.millisecond);
+                 t.second, ".", t.millisecond);
 }
 
 void start_tick()
@@ -135,4 +138,59 @@ microsecond_t time_t2time(const time_t *t)
     return (ms * 1000) + t->microsecond;
 }
 
-} // namespace clock
+void format_fixed(freelibcxx::string &str, int fix, uint64_t val)
+{
+    str.from_uint64(val);
+    if (str.size() < fix)
+    {
+    }
+}
+
+void time_t::format(freelibcxx::span<char> buf, const char *format)
+{
+    char *b = buf.get();
+    int len = buf.size();
+    freelibcxx::string str(memory::KernelCommonAllocatorV);
+
+    while (*format != 0 && len > 0)
+    {
+        auto c = *format;
+        switch (c)
+        {
+            case 'Y':
+                format_fixed(str, 4, year + 2000);
+                break;
+            case 'm':
+                format_fixed(str, 2, month + 1);
+                break;
+            case 'd':
+                format_fixed(str, 2, mday);
+                break;
+            case 'H':
+                format_fixed(str, 2, hour);
+                break;
+            case 'M':
+                format_fixed(str, 2, minute);
+                break;
+            case 'S':
+                format_fixed(str, 2, second);
+                break;
+            default:
+                str.append_buffer(&c, 1);
+                break;
+        }
+        if (len < str.size())
+            return;
+
+        memcpy(b, str.data(), str.size());
+        len -= str.size();
+        b += str.size();
+
+        format++;
+        str.clear();
+    }
+}
+
+freelibcxx::optional<time_t> time_t::from(freelibcxx::span<char> buf, const char *format) {}
+
+} // namespace timeclock

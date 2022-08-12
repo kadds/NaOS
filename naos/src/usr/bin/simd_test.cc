@@ -11,7 +11,7 @@ int simd_test(int argc, char **argv)
     int times = 1000;
     if (argc > 1)
     {
-        times = freelibcxx::str2int(freelibcxx::const_string_view(argv[1]).get_span()).value_or(1000);
+        times = freelibcxx::const_string_view(argv[1]).to_int().value_or(1000);
     }
     freelibcxx::string ss(&alloc);
     freelibcxx::mt19937_random_engine rng(0);
@@ -40,6 +40,7 @@ int simd_test(int argc, char **argv)
             {
                 break;
             }
+            n += strlen(&view[0]);
         }
     }
     printf("find %d\n", n);

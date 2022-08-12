@@ -137,12 +137,7 @@ void super_block::save_dentry(vfs::dentry *entry) {}
 
 void super_block::write_inode(vfs::inode *node) {}
 
-vfs::inode *super_block::get_inode(u64 node_index)
-{
-    inode *node = nullptr;
-    inode_map.get(node_index, node);
-    return node;
-}
+vfs::inode *super_block::get_inode(u64 node_index) { return inode_map.get(node_index).value_or(nullptr); }
 
 handle_t<vfs::file> super_block::alloc_file() { return handle_t<::fs::ramfs::file>::make(); }
 
