@@ -4,24 +4,36 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-int cat(int argc, char **argv)
+void cat_fd(int fdin)
 {
-    int output_fd = STDOUT_FILENO;
-    int input_fd = STDIN_FILENO;
-    if (argc > 1)
-    {
-        int fd = open(argv[1], O_RDONLY);
-        if (fd < 0)
-            exit(-1);
-        input_fd = fd;
-    }
     char data[1024];
     long read_size;
-    while ((read_size = read(input_fd, data, 1024)) != EOF)
+    while ((read_size = read(fdin, data, 1024)) != EOF)
     {
-        write(output_fd, data, read_size);
+        write(STDOUT_FILENO, data, read_size);
     }
-    if (input_fd != STDIN_FILENO)
-        close(input_fd);
+}
+
+int cat(int argc, char **argv)
+{
+    if (argc > 1)
+    {
+        for (int i = 1; i < argc; i++)
+        {
+
+            int fd = open(argv[i], O_RDONLY);
+            if (fd < 0)
+            {
+                printf("file %s not found\n", argv[i]);
+                continue;
+            }
+            cat_fd(fd);
+            close(fd);
+        }
+    }
+    else
+    {
+        cat_fd(STDIN_FILENO);
+    }
     return 0;
 }

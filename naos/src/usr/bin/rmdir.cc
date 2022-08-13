@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include <unistd.h>
 int rmdir(int argc, char **argv)
 {
@@ -5,7 +6,10 @@ int rmdir(int argc, char **argv)
     {
         for (int i = 1; i < argc; i++)
         {
-            rmdir(argv[i]);
+            if (rmdir(argv[i]) != 0)
+            {
+                printf("rmdir %s fail\n", argv[i]);
+            }
         }
     }
     return 0;

@@ -87,6 +87,9 @@ enum path_walk_flags : flag_t
     file = 32,
     cross_root = 64,
     symbolic_file = 128,
+    trunc = 256,
+    write = 512,
+    exec = 1024,
 };
 } // namespace path_walk_flags
 

@@ -222,17 +222,45 @@ i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64
     return ENOTYPE;
 }
 
-int dup(int fd) { return 0; }
+file_desc dup(file_desc fd)
+{
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (!obj)
+    {
+        return EFAILED;
+    }
+    auto fd2 = res.new_kobject(obj);
+    return fd2;
+}
 
-int dup2(int fd, int newfd) { return 0; }
+int dup2(file_desc fd, file_desc newfd)
+{
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (!obj)
+    {
+        return EFAILED;
+    }
+    res.set_handle(newfd, obj, true);
+    return 0;
+}
 
 int istty(int fd)
 {
-    if (fd == 2 || fd == 1 || fd == 0)
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (obj->is<fs::vfs::file>())
     {
-        return 0;
+        if (auto file = obj->get<fs::vfs::file>())
+        {
+            if (file->get_pseudo() != 0)
+            {
+                return 0;
+            }
+        }
     }
-    return EINVAL;
+    return ENOTTY;
 }
 
 int stat(int fd, const char *path, int flags) { return 0; }

@@ -54,11 +54,11 @@ khandle resource_table_t::get_kobject(file_desc fd)
     return handle_map.get(fd).value_or(khandle());
 }
 
-bool resource_table_t::set_handle(file_desc fd, khandle obj)
+bool resource_table_t::set_handle(file_desc fd, khandle obj, bool force)
 {
     uctx::RawWriteLockUninterruptibleContext icu(map_lock);
 
-    if (!handle_map.has(fd))
+    if (!handle_map.has(fd) || force)
     {
         handle_map.insert(fd, std::move(obj));
         return true;

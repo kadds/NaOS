@@ -1,4 +1,5 @@
 
+#include <stdio.h>
 #include <sys/stat.h>
 
 int mkdir(int argc, char **argv)
@@ -7,7 +8,10 @@ int mkdir(int argc, char **argv)
     {
         for (int i = 1; i < argc; i++)
         {
-            mkdir(argv[i], 0);
+            if (mkdir(argv[i], 0) != 0)
+            {
+                printf("mkdir %s fail\n", argv[i]);
+            }
         }
     }
     return 0;

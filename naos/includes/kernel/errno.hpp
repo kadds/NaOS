@@ -74,3 +74,8 @@
 #undef ENOTYPE
 #endif
 #define ENOTYPE -14
+
+#ifdef ENOTTY
+#undef ENOTTY
+#endif
+#define ENOTTY 25

@@ -46,7 +46,7 @@ class resource_table_t
 
     khandle get_kobject(file_desc fd);
 
-    bool set_handle(file_desc fd, khandle obj);
+    bool set_handle(file_desc fd, khandle obj, bool force = false);
 
     void clear();
 

@@ -1,1 +1,2 @@
 export PATH=/bin:/usr/bin
+cat /data/banner.txt

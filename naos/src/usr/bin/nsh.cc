@@ -1,4 +1,10 @@
+
+#include "freelibcxx/string.hpp"
+#include "freelibcxx/vector.hpp"
+#include "nanobox.hpp"
+
 #include <asm-generic/errno-base.h>
+#include <fcntl.h>
 #include <stdio.h>
 
 #include <bits/posix/posix_stdlib.h>
@@ -8,59 +14,75 @@
 #include <strings.h>
 #include <sys/wait.h>
 #include <unistd.h>
-constexpr int max_command_chars = 8192;
 
-int parse_args(const char *args, char **&target)
+const char *helpstr = R"(nsh: nano shell: 
+    cd <path>
+    pwd
+    exit <code>
+    echo <args>
+    export ENV=VALUE
+    command <args>
+    command <args> > stdout
+    command <args> 1> stdout
+    command <args> 2> stderr
+    command <args> 1> stdout 2> stderr
+    command <args> 1> stdout 2>&1
+)";
+
+constexpr int max_command_chars = 8192;
+using namespace freelibcxx;
+
+bool parse_args(const_string_view input, vector<string> &args, FILE *&stdout, FILE *&stderr)
 {
-    target = (char **)malloc(100);
-    int num = 0;
-    if (args == nullptr)
+    stdout = ::stdout;
+    stderr = ::stderr;
+    if (input.size() == 0)
     {
-        return num;
+        return false;
     }
+
     const char *quote = nullptr;
     const char *double_quote = nullptr;
     bool escape = false;
-    char *cur = (char *)malloc(1000);
-    int cur_len = 0;
-    while (*args != '\0')
+
+    string cur(&alloc);
+    const char *p = input.data();
+
+    while (*p != '\0')
     {
-        char ch = *args;
+        char ch = *p;
         if (!escape && ch == '\'')
         {
             if (quote != nullptr)
             {
-                cur[cur_len] = '\0';
-                target[num++] = cur;
-                cur_len = 0;
-                cur = (char *)malloc(1000);
+                args.push_back(cur);
+                cur.clear();
                 quote = nullptr;
             }
             else
             {
-                quote = args;
+                quote = p;
             }
         }
         else if (!escape && ch == '"')
         {
             if (double_quote != nullptr)
             {
-                cur[cur_len] = '\0';
-                target[num++] = cur;
-                cur_len = 0;
-                cur = (char *)malloc(1000);
+                args.push_back(cur);
+                cur.clear();
+
                 double_quote = nullptr;
             }
             else
             {
-                double_quote = args;
+                double_quote = p;
             }
         }
         else if (ch == '\\')
         {
             if (escape)
             {
-                cur[cur_len] = ch;
+                cur += ch;
                 escape = false;
             }
             else
@@ -70,51 +92,97 @@ int parse_args(const char *args, char **&target)
         }
         else if (ch == ' ' && double_quote == nullptr && quote == nullptr && !escape)
         {
-            cur[cur_len] = '\0';
-            target[num++] = cur;
-            cur_len = 0;
-            cur = (char *)malloc(1000);
+            args.push_back(cur);
+            cur.clear();
         }
         else
         {
-            cur[cur_len++] = ch;
+            cur += ch;
         }
 
-        args++;
+        p++;
     }
-    if (cur_len > 0)
+    if (cur.size() > 0)
     {
-        cur[cur_len] = '\0';
-        target[num++] = cur;
+        args.push_back(std::move(cur));
     }
-    else
+
+    // check redirection
+
+    bool redirect = false;
+    for (size_t i = 0; i < args.size();)
     {
-        free(cur);
+        auto str = args[i].const_view();
+        str.trim();
+        if (str.size() == 0)
+        {
+            args.remove_at(i);
+            continue;
+        }
+
+        if (str == "1>" || str == ">")
+        {
+            redirect = true;
+            // query stdout file
+            if (i + 1 < args.size())
+            {
+                auto &file = args[i + 1];
+                auto f = fopen(file.data(), "w");
+                if (f != nullptr)
+                {
+                    stdout = f;
+                }
+                args.remove_n_at(i, 2);
+            }
+        }
+        else if (str == "2>")
+        {
+            redirect = true;
+            if (i + 1 < args.size())
+            {
+                auto &file = args[i + 1];
+                auto f = fopen(file.data(), "w");
+                if (f != nullptr)
+                {
+                    stderr = f;
+                }
+                args.remove_n_at(i, 2);
+            }
+        }
+        else if (str == "2>&1")
+        {
+            redirect = true;
+            stderr = stdout;
+            args.remove_n_at(i, 1);
+        }
+        else
+        {
+            if (redirect)
+            {
+                // ignore rest args
+                args.truncate(i);
+            }
+        }
+        i++;
     }
-    target[num] = nullptr;
-    return num;
+    return true;
 }
 
-void clear_args(char **target, int num)
-{
-    for (int i = 0; i < num; i++)
-    {
-        free(target[i]);
-    }
-    free(target);
-}
-
-int wait_input(size_t max, char *&input)
+int wait_input(FILE *file, size_t max, char *&input)
 {
     ssize_t bytes = 0;
     size_t n = max;
-    if (bytes = getline(&input, &n, stdin); bytes == -1)
+    if (bytes = getline(&input, &n, file); bytes == -1)
     {
-        return -1;
+        return EOF;
     }
     if (bytes == 1)
     {
-        return -1;
+        if (input[0] == '\n')
+        {
+            input[0] = 0;
+        }
+        return 0;
     }
     if (bytes > 1 && input[bytes - 1] == '\n')
     {
@@ -123,153 +191,157 @@ int wait_input(size_t max, char *&input)
     return 0;
 }
 
-int echo(int arg_num, char **args)
+int echo(FILE *fout, vector<string> &args)
 {
-    for (int i = 1; i < arg_num; i++)
+    for (size_t i = 1; i < args.size(); i++)
     {
-        auto beg = args[i];
-        while (*beg != 0)
+        auto arg = args[i].const_view();
+        while (true)
         {
-            char *symbol_beg = strchr(beg, '$');
-            bool mask = false;
-            char *env_beg = nullptr;
-            if (symbol_beg != nullptr)
+            auto iter = arg.find('$');
+            if (iter == arg.end() && iter + 1 != arg.end())
             {
-                if (*(symbol_beg + 1) == '{')
-                {
-                    mask = true;
-                    env_beg = symbol_beg + 2;
-                }
-                else
-                {
-                    env_beg = symbol_beg + 1;
-                }
-            }
-            char *env_end = env_beg;
-
-            if (env_beg != nullptr)
-            {
-                while (*env_end != 0)
-                {
-                    if (*env_end == ' ')
-                    {
-                        break;
-                    }
-                    else if (mask && *env_end == '}')
-                    {
-                        break;
-                    }
-                    env_end++;
-                }
-            }
-
-            if (env_beg != nullptr)
-            {
-                *symbol_beg = 0;
-                printf("%s", beg);
-                *env_end = 0;
-                if (*&env_beg != nullptr)
-                {
-                    // print envvar
-                    char *envvalue = getenv(env_beg);
-                    printf("%s", envvalue);
-                }
-                beg = env_end + 1;
-            }
-            else
-            {
-                printf("%s", beg);
                 break;
             }
+            if (iter - arg.begin() > 0)
+            {
+                auto val = arg.to_string(&alloc);
+                printf("%s", val.data());
+            }
+            // find ${XXX} or $XXX
+            auto next = iter + 1;
+            auto view = arg.substr(iter - arg.begin());
+            char end_ch = ' ';
+            int offset = 1;
+            if (*next == '{')
+            {
+                end_ch = '}';
+                offset++;
+            }
+            // find end char
+            auto end_iter = view.find(end_ch);
+            auto env_key = view.substr(offset, end_iter - view.begin() - offset).to_string(&alloc);
+            if (end_iter != view.end())
+            {
+                end_iter++;
+            }
+            iter = end_iter;
+            // replace ENV
+            auto value = getenv(env_key.data());
+            if (value != nullptr)
+            {
+                fprintf(fout, "%s", value);
+            }
+
+            arg = arg.substr(iter - arg.begin());
         }
+        if (arg.size() > 0)
+        {
+            auto val = arg.to_string(&alloc);
+            fprintf(fout, "%s", val.data());
+        }
+
+        fprintf(fout, " ");
     }
-    printf("\n");
+    fprintf(fout, "\n");
     return 0;
 }
 
-int process(char **args, int arg_num)
+int process(vector<string> &args, FILE *stdout, FILE *stderr)
 {
-    if (arg_num == 0)
+    if (args.size() == 0)
     {
+        return 0;
+    }
+    auto fout = stdout;
+
+    const string &program = args[0];
+    if (program == "help")
+    {
+        fprintf(fout, "%s", helpstr);
         return 0;
     }
 
-    char *program = args[0];
-    if (strcmp(program, "help") == 0)
+    if (program == "cd")
     {
-        printf(R"(nsh: nano shell: 
-    command <args>
-  or  
-    export ENV=VALUE
-)");
+        chdir(args[1].data());
         return 0;
     }
-
-    if (strcmp(program, "cd") == 0)
+    if (program == "exit")
     {
-        chdir(args[1]);
-        return 0;
-    }
-    if (strcmp(program, "exit") == 0)
-    {
-        if (arg_num > 1)
+        if (args.size() > 1)
         {
-            exit(atoi(args[1]));
+            exit(atoi(args[1].data()));
         }
         else
         {
             exit(0);
         }
     }
-    if (strcmp(program, "pwd") == 0)
+    if (program == "pwd")
     {
         char cwd[512];
         if (getcwd(cwd, sizeof(cwd)))
         {
-            printf("%s\n", cwd);
+            fprintf(fout, "%s\n", cwd);
         }
         else
         {
-            printf("execute fail\n");
+            fprintf(fout, "execute fail\n");
             return errno;
         }
         return 0;
     }
-    if (strcmp(program, "export") == 0)
+    if (program == "export")
     {
-        auto p = strchr(args[1], '=');
-        if (p != nullptr)
+        auto arg = args[1].const_view();
+        const_string_view view[2];
+        auto n = arg.split_n<2>('=', view);
+
+        if (n == 2)
         {
-            auto size = p - args[1];
-            char *buffer = (char *)malloc(size);
-            memcpy(buffer, args[1], size);
-            buffer[size] = '\0';
-            setenv(buffer, p + 1, 1);
-            free(buffer);
+            string key = view->to_string(&alloc);
+            setenv(key.data(), view[1].data(), 1);
+            return 0;
         }
         else
         {
-            printf("usage: export ENV=VALUE:VALUE2\n");
+            fprintf(fout, "usage: export ENV=VALUE:VALUE2\n");
             return -1;
         }
-        return 0;
     }
-    if (strcmp(program, "echo") == 0)
+    if (program == "echo")
     {
-        return echo(arg_num, args);
+        return echo(fout, args);
     }
 
     int pid = fork();
     if (pid == 0)
     {
-        int ret = execvp(program, args + 1);
+        if (::stdout != stdout)
+        {
+            dup2(STDOUT_FILENO, fileno_unlocked(stdout));
+        }
+        if (::stderr != stderr)
+        {
+            dup2(STDERR_FILENO, fileno_unlocked(stderr));
+        }
+
+        vector<char *> args_array(&alloc);
+        for (size_t i = 1; i < args.size(); i++)
+        {
+            args_array.push_back(args[i].data());
+        }
+        args_array.push_back(nullptr);
+
+        int ret = execvp(program.data(), args_array.data());
         if (errno == EACCES)
         {
-            printf("command '%s' not found\n", program);
+            printf("command '%s' not found\n", program.data());
         }
         else
         {
-            printf("command '%s' returns %d\n", program, ret);
+            printf("command '%s' returns %d\n", program.data(), ret);
         }
         exit(ret);
     }
@@ -286,23 +358,78 @@ int process(char **args, int arg_num)
     return 0;
 }
 
-int nsh(int argc, char **argv)
+int process_single_line(FILE *file, string &ss)
 {
-    char *cmd = reinterpret_cast<char *>(malloc(max_command_chars));
+    char *buf = ss.data();
+    if (wait_input(file, max_command_chars, buf) != 0)
+    {
+        return EOF;
+    }
+    vector<string> args(&alloc);
+
+    FILE *stdout, *stderr;
+    if (parse_args(ss.const_view(), args, stdout, stderr))
+    {
+        process(args, stdout, stderr);
+    }
+    if (stdout != ::stdout)
+    {
+        fflush(stdout);
+        fclose(stdout);
+    }
+    if (stderr != ::stderr)
+    {
+        fflush(stderr);
+        fclose(stderr);
+    }
+    return 0;
+}
+
+int do_input()
+{
+    string ss(&alloc);
+    ss.resize(max_command_chars);
+
     while (true)
     {
         printf("\e[32;1mnsh>\e[0m");
         fflush(stdout);
-        if (wait_input(max_command_chars, cmd) != 0)
+        if (process_single_line(stdin, ss) == EOF)
         {
-            continue;
+            break;
         }
-
-        char **args = nullptr;
-        int arg_num = parse_args(cmd, args);
-        process(args, arg_num);
-        clear_args(args, arg_num);
     }
+    return 0;
+}
+
+void config_source(const char *path)
+{
+    string ss(&alloc);
+    ss.resize(max_command_chars);
+
+    auto file = fopen(path, "r");
+
+    if (file == nullptr)
+    {
+        printf("source %s not found", path);
+        return;
+    }
+
+    while (true)
+    {
+        if (process_single_line(file, ss) == EOF)
+        {
+            break;
+        }
+    }
+}
+
+int nsh(int argc, char **argv)
+{
+    // read shell config
+    config_source("/etc/nshrc");
+
+    do_input();
 
     return 0;
 }
