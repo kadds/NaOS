@@ -199,7 +199,6 @@ u64 read_msg_data(message_pack_t *msg, byte *buffer, u64 length)
 i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, flag_t flags)
 {
     message_pack_t *msg;
-    msg_pack_list_t *msg_pack_list = nullptr;
     for (;;)
     {
         if (queue->close && queue->msg_count == 0)
@@ -229,7 +228,7 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
         }
         else
         {
-            msg = msg_pack_list->pop_front();
+            msg = list_opt.value()->pop_front();
             queue->msg_count--;
             icu.end();
             break;

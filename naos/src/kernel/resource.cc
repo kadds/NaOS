@@ -68,20 +68,8 @@ bool resource_table_t::set_handle(file_desc fd, khandle obj)
 
 void resource_table_t::clear()
 {
-    while (handle_map.size() != 0)
-    {
-        khandle handle;
-        {
-            uctx::RawWriteLockUninterruptibleContext icu(map_lock);
-
-            auto it = handle_map.begin();
-            if (it == handle_map.end())
-                break;
-            handle = std::move(it->value);
-            handle_map.remove(it->key);
-        }
-        // release handle
-    }
+    uctx::RawWriteLockUninterruptibleContext icu(map_lock);
+    handle_map.clear();
 }
 
 } // namespace task
