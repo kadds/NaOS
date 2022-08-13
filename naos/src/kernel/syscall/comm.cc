@@ -18,7 +18,14 @@ void log(const char *message)
 
 int clock_get(int clock_index, timeclock::time *time)
 {
-    *time = timeclock::to_time(timeclock::get_current_clock());
+    if (!is_user_space_pointer_or_null(time))
+    {
+        return EPARAM;
+    }
+
+    auto us = timeclock::get_current_clock();
+    time->tv_nsec = us / 1000 % 1000;
+    time->tv_sec = us / 1000000;
     return 0;
 }
 
