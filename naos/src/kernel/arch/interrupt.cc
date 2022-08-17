@@ -6,7 +6,6 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"

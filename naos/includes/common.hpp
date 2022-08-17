@@ -59,20 +59,20 @@ class phy_addr_t
     }
     template <typename T> static phy_addr_t from(T v) { return phy_addr_t(reinterpret_cast<void *>(v)); }
     byte *operator()() const { return ptr; }
-    phy_addr_t operator+(i64 val) const { return ptr + val; }
-    phy_addr_t operator-(i64 val) const { return ptr - val; }
-    phy_addr_t &operator+=(i64 val)
+    phy_addr_t operator+(ptrdiff_t val) const { return ptr + val; }
+    phy_addr_t operator-(ptrdiff_t val) const { return ptr - val; }
+    phy_addr_t &operator+=(ptrdiff_t val)
     {
         ptr += val;
         return *this;
     }
-    phy_addr_t &operator-=(i64 val)
+    phy_addr_t &operator-=(ptrdiff_t val)
     {
         ptr -= val;
         return *this;
     }
 
-    i64 operator-(phy_addr_t rhs) const { return ptr - rhs.ptr; }
+    ptrdiff_t operator-(phy_addr_t rhs) const { return ptr - rhs.ptr; }
 
     bool operator>(phy_addr_t rhs) const { return ptr > rhs.ptr; }
     bool operator<(phy_addr_t rhs) const { return ptr < rhs.ptr; }

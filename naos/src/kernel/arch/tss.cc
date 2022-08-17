@@ -2,7 +2,6 @@
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 namespace arch::tss

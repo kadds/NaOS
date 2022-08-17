@@ -172,7 +172,7 @@ slab_group *slab_group::get_group_from(void *ptr) {
     byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size - 1));
     page *p = memory::global_zones->get_page(page_addr);
     if (likely(p != nullptr)) {
-        kassert(!p->has_flag(page::buddy_free), "invalid buddy state, maybe double free");
+        // kassert(p->has_flags(page::buddy_used), "invalid buddy state, maybe double free");
         return p->get_ref_slab();
     }
     return nullptr;
@@ -209,12 +209,12 @@ void *SlabObjectAllocator::allocate(u64 size, u64 align) noexcept
         trace::panic("slab allocator can not alloc a larger size");
 
     auto ptr = slab_obj->alloc();
-#ifdef _DEBUG
-    if (ptr != nullptr)
-    {
-        memset(ptr, 0xFFFF'FFFF, size);
-    }
-#endif
+    // #ifdef _DEBUG
+    //     if (ptr != nullptr)
+    //     {
+    //         memset(ptr, 0xFFFF'FFFF, size);
+    //     }
+    // #endif
     return ptr;
 };
 

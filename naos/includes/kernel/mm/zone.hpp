@@ -1,8 +1,9 @@
 #pragma once
-#include "buddy.hpp"
 #include "common.hpp"
 #include "freelibcxx/allocator.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/mm/page.hpp"
+#include "kernel/types.hpp"
 #include "ucontext.h"
 
 namespace memory
@@ -15,9 +16,9 @@ class zone
     zone(phy_addr_t start, phy_addr_t end, phy_addr_t danger_beg, phy_addr_t danger_end);
     /// tell buddy system memory needs to be reserved
     void tag_alloc(phy_addr_t start, phy_addr_t end);
-    u64 pages_count() const { return page_count; }
+
     u64 free_pages() const;
-    u64 buddy_blocks_count() const { return buddy_block_count; }
+    u64 total_pages() const { return page_count; }
 
     phy_addr_t range_beg() const { return start; }
     phy_addr_t range_end() const { return end; }
@@ -28,8 +29,8 @@ class zone
     page *page_beg() const { return address_to_page(start); }
     page *page_end() const;
 
-    phy_addr_t alloc(u64 size);
-    void add_reference(phy_addr_t ptr);
+    phy_addr_t malloc(u64 pages);
+    void page_add_reference(phy_addr_t ptr);
     void free(phy_addr_t ptr);
 
     page *address_to_page(phy_addr_t ptr) const;
@@ -39,20 +40,22 @@ class zone
     phy_addr_t start;
     phy_addr_t allocate_end;
     phy_addr_t end;
+
     u64 page_count;
-    u64 buddy_block_count;
-    /// buddy pointer
-    buddy buddy_impl;
-    // kernel virtual address
-    page *pages;
+    page *page_array;
+    void *impl;
+
     lock::spinlock_t spin;
+
+    u64 impl_ptr_[64 / sizeof(u64)];
 };
 
 class zones : public freelibcxx::Allocator
 {
   public:
     zones(int count)
-        : count(count)
+        : last_report_(0)
+        , count_(count)
     {
     }
     zones(const zones &) = delete;
@@ -61,34 +64,33 @@ class zones : public freelibcxx::Allocator
     zones &operator=(zones &&) = delete;
     zones() {}
 
-    void set_zone_count(int count) { this->count = count; }
+    zone *at(int idx) { return &zone_array_[idx]; }
 
-    zone *at(int idx) { return &zone_array[idx]; }
-
-    int zone_count() const { return count; }
+    int zone_count() const { return count_; }
 
     zone *which(phy_addr_t ptr);
 
     void tag_alloc(phy_addr_t start, phy_addr_t end);
 
     // virtual address
-    void *allocate(u64 size, u64 align) noexcept override;
+    void *allocate(size_t size, size_t align) noexcept override;
     // virtual address
     void deallocate(void *ptr) noexcept override;
 
-    void add_reference(void *ptr);
+    void page_add_reference(void *ptr);
 
     page *get_page(void *ptr);
 
-    u64 pages_count() const;
+    u64 total_pages() const;
 
     u64 free_pages() const;
 
   private:
+    timeclock::microsecond_t last_report_;
     /// zone element count
-    int count;
+    int count_;
     /// zones array
-    zone zone_array[0];
+    zone zone_array_[0];
 };
 
 extern zones *global_zones;

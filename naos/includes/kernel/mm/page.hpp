@@ -11,14 +11,15 @@ class page
     enum page_flag : u32
     {
         slab_set = 1,
-        buddy_free = 2,
+        buddy_used = 2,
         buddy_unavailable = 4,
-        dirty = 8,
+        buddy_merged = 8,
+        dirty = 16,
     };
 
   public:
     page()
-        : ref_count(0)
+        : ref_count_(0)
         , ref_slab(nullptr)
     {
     }
@@ -28,37 +29,40 @@ class page
     page &operator=(const page &) = delete;
     page &operator=(page &&) = delete;
 
-    void set_buddy_next(page *next) { buddy_next = next; }
-    page *get_buddy_next() const { return buddy_next; }
-    void set_buddy_prev(page *prev) { buddy_prev = prev; }
-    page *get_buddy_prev() const { return buddy_prev; }
+    void set_buddy_next(u32 next) { buddy.next = next; }
+    u32 get_buddy_next() const { return buddy.next; }
+
+    void set_buddy_prev(u32 prev) { buddy.prev = prev; }
+    u32 get_buddy_prev() const { return buddy.prev; }
 
     void set_ref_slab(slab_group *s) { ref_slab = s; }
     slab_group *get_ref_slab() const { return ref_slab; }
 
-    void set_flag(u32 flag) { flags = flag; }
-    void add_flag(u32 flag) { flags |= flag; }
-    void rm_flag(u32 flag) { flags &= ~flag; }
-    bool has_flag(u32 flag) { return flags & flag; }
-    u32 get_ref_count() const { return ref_count; }
-    void clear_ref_count() { ref_count = 0; }
-    void add_ref_count() { ref_count++; }
-    void remove_ref_count() { ref_count--; }
+    void set_flags(u32 flags) { flags_ = flags; }
+    void add_flags(u32 flags) { flags_ |= flags; }
+    void remove_flags(u32 flags) { flags_ &= ~flags; }
+    bool has_flags(u32 flags) { return flags_ & flags; }
 
-    void set_buddy_order(u8 order) { buddy_order = order; }
-    u8 get_buddy_order() { return buddy_order; }
+    u32 get_ref_count() const { return ref_count_; }
+    void clear_ref_count() { ref_count_ = 0; }
+    void add_ref_count() { ref_count_++; }
+    void remove_ref_count() { ref_count_--; }
+
+    void set_buddy_order(int order) { buddy_order = order; }
+    int get_buddy_order() const { return buddy_order; }
+    u32 get_flags() const { return flags_; }
 
   private:
-    u32 flags;
-    u32 ref_count;
+    u32 flags_;
+    u32 ref_count_;
     union
     {
         slab_group *ref_slab;
-        page *buddy_next;
-    };
-    union
-    {
-        page *buddy_prev;
+        struct
+        {
+            u32 next;
+            u32 prev;
+        } buddy;
     };
     union
     {

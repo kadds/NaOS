@@ -7,7 +7,6 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/msg_queue.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
@@ -91,7 +90,7 @@ struct memory_range
     bool operator>=(const memory_range &rhs) const { return beg >= rhs.beg; }
 };
 
-int detect_zones(const kernel_start_args *args, memory_range used, memory_range *zones_range, int max_zones_range_count)
+int detect_zones(const kernel_start_args *args, memory_range *zones_range, int max_zones_range_count)
 {
     kernel_memory_map_item *mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
     max_memory_available = 0;
@@ -118,10 +117,6 @@ int detect_zones(const kernel_start_args *args, memory_range used, memory_range 
                 continue;
             }
             // split it
-            if (used.end <= end)
-            {
-                start = used.end > start ? used.end : start;
-            }
             start = align_up(start, large_page_size);
             if (zone_count + 1 > max_zones_range_count)
             {
@@ -185,8 +180,6 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     memcpy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
     args->rfsimg_start = reinterpret_cast<u64>(image_phy_addr.get());
 
-    auto end_used_memory_addr = align_up(image_ptr + image_size + page_size * 3 + fix_memory_limit, page_size);
-
     // map the kernel and data
     phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);
     phy_addr_t end_kernel = align_up(phy_addr_t::from(args->kernel_base) + args->kernel_size, page_size);
@@ -201,12 +194,14 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         }
     }
 
-    used_range.set(start_kernel, va2pa(end_used_memory_addr));
-
-    int zone_count = detect_zones(args, used_range, result_range, max_memory_range_support);
+    int zone_count = detect_zones(args, result_range, max_memory_range_support);
 
     global_zones = (memory::zones *)VirtBootAllocatorV->allocate(sizeof(zones) + zone_count * sizeof(zone), 8);
     global_zones = new (global_zones) memory::zones(zone_count);
+
+    auto end_used_memory_addr =
+        reinterpret_cast<char *>(VirtBootAllocatorV->current_ptr_address()) + memory::page_size * 2;
+    end_used_memory_addr = align_up(end_used_memory_addr, memory::page_size);
 
     for (int zone_id = 0; zone_id < zone_count; zone_id++)
     {
@@ -215,8 +210,9 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
         trace::debug("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
-                     " num of page ", z->pages_count(), ", block of buddy ", z->buddy_blocks_count());
+                     " num of page ", z->total_pages());
     }
+    global_zones->tag_alloc(phy_addr_t::from(0x100000), va2pa(end_used_memory_addr));
 
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
     KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
@@ -316,7 +312,7 @@ void *vmalloc(u64 size, u64 align)
     auto vm = kernel_vm_info->vma.allocate_map(size, align, 0, 0);
     for (u64 start = vm->start; start < vm->end; start += page_size)
     {
-        auto phy = memory::va2pa(KernelBuddyAllocatorV->allocate(1, 0));
+        auto phy = memory::va2pa(KernelBuddyAllocatorV->allocate(memory::page_size, 0));
         arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(), (void *)start, phy,
                           arch::paging::frame_size::size_4kb, 1,
                           arch::paging::flags::writable | arch::paging::flags::present, false);
@@ -338,7 +334,7 @@ void vfree(void *addr)
     }
 }
 
-void *malloc_page() { return KernelBuddyAllocatorV->allocate(1, 0); }
+void *malloc_page() { return KernelBuddyAllocatorV->allocate(memory::page_size, 0); }
 
 void free_page(void *addr) { KernelBuddyAllocatorV->deallocate(addr); }
 

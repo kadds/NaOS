@@ -27,8 +27,10 @@ void init()
 
     auto &c = arch::cpu::current();
     trace::debug("[CPU", c.get_id(), "] exception rsp:", trace::hex(c.get_exception_rsp()),
-                 " interrupt rsp:", (void *)c.get_interrupt_rsp(), " kernel rsp:", (void *)c.get_kernel_rsp());
+                 " interrupt rsp:", trace::hex(c.get_interrupt_rsp()), " kernel rsp:", trace::hex(c.get_kernel_rsp()),
+                 "\n cpu data: ", trace::hex(cpu));
 }
+
 u64 count() { return arch::cpu::count(); }
 
 cpu_data_t &get(u32 id) { return *(cpu_data_t *)arch::cpu::get(id).get_user_data(); }

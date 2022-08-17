@@ -1,6 +1,5 @@
 #include "kernel/mm/msg_queue.hpp"
 #include "freelibcxx/hash_map.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"

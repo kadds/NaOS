@@ -4,6 +4,7 @@
 #include "freelibcxx/allocator.hpp"
 #include "mm.hpp"
 #include "zone.hpp"
+#include <cstdint>
 #include <utility>
 
 namespace memory
@@ -42,21 +43,26 @@ template <typename T> inline Unpaged_Text_Section T unpaged_pa2va(phy_addr_t phy
 
 inline phy_addr_t align_down(phy_addr_t v, u64 m)
 {
-    return phy_addr_t::from(reinterpret_cast<u64>(v()) & ~(m - 1));
+    return phy_addr_t::from(reinterpret_cast<uintptr_t>(v()) & ~(m - 1));
 }
 
 inline phy_addr_t align_up(phy_addr_t v, u64 m)
 {
-    return phy_addr_t::from((reinterpret_cast<u64>(v()) + (m - 1)) & ~(m - 1));
+    return phy_addr_t::from((reinterpret_cast<uintptr_t>(v()) + (m - 1)) & ~(m - 1));
 }
 
 template <typename T> inline T *align_down(T *v, u64 m)
 {
-    return reinterpret_cast<T *>(reinterpret_cast<u64>(v) & ~(m - 1));
+    return reinterpret_cast<T *>(reinterpret_cast<uintptr_t>(v) & ~(m - 1));
 }
+template <typename T> inline T align_down(T v, u64 m) { return static_cast<T>(static_cast<uintptr_t>(v) & ~(m - 1)); }
 template <typename T> inline T *align_up(T *v, u64 m)
 {
-    return reinterpret_cast<T *>((reinterpret_cast<u64>(v) + (m - 1)) & ~(m - 1));
+    return reinterpret_cast<T *>((reinterpret_cast<uintptr_t>(v) + (m - 1)) & ~(m - 1));
+}
+template <typename T> inline T align_up(T v, u64 m)
+{
+    return static_cast<T>((static_cast<uintptr_t>(v) + (m - 1)) & ~(m - 1));
 }
 
 class PhyBootAllocator : public freelibcxx::Allocator

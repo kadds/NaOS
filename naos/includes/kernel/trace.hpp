@@ -513,7 +513,7 @@ inline static Trace_Section void print_reset() { print<PrintAttribute<TextAttrib
 
 #pragma GCC diagnostic pop
 
-NoReturn void keep_panic(const regs_t *regs = 0);
+void keep_panic(const regs_t *regs = 0);
 
 ///\brief stop all cpu and report an error.
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
@@ -526,9 +526,12 @@ template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
         print<>('\n');
     }
     keep_panic();
+    while (true)
+    {
+    }
 }
 
-template <typename... Args> NoReturn Trace_Section void panic_stack(const regs_t *regs, Args &&... args)
+template <typename... Args> Trace_Section void panic_stack(const regs_t *regs, Args &&...args)
 {
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);

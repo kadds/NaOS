@@ -5,7 +5,6 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/smp.hpp"
@@ -103,7 +102,7 @@ void cpu_wait_panic(u64 data)
     }
 }
 
-NoReturn void keep_panic(const regs_t *regs)
+void keep_panic(const regs_t *regs)
 {
     uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print_stack(regs, 30);
@@ -114,7 +113,8 @@ NoReturn void keep_panic(const regs_t *regs)
         if (id != cpu::current().id())
             SMP::call_cpu(id, cpu_wait_panic, 0);
     }
-    for (;;)
+    volatile bool stop = false;
+    while (!stop)
     {
         cpu_pause();
     }

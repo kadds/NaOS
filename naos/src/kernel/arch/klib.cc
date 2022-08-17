@@ -2,9 +2,7 @@
 #include "common.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/paging.hpp"
-#include "kernel/cpu.hpp"
 #include "kernel/ksybs.hpp"
-#include "kernel/mm/buddy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/task.hpp"
@@ -199,9 +197,10 @@ void *print_stack(const regs_t *regs, int max_depth)
     trace::print("cpu id=", arch::cpu::current().get_id(), " apic id = ", arch::cpu::current().get_apic_id(), " \n");
 
     trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of registers.", '\n');
-    u64 free_pages = memory::global_zones->pages_count();
     trace::print<trace::PrintAttribute<trace::CBK::Black, trace::CFG::White>>("system info: \n");
-    trace::print("buddy free pages ", free_pages, "\n");
+
+    trace::print("buddy free pages ", memory::global_zones->free_pages(), "/", memory::global_zones->total_pages(),
+                 "\n");
     trace::print_reset();
     return trace::hex(rbp);
 }

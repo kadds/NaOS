@@ -618,7 +618,7 @@ template <typename PageTable> bool clone(PageTable *dst, PageTable *src, int idx
         to = source;
         if constexpr (std::is_same_v<PageTable, pt>)
         {
-            memory::global_zones->add_reference(source.get_addr());
+            memory::global_zones->page_add_reference(source.get_addr());
             return true;
         }
         else
