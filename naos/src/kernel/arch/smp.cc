@@ -85,7 +85,7 @@ void init()
     }
 
     trace::debug("Bsp is arrived entrypoint");
-    trace::debug("Waiting for all processtor to arrive entrypoint");
+    trace::debug("Waiting for all processors to arrive entrypoint");
     counter--;
     while (counter > 0)
     {

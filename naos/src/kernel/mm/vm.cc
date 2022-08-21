@@ -301,16 +301,6 @@ u64 to_paging_flags(u64 flags)
         paging_flags |= arch::paging::flags::cache_disable;
     }
     return paging_flags;
-    // if (flags & flags::big_page)
-    // {
-    //     page_size = arch::paging::frame_size::size_2mb;
-    //     attr |= arch::paging::flags::big_page;
-    // }
-    // if (flags & flags::huge_page)
-    // {
-    //     page_size = arch::paging::frame_size::size_1gb;
-    //     attr |= arch::paging::flags::big_page;
-    // }
 }
 
 info_t::info_t()
@@ -331,6 +321,7 @@ info_t::info_t(arch::paging::page_table_t paging)
 info_t::~info_t()
 {
     uctx::RawWriteLockUninterruptibleContext ctx(vma_.get_lock());
+    uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
     auto &list = vma_.get_list();
     for (auto it = list.begin(); it != list.end(); ++it)
     {
@@ -371,6 +362,7 @@ bool info_t::set_brk(u64 ptr)
     }
     else
     {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
         /// remove pages
         paging_.unmap(reinterpret_cast<void *>(ptr), (heap_top_ - ptr) / page_size);
     }
@@ -393,12 +385,14 @@ bool info_t::set_brk_now(u64 ptr)
         auto current_map = heap_top_;
         while (ptr < current_map)
         {
+            uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
             u64 page_flags = to_paging_flags(heap_vm_->flags);
             paging_.map(reinterpret_cast<void *>(current_map), 1, page_flags, 0);
         }
     }
     else
     {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
         /// remove pages
         paging_.unmap(reinterpret_cast<void *>(ptr), (heap_top_ - ptr) / page_size);
     }
@@ -432,7 +426,10 @@ bool info_t::expand_brk(u64 alignment_page, u64 access_address, vm_t *item)
     if (access_address < heap_top_)
     {
         u64 page_flags = to_paging_flags(item->flags);
-        paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+        {
+            uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+            paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+        }
         return true;
     }
     return false;
@@ -445,7 +442,10 @@ bool info_t::expand_vm(u64 alignment_page, u64 access_address, vm_t *item)
         return false;
     }
     u64 page_flags = to_paging_flags(item->flags);
-    paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+    }
     // auto phy = paging_.get_map(reinterpret_cast<void *>(alignment_page)).value();
     // memset(pa2va(phy), 0, memory::page_size);
     return true;
@@ -458,9 +458,13 @@ bool info_t::expand_bss(u64 alignment_page, u64 access_address, vm_t *item)
         return false;
     }
     u64 page_flags = to_paging_flags(item->flags);
-    paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
-    auto phy = paging_.get_map(reinterpret_cast<void *>(alignment_page)).value();
-    memset(pa2va(phy), 0, memory::page_size);
+
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+        auto phy = paging_.get_map(reinterpret_cast<void *>(alignment_page)).value();
+        memset(pa2va(phy), 0, memory::page_size);
+    }
 
     return true;
 }
@@ -470,10 +474,13 @@ bool info_t::expand_file(u64 alignment_page, u64 access_address, vm_t *item)
     map_t *mt = (map_t *)item->user_data;
     u64 length_read = alignment_page - item->start;
     u64 page_flags = to_paging_flags(item->flags);
-    paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
-    auto phy = paging_.get_map(reinterpret_cast<void *>(alignment_page)).value();
-
-    byte *buffer = (byte *)pa2va(phy);
+    byte *buffer;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
+        auto phy = paging_.get_map(reinterpret_cast<void *>(alignment_page)).value();
+        buffer = (byte *)pa2va(phy);
+    }
 
     u64 length_can_read = length_read > mt->file_length ? 0 : mt->file_length - length_read;
     auto ksize = mt->file->pread(mt->file_offset + length_read, buffer,
@@ -538,7 +545,11 @@ bool info_t::umap_file(u64 addr, u64 size)
         memory::Delete<>(memory::KernelCommonAllocatorV, mt);
     }
     vma_.deallocate_map(vm);
-    paging_.unmap(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size);
+
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        paging_.unmap(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size);
+    }
 
     arch::paging::page_table_t::reload();
     return true;
@@ -547,7 +558,10 @@ bool info_t::umap_file(u64 addr, u64 size)
 void info_t::share_to(pid_t from_id, pid_t to_id, info_t *info)
 {
     vma_.clone(info, info->vma_, flags::cow);
-    paging_.clone_readonly_to((void *)0, memory::user_mmap_top_address / memory::page_size, &info->paging_);
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        paging_.clone_readonly_to((void *)0, memory::user_mmap_top_address / memory::page_size, &info->paging_);
+    }
 }
 
 bool info_t::copy_at(u64 virt_addr)
@@ -563,6 +577,7 @@ bool info_t::copy_at(u64 virt_addr)
         u64 alignment_page = align_down(virt_addr, memory::page_size);
         if (vm->flags & vm::flags::cow)
         {
+            uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
             // trace::info("cow at ", trace::hex(alignment_page), " at ", task::current_process()->pid);
             u64 page_flags = to_paging_flags(vm->flags);
             paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags,

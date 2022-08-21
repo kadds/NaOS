@@ -671,7 +671,7 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     // trace::info("process ", process->pid, " execve with ", path);
 
     auto mm_info = (mm_info_t *)process->mm_info;
-    auto new_mm_info = memory::New<mm_info_t>(memory::KernelCommonAllocatorV);
+    auto new_mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     {
         uctx::UninterruptibleContext ctx;
         process->mm_info = new_mm_info;
@@ -680,7 +680,7 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     }
     process->file = file;
 
-    memory::Delete(memory::KernelCommonAllocatorV, mm_info);
+    memory::Delete(mm_info_t_allocator, mm_info);
     mm_info = new_mm_info;
 
     // read file header 128 bytes
@@ -980,6 +980,7 @@ void switch_thread(thread_t *old, thread_t *new_task)
         ((mm_info_t *)new_task->process->mm_info)->paging().load();
     }
 
+    arch::task::update_fs(new_task);
     _switch_task(old->register_info, new_task->register_info);
 }
 
@@ -1002,6 +1003,7 @@ ExportC void userland_return() { scheduler::schedule(); }
 void set_tcb(thread_t *t, void *p)
 {
     t->tcb = p;
+    // trace::info("process ", t->process->pid, " thread ", t->tid, " set tcb ", trace::hex(p));
     arch::task::update_fs(t);
 }
 

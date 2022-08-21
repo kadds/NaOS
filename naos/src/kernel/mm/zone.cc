@@ -201,11 +201,11 @@ page *zone::page_end() const { return page_beg() + page_count; }
 
 phy_addr_t zone::malloc(u64 pages)
 {
+    uctx::RawSpinLockUninterruptibleContext ctx(spin);
     auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
     auto index = impl->alloc(pages);
     if (likely(index.has_value()))
     {
-        uctx::RawSpinLockUninterruptibleContext ctx(spin);
         page *p = page_array + index.value();
         if (p->get_ref_count() != 0)
         {

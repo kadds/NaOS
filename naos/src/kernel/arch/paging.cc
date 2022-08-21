@@ -81,6 +81,7 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
         // nothing to share
         return false;
     }
+    uctx::RawSpinLockUninterruptibleContext icu(share_spin);
     auto &next = entry.next();
     if (memory::global_zones->get_page_reference(&next) == 1)
     {
@@ -89,7 +90,6 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
     }
 
     using NextPageTable = std::remove_reference_t<decltype(entry.next())>;
-    uctx::RawSpinLockUninterruptibleContext icu(share_spin);
 
     int old_counter = page_table2page(next)->page_table_counter();
     kassert(counter(next) == old_counter, "counter not match ", counter(next), "!=", old_counter);
@@ -113,9 +113,10 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
     kassert(new_counter == old_counter, new_counter, "!=", old_counter);
 
     delete_page_table(&next);
+
+    page_table2page(*p)->set_page_table_counter(new_counter);
     entry.set_next(p);
     entry.set_flags(flags);
-    page_table2page(*p)->set_page_table_counter(new_counter);
 
     return true;
 }
@@ -526,9 +527,9 @@ void page_table_t::prepare_kernel_space()
         {
             continue;
         }
+        page_table2page(*base_)->add_page_table_counter();
         pml4e.set_next(new_page_table<pdpt>());
         pml4e.set_flags(flags::writable | flags::present);
-        page_table2page(*base_)->add_page_table_counter();
     }
 }
 
@@ -738,10 +739,9 @@ bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
     else
     {
         auto p = new_page_table<NextPageTable>();
+        page_table2page(base)->add_page_table_counter();
         entry.set_next(p);
         entry.set_flags(flags);
-
-        page_table2page(base)->add_page_table_counter();
 
         kassert(counter(base) == page_table2page(base)->page_table_counter(), "counter not match ", counter(base),
                 "!=", page_table2page(base)->page_table_counter());

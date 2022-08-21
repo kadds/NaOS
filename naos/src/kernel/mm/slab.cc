@@ -139,7 +139,7 @@ void slab_group::free(void *ptr)
     slab *s = reinterpret_cast<slab *>(page_addr);
     u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
     kassert(index < s->bitmap.count(), "s->data_ptr=", trace::hex(s->data_ptr));
-    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free.");
+    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free. ", trace::hex(ptr));
     s->bitmap.reset_bit(index);
     s->rest++;
     all_obj_used--;

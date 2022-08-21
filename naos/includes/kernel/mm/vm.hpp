@@ -153,6 +153,7 @@ class info_t
 
     const vm_t *heap_vm_;
     u64 heap_top_;
+    lock::spinlock_t paging_spin_;
 };
 
 /// map struct
