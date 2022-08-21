@@ -10,6 +10,10 @@
 
 int get_stackframes_by(u64 rbp, u64 rsp, u64 rip, int skip, stack_frame_t *frames, int count)
 {
+    if (memory::kernel_vm_info == nullptr)
+    {
+        return 0;
+    }
     int i = 0;
     int used = 0;
     while ((u64)rbp != 0)
@@ -31,18 +35,13 @@ int get_stackframes_by(u64 rbp, u64 rsp, u64 rip, int skip, stack_frame_t *frame
         {
             break;
         }
-        if (!arch::paging::has_map(arch::paging::current(), p))
+        if (!memory::kernel_vm_info->paging().has_flags(reinterpret_cast<void *>(p)))
         {
             break;
         }
         rip = *p;
-        // if (rip > end || rip < start)
-        // {
-        //     break;
-        // }
         rbp = reinterpret_cast<u64>(*reinterpret_cast<u64 *>(rbp));
     }
-    // util::memzero(frames + used * sizeof(stack_frame_t), (count - used) * sizeof(stack_frame_t));
     return used;
 }
 

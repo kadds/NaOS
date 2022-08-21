@@ -1,6 +1,7 @@
 #pragma once
 #include "../../mm/new.hpp"
 #include "defines.hpp"
+#include "freelibcxx/allocator.hpp"
 namespace fs::vfs
 {
 struct nameidata
@@ -9,11 +10,15 @@ struct nameidata
     u16 symlink_deep;
     u64 deep;
     const char *last_scan_url_point;
-    memory::MemoryView<dir_path_str> entry_buffer;
+    dir_path_str *entry_buffer;
+    freelibcxx::Allocator *allocator_;
 
-    nameidata(freelibcxx::Allocator *allocator, u64 size, u64 align)
-        : entry_buffer(allocator, size, align)
+    nameidata(freelibcxx::Allocator *allocator)
+        : entry_buffer(allocator->New<dir_path_str>())
+        , allocator_(allocator)
     {
     }
+
+    ~nameidata() { allocator_->Delete(entry_buffer); }
 };
 } // namespace fs::vfs

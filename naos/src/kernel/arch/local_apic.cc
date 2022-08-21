@@ -3,6 +3,7 @@
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/interrupt.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/irq.hpp"
@@ -184,11 +185,11 @@ void local_init()
             phy_addr_t local_apic_base_addr = phy_addr_t::from(_rdmsr(0x1B) & ~((1 << 13) - 1));
             // local_apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
             trace::debug("APIC base ", trace::hex(local_apic_base_addr()));
-
-            paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(),
-                        (void *)memory::local_apic_bottom_address, local_apic_base_addr, paging::frame_size::size_2mb,
-                        1, paging::flags::uncacheable | paging::flags::writable, false);
-            paging::reload();
+            auto &paging = memory::kernel_vm_info->paging();
+            paging.big_page_map_to(
+                reinterpret_cast<void *>(memory::local_apic_bottom_address), paging::big_pages, local_apic_base_addr,
+                paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through, 0);
+            paging.reload();
 
             apic_base_addr = (void *)memory::local_apic_bottom_address;
         }

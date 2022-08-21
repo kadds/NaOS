@@ -318,6 +318,10 @@ void completely_fair_scheduler::commit_migrate(thread_t *thd)
     auto it = list->runable_list.find(cfs_thread_t(thd));
     kassert(it != list->runable_list.end(), "commit task failed!");
 
+    auto scher_data = get_schedule_data(thd);
+    thd->schedule_data = nullptr;
+    memory::Delete<>(memory::KernelCommonAllocatorV, scher_data);
+
     list->runable_list.remove(it);
 }
 

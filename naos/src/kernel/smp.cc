@@ -15,7 +15,7 @@ namespace SMP
 
 irq::request_result flush_tlb_irq(const irq::interrupt_info *inter, u64 data, u64 user_data)
 {
-    arch::paging::reload();
+    arch::paging::page_table_t::reload();
     return irq::request_result::ok;
 }
 

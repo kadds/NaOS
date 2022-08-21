@@ -52,22 +52,27 @@ class page
     int get_buddy_order() const { return buddy_order; }
     u32 get_flags() const { return flags_; }
 
+    void add_page_table_counter() { page_table_next_entries_++; }
+    void sub_page_table_counter() { page_table_next_entries_--; }
+    u16 page_table_counter() const { return page_table_next_entries_; }
+    void set_page_table_counter(u16 c) { page_table_next_entries_ = c; }
+
   private:
     u32 flags_;
     u32 ref_count_;
     union
     {
         slab_group *ref_slab;
+        u16 page_table_next_entries_;
         struct
         {
             u32 next;
             u32 prev;
         } buddy;
     };
-    union
-    {
-        u8 buddy_order;
-    };
+
+    u8 buddy_order;
+    void *mapping_;
 };
 
 void init_pages();

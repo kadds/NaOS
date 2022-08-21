@@ -88,7 +88,7 @@ i64 rest_dir_name(nameidata &idata)
 {
     u64 name_len = 0;
     const char *p_name = idata.last_scan_url_point;
-    char *entry_buffer = idata.entry_buffer.get()->name;
+    char *entry_buffer = idata.entry_buffer->name;
 
     while (*p_name != 0)
     {
@@ -127,7 +127,7 @@ i64 rest_file_name(nameidata &idata)
 {
     u64 name_len = 0;
     const char *p_name = idata.last_scan_url_point;
-    char *entry_buffer = idata.entry_buffer.get()->name;
+    char *entry_buffer = idata.entry_buffer->name;
 
     while (*p_name != 0)
     {
@@ -201,7 +201,7 @@ dentry *create_pseudo(inode_type_t type, dentry *parent, const char *name, u64 n
 
 bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     auto entry = path_walk(path, root, cur_dir, 0, idata);
     if (entry != nullptr)
     {
@@ -229,29 +229,27 @@ bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags)
 
     if (flags & create_flags::directory)
     {
-        entry = mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = mkdir(idata.last_available_entry, idata.entry_buffer->name, name_len);
     }
     else if (flags & create_flags::file)
     {
-        entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
+        entry = create_file(idata.last_available_entry, idata.entry_buffer->name, name_len, &idata);
     }
     else if (flags & create_flags::chr)
     {
-        entry = create_pseudo(inode_type_t::chr, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = create_pseudo(inode_type_t::chr, idata.last_available_entry, idata.entry_buffer->name, name_len);
     }
     else if (flags & create_flags::block)
     {
-        entry =
-            create_pseudo(inode_type_t::block, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = create_pseudo(inode_type_t::block, idata.last_available_entry, idata.entry_buffer->name, name_len);
     }
     else if (flags & create_flags::pipe)
     {
-        entry = create_pseudo(inode_type_t::pipe, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = create_pseudo(inode_type_t::pipe, idata.last_available_entry, idata.entry_buffer->name, name_len);
     }
     else if (flags & create_flags::socket)
     {
-        entry =
-            create_pseudo(inode_type_t::socket, idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+        entry = create_pseudo(inode_type_t::socket, idata.last_available_entry, idata.entry_buffer->name, name_len);
     }
 
     if (entry == nullptr)
@@ -276,7 +274,7 @@ void rmdir(dentry *entry)
 
 dentry *rename(const char *new_path, dentry *old, dentry *root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *new_entry = path_walk(new_path, root, cur_dir, 0, idata);
     if (new_entry != nullptr)
         return nullptr;
@@ -299,7 +297,7 @@ dentry *rename(const char *new_path, dentry *old, dentry *root, dentry *cur_dir)
     }
 
     auto cname = (char *)memory::KernelCommonAllocatorV->allocate(name_len, 1);
-    memcpy(cname, (const void *)idata.entry_buffer.get()->name, name_len);
+    memcpy(cname, (const void *)idata.entry_buffer->name, name_len);
     old->set_name(cname);
     old->get_parent()->remove_child(old);
     old->set_parent(idata.last_available_entry);
@@ -331,7 +329,7 @@ u64 next_path_entry_str(const char *&name, char *buffer)
 dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags, nameidata &idata)
 {
     dentry *prev_entry = cur_dir;
-    char *entry_buffer = idata.entry_buffer.get()->name;
+    char *entry_buffer = idata.entry_buffer->name;
     if (*name == 0)
     {
         return cur_dir;
@@ -428,7 +426,7 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
 
 dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
 
     return path_walk(name, root, cur_dir, flags, idata);
 }
@@ -456,7 +454,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
             trace::panic("Mount root \"/\" before mount \"", path, "\". File system name: ", fs->get_name());
         }
 
-        nameidata idata(&data->dir_entry_allocator, 1, 0);
+        nameidata idata(&data->dir_entry_allocator);
         dentry *dir = path_walk(path, path_root, cur_dir, path_walk_flags::directory, idata);
         if (unlikely(dir == nullptr))
         {
@@ -481,7 +479,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
 
 bool umount(const char *path, dentry *path_root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
 
     dentry *dir = path_walk(path, path_root, cur_dir, 0, idata);
     if (dir == nullptr)
@@ -512,7 +510,7 @@ bool umount(const char *path, dentry *path_root, dentry *cur_dir)
 
 handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(filepath, root, cur_dir, attr, idata);
     while (entry == nullptr)
     {
@@ -526,11 +524,11 @@ handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t 
 
             if (attr & path_walk_flags::directory)
             {
-                entry = mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+                entry = mkdir(idata.last_available_entry, idata.entry_buffer->name, name_len);
             }
             else
             {
-                entry = create_file(idata.last_available_entry, idata.entry_buffer.get()->name, name_len, &idata);
+                entry = create_file(idata.last_available_entry, idata.entry_buffer->name, name_len, &idata);
             }
         }
         break;
@@ -547,7 +545,7 @@ handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t 
 
 bool rename(const char *new_dir, const char *old_dir, dentry *root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
 
     auto entry = path_walk(old_dir, root, cur_dir, 0, idata);
     if (entry == nullptr)
@@ -558,7 +556,7 @@ bool rename(const char *new_dir, const char *old_dir, dentry *root, dentry *cur_
 
 bool chmod(const char *dir, dentry *root, dentry *cur_dir, flag_t permission)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
 
     auto entry = path_walk(dir, root, cur_dir, 0, idata);
     if (entry == nullptr)
@@ -573,7 +571,7 @@ bool mkdir(const char *dir, dentry *root, dentry *cur_dir, flag_t attr)
 {
     attr &= ~path_walk_flags::file;
     attr |= path_walk_flags::directory;
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *e = path_walk(dir, root, cur_dir, attr, idata);
     if (unlikely(e != nullptr)) // exist
         return false;
@@ -581,13 +579,13 @@ bool mkdir(const char *dir, dentry *root, dentry *cur_dir, flag_t attr)
     if (name_len <= 0)
         return false; // null dir name
 
-    mkdir(idata.last_available_entry, idata.entry_buffer.get()->name, name_len);
+    mkdir(idata.last_available_entry, idata.entry_buffer->name, name_len);
     return true;
 }
 
 bool rmdir(const char *dir, dentry *root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(dir, root, cur_dir, path_walk_flags::directory, idata);
     if (entry == nullptr)
         return false;
@@ -597,7 +595,7 @@ bool rmdir(const char *dir, dentry *root, dentry *cur_dir)
 
 bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t flags)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(pathname, path_root, cur_dir, 0, idata);
     if (entry == nullptr)
         return false;
@@ -606,12 +604,12 @@ bool access(const char *pathname, dentry *path_root, dentry *cur_dir, flag_t fla
 
 bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *entry_target = path_walk(target, root, cur_dir, 0, idata);
     if (unlikely(entry_target == nullptr))
         return false;
 
-    nameidata src_idata(&data->dir_entry_allocator, 1, 0);
+    nameidata src_idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(src, root, cur_dir, path_walk_flags::file, src_idata);
     if (unlikely(entry != nullptr))
         return false;
@@ -620,7 +618,7 @@ bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
     if (unlikely(name_len <= 0))
         return false;
 
-    entry = create_dentry(src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len);
+    entry = create_dentry(src_idata.last_available_entry, src_idata.entry_buffer->name, name_len);
     if (unlikely(entry == nullptr))
         return false;
 
@@ -657,7 +655,7 @@ bool unlink(dentry *entry)
 
 bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
 {
-    nameidata idata(&data->dir_entry_allocator, 1, 0);
+    nameidata idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(pathname, root, cur_dir, path_walk_flags::not_resolve_symbolic_link, idata);
     if (unlikely(entry == nullptr))
         return false;
@@ -667,7 +665,7 @@ bool unlink(const char *pathname, dentry *root, dentry *cur_dir)
 
 bool symbolink(const char *src, const char *target, dentry *root, dentry *current, flag_t flags)
 {
-    nameidata src_idata(&data->dir_entry_allocator, 1, 0);
+    nameidata src_idata(&data->dir_entry_allocator);
 
     dentry *entry = path_walk(src, root, current, 0, src_idata);
     if (unlikely(entry != nullptr))
@@ -676,7 +674,7 @@ bool symbolink(const char *src, const char *target, dentry *root, dentry *curren
     if (unlikely(name_len <= 0))
         return false;
 
-    entry = create_file(src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len, &src_idata);
+    entry = create_file(src_idata.last_available_entry, src_idata.entry_buffer->name, name_len, &src_idata);
 
     if (unlikely(entry == nullptr))
         return false;
@@ -866,7 +864,7 @@ handle_t<file> open_pipe()
 
 handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
 {
-    nameidata src_idata(&data->dir_entry_allocator, 1, 0);
+    nameidata src_idata(&data->dir_entry_allocator);
 
     dentry *entry = path_walk(path, root, current, 0, src_idata);
 
@@ -881,8 +879,7 @@ handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag
         return {};
     }
 
-    entry =
-        create_pseudo(inode_type_t::pipe, src_idata.last_available_entry, src_idata.entry_buffer.get()->name, name_len);
+    entry = create_pseudo(inode_type_t::pipe, src_idata.last_available_entry, src_idata.entry_buffer->name, name_len);
     if (unlikely(entry == nullptr))
     {
         return {};

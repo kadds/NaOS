@@ -6,7 +6,7 @@
 /// locks aren't disable interrupt, use it by 'ucontext::guard'
 namespace lock
 {
-constexpr int stack_frame_count = 4;
+constexpr int stack_frame_count = 3;
 ///\brief Not nestable, unfair spinlock
 struct spinlock_t
 {
@@ -37,7 +37,7 @@ struct spinlock_t
 #endif
         } while (!lock_m.compare_exchange_strong(target, true));
 #ifdef _DEBUG
-        get_stackframes(1, frames, stack_frame_count);
+        // get_stackframes(2, frames, stack_frame_count);
         get_task_id(pid, tid);
         wait_times = 0;
 #endif
@@ -84,7 +84,7 @@ struct rw_lock_t
             exp = lock_m & 0x7FFFFFFFFFFFFFFFUL;
         } while (!lock_m.compare_exchange_strong(exp, exp + 1));
 #ifdef _DEBUG
-        get_stackframes(1, frames, stack_frame_count);
+        // get_stackframes(2, frames, stack_frame_count);
         get_task_id(pid, tid);
         wait_times = 0;
 #endif
@@ -103,7 +103,7 @@ struct rw_lock_t
             exp = 0;
         } while (!lock_m.compare_exchange_strong(exp, 0x8000000000000000UL));
 #ifdef _DEBUG
-        get_stackframes(1, frames, stack_frame_count);
+        // get_stackframes(2, frames, stack_frame_count);
         get_task_id(pid, tid);
         wait_times = 0;
 #endif

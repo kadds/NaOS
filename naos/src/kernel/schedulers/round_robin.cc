@@ -246,6 +246,11 @@ void round_robin_scheduler::commit_migrate(thread_t *thd)
     uctx::UninterruptibleContext icu;
     auto it = l->runable_list.find(thd);
     kassert(it != l->runable_list.end(), "commit task failed!");
+
+    auto scher_data = (thread_data_rr_t *)thd->schedule_data;
+    thd->schedule_data = nullptr;
+    memory::Delete<>(memory::KernelCommonAllocatorV, scher_data);
+
     l->runable_list.remove(it);
 }
 

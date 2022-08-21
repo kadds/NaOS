@@ -142,7 +142,7 @@ inline constexpr u64 directory_maximum_path_size = 4096;
 
 struct dir_entry_str
 {
-    char name[directory_maximum_entry_size];
+    char name[directory_maximum_path_size];
     char *operator*() { return name; }
 };
 

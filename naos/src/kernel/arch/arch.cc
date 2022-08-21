@@ -63,8 +63,7 @@ void init(const kernel_start_args *args)
         auto cpu_mesh = cpu_info::get_cpu_mesh_info();
         trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
         cpu::allocate_stack(cpu_mesh.logic_num);
-
-        paging::enable_new_paging();
+        memory::kernel_vm_info->paging().load();
 
         trace::debug("GDT init");
         gdt::init_after_paging();

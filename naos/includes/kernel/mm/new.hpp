@@ -75,23 +75,4 @@ class MemoryAllocator : public freelibcxx::Allocator
 extern KernelCommonAllocator *KernelCommonAllocatorV;
 extern KernelVirtualAllocator *KernelVirtualAllocatorV;
 extern MemoryAllocator *MemoryAllocatorV;
-
-template <typename T> struct MemoryView
-{
-    T *ptr;
-    freelibcxx::Allocator *allocator;
-    MemoryView(freelibcxx::Allocator *allocator, u64 size, u64 align)
-        : allocator(allocator)
-    {
-        ptr = (T *)allocator->allocate(size, align);
-    }
-    ~MemoryView() { allocator->deallocate((void *)ptr); }
-
-    MemoryView(const MemoryView &) = delete;
-    MemoryView &operator=(const MemoryView &) = delete;
-    T &operator->() { return *ptr; }
-
-    T *get() { return ptr; }
-};
-
 } // namespace memory

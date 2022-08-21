@@ -1,4 +1,5 @@
 #include "kernel/arch/io_apic.hpp"
+#include "common.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/paging.hpp"
@@ -60,11 +61,11 @@ void io_init()
 
     u64 start = memory::io_apic_bottom_address;
 
-    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start,
-                phy_addr_t::from(io_map.base_addr), paging::frame_size::size_2mb, 1,
-                paging::flags::uncacheable | paging::flags::writable | paging::flags::write_through, false);
+    auto &paging = memory::kernel_vm_info->paging();
+    paging.big_page_map_to(reinterpret_cast<void *>(start), paging::big_pages, phy_addr_t::from(io_map.base_addr),
+                           paging::flags::writable | paging::flags::cache_disable | paging::flags::write_through, 0);
 
-    paging::reload();
+    paging.reload();
 
     io_map.base_addr = (void *)start;
 
@@ -109,10 +110,10 @@ void io_init()
     phy_addr_t base_addr = memory::align_down(rcba_address, paging::frame_size::size_2mb);
 
     start = memory::rcba_apic_bottom_address;
-    paging::map((paging::base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page(), (void *)start, base_addr,
-                paging::frame_size::size_2mb, 1, paging::flags::uncacheable | paging::flags::writable, false);
 
-    paging::reload();
+    paging.big_page_map_to(reinterpret_cast<void *>(start), paging::big_pages, base_addr,
+                           paging::flags::writable | paging::flags::cache_disable | paging::flags::write_through, 0);
+    paging.reload();
 
     trace::debug("RCBA register value ", trace::hex((u64)rcba), ", Base address ", trace::hex(rcba_address()));
     if (!(rcba & 0x1))

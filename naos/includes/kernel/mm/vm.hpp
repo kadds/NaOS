@@ -4,6 +4,7 @@
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/types.hpp"
 #include "list_node_cache.hpp"
@@ -42,35 +43,16 @@ void listen_page_fault();
 
 struct vm_t;
 class vm_allocator;
-
-typedef bool (*vm_page_fault_func)(vm_allocator &vma, u64 page_addr, vm_t *vm);
-struct vm_t
-{
-    u64 start;
-    u64 end;
-    u64 flags;
-    vm_page_fault_func handle;
-    u64 user_data;
-    u64 alloc_times = 0;
-    bool operator==(const vm_t &rhs) const { return rhs.end == end; }
-    bool operator<(const vm_t &rhs) const { return end < rhs.end; }
-    bool operator<=(const vm_t &rhs) const { return end <= rhs.end; }
-    bool operator>(const vm_t &rhs) const { return end > rhs.end; }
-    vm_t(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data)
-        : start(start)
-        , end(end)
-        , flags(flags)
-        , handle(handle)
-        , user_data(user_data){};
-    vm_t(u64 start)
-        : start(start)
-        , end(start)
-        , flags(0)
-        , handle(nullptr)
-        , user_data(0){};
-};
-
 class info_t;
+
+enum class page_fault_method
+{
+    none,
+    heap_break,
+    common,
+    common_with_bss,
+    file,
+};
 
 class vm_allocator
 {
@@ -90,17 +72,19 @@ class vm_allocator
     {
     }
 
+    ~vm_allocator();
+
     void set_range(u64 top, u64 bottom)
     {
         range_top = top;
         range_bottom = bottom;
     }
 
-    const vm_t *allocate_map(u64 size, u64 flags, vm_page_fault_func handle, u64 user_data);
+    const vm_t *allocate_map(u64 size, u64 flags, page_fault_method method, u64 user_data);
     void deallocate_map(const vm_t *vm);
     bool deallocate_map(u64 p);
 
-    const vm_t *add_map(u64 start, u64 end, u64 flags, vm_page_fault_func handle, u64 user_data);
+    const vm_t *add_map(u64 start, u64 end, u64 flags, page_fault_method method, u64 user_data);
 
     vm_t *get_vm_area(u64 p);
 
@@ -109,36 +93,6 @@ class vm_allocator
     void clone(info_t *info, vm_allocator &to, flag_t flag);
 
   private:
-};
-
-class mmu_paging
-{
-  private:
-    void *base_paging_addr;
-
-  public:
-    mmu_paging();
-    ~mmu_paging();
-    void load_paging();
-
-    void map_area(const vm_t *vm, bool override);
-    void map_area_phy(const vm_t *vm, phy_addr_t start, bool override);
-
-    void unmap_area(const vm_t *vm, bool free);
-
-    void *get_base_page();
-
-    void *page_map_vir2phy(void *virtual_addr);
-
-    bool virtual_address_mapped(void *addr);
-
-    void sync_kernel();
-
-    void clone(mmu_paging &to, int deep);
-    int remapping(const vm_t *vm, void *vir, phy_addr_t phy);
-
-    bool has_shared(void *vir);
-    bool clear_shared(void *vir, bool writeable);
 };
 
 struct shared_info_t
@@ -157,32 +111,48 @@ struct shared_info_t
 class info_t
 {
   public:
-    memory::vm::vm_allocator vma;
-    memory::vm::mmu_paging mmu_paging;
-    const vm_t *head_vm;
-    shared_info_t *shared_info;
-    lock::spinlock_t shared_info_lock;
-
-  private:
-    u64 current_head_ptr;
-
-  public:
     info_t();
+    info_t(arch::paging::page_table_t paging);
+
     ~info_t();
     info_t(const info_t &) = delete;
     info_t &operator=(const info_t &) = delete;
+
+    // break offset
     bool init_brk(u64 start);
     bool set_brk(u64 ptr);
     bool set_brk_now(u64 ptr);
     u64 get_brk();
 
+    // mmap virtual address
     const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_offset, u64 file_length, u64 mmap_length,
                          flag_t page_ext_attr);
+
     bool umap_file(u64 addr, u64 size);
     void sync_map_file(u64 addr);
 
     void share_to(pid_t from_id, pid_t to_id, info_t *info);
     bool copy_at(u64 vir);
+
+    void load() { paging_.load(); }
+
+    arch::paging::page_table_t &paging() { return paging_; }
+    vm_allocator &vma() { return vma_; }
+
+    bool expand(page_fault_method method, u64 alignment_page, u64 access_address, vm_t *item);
+
+  private:
+    bool expand_brk(u64 alignment_page, u64 access_address, vm_t *item);
+    bool expand_vm(u64 alignment_page, u64 access_address, vm_t *item);
+    bool expand_bss(u64 alignment_page, u64 access_address, vm_t *item);
+    bool expand_file(u64 alignment_page, u64 access_address, vm_t *item);
+
+  private:
+    memory::vm::vm_allocator vma_;
+    arch::paging::page_table_t paging_;
+
+    const vm_t *heap_vm_;
+    u64 heap_top_;
 };
 
 /// map struct
@@ -201,9 +171,32 @@ struct map_t
         , vm_info(vmi){};
 };
 
-bool fill_file_vm(vm_allocator &vma, u64 page_addr, vm_t *item);
-bool fill_expand_vm(vm_allocator &vma, u64 page_addr, vm_t *item);
-
 void sync_map_file(u64 addr);
+
+struct vm_t
+{
+    u64 start;
+    u64 end;
+    u64 flags;
+    page_fault_method method;
+    u64 user_data;
+    u64 alloc_times = 0;
+    bool operator==(const vm_t &rhs) const { return rhs.end == end; }
+    bool operator<(const vm_t &rhs) const { return end < rhs.end; }
+    bool operator<=(const vm_t &rhs) const { return end <= rhs.end; }
+    bool operator>(const vm_t &rhs) const { return end > rhs.end; }
+    vm_t(u64 start, u64 end, u64 flags, page_fault_method method, u64 user_data)
+        : start(start)
+        , end(end)
+        , flags(flags)
+        , method(method)
+        , user_data(user_data){};
+    vm_t(u64 start, u64 end, u64 flags)
+        : start(start)
+        , end(end)
+        , flags(flags)
+        , method(page_fault_method::none)
+        , user_data(0){};
+};
 
 } // namespace memory::vm

@@ -15,6 +15,8 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
     {
         uctx::RawSpinLockContext ctx(lock);
         list.push_back(current(), condition, user_data);
+        if (condition(user_data))
+            return true;
     }
 
     for (;;)

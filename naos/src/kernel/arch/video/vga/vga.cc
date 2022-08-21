@@ -1,9 +1,11 @@
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/video/vga/output_graphics.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
@@ -58,10 +60,13 @@ void init()
 
     phy_addr_t video_start =
         memory::align_down(phy_addr_t::from(device::vga::get_vram()), paging::frame_size::size_2mb);
-    paging::map(paging::current(), (void *)memory::kernel_vga_bottom_address, video_start, paging::frame_size::size_2mb,
-                (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / paging::frame_size::size_2mb,
-                paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable, false);
-    paging::reload();
+
+    auto pages = (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / memory::page_size;
+
+    auto &paging = memory::kernel_vm_info->paging();
+    paging.map_to(reinterpret_cast<void *>(memory::kernel_vga_bottom_address), pages, video_start,
+                  paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable, 0);
+    paging.reload();
 
     /// print video card memory info
     trace::debug("Vram address ", trace::hex(vram_addr), " map to ", trace::hex(memory::kernel_vga_bottom_address));

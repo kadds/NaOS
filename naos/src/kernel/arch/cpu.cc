@@ -136,7 +136,6 @@ cpuid_t id() { return current().get_id(); }
 
 void map(u64 &base, u64 pg, bool is_bsp = false) {
     u64 size = pg * memory::page_size;
-    auto c = (arch::paging::base_paging_t *) memory::kernel_vm_info->mmu_paging.get_base_page();
     base += memory::page_size;
     phy_addr_t ks;
     if (is_bsp) {
@@ -144,8 +143,10 @@ void map(u64 &base, u64 pg, bool is_bsp = false) {
     } else {
         ks = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(size, 0));
     }
-    paging::map(c, reinterpret_cast<void *>(base), ks, paging::frame_size::size_4kb, pg, paging::flags::writable,
-                false);
+    auto &paging = memory::kernel_vm_info->paging();
+
+    paging.map_to(reinterpret_cast<void *>(base), pg, ks, paging::flags::writable, 0);
+
     base += size;
 }
 
@@ -167,35 +168,31 @@ void allocate_stack(int logic_num)
 
 phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {
     void *vir = get_kernel_stack_bottom(id);
-    phy_addr_t phy = nullptr;
-    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
-    kassert(ret, "");
-    return phy;
+    auto addr = memory::kernel_vm_info->paging().get_map(vir);
+    kassert(addr.has_value(), id, " at ", vir);
+    return addr.value();
 }
 
 phy_addr_t get_exception_stack_bottom_phy(cpuid_t id) {
     void *vir = get_exception_stack_bottom(id);
-    phy_addr_t phy = nullptr;
-    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
-    kassert(ret, "");
-    return phy;
+    auto addr = memory::kernel_vm_info->paging().get_map(vir);
+    kassert(addr.has_value(), id, " at ", vir);
+    return addr.value();
 }
 
-phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id) {
-
+phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id)
+{
     void *vir = get_interrupt_stack_bottom(id);
-    phy_addr_t phy = nullptr;
-    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
-    kassert(ret, "");
-    return phy;
+    auto addr = memory::kernel_vm_info->paging().get_map(vir);
+    kassert(addr.has_value(), id, " at ", vir);
+    return addr.value();
 }
 
 phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id) {
     void *vir = get_exception_nmi_stack_bottom(id);
-    phy_addr_t phy = nullptr;
-    [[maybe_unused]] bool ret = paging::get_map_address(paging::current(), vir, &phy);
-    kassert(ret, "");
-    return phy;
+    auto addr = memory::kernel_vm_info->paging().get_map(vir);
+    kassert(addr.has_value(), id, " at ", vir);
+    return addr.value();
 }
 
 byte *get_kernel_stack_bottom(cpuid_t id)

@@ -80,6 +80,7 @@ class zones : public freelibcxx::Allocator
     void page_add_reference(void *ptr);
 
     page *get_page(void *ptr);
+    u32 get_page_reference(void *ptr);
 
     u64 total_pages() const;
 

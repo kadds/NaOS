@@ -1,14 +1,20 @@
 #include "kernel/arch/paging.hpp"
+#include "common.hpp"
+#include "freelibcxx/optional.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/smp.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 #include <termios.h>
 #include <type_traits>
 namespace arch::paging
@@ -17,25 +23,43 @@ namespace arch::paging
 static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
               "sizeof paging struct is not 4KB.");
 
-template <typename _T> _T *new_page_table()
+template <typename T>
+concept page_table = requires(T t)
 {
-    static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    return memory::New<_T, freelibcxx::Allocator *, 0x1000>(memory::KernelBuddyAllocatorV);
+    t[0];
+    t.is_page_table();
+};
+
+template <typename PageTable>
+requires page_table<PageTable> memory::page *page_table2page(PageTable &base)
+{
+    return memory::global_zones->get_page(&base);
 }
 
-template <typename _T> void delete_page_table(_T *addr)
+template <typename T>
+requires page_table<T> T *new_page_table()
 {
-    static_assert(sizeof(_T) == 0x1000, "type _T must be a page table");
-    memory::Delete<_T, freelibcxx::Allocator *>(memory::KernelBuddyAllocatorV, addr);
+    static_assert(sizeof(T) == 0x1000, "type _T must be a page table");
+    auto p = memory::New<T, freelibcxx::Allocator *, 0x1000>(memory::KernelBuddyAllocatorV);
+    memory::global_zones->get_page(p)->set_page_table_counter(0);
+    return p;
 }
 
-void *base_entry::get_addr() const { return memory::pa2va(phy_addr_t::from((u64)data & 0xFFFFFFFFFF000UL)); }
+template <typename T>
+requires page_table<T>
+void delete_page_table(T *addr)
+{
+    static_assert(sizeof(T) == 0x1000, "type _T must be a page table");
+    memory::Delete<T, freelibcxx::Allocator *>(memory::KernelBuddyAllocatorV, addr);
+}
 
-void *base_entry::get_phy_addr() const { return (void *)((u64)data & 0xFFFFFFFFFF000UL); }
+void *base_entry::get_addr() const { return memory::pa2va(phy_addr_t::from((u64)data & 0xF'FFFF'FFFF'F000UL)); }
+
+phy_addr_t base_entry::get_phy_addr() const { return phy_addr_t::from((void *)((u64)data & 0xF'FFFF'FFFF'F000UL)); }
 
 void base_entry::set_addr(void *ptr)
 {
-    data = (data & ~0xFFFFFFFFFF000UL) | (((u64)memory::va2pa(ptr)()) & 0xFFFFFFFFFF000UL);
+    data = (data & ~0xF'FFFF'FFFF'F000UL) | (((u64)memory::va2pa(ptr)()) & 0xF'FFFF'FFFF'F000UL);
 }
 
 void base_entry::set_phy_addr(void *ptr)
@@ -43,7 +67,75 @@ void base_entry::set_phy_addr(void *ptr)
     data = (data & ~0xF'FFFF'FFFF'F000UL) | (((u64)ptr) & 0xF'FFFF'FFFF'F000UL);
 }
 
-inline u64 get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
+inline int get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1); }
+
+lock::spinlock_t share_spin;
+
+template <typename PageTable, typename PageEntry>
+requires page_table<PageTable>
+bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
+{
+    auto readonly_flags = flags & ~flags::writable;
+    if (readonly_flags == flags && !(actions & action_flags::copy_all))
+    {
+        // nothing to share
+        return false;
+    }
+    auto &next = entry.next();
+    if (memory::global_zones->get_page_reference(&next) == 1)
+    {
+        entry.set_flags(flags);
+        return false;
+    }
+
+    using NextPageTable = std::remove_reference_t<decltype(entry.next())>;
+    uctx::RawSpinLockUninterruptibleContext icu(share_spin);
+
+    int old_counter = page_table2page(next)->page_table_counter();
+    kassert(counter(next) == old_counter, "counter not match ", counter(next), "!=", old_counter);
+
+    auto p = new_page_table<NextPageTable>();
+
+    // copy next level page entry
+    int new_counter = 0;
+    for (int i = 0; i < 512 && new_counter < old_counter; i++)
+    {
+        if (next[i].is_present())
+        {
+            memory::page *page = memory::global_zones->get_page(next[i].get_addr());
+            page->add_ref_count();
+
+            next[i].set_flags(readonly_flags);
+            (*p)[i] = next[i];
+            new_counter++;
+        }
+    }
+    kassert(new_counter == old_counter, new_counter, "!=", old_counter);
+
+    delete_page_table(&next);
+    entry.set_next(p);
+    entry.set_flags(flags);
+    page_table2page(*p)->set_page_table_counter(new_counter);
+
+    return true;
+}
+
+template <typename PageTable>
+requires page_table<PageTable>
+int counter(PageTable &base)
+{
+    int n = 0;
+    for (int i = 0; i < 512; i++)
+    {
+        if (base[i].is_present())
+        {
+            n++;
+        }
+    }
+    return n;
+}
+
+bool move_forward_index(int level, int &pml4e_index, int &pdpe_index, int &pde_index, int &pte_index) { return false; }
 
 Unpaged_Text_Section u64 get_bits_unpaged(u64 addr, u8 start_bit, u8 bit_count)
 {
@@ -153,122 +245,39 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
     }
 }
 
-constexpr u64 pml4_entries_num = memory::max_memory_support / memory_size_gb(512);
-
 void init()
 {
-    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page();
+    auto &kernel_paging = memory::kernel_vm_info->paging();
     if (!cpu::current().is_bsp())
     {
-        load(base_kernel_page_addr);
+        kernel_paging.load();
         return;
     }
+    kernel_paging.prepare_kernel_space();
+
     u64 max_maped_memory = memory::get_max_maped_memory();
     if (max_maped_memory > memory::max_memory_support)
         trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
                      ". Maximum memory supported ", memory::max_memory_support, ".");
     // map all phy address
+    auto virt_start = reinterpret_cast<void *>(memory::minimum_kernel_addr);
+
     if (cpu_info::has_feature(cpu_info::feature::huge_page_1gb))
     {
+        max_maped_memory = memory::align_up(max_maped_memory, frame_size::size_1gb);
+        auto pages = max_maped_memory / memory::page_size;
+        kernel_paging.huge_page_map_to(virt_start, pages, phy_addr_t::from(0), arch::paging::flags::writable, 0);
         trace::debug("Paging at 1GB granularity");
-        map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_1gb,
-            (max_maped_memory + frame_size::size_1gb - 1) / frame_size::size_1gb, flags::writable, false);
     }
     else
     {
+        max_maped_memory = memory::align_up(max_maped_memory, frame_size::size_2mb);
+        auto pages = max_maped_memory / memory::page_size;
+        kernel_paging.big_page_map_to(virt_start, pages, phy_addr_t::from(0), arch::paging::flags::writable, 0);
         trace::debug("Paging at 2MB granularity");
-        map(base_kernel_page_addr, (void *)0xffff800000000000, phy_addr_t::from(0x0), frame_size::size_2mb,
-            (max_maped_memory + frame_size::size_2mb - 1) / frame_size::size_2mb, flags::writable, false);
     }
-    trace::debug("Map address ", (void *)0, "-", (void *)max_maped_memory, "->", (void *)0xffff800000000000, "-",
-                 (void *)(0xffff800000000000 + max_maped_memory));
-}
-
-void enable_new_paging()
-{
-    trace::debug("Reloading new page table");
-    auto base_kernel_page_addr = (base_paging_t *)memory::kernel_vm_info->mmu_paging.get_base_page();
-    load(base_kernel_page_addr);
-}
-
-void check_pml4e(pml4t *base_addr, int pml4_index, bool override)
-{
-    auto &pml4e = (*base_addr)[pml4_index];
-    if (!pml4e.is_present())
-    {
-        pml4e.set_present();
-        pml4e.set_user_mode();
-        pml4e.set_writable();
-
-        pml4e.set_addr(new_page_table<pdpt>());
-        pml4e.set_counter(0);
-    }
-    else if (override)
-    {
-        if (pml4e.has_share_flag())
-        {
-            pml4e.clear_share_flag();
-            pml4e.set_writable();
-        }
-    }
-}
-
-void check_pdpe(pml4t *base_addr, int pml4_index, int pdpt_index, bool create_next_table, bool override)
-{
-    check_pml4e(base_addr, pml4_index, override);
-    auto &pml4e = (*base_addr)[pml4_index];
-    auto &pdpte = pml4e.next()[pdpt_index];
-    if (!pdpte.is_present())
-    {
-        pdpte.set_present();
-        pdpte.set_user_mode();
-        pdpte.set_writable();
-
-        if (create_next_table)
-            pdpte.set_addr(new_page_table<pdt>());
-        else
-            pdpte.set_addr(0);
-
-        pdpte.set_counter(0);
-        pml4e.add_counter();
-    }
-    else if (override)
-    {
-        if (pdpte.has_share_flag())
-        {
-            pdpte.clear_share_flag();
-            pdpte.set_writable();
-        }
-    }
-}
-
-void check_pde(pml4t *base_addr, int pml4_index, int pdpt_index, int pt_index, bool create_next_table, bool override)
-{
-    check_pdpe(base_addr, pml4_index, pdpt_index, true, override);
-    auto &pdpt = (*base_addr)[pml4_index].next()[pdpt_index];
-    auto &pdt = pdpt.next()[pt_index];
-    if (!pdt.is_present())
-    {
-        pdt.set_present();
-        pdt.set_user_mode();
-        pdt.set_writable();
-
-        if (create_next_table)
-            pdt.set_addr(new_page_table<pt>());
-        else
-            pdt.set_addr(0);
-
-        pdt.set_counter(0);
-        pdpt.add_counter();
-    }
-    else if (override)
-    {
-        if (pdt.has_share_flag())
-        {
-            pdt.clear_share_flag();
-            pdt.set_writable();
-        }
-    }
+    trace::debug("Map address ", trace::hex(0), "-", trace::hex(max_maped_memory), "->", virt_start, "-",
+                 trace::hex(memory::minimum_kernel_addr + max_maped_memory));
 }
 
 NoReturn void error_map()
@@ -283,299 +292,48 @@ NoReturn void error_unmap()
                  "or not aligned.");
 }
 
-bool map(base_paging_t *base_paging_addr, void *virt_start_addr, phy_addr_t phy_start_addr, u64 frame_size,
-         u64 frame_count, u32 page_ext_flags, bool override)
+pml4t *current()
 {
-    uctx::UninterruptibleContext icu;
-    // virtual address doesn't align of 4kb
-    if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
-        error_map();
-
-    auto &top_page = *(pml4t *)base_paging_addr;
-    u64 v = (u64)virt_start_addr;
-    u64 pml4e_index = get_bits(v, 39, 8);
-    u64 pdpe_index = get_bits(v, 30, 8);
-    u64 pde_index = get_bits(v, 21, 8);
-    u64 pte_index = get_bits(v, 12, 8);
-
-    u8 *phy_addr = (u8 *)phy_start_addr();
-
-    switch (frame_size)
-    {
-        case frame_size::size_1gb: {
-            check_pml4e(&top_page, pml4e_index, override);
-            for (u32 i = 0; i < frame_count; i++, pdpe_index++, phy_addr += (u64)frame_size)
-            {
-                if (pdpe_index >= 512)
-                {
-                    if (++pml4e_index >= 512)
-                        error_map();
-                    check_pml4e(&top_page, pml4e_index, override);
-                    pdpe_index = 0;
-                }
-                auto &prev_entry = top_page[pml4e_index];
-                auto &entry = prev_entry.next()[pdpe_index];
-                if (entry.is_present())
-                {
-                    auto src = entry.get_addr();
-                    if (!override)
-                    {
-                        error_map();
-                    }
-                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
-                    memory::KernelBuddyAllocatorV->deallocate(src);
-                }
-                else
-                {
-
-                    prev_entry.add_counter();
-                }
-                entry = pdpt_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
-            }
-        }
-        break;
-        case frame_size::size_2mb: {
-            check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
-            for (u32 i = 0; i < frame_count; i++, pde_index++, phy_addr += (u64)frame_size)
-            {
-                if (pde_index >= 512)
-                {
-                    if (++pdpe_index >= 512)
-                    {
-                        if (++pml4e_index >= 512)
-                            error_map();
-                        check_pml4e(&top_page, pml4e_index, override);
-                        pdpe_index = 0;
-                    }
-                    check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
-                    pde_index = 0;
-                }
-                auto &prev_entry = top_page[pml4e_index].next()[pdpe_index];
-                auto &entry = prev_entry.next()[pde_index];
-                if (entry.is_present())
-                {
-                    auto src = entry.get_addr();
-                    if (!override)
-                    {
-                        error_map();
-                    }
-                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
-                    memory::KernelBuddyAllocatorV->deallocate(src);
-                }
-                else
-                {
-                    prev_entry.add_counter();
-                }
-                entry = pd_entry(phy_addr, flags::big_page | flags::present | page_ext_flags);
-            }
-        }
-        break;
-        case frame_size::size_4kb: {
-            check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true, override);
-            for (u32 i = 0; i < frame_count; i++, pte_index++, phy_addr += (u64)frame_size)
-            {
-                if (pte_index >= 512)
-                {
-                    if (++pde_index >= 512)
-                    {
-                        if (++pdpe_index >= 512)
-                        {
-                            if (++pml4e_index >= 512)
-                                error_map();
-                            check_pml4e(&top_page, pml4e_index, override);
-                            pdpe_index = 0;
-                        }
-                        check_pdpe(&top_page, pml4e_index, pdpe_index, true, override);
-                        pde_index = 0;
-                    }
-                    check_pde(&top_page, pml4e_index, pdpe_index, pde_index, true, override);
-                    pte_index = 0;
-                }
-                auto &prev_entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index];
-                auto &entry = prev_entry.next()[pte_index];
-                if (entry.is_present())
-                {
-                    auto src = entry.get_addr();
-                    if (!override)
-                    {
-                        error_map();
-                    }
-                    memcpy(memory::pa2va(phy_addr_t::from(phy_addr)), src, frame_size);
-                    memory::KernelBuddyAllocatorV->deallocate(src);
-                }
-                else
-                {
-                    prev_entry.add_counter();
-                }
-                entry = pt_entry(phy_addr, flags::present | page_ext_flags);
-            }
-        }
-        break;
-        default:
-            return false;
-    }
-    return true;
+    u64 v;
+    __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : :);
+    return memory::pa2va<pml4t *>(phy_addr_t::from(v));
 }
 
-void clean_null_page_pml4e(pml4t &base_page, u64 pml4e_index)
+page_table_t::page_table_t()
+    : self_(true)
 {
-    auto &e = base_page[pml4e_index];
-    if (e.get_counter() == 0 && e.is_present())
+    base_ = new_page_table<pml4t>();
+}
+page_table_t &page_table_t::operator=(page_table_t &&rhs)
+{
+    if (&rhs == this)
     {
-        delete_page_table(&e.next());
-        e.clear_present();
+        return *this;
+    }
+    if (base_ != nullptr && self_)
+    {
+        delete_page_table<pml4t>(base_);
+    }
+
+    base_ = rhs.base_;
+    self_ = rhs.self_;
+
+    rhs.base_ = nullptr;
+
+    return *this;
+}
+
+page_table_t::~page_table_t()
+{
+    if (base_ != nullptr && self_)
+    {
+        delete_page_table<pml4t>(base_);
     }
 }
 
-void clean_null_page_pdpe(pml4t &base_page, u64 pml4e_index, u64 pdpe_index)
-{
-    auto &e = base_page[pml4e_index].next()[pdpe_index];
-    if (e.get_counter() == 0 && e.is_present())
-    {
-        delete_page_table(&e.next());
-        e.clear_present();
-    }
-}
+void page_table_t::load() { __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(memory::va2pa(base_)()) : "memory"); }
 
-void clean_null_page_pde(pml4t &base_page, u64 pml4e_index, u64 pdpe_index, u64 pde_index)
-{
-    auto &e = base_page[pml4e_index].next()[pdpe_index].next()[pde_index];
-    if (e.get_counter() == 0 && e.is_present())
-    {
-        delete_page_table(&e.next());
-        e.clear_present();
-    }
-}
-
-bool unmap(base_paging_t *base_paging_addr, void *virt_start_addr, u64 frame_size, u64 frame_count)
-{
-    uctx::UninterruptibleContext icu;
-    // virtual address doesn't align of 4kb
-    if (((u64)virt_start_addr & (frame_size::size_4kb - 1)) != 0)
-        error_unmap();
-
-    auto &top_page = *(pml4t *)base_paging_addr;
-    u64 v = (u64)virt_start_addr;
-    u64 pml4e_index = get_bits(v, 39, 8);
-    u64 pdpe_index = get_bits(v, 30, 8);
-    u64 pde_index = get_bits(v, 21, 8);
-    u64 pte_index = get_bits(v, 12, 8);
-
-    switch (frame_size)
-    {
-        case frame_size::size_1gb: {
-            if (!top_page[pml4e_index].is_present())
-                error_unmap();
-
-            for (u32 i = 0; i < frame_count; i++, pdpe_index++)
-            {
-                if (pdpe_index >= 512)
-                {
-                    clean_null_page_pml4e(top_page, pml4e_index);
-                    if (++pml4e_index >= 512)
-                        error_unmap();
-                    if (!top_page[pml4e_index].is_present())
-                        error_unmap();
-                    pdpe_index = 0;
-                }
-                auto &entry = top_page[pml4e_index].next()[pdpe_index];
-                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
-                entry.clear_present();
-                entry.sub_counter();
-            }
-
-            clean_null_page_pml4e(top_page, pml4e_index);
-        }
-        break;
-        case frame_size::size_2mb: {
-            if (!top_page[pml4e_index].is_present())
-                error_unmap();
-            if (!top_page[pml4e_index].next()[pdpe_index].is_present())
-                error_unmap();
-
-            for (u32 i = 0; i < frame_count; i++, pde_index++)
-            {
-                if (pde_index >= 512)
-                {
-                    clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-                    if (++pdpe_index >= 512)
-                    {
-                        clean_null_page_pml4e(top_page, pml4e_index);
-                        if (++pml4e_index >= 512)
-                            error_unmap();
-                        if (!top_page[pml4e_index].is_present())
-                            error_unmap();
-                        pdpe_index = 0;
-                    }
-                    if (!top_page[pml4e_index].next()[pdpe_index].is_present())
-                        error_unmap();
-                    pde_index = 0;
-                }
-                auto &entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index];
-                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
-                entry.clear_present();
-                entry.sub_counter();
-            }
-            // clean null page tables
-            clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-            clean_null_page_pml4e(top_page, pml4e_index);
-        }
-        break;
-        case frame_size::size_4kb: {
-            if (!top_page[pml4e_index].is_present())
-                error_unmap();
-            if (!top_page[pml4e_index].next()[pdpe_index].is_present())
-                error_unmap();
-            if (!top_page[pml4e_index].next()[pdpe_index].next()[pde_index].is_present())
-                error_unmap();
-
-            for (u32 i = 0; i < frame_count; i++, pte_index++)
-            {
-                if (pte_index >= 512)
-                {
-                    clean_null_page_pde(top_page, pml4e_index, pdpe_index, pde_index);
-                    if (++pde_index >= 512)
-                    {
-                        clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-                        if (++pdpe_index >= 512)
-                        {
-                            clean_null_page_pml4e(top_page, pml4e_index);
-                            if (++pml4e_index >= 512)
-                                error_unmap();
-                            if (!top_page[pml4e_index].is_present())
-                                error_unmap();
-                            pdpe_index = 0;
-                        }
-                        if (!top_page[pml4e_index].next()[pdpe_index].is_present())
-                            error_unmap();
-                        pde_index = 0;
-                    }
-                    if (!top_page[pml4e_index].next()[pdpe_index].next()[pde_index].is_present())
-                        error_unmap();
-                    pte_index = 0;
-                }
-                auto &entry = top_page[pml4e_index].next()[pdpe_index].next()[pde_index].next()[pte_index];
-                memory::KernelBuddyAllocatorV->deallocate(entry.get_addr());
-                entry.clear_present();
-                entry.sub_counter();
-            }
-            clean_null_page_pde(top_page, pml4e_index, pdpe_index, pde_index);
-            clean_null_page_pdpe(top_page, pml4e_index, pdpe_index);
-            clean_null_page_pml4e(top_page, pml4e_index);
-        }
-        break;
-        default:
-            return false;
-    }
-    return true;
-}
-
-void load(base_paging_t *base_paging_addr)
-{
-    __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(memory::va2pa(base_paging_addr)()) : "memory");
-}
-
-void reload()
+void page_table_t::reload()
 {
     u64 c = 0;
     __asm__ __volatile__("movq %%cr3, %0	\n\t"
@@ -585,371 +343,536 @@ void reload()
                          : "memory");
 }
 
-base_paging_t *current()
+void page_table_t::map(void *virt_start, size_t pages, u64 flags, u64 actions)
 {
-    u64 v;
-    __asm__ __volatile__("movq %%cr3, %0	\n\t" : "=r"(v) : :);
-    return memory::pa2va<base_paging_t *>(phy_addr_t::from(v));
-}
-
-// return true if next level paging is needed
-template <typename PageTable> bool clone(PageTable *dst, PageTable *src, int idx, bool override, int deep)
-{
-    auto &source = src->entries[idx];
-    if (likely(source.is_present()))
+    // virtual address doesn't align of 4kb
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    if (p & (frame_size::size_4kb - 1))
     {
-        auto &to = dst->entries[idx];
-        if (to.is_present())
+        error_map();
+    }
+    flags |= flags::present;
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    ensure(pml4e_index, pdpe_index, pde_index, flags, actions);
+
+    for (size_t i = 0; i < pages; i++, pte_index++)
+    {
+        if (normalize_index(pml4e_index, pdpe_index, pde_index, pte_index))
         {
-            if (override)
+            ensure(pml4e_index, pdpe_index, pde_index, flags, actions);
+        }
+
+        auto &pe = (*base_)[pml4e_index][pdpe_index][pde_index][pte_index];
+
+        auto old_addr = pe.get_addr();
+        void *target_addr = old_addr;
+
+        if (pe.is_present())
+        {
+            if (!(actions & action_flags::override))
             {
-                if (likely(to.get_addr() != source.get_addr()))
-                {
-                    delete_page_table<PageTable>((PageTable *)to.get_addr());
-                }
+                error_map();
+            }
+            auto page = memory::global_zones->get_page(old_addr);
+            if (page->get_ref_count() >= 1)
+            {
+                // if (page->get_ref_count() != 1)
+                // {
+                target_addr = memory::KernelBuddyAllocatorV->allocate(memory::page_size, 0);
+                memcpy(target_addr, old_addr, frame_size::size_4kb);
+                memory::KernelBuddyAllocatorV->deallocate(old_addr);
+                // }
             }
             else
             {
-                return true;
+                error_map();
             }
-        }
-        source.add_share_flag();
-        source.clear_writable();
-        to = source;
-        if constexpr (std::is_same_v<PageTable, pt>)
-        {
-            memory::global_zones->page_add_reference(source.get_addr());
-            return true;
         }
         else
         {
-            if (!to.is_big_page())
+            if (actions & action_flags::cow)
             {
-                auto pt = new_page_table<PageTable>();
-                memcpy(pt, source.get_addr(), sizeof(PageTable));
-                to.set_addr(pt);
+                error_map();
             }
-            else
+
+            target_addr = memory::KernelBuddyAllocatorV->allocate(memory::page_size, 0);
+            page_table2page((*base_)[pml4e_index][pdpe_index][pde_index].next())->add_page_table_counter();
+        }
+
+        pe.set_addr(target_addr);
+        pe.set_flags(flags);
+    }
+}
+
+void page_table_t::map_to(void *virt_start, size_t pages, phy_addr_t phy_start, u64 flags, u64 actions)
+{
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    if (p & (frame_size::size_4kb - 1))
+    {
+        error_map();
+    }
+    flags |= flags::present;
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    ensure(pml4e_index, pdpe_index, pde_index, flags, actions);
+
+    for (size_t i = 0; i < pages; i++, pte_index++)
+    {
+        if (normalize_index(pml4e_index, pdpe_index, pde_index, pte_index))
+        {
+            ensure(pml4e_index, pdpe_index, pde_index, flags, actions);
+        }
+        auto &pe = (*base_)[pml4e_index][pdpe_index][pde_index][pte_index];
+
+        if (!pe.is_present())
+        {
+            page_table2page((*base_)[pml4e_index][pdpe_index][pde_index].next())->add_page_table_counter();
+        }
+        pe.set_phy_addr(phy_start());
+        pe.set_flags(flags);
+
+        phy_start += frame_size::size_4kb;
+    }
+}
+
+void page_table_t::big_page_map_to(void *virt_start, size_t pages, phy_addr_t phy_start, u64 flags, u64 actions)
+{
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    if (p & (frame_size::size_2mb - 1))
+    {
+        error_map();
+    }
+    if (pages & (big_pages - 1))
+    {
+        error_map();
+    }
+
+    flags |= flags::present;
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    ensure(pml4e_index, pdpe_index, flags, actions);
+
+    for (size_t i = 0; i < pages; i += big_pages, pde_index++)
+    {
+        if (normalize_index(pml4e_index, pdpe_index, pde_index, pte_index))
+        {
+            ensure(pml4e_index, pdpe_index, flags, actions);
+        }
+        auto &pde = (*base_)[pml4e_index][pdpe_index][pde_index];
+
+        if (!pde.is_present())
+        {
+            page_table2page((*base_)[pml4e_index][pdpe_index].next())->add_page_table_counter();
+        }
+        pde.set_phy_addr(phy_start());
+        pde.set_flags(flags | flags::big_page);
+
+        phy_start += frame_size::size_2mb;
+    }
+}
+
+void page_table_t::huge_page_map_to(void *virt_start, size_t pages, phy_addr_t phy_start, u64 flags, u64 actions)
+{
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    if (p & (frame_size::size_1gb - 1))
+    {
+        error_map();
+    }
+    if (pages & (huge_pages - 1))
+    {
+        error_map();
+    }
+
+    flags |= flags::present;
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    ensure(pml4e_index, flags, actions);
+
+    for (size_t i = 0; i < pages; i += huge_pages, pdpe_index++)
+    {
+        if (normalize_index(pml4e_index, pdpe_index, pde_index, pte_index))
+        {
+            ensure(pml4e_index, flags, actions);
+        }
+
+        auto &pdpe = (*base_)[pml4e_index][pdpe_index];
+
+        if (!pdpe.is_present())
+        {
+            page_table2page((*base_)[pml4e_index].next())->add_page_table_counter();
+        }
+        pdpe.set_phy_addr(phy_start());
+        pdpe.set_flags(flags | flags::huge_page);
+
+        phy_start += frame_size::size_1gb;
+    }
+}
+
+void page_table_t::prepare_kernel_space()
+{
+    for (int pml4e_index = 256; pml4e_index < 512; pml4e_index++)
+    {
+        auto &pml4e = (*base_)[pml4e_index];
+        if (pml4e.is_present())
+        {
+            continue;
+        }
+        pml4e.set_next(new_page_table<pdpt>());
+        pml4e.set_flags(flags::writable | flags::present);
+        page_table2page(*base_)->add_page_table_counter();
+    }
+}
+
+void page_table_t::map_kernel_space()
+{
+    page_table_t p(current());
+    for (int pml4e_index = 256; pml4e_index < 512; pml4e_index++)
+    {
+        auto &src = (*p.base_)[pml4e_index];
+        (*base_)[pml4e_index] = src;
+        if (src.is_present())
+        {
+            page_table2page(*base_)->add_page_table_counter();
+        }
+    }
+}
+
+void page_table_t::unmap(void *virt_start, size_t pages)
+{
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    if (p & (frame_size::size_4kb - 1))
+    {
+        error_unmap();
+    }
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    auto *pml4e = &(*base_)[pml4e_index];
+    pdpt_entry *pdpe = nullptr;
+    pd_entry *pde = nullptr;
+    pt_entry *pte = nullptr;
+    bool need_check = true;
+    int skip_level = 1;
+
+    for (size_t i = 0; i < pages;)
+    {
+        if (normalize_index(pml4e_index, pdpe_index, pde_index, pte_index))
+        {
+            pml4e = &(*base_)[pml4e_index];
+            need_check = true;
+        }
+        skip_level = 3;
+        bool skip = false;
+
+        while (need_check)
+        {
+            if (!pml4e->is_present())
             {
-                return false;
+                skip_level = 0;
+                skip = true;
+                break;
+            }
+
+            pdpe = &(*pml4e)[pdpe_index];
+            if (!pdpe->is_present())
+            {
+                skip_level = 1;
+                skip = true;
+                break;
+            }
+
+            pde = &(*pdpe)[pde_index];
+            if (!pde->is_present())
+            {
+                skip_level = 2;
+                skip = true;
+                break;
+            }
+            break;
+        }
+        if (!skip)
+        {
+            // auto rest = pages - i;
+            // if (pte_index == 0 && rest >= 512)
+            // {
+            //     if (pde_index == 0 && rest >= 512 * 512)
+            //     {
+            //         if (pdpe_index == 0 && rest >= 512 * 512 * 512)
+            //         {
+            //             // remove pml4 entry;
+            //             delete_page_table(&pml4e->next());
+            //             skip_level = 0;
+            //             skip = true;
+            //         }
+            //         else
+            //         {
+            //             delete_page_table(&pdpe->next());
+            //             skip_level = 1;
+            //             skip = true;
+            //         }
+            //     }
+            //     else
+            //     {
+            //         delete_page_table(&pde->next());
+            //         skip_level = 2;
+            //         skip = true;
+            //     }
+            // }
+        }
+        if (!skip)
+        {
+            pte = &(*pde)[pte_index];
+            if (pte->is_present())
+            {
+                ensure(pml4e_index, pdpe_index, pde_index, pte->flags(),
+                       action_flags::cow | action_flags::override | action_flags::copy_all);
+
+                pml4e = &(*base_)[pml4e_index];
+                pdpe = &(*pml4e)[pdpe_index];
+                pde = &(*pdpe)[pde_index];
+                pte = &(*pde)[pte_index];
+                need_check = true;
+
+                auto addr = to_virt_addr(index_t::from_pack(pml4e_index, pdpe_index, pde_index, pte_index));
+                kassert(memory::global_zones->get_page_reference(pml4e->get_addr()) == 1, "pml4e ", pml4e_index,
+                        " check status fail ", trace::hex(addr));
+                kassert(memory::global_zones->get_page_reference(pdpe->get_addr()) == 1, "pml4e ", pml4e_index,
+                        " pdpe ", pdpe_index, " check status fail ", trace::hex(addr));
+                kassert(memory::global_zones->get_page_reference(pde->get_addr()) == 1, "pml4e ", pml4e_index, " pdpe ",
+                        pdpe_index, " pde ", pde_index, " check status fail ", trace::hex(addr));
+
+                memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
+                pte->set_flags(0);
+
+                auto pde_page = page_table2page(pde->next());
+                auto pdpe_page = page_table2page(pdpe->next());
+                auto pml4e_page = page_table2page(pml4e->next());
+
+                kassert(pde_page->page_table_counter() > 0, "invalid status");
+                pde_page->sub_page_table_counter();
+                if (pde_page->page_table_counter() == 0)
+                {
+                    delete_page_table(&pde->next());
+                    pde->set_flags(0);
+
+                    kassert(pdpe_page->page_table_counter() > 0, "invalid status");
+                    pdpe_page->sub_page_table_counter();
+                }
+
+                if (pdpe_page->page_table_counter() == 0)
+                {
+                    delete_page_table(&pdpe->next());
+                    pdpe->set_flags(0);
+
+                    kassert(pml4e_page->page_table_counter() > 0, "invalid status");
+                    pml4e_page->sub_page_table_counter();
+                }
+
+                if (pml4e_page->page_table_counter() == 0)
+                {
+                    delete_page_table(&pml4e->next());
+                    pml4e->set_flags(0);
+                }
             }
         }
-        return true;
+
+        switch (skip_level)
+        {
+            case 0:
+                pml4e_index++;
+                i += (512 - pdpe_index) * 512 * 512 + (512 - pde_index) * 512 + (512 - pte_index);
+                pdpe_index = 0;
+                pde_index = 0;
+                pte_index = 0;
+                need_check = true;
+                break;
+            case 1:
+                pdpe_index++;
+                i += (512 - pde_index) * 512 + (512 - pte_index);
+                pde_index = 0;
+                pte_index = 0;
+                need_check = true;
+                break;
+            case 2:
+                pde_index++;
+                i += 512 - pte_index;
+                pte_index = 0;
+                need_check = true;
+                break;
+            case 3:
+                pte_index++;
+                i++;
+                break;
+        }
+    }
+}
+
+// return need add counter
+template <typename PageTable>
+requires page_table<PageTable>
+bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
+{
+    auto &entry = base[index];
+    using NextPageTable = std::remove_reference_t<decltype(entry.next())>;
+
+    if (entry.is_present())
+    {
+        if ((entry.flags() | flags) != entry.flags() && actions & (action_flags::cow | action_flags::override))
+        {
+            flags |= entry.flags();
+        }
+        flags &= ~(flags::accessed | flags::dirty);
+
+        return share_page_entry(base, entry, flags, actions);
     }
     else
     {
-        [[maybe_unused]] auto &to = dst->entries[idx];
-        kassert(!to.is_present(), "");
+        auto p = new_page_table<NextPageTable>();
+        entry.set_next(p);
+        entry.set_flags(flags);
+
+        page_table2page(base)->add_page_table_counter();
+
+        kassert(counter(base) == page_table2page(base)->page_table_counter(), "counter not match ", counter(base),
+                "!=", page_table2page(base)->page_table_counter());
     }
-    return false;
+
+    return true;
 }
 
-void share_page_table(base_paging_t *to, base_paging_t *source, u64 start, u64 end, bool override, int deep)
+void page_table_t::ensure(int pml4e_index, int pdpe_index, int pde_index, u64 flags, u64 actions)
 {
-    pml4t *dst = (pml4t *)to;
-    pml4t *src = (pml4t *)source;
-
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    bool pml4e_changed = override;
-    bool pdpe_changed = override;
-    bool pde_changed = override;
-    bool pte_changed = override;
-    u64 page_count = (end - start) / memory::page_size;
-    for (u64 i = 0; i < page_count;)
-    {
-        if (clone(dst, src, pml4e_index, pml4e_changed, deep))
-        {
-            pml4e_changed = false;
-            auto &pdpt_src = src->entries[pml4e_index].next();
-            auto &pdpt_dst = dst->entries[pml4e_index].next();
-            if (clone(&pdpt_dst, &pdpt_src, pdpe_index, pdpe_changed, deep - 1))
-            {
-                pdpe_changed = false;
-                auto &pdt_src = pdpt_src.entries[pdpe_index].next();
-                auto &pdt_dst = pdpt_dst.entries[pdpe_index].next();
-                if (clone(&pdt_dst, &pdt_src, pde_index, pde_changed, deep - 2))
-                {
-                    pde_changed = false;
-                    auto &pet_src = pdt_src.entries[pde_index].next();
-                    auto &pet_dst = pdt_dst.entries[pde_index].next();
-                    clone(&pet_dst, &pet_src, pte_index, pte_changed, deep - 3);
-                    i += pt_entry::pages;
-                    pte_index++;
-                    pte_changed = override;
-                }
-                else
-                {
-                    i += pd_entry::pages - pt_entry::pages * pte_index;
-                    pte_index = 0;
-                    pde_index++;
-                    pde_changed = override;
-                    pte_changed = override;
-                }
-            }
-            else
-            {
-                i += pdpt_entry::pages - pd_entry::pages * pde_index - pt_entry::pages * pte_index;
-                pte_index = 0;
-                pde_index = 0;
-                pdpe_index++;
-                pdpe_changed = override;
-                pde_changed = override;
-                pte_changed = override;
-            }
-        }
-        else
-        {
-            i += pml4_entry::pages - pdpt_entry::pages * pdpe_index - pd_entry::pages * pde_index -
-                 pt_entry::pages * pte_index;
-            pte_index = 0;
-            pde_index = 0;
-            pdpe_index = 0;
-            pml4e_index++;
-            pml4e_changed = override;
-            pdpe_changed = override;
-            pde_changed = override;
-            pte_changed = override;
-        }
-        if (pte_index >= 512)
-        {
-            pte_index = 0;
-            pde_index++;
-            pde_changed = true;
-        }
-        if (pde_index >= 512)
-        {
-            pde_index = 0;
-            pdpe_index++;
-            pdpe_changed = true;
-        }
-        if (pdpe_index >= 512)
-        {
-            pdpe_index = 0;
-            pml4e_index++;
-            pml4e_changed = true;
-        }
-        if (pml4e_index >= 512)
-            error_map();
-    }
+    ensure(pml4e_index, pdpe_index, flags, actions);
+    ensure_single((*base_)[pml4e_index][pdpe_index].next(), pde_index, flags, actions);
 }
 
-void sync_kernel_page_table(base_paging_t *to, base_paging_t *kernel)
+void page_table_t::ensure(int pml4e_index, int pdpe_index, u64 flags, u64 actions)
 {
-    // 0xFFFF800000000000-0xFFFFFFFFFFFFFFFF
-    pml4t *dst = (pml4t *)to;
-    pml4t *src = (pml4t *)kernel;
-    for (int i = 256; i < 512; i++)
-    {
-        auto &pml4e_source = src->entries[i];
-        auto &pml4e_dst = dst->entries[i];
-        if (pml4e_source.is_present() && pml4e_dst.is_present() &&
-            unlikely(pml4e_source.get_addr() != pml4e_dst.get_addr()))
-        {
-            /// TODO: free page table
-            trace::panic("dest pml4e not empty");
-        }
-        dst->entries[i] = pml4e_source;
-    }
+    ensure(pml4e_index, flags, actions);
+    ensure_single((*base_)[pml4e_index].next(), pdpe_index, flags, actions);
 }
 
-bool get_map_address(base_paging_t *base_paging_addr, void *virt_addr, phy_addr_t *phy_addr)
+void page_table_t::ensure(int pml4e_index, u64 flags, u64 actions)
 {
-    u64 start = (u64)virt_addr;
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    auto &pml4e = ((pml4t *)base_paging_addr)->entries[pml4e_index];
-    if (likely(pml4e.is_present()))
-    {
-        auto &pdpe = pml4e.next()[pdpe_index];
-        if (likely(pdpe.is_present()))
-        {
-            if (pdpe.is_big_page())
-            {
-                *phy_addr = phy_addr_t::from(pdpe.get_phy_addr());
-                return true;
-            }
-            auto &pde = pdpe.next()[pde_index];
-            if (likely(pde.is_present()))
-            {
-                if (pde.is_big_page())
-                {
-                    *phy_addr = phy_addr_t::from(pde.get_phy_addr());
-                    return true;
-                }
-                auto &pe = pde.next()[pte_index];
-                if (likely(pe.is_present()))
-                {
-                    *phy_addr = phy_addr_t::from(pe.get_phy_addr());
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
+    ensure_single(*base_, pml4e_index, flags, actions);
 }
 
-bool has_map(base_paging_t *base_paging_addr, void *virt_addr)
+bool page_table_t::has_flags(void *virt_start, u64 flags)
 {
-    u64 start = (u64)virt_addr;
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    auto &pml4e = ((pml4t *)base_paging_addr)->entries[pml4e_index];
-    if (likely(pml4e.is_present()))
+    auto p = memory::align_up(reinterpret_cast<u64>(virt_start), memory::page_size);
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+    flags |= flags::present;
+
+    auto &pml4e = (*base_)[pml4e_index];
+    if (!(pml4e.flags() & flags))
     {
-        auto &pdpe = pml4e.next()[pdpe_index];
-        if (likely(pdpe.is_present()))
-        {
-            if (pdpe.is_big_page())
-            {
-                return true;
-            }
-            auto &pde = pdpe.next()[pde_index];
-            if (likely(pde.is_present()))
-            {
-                if (pde.is_big_page())
-                {
-                    return true;
-                }
-                auto &pe = pde.next()[pte_index];
-                if (likely(pe.is_present()))
-                {
-                    return true;
-                }
-            }
-        }
+        return false;
     }
-    return false;
+
+    auto &pdpe = pml4e[pdpe_index];
+    if (!(pdpe.flags() & flags))
+    {
+        return false;
+    }
+    if (pdpe.is_big_page())
+    {
+        return true;
+    }
+
+    auto &pde = pdpe[pde_index];
+    if (!(pde.flags() & flags))
+    {
+        return false;
+    }
+    if (pde.is_big_page())
+    {
+        return true;
+    }
+
+    auto &pte = pde[pte_index];
+    return pte.flags() & flags;
 }
 
-bool has_flag(base_paging_t *base, void *vir, u64 flags)
+freelibcxx::optional<phy_addr_t> page_table_t::get_map(void *virt_start)
 {
-    u64 start = (u64)vir;
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
-    if (likely(pml4e.is_present()))
+    auto p = memory::align_up(reinterpret_cast<u64>(virt_start), memory::page_size);
+
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    auto &pml4e = (*base_)[pml4e_index];
+    if (!pml4e.is_present())
     {
-        auto &pdpe = pml4e.next()[pdpe_index];
-        if (likely(pdpe.is_present()))
-        {
-            if (pdpe.is_big_page())
-            {
-                return pdpe.data & flags;
-            }
-            auto &pde = pdpe.next()[pde_index];
-            if (likely(pde.is_present()))
-            {
-                if (pde.is_big_page())
-                {
-                    return pde.data & flags;
-                }
-                auto &pe = pde.next()[pte_index];
-                if (likely(pe.is_present()))
-                {
-                    return pe.data & flags;
-                }
-            }
-        }
+        return freelibcxx::nullopt;
     }
-    return false;
+    auto &pdpe = pml4e[pdpe_index];
+    if (!pdpe.is_present())
+    {
+        return freelibcxx::nullopt;
+    }
+    if (pdpe.is_big_page())
+    {
+        return pdpe.get_phy_addr();
+    }
+    auto &pde = pdpe[pde_index];
+    if (!pde.is_present())
+    {
+        return freelibcxx::nullopt;
+    }
+    if (pde.is_big_page())
+    {
+        return pde.get_phy_addr();
+    }
+    auto &pte = pde[pte_index];
+    if (!pte.is_present())
+    {
+        return freelibcxx::nullopt;
+    }
+    return pte.get_phy_addr();
 }
 
-bool has_shared(base_paging_t *base, void *vir)
+void page_table_t::clone_readonly_to(void *virt_start, size_t pages, page_table_t *to)
 {
-    u64 start = (u64)vir;
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
-    if (likely(pml4e.is_present()))
+    auto p = reinterpret_cast<uintptr_t>(virt_start);
+    auto index = from_virt_addr(p);
+    auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+
+    auto to_page = page_table2page(*to->base_);
+    for (size_t i = 0; i < pages; i += huge_pages)
     {
-        auto &pdpe = pml4e.next()[pdpe_index];
-        if (likely(pdpe.is_present()))
+        // clone pml4e
+        auto &src = (*base_)[pml4e_index];
+        auto &dst = (*to->base_)[pml4e_index];
+        if (!src.is_present())
         {
-            if (pdpe.is_big_page())
-            {
-                return pdpe.has_share_flag();
-            }
-            auto &pde = pdpe.next()[pde_index];
-            if (likely(pde.is_present()))
-            {
-                if (pde.is_big_page())
-                {
-                    return pde.has_share_flag();
-                }
-                auto &pe = pde.next()[pte_index];
-                if (likely(pe.is_present()))
-                {
-                    return pe.has_share_flag();
-                }
-            }
+            continue;
         }
+        auto addr = src.get_addr();
+
+        memory::global_zones->page_add_reference(addr);
+        auto flags = src.flags();
+        flags &= ~flags::writable;
+
+        src.set_flags(flags);
+
+        dst = src;
+        to_page->add_page_table_counter();
+
+        pml4e_index++;
     }
-    return false;
-}
-bool clear_shared(base_paging_t *base, void *vir, bool writeable)
-{
-    u64 start = (u64)vir;
-    u64 pml4e_index = get_bits(start, 39, 8);
-    u64 pdpe_index = get_bits(start, 30, 8);
-    u64 pde_index = get_bits(start, 21, 8);
-    u64 pte_index = get_bits(start, 12, 8);
-    auto &pml4e = ((pml4t *)base)->entries[pml4e_index];
-    if (likely(pml4e.is_present()))
-    {
-        pml4e.clear_share_flag();
-        if (writeable)
-        {
-            pml4e.set_writable();
-        }
-        auto &pdpe = pml4e.next()[pdpe_index];
-        if (likely(pdpe.is_present()))
-        {
-            pdpe.clear_share_flag();
-            if (writeable)
-            {
-                pdpe.set_writable();
-            }
-            if (pdpe.is_big_page())
-            {
-                return true;
-            }
-            auto &pde = pdpe.next()[pde_index];
-            if (likely(pde.is_present()))
-            {
-                pde.clear_share_flag();
-                if (writeable)
-                {
-                    pde.set_writable();
-                }
-                if (pde.is_big_page())
-                {
-                    return true;
-                }
-                auto &pe = pde.next()[pte_index];
-                if (likely(pe.is_present()))
-                {
-                    pe.clear_share_flag();
-                    if (writeable)
-                    {
-                        pe.set_writable();
-                    }
-                    return pe.has_share_flag();
-                }
-            }
-        }
-    }
-    return false;
+    kassert(counter(*to->base_) == to_page->page_table_counter(), "counter not match");
 }
 
 } // namespace arch::paging

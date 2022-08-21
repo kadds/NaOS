@@ -21,7 +21,7 @@ struct handle_data
 
 bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
 {
-    auto &vma = new_mm_info->vma;
+    auto &vma = new_mm_info->vma();
     using namespace memory::vm;
     using namespace arch::task;
     auto new_vm = new_mm_info->map_file(memory::user_code_bottom_address, file, 0, file->size(), file->size(),
@@ -32,7 +32,7 @@ bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
-                                     memory::vm::fill_expand_vm, 0);
+                                     memory::vm::page_fault_method::common, 0);
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;

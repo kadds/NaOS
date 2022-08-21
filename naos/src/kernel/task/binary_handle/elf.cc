@@ -216,13 +216,16 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     if (elf->shentsize != sizeof(section_64) || elf->phentsize != sizeof(program_64))
         return false;
 
-    auto &vma = new_mm_info->vma;
+    auto &vma = new_mm_info->vma();
     using namespace memory::vm;
     using namespace arch::task;
 
     program_64 *program = load_segment(elf, file);
+    void *program_ptr = program;
     if (program == nullptr)
+    {
         return false;
+    }
 
     program_64 *program_last = program + elf->phnum;
     u64 loaded_max_address = 0;
@@ -410,7 +413,10 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
-                                     memory::vm::fill_expand_vm, 0);
+                                     memory::vm::page_fault_method::common, 0);
+
+    // trace::debug("map stack ", trace::hex(stack_vm->start), "-", trace::hex(stack_vm->end));
+
     if (stack_vm == nullptr)
     {
         trace::warning("empty start_vm");
@@ -422,6 +428,7 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;
     info->entry_start_address = (void *)elf->entry;
+    memory::MemoryAllocatorV->deallocate(program_ptr);
 
     return true;
 }

@@ -21,7 +21,7 @@ set(LINKER_X64 "-Wl,-n -Wl,-melf_x86_64 -Wl,--no-relax -Wl,--build-id=none")
 
 set(CXX_X64 "-mcmodel=large -m64")
 
-set(CMAKE_CXX_FLAGS_DEBUG "-g -Og")
+set(CMAKE_CXX_FLAGS_DEBUG "-g ")
 set(CMAKE_ASM_FLAGS_DEBUG "-g -Og")
 
 set(CMAKE_CXX_FLAGS_RELEASE "-g -Os")

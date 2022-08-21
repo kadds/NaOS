@@ -1,5 +1,6 @@
 #include "kernel/scheduler.hpp"
 #include "freelibcxx/hash_map.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/schedulers/completely_fair.hpp"
 #include "kernel/schedulers/round_robin.hpp"
@@ -140,26 +141,23 @@ struct remove_task__ipi_param
 void remove_task_ipi(u64 data)
 {
     remove_task__ipi_param *p = (remove_task__ipi_param *)data;
-    p->thread->scheduler->remove(p->thread);
-    auto d = p->data;
-    auto func = p->func;
+    remove(p->thread, p->func, p->data);
     memory::Delete<>(memory::KernelCommonAllocatorV, p);
-    func(d);
 }
 
 void remove(thread_t *thread, remove_func func, u64 user_data)
 {
-    if (thread->attributes & thread_attributes::on_migrate)
+    while (thread->attributes & thread_attributes::on_migrate)
         cpu_pause();
 
     if (thread->cpuid == cpu::current().id())
     {
-        thread->scheduler->update_state(thread, thread_state::stop);
         auto &lock = cpu::current().get_microtask_lock();
         cpu::next_schedule_microtask_data_t data;
         data.data = user_data;
         data.func = func;
         uctx::RawSpinLockUninterruptibleContext icu(lock);
+        thread->scheduler->update_state(thread, thread_state::stop);
         cpu::current().get_microtask_queue().push_back(data);
     }
     else
@@ -191,7 +189,7 @@ void schedule()
     auto &q = cpu.get_microtask_queue();
     while (!q.empty())
     {
-        auto data = cpu::current().get_microtask_queue().pop_back();
+        auto data = q.pop_back();
         icu.end();
         data.func(data.data);
         icu.begin();

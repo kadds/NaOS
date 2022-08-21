@@ -200,7 +200,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     global_zones = new (global_zones) memory::zones(zone_count);
 
     auto end_used_memory_addr =
-        reinterpret_cast<char *>(VirtBootAllocatorV->current_ptr_address()) + memory::page_size * 2;
+        reinterpret_cast<char *>(VirtBootAllocatorV->current_ptr_address()) + memory::page_size * 4;
     end_used_memory_addr = align_up(end_used_memory_addr, memory::page_size);
 
     for (int zone_id = 0; zone_id < zone_count; zone_id++)
@@ -243,7 +243,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
     memory::vm::init();
     kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV);
-    kernel_vm_info->vma.set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
+    kernel_vm_info->vma().set_range(memory::kernel_mmap_top_address, memory::kernel_mmap_bottom_address);
 
     PhyBootAllocatorV->discard();
     kassert(VirtBootAllocatorV->current_ptr_address() <= end_used_memory_addr, "BootAllocator is Out of memory");
@@ -309,28 +309,22 @@ void kfree(void *addr)
 
 void *vmalloc(u64 size, u64 align)
 {
-    auto vm = kernel_vm_info->vma.allocate_map(size, align, 0, 0);
-    for (u64 start = vm->start; start < vm->end; start += page_size)
-    {
-        auto phy = memory::va2pa(KernelBuddyAllocatorV->allocate(memory::page_size, 0));
-        arch::paging::map((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(), (void *)start, phy,
-                          arch::paging::frame_size::size_4kb, 1,
-                          arch::paging::flags::writable | arch::paging::flags::present, false);
-    }
-    arch::paging::reload();
+    auto vm = kernel_vm_info->vma().allocate_map(size, align, vm::page_fault_method::none, 0);
+    kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
+                                 arch::paging::flags::writable, 0);
+
+    arch::paging::page_table_t::reload();
     return (void *)vm->start;
 }
 
 void vfree(void *addr)
 {
-    auto vm = kernel_vm_info->vma.get_vm_area((u64)addr);
+    auto vm = kernel_vm_info->vma().get_vm_area((u64)addr);
     if (vm)
     {
         /// TODO: free page memory
-        kernel_vm_info->vma.deallocate_map(vm);
-        arch::paging::unmap((arch::paging::base_paging_t *)kernel_vm_info->mmu_paging.get_base_page(),
-                            (void *)vm->start, arch::paging::frame_size::size_4kb,
-                            (vm->end - vm->start) / arch::paging::frame_size::size_4kb);
+        kernel_vm_info->vma().deallocate_map(vm);
+        kernel_vm_info->paging().unmap(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size);
     }
 }
 
@@ -357,7 +351,7 @@ void *MemoryAllocator::allocate(u64 size, u64 align) noexcept
 
 void MemoryAllocator::deallocate(void *p) noexcept
 {
-    auto vm = kernel_vm_info->vma.get_vm_area((u64)p);
+    auto vm = kernel_vm_info->vma().get_vm_area((u64)p);
     if (!vm)
     {
         vfree(p);

@@ -75,6 +75,16 @@ page *zones::get_page(void *ptr)
     return z->address_to_page(p);
 }
 
+u32 zones::get_page_reference(void *ptr)
+{
+    auto page = get_page(ptr);
+    if (page != nullptr)
+    {
+        return page->get_ref_count();
+    }
+    return 0;
+}
+
 u64 zones::total_pages() const
 {
     u64 ret = 0;
@@ -132,13 +142,13 @@ void *zones::allocate(size_t size, size_t align) noexcept
         {
             auto ptr = pa2va(p);
 #ifdef _DEBUG
-            memset(ptr, 0xFEFF'FEFF, size);
+            memset(ptr, 0xFAFF'FEF0, size);
 #endif
-            if (timeclock::get_current_clock() - last_report_ > 1000'000)
-            {
-                last_report_ = timeclock::get_current_clock();
-                trace::info("free ", free_pages(), "/", total_pages());
-            }
+            // if (timeclock::get_current_clock() - last_report_ > 1000'000)
+            // {
+            //     last_report_ = timeclock::get_current_clock();
+            //     trace::info("free ", free_pages(), "/", total_pages());
+            // }
             return ptr;
         }
     }
@@ -197,6 +207,10 @@ phy_addr_t zone::malloc(u64 pages)
     {
         uctx::RawSpinLockUninterruptibleContext ctx(spin);
         page *p = page_array + index.value();
+        if (p->get_ref_count() != 0)
+        {
+            trace::panic("ref count == 0 malloc ", pages);
+        }
         p->add_ref_count();
         return page_to_address(p);
     }
@@ -239,7 +253,8 @@ void zone::free(phy_addr_t ptr)
     if (free)
     {
         auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
-        impl->free(p - page_array);
+        [[maybe_unused]] bool ok = impl->free(p - page_array);
+        kassert(ok, "fail ", p - page_array);
     }
 }
 
