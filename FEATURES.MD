@@ -3,7 +3,7 @@ Features / TODO
 
 * - [x] X86-64 Architecture
     - [x] Four-level Paging
-        - [x] Copy on write
+        - [x] Page entry copy on write
     - [x] VGA display
       - [x] Kernel Console
     - [x] System call
@@ -41,7 +41,8 @@ Features / TODO
         - [x] Virtual address allocator
         - [x] File-based mapping
         - [x] Anon-based mapping
-        - [x] Copy on write
+        - [x] Lazy virtual address mapping
+        - [x] VMA copy on write
     - [ ] Elf loader
         - [X] Static binary loader
         - [ ] Dynamic link elf loader
@@ -105,5 +106,6 @@ Features / TODO
     - [x] Kernel logger
     - [ ] Basic commands
       - [ ] nanobox
+      - [ ] nano shell
 
 
