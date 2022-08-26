@@ -108,6 +108,11 @@ cpu_t &get(cpuid_t cpuid) { return per_cpu_data[cpuid]; }
 
 cpu_t &current()
 {
+    if (!has_init())
+    {
+        // TODO: report error
+        return per_cpu_data[0];
+    }
     u64 cpuid;
 #ifdef _DEBUG
     kassert(_rdmsr(0xC0000101) != 0, "Unreadable gs base");

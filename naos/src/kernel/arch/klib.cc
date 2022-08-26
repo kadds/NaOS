@@ -193,13 +193,21 @@ void *print_stack(const regs_t *regs, int max_depth)
     trace::print("control registers(now): cr0=", trace::hex(cr0), ", cr2=", trace::hex(cr2), ", cr3=", trace::hex(cr3),
                  ", cr4=", trace::hex(cr4), ", cr8=", trace::hex(cr8), '\n');
 
-    trace::print("cpu id=", arch::cpu::current().get_id(), " apic id = ", arch::cpu::current().get_apic_id(), " \n");
+    if (arch::cpu::has_init())
+    {
+        auto &cpu = arch::cpu::current();
+
+        trace::print("cpu id=", cpu.get_id(), " apic id = ", cpu.get_apic_id(), " \n");
+    }
 
     trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of registers.", '\n');
     trace::print<trace::PrintAttribute<trace::CBK::Black, trace::CFG::White>>("system info: \n");
 
-    trace::print("buddy free pages ", memory::global_zones->free_pages(), "/", memory::global_zones->total_pages(),
-                 "\n");
+    if (memory::global_zones != nullptr)
+    {
+        trace::print("buddy free pages ", memory::global_zones->free_pages(), "/", memory::global_zones->total_pages(),
+                     "\n");
+    }
     trace::print_reset();
     return trace::hex(rbp);
 }
