@@ -1,13 +1,17 @@
 #include "kernel/task/builtin/input_task.hpp"
 #include "freelibcxx/bit_set.hpp"
+#include "freelibcxx/string.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/common/cursor/cursor.hpp"
 #include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/handle.hpp"
 #include "kernel/input/key.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/wait.hpp"
 
@@ -59,7 +63,13 @@ void set_key_switch_state(switchable_key k, bool enable)
 
 bool is_key_down(key k) { return key_down_state.get_bit((u64)k); }
 
-void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req, dev::tty::tty_pseudo_t *tty)
+bool is_ctrl_key_down() { return is_key_down(key::left_control) || is_key_down(key::right_control); }
+bool is_alt_key_down() { return is_key_down(key::left_alt) || is_key_down(key::right_alt); }
+
+bool is_fkey(key k) { return (k >= key::f1 && k <= key::f10) || (k >= key::f11 && k <= key::f12); }
+
+void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req,
+                    freelibcxx::span<handle_t<fs::vfs::file>> tty_file_list)
 {
     if (status.io_is_completion)
     {
@@ -69,6 +79,11 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
         }
         else
         {
+            auto terms = term::get_terms();
+            int idx = terms->term_index();
+            // auto &term = terms->get(idx);
+            auto tty = reinterpret_cast<dev::tty::tty_pseudo_t *>(tty_file_list[idx]->get_pseudo());
+
             key k = (key)res.get.key;
             if (k == key::capslock)
             {
@@ -83,15 +98,27 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 set_key_switch_state(switchable_key::numlock, !get_key_switch_state(switchable_key::numlock));
             }
 
-            if (k == key::c && (is_key_down(key::left_control) || is_key_down(key::right_control)))
+            if (is_ctrl_key_down())
             {
-                /// send sigint
-                auto proc = task::get_init_process();
-                proc->signal_pack.send(proc, task::signal::sigint, 0, 0, 0);
-            }
-            else if (k == key::d && (is_key_down(key::left_control) || is_key_down(key::right_control)))
-            {
-                tty->send_EOF();
+                if (k == key::c)
+                {
+                    /// send sigint
+                    auto proc = task::get_init_process();
+                    proc->signal_pack.send(proc, task::signal::sigint, 0, 0, 0);
+                }
+                else if (k == key::d)
+                {
+                    tty->send_EOF();
+                }
+                else if (is_fkey(k) && is_alt_key_down())
+                {
+                    // control + alt + f1-f12
+                    auto to_idx = k > key::f11 ? ((int)k - (int)key::f11) + 10 : (int)k - (int)key::f1;
+                    if (to_idx < terms->total())
+                    {
+                        terms->switch_term(to_idx);
+                    }
+                }
             }
             else if (key_char_table[(u8)k] != 0)
             {
@@ -184,8 +211,15 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
 io::keyboard_request_t request;
 void listen_keyboard()
 {
-    auto input_file = fs::vfs::open("/dev/tty/0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
-    auto input_tty = (dev::tty::tty_pseudo_t *)input_file->get_pseudo();
+    freelibcxx::vector<handle_t<fs::vfs::file>> tty_file_list(memory::MemoryAllocatorV);
+    freelibcxx::string ttyname(memory::MemoryAllocatorV, "/dev/tty/0");
+    for (int i = 0; i < term::get_terms()->total(); i++)
+    {
+        ttyname.view()[ttyname.size() - 1] = '0' + i;
+        auto input_file = fs::vfs::open(ttyname.data(), fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+        tty_file_list.push_back(input_file);
+    }
+
     key_down_state.reset_all();
     key_switch_state = 0;
     request.type = io::chain_number::keyboard;
@@ -209,7 +243,7 @@ void listen_keyboard()
         {
             input_wait_queue.do_wait([](u64 data) { return request.status.io_is_completion; }, 0);
         }
-        print_keyboard(request.result, request.status, &request, input_tty);
+        print_keyboard(request.result, request.status, &request, tty_file_list.span());
     };
 }
 

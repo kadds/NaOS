@@ -114,11 +114,11 @@ void init()
 
         pit_source = arch::device::PIT::make_clock();
 
-        clock_sources.push_back(arch::APIC::make_clock());
         clock_sources.push_back(arch::TSC::make_clock());
+        clock_sources.push_back(arch::APIC::make_clock());
 
-        cpu::current().set_clock_event(clock_sources.front()->get_event());
-        cpu::current().set_clock_source(clock_sources.back());
+        cpu::current().set_clock_event(clock_sources.back()->get_event());
+        cpu::current().set_clock_source(clock_sources.front());
     }
     for (auto cs : clock_sources)
     {

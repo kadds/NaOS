@@ -11,6 +11,12 @@
 #include <type_traits>
 #include <utility>
 
+namespace term
+{
+
+void reset_panic_term();
+}
+
 /// kernel output and debug components
 namespace trace
 {
@@ -18,9 +24,14 @@ namespace trace
 extern bool output_debug;
 
 void init();
-void early_init(void *start, void *end);
+void early_init();
 
 template <typename T> using span = freelibcxx::span<T>;
+
+template <typename E> struct prefix_hex_formatter
+{
+    E val;
+};
 
 template <typename In> struct format
 {
@@ -155,6 +166,53 @@ template <> struct format<const void *>
         buf[1] = 'x';
 
         auto pos = freelibcxx::uint642str(buf.subspan(2), (uint64_t)in, 16).value_or(0);
+        buf[pos + 2] = 0;
+        return buf.get();
+    }
+};
+
+template <> struct format<prefix_hex_formatter<u32>>
+{
+    using In = prefix_hex_formatter<u32>;
+    const char *operator()(const In &in, span<char> buf)
+    {
+        constexpr int chars = sizeof(in.val) * 2;
+        buf[0] = '0';
+        buf[1] = 'x';
+
+        auto pos = freelibcxx::uint2str(buf.subspan(2), in.val, 16).value_or(0);
+        if (pos < chars)
+        {
+            memmove(buf.get() + 2 + chars - pos, buf.get() + 2, chars - pos);
+            for (int i = pos; i < chars; i++)
+            {
+                buf[i + 2 - pos] = '0';
+            }
+            pos = chars;
+        }
+        buf[pos + 2] = 0;
+        return buf.get();
+    }
+};
+template <> struct format<prefix_hex_formatter<u64>>
+{
+    using In = prefix_hex_formatter<u64>;
+    const char *operator()(const In &in, span<char> buf)
+    {
+        constexpr int chars = sizeof(in.val) * 2;
+        buf[0] = '0';
+        buf[1] = 'x';
+
+        auto pos = freelibcxx::uint642str(buf.subspan(2), in.val, 16).value_or(0);
+        if (pos < chars)
+        {
+            memmove(buf.get() + 2 + chars - pos, buf.get() + 2, chars - pos);
+            for (int i = pos; i < chars; i++)
+            {
+                buf[i + 2 - pos] = '0';
+            }
+            pos = chars;
+        }
         buf[pos + 2] = 0;
         return buf.get();
     }
@@ -367,6 +425,8 @@ template <typename... Args> struct PrintAttribute
 {
 };
 
+template <typename... Args> using PA = PrintAttribute<Args...>;
+
 template <typename T> struct has_member_t
 {
     template <typename U> static auto Check(U) -> typename std::decay<decltype(U::t)>::type;
@@ -443,9 +503,9 @@ struct NoneAttr
 extern lock::spinlock_t spinlock;
 
 /// print string to screen
-void print_inner(const char *str);
-void print_inner(const char *str, u64 len);
-void print_inner(char ch);
+void print_klog(const char *str);
+void print_klog(const char *str, u64 len);
+void print_klog(char ch);
 
 /// the kernel print to the serial device. recv com1
 extern arch::device::com::serial serial_device;
@@ -460,19 +520,19 @@ template <typename Head> Trace_Section void dispatch(const Head &head)
     format<RealType> fmt;
     char fmt_str[64];
     span<char> buf(fmt_str, sizeof(fmt_str) - 1);
-    print_inner(fmt(head, buf));
+    print_klog(fmt(head, buf));
 }
 
 template <typename Head> Trace_Section void cast_fmt()
 {
-    print_inner(Head::t);
-    print_inner('m');
+    print_klog(Head::t);
+    print_klog('m');
 }
 
 template <typename Head, typename Second, typename... Args> Trace_Section void cast_fmt()
 {
-    print_inner(Head::t);
-    print_inner(';');
+    print_klog(Head::t);
+    print_klog(';');
     cast_fmt<Second, Args...>();
 }
 
@@ -489,7 +549,7 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
 {
     if constexpr (sizeof...(Args) != 0)
     {
-        print_inner("\e[", 2);
+        print_klog("\e[", 2);
         cast_fmt<Args...>();
     }
 }
@@ -518,6 +578,7 @@ void keep_panic(const regs_t *regs = 0);
 ///\brief stop all cpu and report an error.
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
+    term::reset_panic_term();
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
@@ -533,6 +594,7 @@ template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 
 template <typename... Args> Trace_Section void panic_stack(const regs_t *regs, Args &&...args)
 {
+    term::reset_panic_term();
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
         print<PrintAttribute<Color::Foreground::LightRed>>("[panic]   ");
@@ -573,6 +635,14 @@ template <typename... Args> Trace_Section void debug(Args &&...args)
 }
 
 template <typename T> void *hex(T t) { return reinterpret_cast<void *>(t); }
+template <typename T> prefix_hex_formatter<u64> hex16(T t)
+{
+    return prefix_hex_formatter<u64>{reinterpret_cast<u64>(t)};
+}
+template <typename T> prefix_hex_formatter<u32> hex8(T t)
+{
+    return prefix_hex_formatter<u32>{reinterpret_cast<u32>(t)};
+}
 
 template <typename... Args>
 Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&... args)

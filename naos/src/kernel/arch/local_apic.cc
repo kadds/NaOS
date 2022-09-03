@@ -80,12 +80,14 @@ u64 ms_tsc;
 u32 read_register_MSR(u16 reg)
 {
     reg += 0x800;
+    _mfence();
     return _rdmsr(reg);
 }
 
 u64 read_register_MSR_64(u16 reg)
 {
     reg += 0x800;
+    _mfence();
     return _rdmsr(reg);
 }
 
@@ -93,12 +95,14 @@ void write_register_MSR(u16 reg, u32 v)
 {
     reg += 0x800;
     _wrmsr(reg, v);
+    _mfence();
 }
 
 void write_register_MSR_64(u16 reg, u64 v)
 {
     reg += 0x800;
     _wrmsr(reg, v);
+    _mfence();
 }
 
 u32 read_register_mm(u16 reg)
@@ -116,6 +120,7 @@ u64 read_register_mm_64(u16 reg)
     _mfence();
     v = v << 32;
     v |= *(u32 *)((byte *)apic_base_addr + reg + 0x10);
+    _mfence();
     return v;
 }
 
@@ -193,8 +198,6 @@ void local_init()
 
             apic_base_addr = (void *)memory::local_apic_bottom_address;
         }
-
-        trace::debug("Enable Local APIC");
     }
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))
@@ -230,15 +233,11 @@ void local_init()
         v |= 1 << 12; // disable broadcast EOI
     }
 
+    disable_all_lvt();
     // enable software Local APIC
     write_register(spurious_interrupt_vector_register, read_register(spurious_interrupt_vector_register) | v);
     kassert((read_register(spurious_interrupt_vector_register) & v) == v, "Can't software enable local-APIC value ",
             (void *)(u64)read_register(spurious_interrupt_vector_register));
-
-    disable_all_lvt();
-    if (!cpu::current().is_bsp())
-    {
-    }
 }
 
 u64 local_ID() { return cpu::current().get_apic_id(); }
@@ -309,9 +308,9 @@ irq::request_result _ctx_interrupt_ on_event(const irq::interrupt_info *inter, u
 {
     auto event = (clock_event *)user_data;
 
-    if (likely(event && !event->is_suspend && event->id == cpu::current().get_apic_id()))
+    if (likely(event && !event->is_suspend.load() && event->id == cpu::current().get_apic_id()))
     {
-        event->tick_count = event->tick_count + 1;
+        event->tick_count++;
         irq::raise_soft_irq(irq::soft_vector::timer);
         return irq::request_result::ok;
     }
@@ -336,8 +335,8 @@ void clock_event::init(u64 HZ)
 {
     tick_count = 0;
     this->hz = HZ;
-    init_counter = 10000;
-    divide = 0b001;
+    init_counter = 2000'000;
+    divide = 0b000;
     id = cpu::current().get_apic_id();
 
     is_suspend = false;
@@ -352,13 +351,14 @@ void clock_event::suspend()
 {
     if (!is_suspend)
     {
-        uctx::UninterruptibleContext icu;
+        {
+            uctx::UninterruptibleContext icu;
+            local_disable(lvt_index::timer);
+            write_register(timer_initial_count_register, 0xFFFFFFFF);
+            write_register(timer_divide_register, 0);
+        }
         is_suspend = true;
         irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
-        local_disable(lvt_index::timer);
-
-        write_register(timer_initial_count_register, 0xFFFFFFFF);
-        write_register(timer_divide_register, 0);
     }
 }
 
@@ -366,24 +366,22 @@ void clock_event::resume()
 {
     if (is_suspend)
     {
-        uctx::UninterruptibleContext icu;
+        irq::register_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
+        is_suspend = false;
 
-        local_enable(lvt_index::timer);
+        uctx::UninterruptibleContext icu;
 
         write_register(timer_initial_count_register, init_counter);
         write_register(timer_divide_register, divide);
-        is_suspend = false;
-        irq::register_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
+        local_enable(lvt_index::timer);
     }
 }
 
 void clock_event::wait_next_tick()
 {
-    u64 old = tick_count;
-    while (tick_count == old)
+    u64 old = tick_count.load();
+    while (tick_count.load() == old)
         ;
-
-    kassert(tick_count > old, "Unexpected value");
 }
 void clock_source::init() {}
 
@@ -392,32 +390,34 @@ void clock_source::destroy() {}
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
-    return 1000000UL * ev->tick_count / ev->hz + (read_register(timer_current_count_register) * 1000000UL) /
-                                                     ev->init_counter / divide_value(ev->divide) / 1000000UL;
+    return 1000000UL * ev->tick_count.load() / ev->hz + (read_register(timer_current_count_register) * 1000000UL) /
+                                                            ev->init_counter / divide_value(ev->divide) / 1000000UL;
 }
+
+// 20ms
+constexpr u64 test_duration_us = 200000;
+constexpr size_t test_times = 4;
+
 u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
 {
+    auto from_ev = cs->get_event();
+    from_ev->resume();
+    from_ev->wait_next_tick();
     clock_event *ev = (clock_event *)event;
-    // 5ms
-    u64 test_time = 5000;
     ev->resume();
-    cs->get_event()->resume();
-    cs->get_event()->wait_next_tick();
-    cs->current();
-    ev->wait_next_tick();
-    u64 t = test_time + cs->current();
-    u64 start_count = ev->tick_count;
+
+    u64 t = test_duration_us + cs->current();
+    u64 start_count = ev->tick_count.load();
     while (cs->current() < t)
     {
         __asm__ __volatile__("pause\n\t" : : : "memory");
     }
-    u64 end_count = ev->tick_count;
+    u64 end_count = ev->tick_count.load();
+    t = cs->current() - t + test_duration_us;
 
-    t = cs->current() - t + test_time;
-
-    cs->get_event()->suspend();
+    from_ev->suspend();
     ev->suspend();
-    return (end_count - start_count) * 1000000 / t;
+    return (end_count - start_count) * 1000'000UL / t;
 }
 u64 lapic_counter = 0;
 u64 lapic_frq = 0;
@@ -428,41 +428,51 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
 
     if (lapic_counter == 0)
     {
-        i64 apic_hz[7];
-        i64 sum = 0;
-        for (auto &i : apic_hz)
+        for (int i = 0; i < 2; i++)
         {
-            i = calibrate_apic(cs);
-            sum += i;
+            u64 apic_freq[test_times];
+            u64 total_freq = 0;
+            u64 max_freq = 0;
+            u64 min_freq = std::numeric_limits<u64>::max();
+            for (auto &freq : apic_freq)
+            {
+                freq = calibrate_apic(cs);
+                total_freq += freq;
+                min_freq = freelibcxx::min(min_freq, freq);
+                max_freq = freelibcxx::max(max_freq, freq);
+            }
+
+            const u64 avg_freq = total_freq / test_times;
+            u64 frq = avg_freq * ev->init_counter * divide_value(ev->divide);
+            lapic_frq = frq;
+            lapic_counter = frq / (divide_value(ev->divide) * ev->hz);
+
+            if (i == 1)
+            {
+                u64 delta = 0;
+                for (auto freq : apic_freq)
+                {
+                    i64 d = ((i64)freq - (i64)avg_freq);
+                    delta += d * d;
+                }
+                delta /= test_times;
+
+                trace::debug("Local APIC test frequency ", avg_freq, "HZ. delta ", delta, " min ", min_freq, "HZ. max ",
+                             max_freq, "HZ. ");
+
+                trace::debug("Local APIC base frequency ", frq / 1000'000UL, "MHZ");
+                trace::debug("Local APIC set counter ", lapic_counter);
+            }
+            ev->init_counter = lapic_counter;
         }
-        sum /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
-        u64 hz = sum;
-        u64 abs_delta = 0;
-        for (auto i : apic_hz)
-        {
-            i64 d = (i - sum);
-            abs_delta += d * d;
-        }
-
-        abs_delta /= (sizeof(apic_hz) / (sizeof(apic_hz[0])));
-
-        u64 frq = hz * ev->init_counter * divide_value(ev->divide);
-        lapic_frq = frq;
-
-        trace::debug("Local APIC Timer ", frq, "HZ. ", frq / 1000000, "MHZ. ", "divide ", divide_value(ev->divide));
-
-        trace::debug("cpu bus frequency ", frq / 1000000, "MHZ");
-
-        lapic_counter = frq / (divide_value(ev->divide) * ev->hz);
-        trace::debug("set counter ", lapic_counter);
     }
     ev->bus_frequency = lapic_frq;
     ev->init_counter = lapic_counter;
 
-    u64 currentHZ = calibrate_apic(cs);
-    trace::debug("Local APIC Timer ", currentHZ, "HZ. ", currentHZ / 1000000, "MHZ");
+    u64 current_freq = calibrate_apic(cs);
+    trace::debug("Local APIC Timer ", current_freq, "HZ");
 
-    ev->hz = currentHZ;
+    ev->hz = current_freq;
 }
 
 clock_source *make_clock()

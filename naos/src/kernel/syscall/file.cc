@@ -250,7 +250,7 @@ int istty(int fd)
 {
     auto &res = task::current_process()->resource;
     auto obj = res.get_kobject(fd);
-    if (obj->is<fs::vfs::file>())
+    if (obj && obj->is<fs::vfs::file>())
     {
         if (auto file = obj->get<fs::vfs::file>())
         {

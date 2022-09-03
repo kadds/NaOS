@@ -12,6 +12,7 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
     task::wait_queue_t wait_queue;
     std::atomic_int input_chars;
     std::atomic_int eof_count;
+    int term_index;
     bool line_discipline;
     int enter;
 
@@ -26,10 +27,11 @@ class tty_pseudo_t : public fs::vfs::pseudo_t
 
     void close() override;
 
-    tty_pseudo_t(u64 size = 4096)
+    tty_pseudo_t(int term_index, u64 size = 4096)
         : buffer(memory::MemoryAllocatorV, size)
         , input_chars(0)
         , eof_count(0)
+        , term_index(term_index)
         , line_discipline(true)
         , enter(0)
     {

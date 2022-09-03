@@ -16,6 +16,7 @@
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/time.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
@@ -217,18 +218,18 @@ void create_devs()
     dev::tty::tty_pseudo_t *ps;
 
     char fname[] = "/dev/tty/x";
-    for (int i = 1; i < 8; i++)
+    int max = term::get_terms()->total();
+    for (int i = 0; i < max; i++)
     {
         fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
         fs::vfs::create(fname, root, root, fs::create_flags::chr);
         auto f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
 
-        ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(memory::page_size * 2);
+        ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(i, memory::page_size * 2);
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&ps), 8);
     }
 
-    fs::vfs::link("/dev/tty/0", "/dev/tty/1", root, root);
-    fs::vfs::link("/dev/console", "/dev/tty/1", root, root);
+    fs::vfs::link("/dev/console", "/dev/tty/0", root, root);
 }
 
 std::atomic_bool is_init = false, init_ok = false;
@@ -285,14 +286,17 @@ void init()
     if (cpu::current().is_bsp())
     {
         create_devs();
-        auto tty0read = fs::vfs::open("/dev/console", root, root, fs::mode::read, 0);
-        auto tty0write = fs::vfs::open("/dev/console", root, root, fs::mode::write, 0);
-        auto tty0err = fs::vfs::open("/dev/console", root, root, fs::mode::write, 0);
+        auto tty1read = fs::vfs::open("/dev/tty/1", root, root, fs::mode::read, 0);
+        auto tty1write = fs::vfs::open("/dev/tty/1", root, root, fs::mode::write, 0);
+        auto tty1err = fs::vfs::open("/dev/tty/1", root, root, fs::mode::write, 0);
         auto &res = current_process()->resource;
-        res.set_handle(console_in, tty0read);
-        res.set_handle(console_out, tty0write);
-        res.set_handle(console_err, tty0err);
+        kassert(tty1read, "invalid tty");
+
+        res.set_handle(console_in, tty1read);
+        res.set_handle(console_out, tty1write);
+        res.set_handle(console_err, tty1err);
         is_init = true;
+        term::get_terms()->switch_term(1);
 
         bin_handle::init();
         init_ok = true;

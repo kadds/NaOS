@@ -1,17 +1,23 @@
 #pragma once
 #include "common.hpp"
+#include "freelibcxx/span.hpp"
+#include "freelibcxx/tuple.hpp"
 namespace font
 {
 
-class font
+struct glyph
+{
+    freelibcxx::span<byte> bytes;
+    u32 line_bytes;
+    bool hit(u32 x, u32 y) { return (u8)bytes[y * line_bytes] & (1 << (8 * line_bytes - x - 1)); }
+};
+
+class pixel_font
 {
   public:
-    virtual void init() = 0;
     // Parameter code is encoded with unicode to support multiple language
-    virtual void *get_unicode(u32 code) = 0;
-    // Should write pixel in position(x, y) ?
-    virtual u8 hit(void *font_data, u32 x, u32 y) = 0;
-    virtual void get_size(u32 &width, u32 &height) = 0;
+    virtual glyph get_glyph(char32_t code) = 0;
+    virtual freelibcxx::tuple<u32, u32> get_size() = 0;
 };
 
 } // namespace font

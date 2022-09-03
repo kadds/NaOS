@@ -1,32 +1,17 @@
 #pragma once
 #include "common.hpp"
+#include "freelibcxx/string.hpp"
+#include "freelibcxx/vector.hpp"
+#include "kernel/framebuffer.hpp"
+#include "kernel/terminal.hpp"
 namespace trace
 {
 struct console_attribute;
 }
+
 namespace arch::device::vga
 {
-
-struct text_cursor_t
-{
-    u64 px;
-    u64 py;
-};
-extern bool is_auto_flush;
-
+term::minimal_terminal *early_init(fb::framebuffer_t fb);
 void init();
-
-byte *get_vram();
-void set_vram(byte *addr);
-
-byte *get_backbuffer();
-void set_backbuffer(byte *addr);
-
-void auto_flush();
-void flush();
-void flush_kbuffer();
-
-u64 putstring(const char *str, u64 max_len);
-void tag_memory();
 
 } // namespace arch::device::vga

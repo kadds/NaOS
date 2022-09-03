@@ -11,6 +11,7 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/trace.hpp"
 namespace arch
 {
@@ -20,15 +21,21 @@ ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
     paging::temp_init(args != 0);
 }
 
-constexpr u64 trace_early_bottom_address = 0x21000;
-constexpr u64 trace_early_top_address = 0x30000;
-
 void early_init(kernel_start_args *args)
 {
     if (args != nullptr) /// bsp
     {
         // init serial device for logger when video device is preparing.
-        trace::early_init((void *)trace_early_bottom_address, (void *)trace_early_top_address);
+        if (args->fb_type != 1)
+        {
+            while (true)
+                ;
+            // trace::warning("fb type not support");
+        }
+
+        term::early_init(args);
+
+        trace::early_init();
 
         trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
             " NaOS: Nano Operating System (arch X86_64)\n");
@@ -63,6 +70,8 @@ void init(const kernel_start_args *args)
         auto cpu_mesh = cpu_info::get_cpu_mesh_info();
         trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
         cpu::allocate_stack(cpu_mesh.logic_num);
+        term::reset_early_paging();
+
         memory::kernel_vm_info->paging().load();
 
         trace::debug("GDT init");
@@ -91,11 +100,7 @@ void init(const kernel_start_args *args)
     APIC::init();
 }
 
-void post_init()
-{
-    device::vga::init();
-    device::vga::auto_flush();
-}
+void post_init() {}
 
 void init_drivers() { device::chip8042::init(); }
 

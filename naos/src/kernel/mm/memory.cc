@@ -99,9 +99,9 @@ int detect_zones(const kernel_start_args *args, memory_range *zones_range, int m
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
-        trace::debug("Memory map index ", i, ": type:", get_type_str(mm_item->map_type),
-                     ", range:", (void *)mm_item->addr, "-", (void *)((char *)mm_item->addr + mm_item->len),
-                     ", size:", mm_item->len, "bytes -> ", mm_item->len >> 10, "Kib -> ", mm_item->len >> 20, "Mib");
+        trace::debug("Memory map ", i, " type:", get_type_str(mm_item->map_type), " from:", trace::hex(mm_item->addr),
+                     "-", trace::hex((char *)mm_item->addr + mm_item->len), " size:", mm_item->len, "bytes->",
+                     mm_item->len >> 10, "Kib->", mm_item->len >> 20, "Mib");
         if (mm_item->map_type == map_type_t::available)
         {
             phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);

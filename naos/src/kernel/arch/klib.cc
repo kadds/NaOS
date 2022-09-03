@@ -1,6 +1,7 @@
 #include "kernel/arch/klib.hpp"
 #include "common.hpp"
 #include "kernel/arch/cpu.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/mm/memory.hpp"
@@ -101,42 +102,59 @@ void *print_stack(const regs_t *regs, int max_depth)
         rip = regs->rip;
         rsp = regs->rsp;
     }
-    trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack data(rbp->rsp):");
-    trace::print_reset();
-
-    u64 least_rsp = rbp - sizeof(u64) * 10;
-    u32 p = 0;
-    for (u64 i = rbp; (i >= rsp || i >= least_rsp) && is_kernel_space_pointer(i) && p < 100; i -= sizeof(u64), p++)
+    if (memory::kernel_vm_info && memory::kernel_vm_info->paging().get_map(reinterpret_cast<void *>(rbp)).has_value())
     {
-        /// print stack value
-        u64 *val_of_i = reinterpret_cast<u64 *>(i);
-        trace::print("\n    [", trace::hex(i), "]=", trace::hex(*val_of_i));
+        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack data(rbp->rsp):");
+        u64 end_rbp = rbp - sizeof(u64) * 10;
+        if (end_rbp < rsp)
+        {
+            end_rbp = rsp;
+        }
+        trace::print<trace::PrintAttribute<trace::CFG::Black>>(" [", trace::hex(rbp), "-", trace::hex(end_rbp), "]");
+
+        trace::print_reset();
+
+        u64 tmp_rbp = rbp;
+        int n = 0;
+        while (tmp_rbp > end_rbp)
+        {
+            if ((n++ % 4) == 0)
+            {
+                trace::print("\n");
+            }
+            /// print stack value
+            u64 *val0 = reinterpret_cast<u64 *>(tmp_rbp);
+            trace::print(trace::hex16(*val0), "  ");
+            tmp_rbp -= sizeof(u64);
+        }
+
+        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("\nend of stack data.\n");
     }
 
-    trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("\nend of stack data.\n");
-
-    trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack trace:\n");
-    trace::print<trace::PrintAttribute<trace::CBK::Default>>();
     int n = get_stackframes_by(rbp, rsp, rip, 2, frames, frame_count);
-
-    for (int i = 0; i < n; i++)
+    if (n > 0)
     {
-        auto &frame = frames[i];
-        const char *fn = frame.get_frame_name();
-        if (fn != nullptr)
+        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack trace:\n");
+        trace::print<trace::PrintAttribute<trace::CBK::Default>>();
+        for (int i = 0; i < n; i++)
         {
-            trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>(fn);
-            trace::print<trace::PrintAttribute<trace::CFG::Default>>(" [", trace::hex(frame.rip), "]");
-            trace::print<trace::PrintAttribute<trace::CFG::White>>(" rbp:", trace::hex(frame.rbp), "\n");
+            auto &frame = frames[i];
+            const char *fn = frame.get_frame_name();
+            if (fn != nullptr)
+            {
+                trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>(fn);
+                trace::print<trace::PrintAttribute<trace::CFG::Default>>(" [", trace::hex(frame.rip), "]");
+                trace::print<trace::PrintAttribute<trace::CFG::White>>(" rbp:", trace::hex(frame.rbp), "\n");
+            }
+            else
+            {
+                trace::print<trace::PrintAttribute<trace::CBK::Default, trace::CFG::Default>>(
+                    trace::hex(frame.rip), " rbp:", trace::hex(frame.rbp), "\n");
+            }
         }
-        else
-        {
-            trace::print<trace::PrintAttribute<trace::CBK::Default, trace::CFG::Default>>(
-                trace::hex(frame.rip), " rbp:", trace::hex(frame.rbp), "\n");
-        }
-    }
 
-    trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of stack trace. \n");
+        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of stack trace. \n");
+    }
 
     if (regs != nullptr)
     {
@@ -146,14 +164,14 @@ void *print_stack(const regs_t *regs, int max_depth)
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
         trace::print("\nrax=", trace::hex(regs->rax), ", rbx=", trace::hex(regs->rbx), ", rcx=", trace::hex(regs->rcx),
                      ", rdx=", trace::hex(regs->rdx), ", r8=", trace::hex(regs->r8), ", r9=", trace::hex(regs->r9),
-                     ",\n r10=", trace::hex(regs->r10), ", r11=", trace::hex(regs->r11),
-                     ", r12=", trace::hex(regs->r12), ", r13=", trace::hex(regs->r13), ", r14=", trace::hex(regs->r14),
-                     ", r15=", trace::hex(regs->r15), ",\n rdi=", trace::hex(regs->rdi),
-                     ", rsi=", trace::hex(regs->rsi), ", cs=", trace::hex(regs->cs), ", ds=", trace::hex(regs->ds),
-                     ", es=", trace::hex(regs->es), ", fs=", trace::hex(fs), ",\n gs=", trace::hex(gs),
-                     ", ss=", trace::hex(regs->ss), ", rip=", trace::hex(regs->rip), ", rsp=", trace::hex(regs->rsp),
-                     ", rbp=", trace::hex(regs->rbp), ", rflags=", trace::hex(regs->rflags),
-                     ",\n vector=", trace::hex(regs->vector), ", error_code=", trace::hex(regs->error_code), "\n");
+                     ", r10=", trace::hex(regs->r10), ", r11=", trace::hex(regs->r11), ", r12=", trace::hex(regs->r12),
+                     ", r13=", trace::hex(regs->r13), ", r14=", trace::hex(regs->r14), ", r15=", trace::hex(regs->r15),
+                     ", rdi=", trace::hex(regs->rdi), ", rsi=", trace::hex(regs->rsi), ", cs=", trace::hex(regs->cs),
+                     ", ds=", trace::hex(regs->ds), ", es=", trace::hex(regs->es), ", fs=", trace::hex(fs),
+                     ", gs=", trace::hex(gs), ", ss=", trace::hex(regs->ss), ", rip=", trace::hex(regs->rip),
+                     ", rsp=", trace::hex(regs->rsp), ", rbp=", trace::hex(regs->rbp),
+                     ", rflags=", trace::hex(regs->rflags), ", vector=", trace::hex(regs->vector),
+                     ", error_code=", trace::hex(regs->error_code), "\n");
     }
     else
     {
@@ -173,7 +191,7 @@ void *print_stack(const regs_t *regs, int max_depth)
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
         trace::print<>("\ncs=", trace::hex(cs), ", ds=", trace::hex(ds), ", es=", trace::hex(es),
                        ", fs=", trace::hex(fs), ", gs=", trace::hex(gs), ", ss=", trace::hex(ss),
-                       ",\n rip=", trace::hex(reg_rip), ", rsp=", trace::hex(reg_rsp), ", rbp=", trace::hex(reg_rbp),
+                       ", rip=", trace::hex(reg_rip), ", rsp=", trace::hex(reg_rsp), ", rbp=", trace::hex(reg_rbp),
                        ", rflags=", trace::hex(reg_rflags), "\n");
     }
     u64 gs_base, k_gs_base, fs_base;
@@ -206,7 +224,7 @@ void *print_stack(const regs_t *regs, int max_depth)
     if (memory::global_zones != nullptr)
     {
         trace::print("buddy free pages ", memory::global_zones->free_pages(), "/", memory::global_zones->total_pages(),
-                     "\n");
+                     ". free ", memory::global_zones->free_pages() * memory::page_size / 1024 / 1024, "Mib \n");
     }
     trace::print_reset();
     return trace::hex(rbp);

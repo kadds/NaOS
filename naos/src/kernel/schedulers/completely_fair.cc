@@ -146,6 +146,12 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         {
             return;
         }
+        else if (thread->state == thread_state::ready)
+        {
+            trace::debug("task ready to ready pid ", thread->process->pid, " tid ", thread->tid);
+            // ready to ready is safe
+            return;
+        }
     }
     else if (state == thread_state::stop)
     {

@@ -1,6 +1,8 @@
 #include "kernel/dev/tty/tty.hpp"
+#include "freelibcxx/string.hpp"
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/task.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/trace.hpp"
 
 namespace dev::tty
@@ -17,13 +19,13 @@ bool tty_read_func(u64 data)
 /// print to screen
 i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 {
-    trace::print_inner((const char *)data, size);
+    term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), term_index);
     return size;
 }
 
 u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
 {
-    trace::print_inner((const char *)data, size);
+    term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), term_index);
     for (u64 i = 0; i < size; i++)
     {
         auto ch = (char)data[i];

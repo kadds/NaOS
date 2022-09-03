@@ -106,6 +106,12 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         {
             return;
         }
+        else if (thread->state == thread_state::ready)
+        {
+            trace::debug("task ready to ready pid ", thread->process->pid, " tid ", thread->tid);
+            // ready to ready is safe
+            return;
+        }
     }
     else if (state == thread_state::sched_switch_to_ready)
     {

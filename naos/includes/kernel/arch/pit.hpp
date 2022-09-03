@@ -3,6 +3,7 @@
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
 #include "common.hpp"
+#include <atomic>
 
 namespace arch::device::PIT
 {
@@ -14,9 +15,9 @@ class clock_event : public ::timeclock::clock_event
 
   private:
     u64 hz;
-    u16 pc;
-    bool is_suspend;
-    volatile u64 tick_jiff;
+    u16 divisor;
+    std::atomic_bool is_suspend;
+    std::atomic_uint64_t tick_jiff;
 
   public:
     clock_event()

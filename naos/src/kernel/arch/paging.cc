@@ -202,8 +202,8 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
 
 Unpaged_Text_Section void temp_init(bool is_bsp)
 {
-    // map 0x0 -> 1GB
-    // map 0xFFFF800000000000 -> 1GB
+    // map 0x0 -> 4GB
+    // map 0xFFFF800000000000 -> 4GB
     // also map cpu_stack_bottom_address[0] -> 0x8XFFF-0x90000
 
     void *temp_pml4_addr = (void *)base_tmp_page_entries;
@@ -220,13 +220,17 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
         u64 *page_pdp_entries = (u64 *)page_alloc_position;
         set_zero(page_pdp_entries);
 
-        page_alloc_position += 0x1000;
-        page_pdp_entries[0] = page_alloc_position + 3;
-        u64 *page_pd_entries = (u64 *)page_alloc_position;
-        for (int k = 0; k < 512; k++)
+        for (int i = 0; i < 4; i++)
         {
-            page_pd_entries[k] = target_phy;
-            target_phy += 0x200000;
+            page_alloc_position += 0x1000;
+            page_pdp_entries[i] = page_alloc_position + 3;
+
+            u64 *page_pd_entries = (u64 *)page_alloc_position;
+            for (int k = 0; k < 512; k++)
+            {
+                page_pd_entries[k] = target_phy;
+                target_phy += 0x200000;
+            }
         }
 
         __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
@@ -807,7 +811,7 @@ bool page_table_t::has_flags(void *virt_start, u64 flags)
 
 freelibcxx::optional<phy_addr_t> page_table_t::get_map(void *virt_start)
 {
-    auto p = memory::align_up(reinterpret_cast<u64>(virt_start), memory::page_size);
+    auto p = memory::align_down(reinterpret_cast<u64>(virt_start), memory::page_size);
 
     auto index = from_virt_addr(p);
     auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();

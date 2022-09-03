@@ -44,7 +44,7 @@ extern "C" void *memcpy(void *__restrict dst, const void *__restrict src, size_t
     {
         return dst;
     }
-    if (dst_address >= src_address && dst_address < src_address + size)
+    if (dst_address > src_address && dst_address < src_address + size)
     {
         trace::panic("memcpy check fail");
     }
@@ -98,7 +98,7 @@ extern "C" void *memmove(void *dst, const void *src, size_t size) noexcept
     char *d = reinterpret_cast<char *>(dst);
     uintptr_t dst_address = reinterpret_cast<uintptr_t>(dst);
     uintptr_t src_address = reinterpret_cast<uintptr_t>(src);
-    if (unlikely(dst_address < src_address + size))
+    if (unlikely(dst_address > src_address && dst_address < src_address + size))
     {
         if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
         {

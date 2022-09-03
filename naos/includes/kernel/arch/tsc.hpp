@@ -27,8 +27,8 @@ class clock_source : public ::timeclock::clock_source
 {
 
   private:
-    u64 tsc_tick_per_microsecond;
-    u64 fill_tsc;
+    u64 tsc_tick_second;
+    u64 begin_tsc;
 
   public:
     void init() override;

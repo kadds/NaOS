@@ -4,6 +4,7 @@
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
 #include "common.hpp"
+#include <atomic>
 
 namespace arch::APIC
 {
@@ -44,8 +45,8 @@ class clock_event : public ::timeclock::clock_event
   private:
     friend irq::request_result on_event(const irq::interrupt_info *, u64 extra_data, u64 user_data);
     friend class clock_source;
-    volatile bool is_suspend;
-    volatile u64 tick_count;
+    std::atomic_bool is_suspend;
+    std::atomic_uint64_t tick_count;
     volatile u32 init_counter;
     volatile u32 divide;
     volatile u64 bus_frequency;

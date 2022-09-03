@@ -15,6 +15,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/trace.hpp"
 
@@ -71,14 +72,19 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     memory::listen_page_fault();
     timer::init();
     SMP::init();
+
     // -----spec routine for bsp----
     fs::vfs::init();
     fs::ramfs::init();
     fs::rootfs::init(memory::pa2va<byte*>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
     fs::pipefs::init();
     ksybs::init();
+
     io::init();
     dev::init();
+
+    term::init();
+
     task::init();
     arch::init_drivers();
     trace::info("Bsp kernel main is running");
