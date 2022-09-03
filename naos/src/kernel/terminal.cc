@@ -1,12 +1,16 @@
 #include "kernel/terminal.hpp"
+#include "common.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/string.hpp"
+#include "kernel/arch/mm.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 #include <atomic>
@@ -460,7 +464,15 @@ void early_init(kernel_start_args *args)
     };
     early_terminal = arch::device::vga::early_init(fb);
 }
-void reset_early_paging() { return; }
+void reset_early_paging()
+{
+    void *virt = reinterpret_cast<void *>(memory::kernel_vga_bottom_address);
+    memory::kernel_vm_info->paging().big_page_map_to(
+        virt, 32 * arch::paging::big_pages, memory::va2pa(early_terminal->backend()->fb().ptr),
+        arch::paging::flags::writable | arch::paging::flags::cache_disable | arch::paging::flags::write_through, 0);
+    early_terminal->backend()->fb().ptr = virt;
+}
+
 void reset_panic_term()
 {
     early_terminal->reattach_backend();

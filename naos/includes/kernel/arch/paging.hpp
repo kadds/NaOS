@@ -202,6 +202,7 @@ constexpr inline u64 huge_pages = frame_size::size_1gb / frame_size::size_4kb;
 void init();
 void enable_new_paging();
 void temp_init(bool is_bsp);
+void temp_update_uncached(void *virt, u64 pages);
 
 namespace action_flags
 {

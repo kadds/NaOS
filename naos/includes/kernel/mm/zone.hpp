@@ -53,8 +53,8 @@ class zone
 class zones : public freelibcxx::Allocator
 {
   public:
-    zones(int count)
-        : last_report_(0)
+    zones(int count, int high_memory_index)
+        : high_memory_index_(high_memory_index)
         , count_(count)
     {
     }
@@ -86,8 +86,26 @@ class zones : public freelibcxx::Allocator
 
     u64 free_pages() const;
 
+    int high_memory_index() const { return high_memory_index_; }
+
+    bool high_memory_init() const { return high_memory_init_; }
+
+    void set_high_memory_init() { high_memory_init_ = true; }
+
+    int active_zones() const
+    {
+        int n = high_memory_index_;
+        if (likely(high_memory_init_))
+        {
+            n = count_;
+        }
+        return n;
+    };
+
   private:
-    timeclock::microsecond_t last_report_;
+    bool high_memory_init_ = false;
+    int high_memory_index_;
+
     /// zone element count
     int count_;
     /// zones array

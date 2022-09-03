@@ -53,14 +53,14 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     {
         if (unlikely(!cpu::has_init()))
         {
-            trace::panic_stack(regs, "Startup Oops error");
+            trace::panic_stack(regs, "Startup Oops error ", trace::hex(extra_data));
         }
         auto &cpu = cpu::current();
         if (unlikely(cpu.get_user_data() == nullptr))
         {
-            trace::panic_stack(regs, "Startup Oops error");
+            trace::panic_stack(regs, "Startup Oops error ", trace::hex(extra_data));
         }
-        ::task::thread_t *task = ::cpu::current().get_task();
+        ::task::thread_t *task = ::task::current();
         if (likely((regs->cs & 0x3) != 0)) // user space : DPL 3
         {
             task->register_info->trap_vector = regs->vector;
@@ -137,7 +137,7 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             {
                 task->register_info->trap_vector = regs->vector;
             }
-            ::task::thread_t *task = ::cpu::current().get_task();
+            ::task::thread_t *task = ::task::current();
             trace::warning("exception ", regs->vector, " occurred at ", trace::hex(regs->rip), " code ",
                            regs->error_code, " task ", task != nullptr ? task->process->pid : 0);
             trace::panic_stack(regs, "Kernel Oops ->");

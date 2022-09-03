@@ -70,9 +70,6 @@ void init(const kernel_start_args *args)
         auto cpu_mesh = cpu_info::get_cpu_mesh_info();
         trace::info("detect cpu logic count ", cpu_mesh.logic_num, " core count ", cpu_mesh.core_num);
         cpu::allocate_stack(cpu_mesh.logic_num);
-        term::reset_early_paging();
-
-        memory::kernel_vm_info->paging().load();
 
         trace::debug("GDT init");
         gdt::init_after_paging();
@@ -83,6 +80,12 @@ void init(const kernel_start_args *args)
         cpu::init_data(0);
         trace::debug("IDT init");
         idt::init_after_paging();
+
+        trace::debug("New paging reloading");
+        term::reset_early_paging();
+        idt::enable();
+        memory::kernel_vm_info->paging().load();
+        memory::init2();
 
         trace::debug("APIC init");
         APIC::init();

@@ -152,22 +152,22 @@ struct thread_t
     void *user_stack_bottom;
 
     /// from 0 - 255, 0 is the highest priority, 100 - 139 to user thread, default is 125
-    u8 static_priority;
+    u8 static_priority = 0;
     /// dynamic priority
     ///
     /// -128 - 128, minimum value means a CPU bound thread, maximum value means a IO
     /// bound thread, the default value is 0.
-    i8 dynamic_priority;
+    i8 dynamic_priority = 0;
     /// run in cpu core
-    u32 cpuid;
+    u32 cpuid = 0;
     cpu_mask_t cpumask;
     statistics_t statistics;
     preempt_t preempt_data;
     wait_queue_t wait_queue;
     std::atomic_int wait_counter;
-    u64 error_code;
-    wait_queue_t *do_wait_queue_now;
-    void *tcb;
+    u64 error_code = 0;
+    wait_queue_t *do_wait_queue_now = nullptr;
+    void *tcb = 0;
 
     thread_t();
 };
@@ -281,8 +281,24 @@ process_t *get_init_process();
 
 void set_init_process(process_t *proc);
 
-inline thread_t *current() { return (thread_t *)cpu::current().get_task(); }
-inline process_t *current_process() { return current()->process; }
+inline thread_t *current()
+{
+    auto &t = cpu::current();
+    if (likely(&t))
+    {
+        return (thread_t *)t.get_task();
+    }
+    return nullptr;
+}
+inline process_t *current_process()
+{
+    auto t = current();
+    if (likely(t))
+    {
+        return t->process;
+    }
+    return nullptr;
+}
 
 void set_cpu_mask(thread_t *thd, cpu_mask_t mask);
 

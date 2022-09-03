@@ -49,7 +49,7 @@ class framebuffer_backend
         return freelibcxx::make_tuple(rows, cols);
     }
 
-    framebuffer_t fb() const { return fb_; }
+    framebuffer_t &fb() { return fb_; }
 
     u32 frame_bytes() const { return fb_.width * fb_.height * fb_.bbp / 8; }
 

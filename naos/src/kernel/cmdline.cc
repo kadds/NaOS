@@ -107,6 +107,32 @@ bool early_get_bool(const char *key, bool default_value)
     return ret;
 }
 
+int early_get_int(const char *key, int default_value)
+{
+    u64 len = 0;
+    char *beg;
+
+    if (!early_get(key, beg, len) || len == 0)
+    {
+        return default_value;
+    }
+    auto val = freelibcxx::const_string_view(beg, len);
+    return val.to_int().value_or(default_value);
+}
+
+u32 early_get_uint(const char *key, u32 default_value)
+{
+    u64 len = 0;
+    char *beg;
+
+    if (!early_get(key, beg, len) || len == 0)
+    {
+        return default_value;
+    }
+    auto val = freelibcxx::const_string_view(beg, len);
+    return val.to_uint().value_or(default_value);
+}
+
 void init()
 {
     char *cmdline = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));

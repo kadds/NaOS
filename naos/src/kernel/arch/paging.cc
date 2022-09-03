@@ -154,6 +154,8 @@ Unpaged_Text_Section void set_zero(void *p)
 
 Unpaged_Data_Section(1) static u64 page_alloc_position;
 
+const u64 tmp_base_flags = flags::present | flags::writable;
+
 Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_addr)
 {
     u64 *page_entries = (u64 *)base_tmp_page_entries;
@@ -172,7 +174,7 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
             page_alloc_position += 0x1000;
             page_pdp_entries = (u64 *)page_alloc_position;
             set_zero(page_pdp_entries);
-            page_entries[pml4e_index] = page_alloc_position | 0x3;
+            page_entries[pml4e_index] = page_alloc_position | tmp_base_flags;
         }
 
         u64 *page_pd_entries = (u64 *)(page_pdp_entries[pdpe_index] & 0xF'FFFF'FFFF'F000UL);
@@ -181,7 +183,7 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
             page_alloc_position += 0x1000;
             page_pd_entries = (u64 *)page_alloc_position;
             set_zero(page_pd_entries);
-            page_pdp_entries[pdpe_index] = page_alloc_position | 0x3;
+            page_pdp_entries[pdpe_index] = page_alloc_position | tmp_base_flags;
         }
 
         u64 *page_pt_entries = (u64 *)(page_pd_entries[pde_index] & 0xF'FFFF'FFFF'F000UL);
@@ -190,10 +192,10 @@ Unpaged_Text_Section void fill_stack_page_table(u64 base_virtual_addr, u64 phy_a
             page_alloc_position += 0x1000;
             page_pt_entries = (u64 *)page_alloc_position;
             set_zero(page_pt_entries);
-            page_pd_entries[pde_index] = page_alloc_position | 0x3;
+            page_pd_entries[pde_index] = page_alloc_position | tmp_base_flags;
         }
 
-        page_pt_entries[pte_index] = phy_addr | 0x83;
+        page_pt_entries[pte_index] = phy_addr | tmp_base_flags | flags::big_page;
 
         base_virtual_addr += memory::page_size;
         phy_addr += memory::page_size;
@@ -212,7 +214,7 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
         page_alloc_position = reinterpret_cast<u64>(&base_tmp_page_entries);
         u64 *page_entries = (u64 *)page_alloc_position;
         set_zero(page_entries);
-        u64 target_phy = 0x83;
+        u64 target_phy = tmp_base_flags | flags::big_page;
 
         page_alloc_position += 0x1000;
         page_entries[0] = page_alloc_position + 3;
@@ -248,6 +250,31 @@ Unpaged_Text_Section void temp_init(bool is_bsp)
         fill_stack_page_table((u64)base, (u64)phy);
         __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
     }
+}
+
+void temp_update_uncached(void *virt, u64 pages)
+{
+    u64 base_virtual_addr = (u64)virt;
+    u64 *page_entries = (u64 *)base_tmp_page_entries;
+    for (u64 i = 0; i < pages; i++)
+    {
+        u64 pml4e_index = get_bits_unpaged(base_virtual_addr, 39, 8);
+        u64 pdpe_index = get_bits_unpaged(base_virtual_addr, 30, 8);
+        u64 pde_index = get_bits_unpaged(base_virtual_addr, 21, 8);
+        u64 pte_index = get_bits_unpaged(base_virtual_addr, 12, 8);
+
+        u64 *page_pdp_entries = (u64 *)(page_entries[pml4e_index] & 0xF'FFFF'FFFF'F000UL);
+
+        u64 *page_pd_entries = (u64 *)(page_pdp_entries[pdpe_index] & 0xF'FFFF'FFFF'F000UL);
+
+        u64 *page_pt_entries = (u64 *)(page_pd_entries[pde_index] & 0xF'FFFF'FFFF'F000UL);
+
+        page_pt_entries[pte_index] |= flags::cache_disable | flags::write_through;
+
+        base_virtual_addr += memory::page_size;
+    }
+    void *temp_pml4_addr = (void *)base_tmp_page_entries;
+    __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
 }
 
 void init()

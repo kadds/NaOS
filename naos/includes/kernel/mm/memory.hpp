@@ -17,6 +17,7 @@ class info_t;
 extern vm::info_t *kernel_vm_info;
 
 void init(kernel_start_args *args, u64 fix_memory_limit);
+void init2();
 void paging();
 u64 get_max_available_memory();
 u64 get_max_maped_memory();

@@ -141,6 +141,7 @@ root=(hd0,msdos1)
 set default=0
 set timeout=1
 menuentry "NaOS multiboot2" {
+    insmod all_video
     insmod part_msdos
     insmod fat
     multiboot2 /boot/kernel
@@ -170,9 +171,7 @@ root=(hd0,gpt2)
 set default=0
 set timeout=1
 menuentry "NaOS multiboot2" {
-    insmod efi_gop
-    insmod efi_uga
-    insmod ieee1275_fb
+    insmod all_video
     insmod part_gpt
     insmod part_msdos
     insmod fat

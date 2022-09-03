@@ -88,7 +88,7 @@ u32 zones::get_page_reference(void *ptr)
 u64 zones::total_pages() const
 {
     u64 ret = 0;
-    for (int i = 0; i < count_; i++)
+    for (int i = 0; i < active_zones(); i++)
     {
         ret += zone_array_[i].total_pages();
     }
@@ -98,7 +98,7 @@ u64 zones::total_pages() const
 u64 zones::free_pages() const
 {
     u64 ret = 0;
-    for (int i = 0; i < count_; i++)
+    for (int i = 0; i < active_zones(); i++)
     {
         ret += zone_array_[i].free_pages();
     }
@@ -107,7 +107,7 @@ u64 zones::free_pages() const
 
 zone *zones::which(phy_addr_t ptr)
 {
-    int i = 0, j = count_;
+    int i = 0, j = active_zones();
     while (i < j)
     {
         int mid = i + (j - i) / 2;
@@ -135,7 +135,7 @@ void *zones::allocate(size_t size, size_t align) noexcept
     size = align_up(size, memory::page_size);
     u64 pages = size / memory::page_size;
     // select one zone
-    for (int i = 0; i < count_; i++)
+    for (int i = 0; i < active_zones(); i++)
     {
         phy_addr_t p = zone_array_[i].malloc(pages);
         if (p != nullptr)
@@ -144,11 +144,6 @@ void *zones::allocate(size_t size, size_t align) noexcept
 #ifdef _DEBUG
             memset(ptr, 0xFAFF'FEF0, size);
 #endif
-            // if (timeclock::get_current_clock() - last_report_ > 1000'000)
-            // {
-            //     last_report_ = timeclock::get_current_clock();
-            //     trace::info("free ", free_pages(), "/", total_pages());
-            // }
             return ptr;
         }
     }
@@ -175,7 +170,7 @@ void zones::tag_alloc(phy_addr_t start, phy_addr_t end)
 {
     kassert(start <= end, "address check fail");
 
-    for (int i = 0; i < count_; i++)
+    for (int i = 0; i < active_zones(); i++)
     {
         auto &z = zone_array_[i];
 
@@ -299,7 +294,6 @@ zone::zone(phy_addr_t start, phy_addr_t end, phy_addr_t danger_beg, phy_addr_t d
 
     u64 page_bytes = sizeof(page) * page_count;
     phy_addr_t page_addr = align_down(end - page_bytes, page_size);
-    allocate_end = start + page_count * page_size;
 
     page_array = memory::pa2va<page *>(end - page_bytes);
     memset(page_array, 0, page_bytes);

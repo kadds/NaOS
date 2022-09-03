@@ -137,9 +137,7 @@ void update_fs(::task::thread_t *thd)
 {
     u64 tcb = reinterpret_cast<u64>(thd->tcb);
     _wrmsr(0xC0000100, tcb);
-#ifdef _DEBUG
-    kassert(_rdmsr(0xC0000100) == tcb, "Unreadable fs base ", tcb, " ", _rdmsr(0xC0000100));
-#endif
+    kassert(_rdmsr(0xC0000100) == tcb, "Unreadable fs base ", trace::hex(tcb), " ", trace::hex(_rdmsr(0xC0000100)));
 }
 
 bool make_signal_context(void *stack, void *func, userland_code_context *context)

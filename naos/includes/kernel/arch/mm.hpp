@@ -14,7 +14,7 @@
     0xFFFF,A0000,1000,0000 - 0xFFFF,A000,101F,FFFF: io apic (2MB)
     0xFFFF,A0000,1020,0000 - 0xFFFF,A000,103F,FFFF: local apic (2MB)
     0xFFFF,A0000,1040,0000 - 0xFFFF,A000,105F,FFFF: rcba apic (2MB)
-    0xFFFF,A0000,2000,0000 - 0xFFFF,A000,23FF,FFFF: vga (64MB)
+    0xFFFF,A0000,2000,0000 - 0xFFFF,A000,23FF,FFFF: vga framebuffer (64MB)
 
 0xFFFF,B000,0000,0000 - 0xFFFF,CFFF,FFFF,FFFF: kernel mmap zone (32TB)
 0xFFFF,F000,0000,0000 - 0xFFFF,F000,3FFF,FFFF: Kernel cpu stack memroy map (1GB)
@@ -41,8 +41,8 @@ constexpr u64 local_apic_bottom_address = 0xFFFF'A000'1020'0000UL;
 constexpr u64 local_apic_top_address = 0xFFFF'A000'1040'0000UL;
 constexpr u64 rcba_apic_bottom_address = 0xFFFF'A000'1040'0000UL;
 constexpr u64 rcba_apic_top_address = 0xFFFF'A000'1060'0000UL;
-constexpr u64 kernel_vga_bottom_address = 0xFFFF'800A'2000'0000UL;
-constexpr u64 kernel_vga_top_address = 0xFFFF'800A'2400'0000UL;
+constexpr u64 kernel_vga_bottom_address = 0xFFFF'A000'2000'0000UL;
+constexpr u64 kernel_vga_top_address = 0xFFFF'A000'2400'0000UL;
 constexpr u64 kernel_mmap_bottom_address = 0xFFFF'B000'0000'0000UL;
 constexpr u64 kernel_mmap_top_address = 0xFFFF'D000'0000'0000UL;
 constexpr u64 kernel_cpu_stack_bottom_address = 0xFFFF'F000'0000'0000UL;

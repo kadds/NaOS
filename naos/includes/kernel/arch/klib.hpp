@@ -35,12 +35,15 @@ ExportC void _from_rip();
 
 ExportC void _unpaged_reload_segment(u64 cs, u64 ss);
 
+inline void _mfence() { __asm__ __volatile__("mfence\n\t" : : : "memory"); }
+
 inline void _wrmsr(u64 address, u64 value)
 {
     __asm__ __volatile__("wrmsr  \n\t"
                          :
                          : "d"((u32)(value >> 32)), "a"((u32)(value & 0xFFFFFFFF)), "c"(address)
                          : "memory");
+    _mfence();
 }
 inline u64 _rdmsr(u64 address)
 {
@@ -56,8 +59,6 @@ inline u64 _rdtsc()
     __asm__ __volatile__("mfence \n\t rdtsc	\n\t" : "=d"(v0), "=a"(v1) : : "memory");
     return ((u64)v0) << 32 | v1;
 }
-
-inline void _mfence() { __asm__ __volatile__("mfence\n\t" : : : "memory"); }
 
 ExportC volatile char _sys_call;
 ExportC volatile char _sys_ret;

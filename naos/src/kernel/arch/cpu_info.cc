@@ -66,7 +66,10 @@ void init()
     max_extend_number = a;
     trace_debug_info();
     feature required_feature[] = {
-        feature::system_call_ret, feature::msr, feature::tsc, feature::apic, feature::xsave,
+        feature::system_call_ret,
+        feature::msr,
+        feature::tsc,
+        feature::apic,
     };
     for (auto feat : required_feature)
     {

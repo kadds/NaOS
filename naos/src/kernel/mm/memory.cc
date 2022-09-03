@@ -1,5 +1,6 @@
 #include "kernel/mm/memory.hpp"
 #include "common.hpp"
+#include "freelibcxx/tuple.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/klib.hpp"
@@ -90,12 +91,14 @@ struct memory_range
     bool operator>=(const memory_range &rhs) const { return beg >= rhs.beg; }
 };
 
-int detect_zones(const kernel_start_args *args, memory_range *zones_range, int max_zones_range_count)
+freelibcxx::tuple<int, int> detect_zones(const kernel_start_args *args, memory_range *zones_range,
+                                         int max_zones_range_count)
 {
     kernel_memory_map_item *mm_item = pa2va<kernel_memory_map_item *>(phy_addr_t::from(args->mmap));
     max_memory_available = 0;
     max_memory_maped = 0;
     int zone_count = 0;
+    int high_memory_index = -1;
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
@@ -123,6 +126,14 @@ int detect_zones(const kernel_start_args *args, memory_range *zones_range, int m
                 break;
             }
             i64 len = end - start;
+            if (len <= (i64)memory::page_size * 2)
+            {
+                continue;
+            }
+            if (start > phy_addr_t::from(0xFFFF'FFFF)) // >= 4GB
+            {
+                high_memory_index = zone_count;
+            }
 
             max_memory_available += len;
             zones_range[zone_count].set(start, end);
@@ -140,9 +151,15 @@ int detect_zones(const kernel_start_args *args, memory_range *zones_range, int m
     {
         trace::panic("Too few memory to boot");
     }
+    if (high_memory_index == -1)
+    {
+        high_memory_index = zone_count;
+    }
 
-    return zone_count;
+    return freelibcxx::make_tuple(zone_count, high_memory_index);
 }
+constexpr int max_memory_range_support = 32;
+memory_range result_range[max_memory_range_support];
 
 void init(kernel_start_args *args, u64 fix_memory_limit)
 {
@@ -156,10 +173,6 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
     phy_addr_t start_data = align_down(phy_addr_t::from(args->data_base), page_size);
     phy_addr_t end_data = phy_addr_t::from(PhyBootAllocator::current_ptr_address());
-
-    constexpr int max_memory_range_support = 32;
-    memory_range result_range[max_memory_range_support];
-    memory_range used_range;
 
     // copy pointers
     const char *cmdline = reinterpret_cast<const char *>(args->command_line);
@@ -194,16 +207,18 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         }
     }
 
-    int zone_count = detect_zones(args, result_range, max_memory_range_support);
+    auto [zone_count, high_memory_index] = detect_zones(args, result_range, max_memory_range_support);
 
     global_zones = (memory::zones *)VirtBootAllocatorV->allocate(sizeof(zones) + zone_count * sizeof(zone), 8);
-    global_zones = new (global_zones) memory::zones(zone_count);
+    global_zones = new (global_zones) memory::zones(zone_count, high_memory_index);
 
     auto end_used_memory_addr =
         reinterpret_cast<char *>(VirtBootAllocatorV->current_ptr_address()) + memory::page_size * 4;
     end_used_memory_addr = align_up(end_used_memory_addr, memory::page_size);
 
-    for (int zone_id = 0; zone_id < zone_count; zone_id++)
+    trace::debug("Build memory zones ", zone_count, " high memory zones ", zone_count - high_memory_index);
+
+    for (int zone_id = 0; zone_id < high_memory_index; zone_id++)
     {
         auto range = result_range[zone_id];
 
@@ -248,6 +263,20 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     PhyBootAllocatorV->discard();
     kassert(VirtBootAllocatorV->current_ptr_address() <= end_used_memory_addr, "BootAllocator is Out of memory");
     msg_queue_init();
+}
+
+void init2()
+{
+    for (int zone_id = global_zones->high_memory_index(); zone_id < global_zones->zone_count(); zone_id++)
+    {
+        auto range = result_range[zone_id];
+
+        zone *z = global_zones->at(zone_id);
+        z = new (z) zone(range.beg, range.end, nullptr, nullptr);
+        trace::debug("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
+                     " num of page ", z->total_pages());
+    }
+    global_zones->set_high_memory_init();
 }
 
 void listen_page_fault() { vm::listen_page_fault(); }

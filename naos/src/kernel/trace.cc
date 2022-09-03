@@ -1,4 +1,5 @@
 #include "kernel/trace.hpp"
+#include "common.hpp"
 #include "freelibcxx/circular_buffer.hpp"
 #include "freelibcxx/string.hpp"
 #include "kernel/arch/com.hpp"
@@ -21,6 +22,7 @@ freelibcxx::circular_buffer<byte> *kernel_log_buffer = nullptr;
 
 arch::device::com::serial serial_device;
 bool serial_device_enable = false;
+int slowdown = 0;
 
 void early_init()
 {
@@ -29,6 +31,7 @@ void early_init()
         serial_device.init(arch::device::com::get_control_port(0));
         serial_device_enable = true;
     }
+    slowdown = cmdline::early_get_uint("slowdown", 0);
 }
 
 void init()
@@ -54,6 +57,15 @@ void print_klog(const char *str, u64 len)
 {
     if (unlikely(len != 0 && str[len - 1] == 0))
         len--;
+
+    if (unlikely(slowdown))
+    {
+        volatile int v = 0;
+        for (int i = 0; i < slowdown * 10'000; i++)
+        {
+            v = v + 1;
+        }
+    }
 
     if (likely(kernel_log_buffer != nullptr))
     {

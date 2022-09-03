@@ -7,6 +7,7 @@ _text_start_addr:
     .quad 0xAA5555AAAA0000AA # magic number
 .globl _start
 _start: 
+    cli
     movl $0x8000, %esp
     push %rdi
     movabsq $_init_unpaged, %rax

@@ -104,7 +104,6 @@ void io_init()
     io_out8(0x23, 0x1);
 
     io_out32(0xcf8, 0x80000000 | (0 << 16) | (31 << 11) | (0 << 8) | 0xF0);
-    _mfence();
     u32 rcba = io_in32(0xcfc);
     phy_addr_t rcba_address = phy_addr_t::from(rcba & 0xFFFFC000);
     phy_addr_t base_addr = memory::align_down(rcba_address, paging::frame_size::size_2mb);
@@ -118,7 +117,7 @@ void io_init()
     trace::debug("RCBA register value ", trace::hex((u64)rcba), ", Base address ", trace::hex(rcba_address()));
     if (!(rcba & 0x1))
     {
-        trace::panic("RCBA isn't an enable address");
+        trace::panic("RCBA isn't an enabled address");
     }
 
     u8 *oic = (u8 *)(start + 0x31FF + (rcba_address - base_addr));

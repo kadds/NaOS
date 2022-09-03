@@ -23,6 +23,8 @@ bool early_get(const char *key, char *&out_buf, u64 &len);
 
 space_t early_get_space(const char *key, space_t default_value);
 bool early_get_bool(const char *key, bool default_value);
+int early_get_int(const char *key, int default_value);
+u32 early_get_uint(const char *key, u32 default_value);
 
 void init();
 
