@@ -78,6 +78,7 @@ SECTIONS
         *(.hash)
         *(.comment)
         *(.note.gnu.property)
+        *(.eh_frame*)
     }
     .dynsym : 
     {

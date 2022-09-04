@@ -28,6 +28,7 @@ _address_start:
 //bss_end_addr
 .long _bss_end
 _address_end:
+
 .align 8
 _entry_start:
 .short MULTIBOOT_HEADER_TAG_ENTRY_ADDRESS
@@ -36,6 +37,7 @@ _entry_start:
 //entry_addr
 .long _multiboot_start
 _entry_end:
+
 .align 8
 // video info
 _frame_buffer_start:
@@ -46,17 +48,20 @@ _frame_buffer_start:
 .long 600
 .long 32
 _frame_buffer_end:
+
 .align 8
 _module_start:
 .short MULTIBOOT_HEADER_TAG_MODULE_ALIGN
 .short 0
 .long _module_end-_module_start
 _module_end:
+
 .align 8
 .short MULTIBOOT_HEADER_TAG_END
 .short 0
 .long 8
 _header_multiboot_end:
+
 magic:
     .long MULTIBOOT2_BOOTLOADER_MAGIC
 

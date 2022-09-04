@@ -1,8 +1,10 @@
 #include "kernel/arch/io_apic.hpp"
 #include "common.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/paging.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/trace.hpp"
@@ -57,7 +59,16 @@ u8 rte_count;
 
 void io_init()
 {
-    io_map.base_addr = (void *)(u64)0xfec00000;
+    bool acpi = cmdline::get_bool("acpi", false);
+    if (acpi)
+    {
+        io_map.base_addr = arch::ACPI::get_io_apic_base().get();
+    }
+    else
+    {
+        io_map.base_addr = (void *)(u64)0xfec00000;
+    }
+    trace::debug("IO APIC base ", trace::hex(io_map.base_addr));
 
     u64 start = memory::io_apic_bottom_address;
 
@@ -100,30 +111,30 @@ void io_init()
     _mfence();
     // APIC mode
     // enable IMCR
-    io_out8(0x22, 0x70);
-    io_out8(0x23, 0x1);
+    // io_out8(0x22, 0x70);
+    // io_out8(0x23, 0x1);
 
-    io_out32(0xcf8, 0x80000000 | (0 << 16) | (31 << 11) | (0 << 8) | 0xF0);
-    u32 rcba = io_in32(0xcfc);
-    phy_addr_t rcba_address = phy_addr_t::from(rcba & 0xFFFFC000);
-    phy_addr_t base_addr = memory::align_down(rcba_address, paging::frame_size::size_2mb);
+    // io_out32(0xcf8, 0x80000000 | (0 << 16) | (31 << 11) | (0 << 8) | 0xF0);
+    // u32 rcba = io_in32(0xcfc);
+    // phy_addr_t rcba_address = phy_addr_t::from(rcba & 0xFFFFC000);
+    // phy_addr_t base_addr = memory::align_down(rcba_address, paging::frame_size::size_2mb);
 
-    start = memory::rcba_apic_bottom_address;
+    // start = memory::rcba_apic_bottom_address;
 
-    paging.big_page_map_to(reinterpret_cast<void *>(start), paging::big_pages, base_addr,
-                           paging::flags::writable | paging::flags::cache_disable | paging::flags::write_through, 0);
-    paging.reload();
+    // paging.big_page_map_to(reinterpret_cast<void *>(start), paging::big_pages, base_addr,
+    //                        paging::flags::writable | paging::flags::cache_disable | paging::flags::write_through, 0);
+    // paging.reload();
 
-    trace::debug("RCBA register value ", trace::hex((u64)rcba), ", Base address ", trace::hex(rcba_address()));
-    if (!(rcba & 0x1))
-    {
-        trace::panic("RCBA isn't an enabled address");
-    }
+    // trace::debug("RCBA register value ", trace::hex((u64)rcba), ", Base address ", trace::hex(rcba_address()));
+    // if (!(rcba & 0x1))
+    // {
+    //     trace::panic("RCBA isn't an enabled address");
+    // }
 
-    u8 *oic = (u8 *)(start + 0x31FF + (rcba_address - base_addr));
-    u8 v = *oic;
-    v |= 1;
-    *oic = v;
+    // u8 *oic = (u8 *)(start + 0x31FF + (rcba_address - base_addr));
+    // u8 v = *oic;
+    // v |= 1;
+    // *oic = v;
     // kassert(*oic == v, "OIC register can't write value ", (void *)(u64)v, ", old value", (void *)(u64)(*oic));
 }
 

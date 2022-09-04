@@ -134,8 +134,21 @@ void Unpaged_Text_Section set_args_rsdp(kernel_start_args *args, multiboot_tag *
     multiboot_tag_new_acpi *acpi = (multiboot_tag_new_acpi *)tags;
     if (acpi->size - sizeof(multiboot_tag_new_acpi) > 0)
     {
-        args->rsdp = acpi->rsdp[0];
+        args->rsdp = (u64)&acpi->rsdp;
     }
+}
+void Unpaged_Text_Section set_args_rsdp_old(kernel_start_args *args, multiboot_tag *tags)
+{
+    multiboot_tag_old_acpi *acpi = (multiboot_tag_old_acpi *)tags;
+    if (acpi->size - sizeof(multiboot_tag_old_acpi) > 0)
+    {
+        args->rsdp_old = (u64)&acpi->rsdp;
+    }
+}
+void Unpaged_Text_Section set_args_efi(kernel_start_args *args, multiboot_tag *tags)
+{
+    multiboot_tag_efi64 *efi = (multiboot_tag_efi64 *)tags;
+    args->efi_system_table = efi->pointer;
 }
 
 typedef void (*set_args_func)(kernel_start_args *args, multiboot_tag *tags);
@@ -149,6 +162,8 @@ void Unpaged_Text_Section set_args(kernel_start_args *args, multiboot_tag *tags)
     funcs[MULTIBOOT_TAG_TYPE_MMAP] = set_args_mmap;
     funcs[MULTIBOOT_TAG_TYPE_FRAMEBUFFER] = set_args_fb;
     funcs[MULTIBOOT_TAG_TYPE_ACPI_NEW] = set_args_rsdp;
+    funcs[MULTIBOOT_TAG_TYPE_ACPI_OLD] = set_args_rsdp_old;
+    funcs[MULTIBOOT_TAG_TYPE_EFI64] = set_args_efi;
 
     u32 next_size = ((tags->size + 7) & ~7);
     for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + next_size))

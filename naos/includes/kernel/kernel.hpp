@@ -51,7 +51,9 @@ struct kernel_start_args
     u64 command_line;     ///< Pointer, kernel boot command string
     u64 boot_loader_name; ///< Pointer, like "grub2", "efi" string
 
+    u64 rsdp_old; ///< Pointer, ACPI RSDP
     u64 rsdp; ///< Pointer, ACPI RSDP
+    u64 efi_system_table; ///< Pointer, uefi system table address
 } PackStruct;
 
 /// Kernel file struct

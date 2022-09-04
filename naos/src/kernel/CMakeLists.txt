@@ -17,6 +17,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system)
 add_definitions(-DOS_KERNEL)
 add_executable(kernel ${DIR_ALL})
 target_link_libraries(kernel freelibcxx)
+target_link_libraries(kernel acpica)
 
 set(KERNEL_LINK_TAG "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")
 

@@ -10,7 +10,8 @@
 namespace memory
 {
 
-slab_cache_pool *global_kmalloc_slab_domain, *global_dma_slab_domain, *global_object_slab_domain;
+slab_cache_pool *global_kmalloc_slab_domain, *global_dma_slab_domain, *global_object_slab_domain,
+    *global_acpi_slab_domain;
 slab *slab_group::new_memory_node()
 {
     slab *s = (slab *)memory::KernelBuddyAllocatorV->allocate(page_pre_slab * memory::page_size, 8);

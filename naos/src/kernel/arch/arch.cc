@@ -1,5 +1,6 @@
 #include "kernel/arch/arch.hpp"
 #include "common.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/apic.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
@@ -9,6 +10,7 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/tss.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/terminal.hpp"
@@ -40,6 +42,8 @@ void early_init(kernel_start_args *args)
         trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
             " NaOS: Nano Operating System (arch X86_64)\n");
         trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
+
+        trace::info((u32)args->fb_width, "x", (u32)args->fb_height);
 
         trace::debug("Boot loader is ", (const char *)args->boot_loader_name);
         if (sizeof(kernel_start_args) != args->size_of_struct)
@@ -86,6 +90,12 @@ void init(const kernel_start_args *args)
         idt::enable();
         memory::kernel_vm_info->paging().load();
         memory::init2();
+
+        if (cmdline::get_bool("acpi", false))
+        {
+            trace::debug("ACPI init");
+            ACPI::init();
+        }
 
         trace::debug("APIC init");
         APIC::init();

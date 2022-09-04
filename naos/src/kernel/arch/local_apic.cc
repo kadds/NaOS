@@ -1,4 +1,5 @@
 #include "kernel/arch/local_apic.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/interrupt.hpp"
@@ -6,6 +7,7 @@
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/pit.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -172,32 +174,43 @@ void local_init()
     u64 v = (1 << 11);
     if (arch::cpu::current().is_bsp())
     {
+        bool acpi = cmdline::get_bool("acpi", false);
         if (cpu_info::has_feature(cpu_info::feature::x2apic))
         {
             trace::debug("x2APIC is supported");
-            read_register = read_register_MSR;
-            write_register = write_register_MSR;
-            read_register64 = read_register_MSR_64;
-            write_register64 = write_register_MSR_64;
+            // read_register = read_register_MSR;
+            // write_register = write_register_MSR;
+            // read_register64 = read_register_MSR_64;
+            // write_register64 = write_register_MSR_64;
         }
-        else
+        // else
+        // {
+        read_register = read_register_mm;
+        write_register = write_register_mm;
+        read_register64 = read_register_mm_64;
+        write_register64 = write_register_mm_64;
+        // }
+
+        phy_addr_t local_apic_base_addr = phy_addr_t::from(_rdmsr(0x1B) & ~((1 << 13) - 1));
+        if (acpi)
         {
-            read_register = read_register_mm;
-            write_register = write_register_mm;
-            read_register64 = read_register_mm_64;
-            write_register64 = write_register_mm_64;
-
-            phy_addr_t local_apic_base_addr = phy_addr_t::from(_rdmsr(0x1B) & ~((1 << 13) - 1));
-            // local_apic_base_addr = (void *)(_rdmsr(0x1B) & ~((1 << 13) - 1));
-            trace::debug("APIC base ", trace::hex(local_apic_base_addr()));
-            auto &paging = memory::kernel_vm_info->paging();
-            paging.big_page_map_to(
-                reinterpret_cast<void *>(memory::local_apic_bottom_address), paging::big_pages, local_apic_base_addr,
-                paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through, 0);
-            paging.reload();
-
-            apic_base_addr = (void *)memory::local_apic_bottom_address;
+            phy_addr_t base = arch::ACPI::get_local_apic_base();
+            if (base != local_apic_base_addr)
+            {
+                trace::warning("Local APIC base from msr ", trace::hex(local_apic_base_addr()), " from ACPI ",
+                               trace::hex(base()));
+            }
+            local_apic_base_addr = base;
         }
+
+        trace::debug("Local APIC base ", trace::hex(local_apic_base_addr()));
+        auto &paging = memory::kernel_vm_info->paging();
+        paging.big_page_map_to(
+            reinterpret_cast<void *>(memory::local_apic_bottom_address), paging::big_pages, local_apic_base_addr,
+            paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through, 0);
+        paging.reload();
+
+        apic_base_addr = (void *)memory::local_apic_bottom_address;
     }
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))

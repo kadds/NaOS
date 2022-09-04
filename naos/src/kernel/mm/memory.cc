@@ -236,6 +236,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     global_kmalloc_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
     global_dma_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
     global_object_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
+    global_acpi_slab_domain = New<slab_cache_pool>(VirtBootAllocatorV);
 
     for (auto &i : kmalloc_fixed_slab_size)
     {

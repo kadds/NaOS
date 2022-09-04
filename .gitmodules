@@ -4,3 +4,6 @@
 [submodule "naos/freelibcxx"]
 	path = naos/freelibcxx
 	url = https://github.com/kadds/freelibcxx
+[submodule "naos/src/acpica"]
+	path = naos/src/acpica
+	url = https://github.com/kadds/acpica

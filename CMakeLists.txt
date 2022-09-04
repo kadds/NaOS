@@ -42,6 +42,7 @@ set(FREE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++20 -Wno-
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(FREE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")
+add_definitions(-DNAOS)
 
 set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
