@@ -27,6 +27,7 @@ enum
     BLINK = 8,
     REVERSE = 16,
     FRAME = 32,
+    NEW_LINE = 64,
 };
 }
 
@@ -144,13 +145,17 @@ template <typename CHILD, typename CHAR> class terminal
         , col_(rhs.col_)
         , rows_(rhs.rows_)
         , cols_(rhs.cols_)
+        , lock_row_(rhs.lock_row_)
+        , lock_col_(rhs.lock_col_)
         , dirty_(rhs.dirty_)
         , escape_state_(rhs.escape_state_)
         , backend_(rhs.backend_)
+        , last_char_(rhs.last_char_)
         , placeholder_time_(rhs.placeholder_time_)
         , enable_placeholder_(rhs.enable_placeholder_)
         , placeholder_show_(rhs.placeholder_show_)
         , placeholder_reset_(rhs.placeholder_reset_)
+        , drop_(rhs.drop_)
     {
     }
     terminal &operator=(terminal &&rhs) noexcept
@@ -160,13 +165,17 @@ template <typename CHILD, typename CHAR> class terminal
         col_ = rhs.col_;
         rows_ = rhs.rows_;
         cols_ = rhs.cols_;
+        lock_row_ = rhs.lock_row_;
+        lock_col_ = rhs.lock_col_;
         dirty_ = rhs.dirty_;
         escape_state_ = rhs.escape_state_;
         backend_ = rhs.backend_;
+        last_char_ = rhs.last_char_;
         placeholder_time_ = rhs.placeholder_time_;
         enable_placeholder_ = rhs.enable_placeholder_;
         placeholder_show_ = rhs.placeholder_show_;
         placeholder_reset_ = rhs.placeholder_reset_;
+        drop_ = rhs.drop_;
         return *this;
     }
 
@@ -283,6 +292,13 @@ template <typename CHILD, typename CHAR> class terminal
 
     void enable_placeholder() { enable_placeholder_ = true; }
 
+    void commit_changes()
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        lock_col_ = col_;
+        lock_row_ = row_;
+    }
+
   protected:
     // return if skip current char
     bool goto_next_row(char ch, freelibcxx::const_string_view &str)
@@ -304,8 +320,16 @@ template <typename CHILD, typename CHAR> class terminal
         auto child = static_cast<CHILD *>(this);
         auto term_char = child->alloc_char(row_, col_);
 
-        auto [p, row, col] = child->previous_term_char(row_, col_);
-        child->make_state(p, term_char, codepoint, escape_state_.attr);
+        if (drop_)
+        {
+            drop_ = false;
+            child->make_state(&last_char_, term_char, codepoint, escape_state_.attr);
+        }
+        else
+        {
+            auto [p, row, col] = child->previous_term_char(row_, col_);
+            child->make_state(p, term_char, codepoint, escape_state_.attr);
+        }
     }
     bool pop_char_inner()
     {
@@ -313,15 +337,26 @@ template <typename CHILD, typename CHAR> class terminal
         auto [p, row, col] = child->previous_term_char(row_, col_);
         if (p != nullptr)
         {
+            if ((row == lock_row_ && col < lock_col_) || row < lock_row_)
+            {
+                return false;
+            }
+
+            last_char_ = *p;
             child->free_char(row, col, p);
             dirty_ += rectangle(col, col + 1, row, row + 1);
             dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
             row_ = row;
             col_ = col;
+            drop_ = true;
             return true;
         }
         return false;
     }
+
+    rectangle viewport() { return rectangle(0, cols_, row_offset_, row_offset_ + rows_); }
+
+    bool viewport_is_full() { return row_ + 1 >= row_offset_ + rows_; }
 
     void push_new_line()
     {
@@ -336,6 +371,7 @@ template <typename CHILD, typename CHAR> class terminal
                 row_offset_++;
             }
             col_ = 0;
+            lock_row_--;
         }
         else
         {
@@ -343,10 +379,6 @@ template <typename CHILD, typename CHAR> class terminal
             col_ = 0;
         }
     }
-
-    rectangle viewport() { return rectangle(0, cols_, row_offset_, row_offset_ + rows_); }
-
-    bool viewport_is_full() { return row_ + 1 >= row_offset_ + rows_; }
 
   private:
     lock::spinlock_t lock_;
@@ -364,16 +396,21 @@ template <typename CHILD, typename CHAR> class terminal
     // viewport width
     int cols_ = 0;
 
+    int lock_row_ = 0;
+    int lock_col_ = 0;
+
     rectangle dirty_;
 
     escape_string_state escape_state_;
 
     fb::framebuffer_backend *backend_ = nullptr;
+    CHAR last_char_ = {};
 
     u64 placeholder_time_ = 0;
     bool enable_placeholder_ = false;
     bool placeholder_show_ = false;
     bool placeholder_reset_ = false;
+    bool drop_ = false;
 };
 
 template <typename CHILD, typename CHAR>
@@ -436,11 +473,35 @@ void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool 
             continue;
         }
 
-        if (col_ == cols_)
+        if (!next_row)
+        {
+            // parses utf8 chars as unicode
+            auto span = str.span();
+            auto slice = freelibcxx::advance_utf8(span);
+            if (!slice.has_value())
+            {
+                str = str.substr(1);
+                continue;
+            }
+            str = span;
+            auto codepoint = freelibcxx::utf8_to_unicode(slice.value());
+            if (!codepoint.has_value())
+            {
+                push_char(0xFE);
+            }
+            else
+            {
+                push_char(codepoint.value());
+            }
+            dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+            col_++;
+            child->update_row_cols(row_, col_);
+        }
+
+        if (unlikely(col_ == cols_))
         {
             next_row = true;
         }
-
         if (next_row)
         {
             if (goto_next_row(ch, str))
@@ -448,28 +509,6 @@ void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool 
                 continue;
             }
         }
-
-        // parses utf8 chars as unicode
-        auto span = str.span();
-        auto slice = freelibcxx::advance_utf8(span);
-        if (!slice.has_value())
-        {
-            str = str.substr(1);
-            continue;
-        }
-        str = span;
-        auto codepoint = freelibcxx::utf8_to_unicode(slice.value());
-        if (!codepoint.has_value())
-        {
-            push_char(0xFE);
-        }
-        else
-        {
-            push_char(codepoint.value());
-        }
-        dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
-        col_++;
-        child->update_row_cols(row_, col_);
 
         escape_state_.reset();
     }
@@ -711,5 +750,6 @@ terminal_manager *get_terms();
 
 void write_to(freelibcxx::const_string_view sv, int index);
 void write_to_klog(freelibcxx::const_string_view sv);
+void commit_changes(int index);
 
 } // namespace term

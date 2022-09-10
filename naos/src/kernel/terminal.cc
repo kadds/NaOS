@@ -504,4 +504,13 @@ void write_to(freelibcxx::const_string_view sv, int index)
 
 void write_to_klog(freelibcxx::const_string_view sv) { write_to(sv, 0); }
 
+void commit_changes(int index)
+{
+    if (use_stand_terminal)
+    {
+        auto &term = manager->get(index);
+        term.commit_changes();
+    }
+}
+
 } // namespace term

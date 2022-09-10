@@ -20,6 +20,7 @@ bool tty_read_func(u64 data)
 i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 {
     term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), term_index);
+    term::commit_changes(term_index);
     return size;
 }
 
@@ -47,7 +48,6 @@ u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
         }
         buffer.write(data[i]);
     }
-    // trace::print_inner((const char *)data, size);
     if (enter > 0)
     {
         wait_queue.do_wake_up();

@@ -21,20 +21,34 @@ void framebuffer_backend::commit(u32 row, u32 col, cell_t cell)
         return;
     }
 
-    for (u32 i = 0; i < font_height_; i++)
+    if (likely(cell.fg == cell.bg))
     {
-        for (u32 j = 0; j < font_width_; j++)
+        for (u32 i = 0; i < font_height_; i++)
         {
-            if (glyph.hit(j, i))
+            for (u32 j = 0; j < font_width_; j++)
             {
                 *(dst + j) = cell.fg;
             }
-            else
-            {
-                *(dst + j) = cell.bg;
-            }
+            dst += fb_.pitch / sizeof(u32);
         }
-        dst += fb_.pitch / sizeof(u32);
+    }
+    else
+    {
+        for (u32 i = 0; i < font_height_; i++)
+        {
+            for (u32 j = 0; j < font_width_; j++)
+            {
+                if (glyph.hit(j, i))
+                {
+                    *(dst + j) = cell.fg;
+                }
+                else
+                {
+                    *(dst + j) = cell.bg;
+                }
+            }
+            dst += fb_.pitch / sizeof(u32);
+        }
     }
 }
 
