@@ -11,6 +11,7 @@
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 #include <cctype>
 
@@ -129,6 +130,8 @@ struct rectangle
     }
 };
 
+constexpr u32 placeholder_freq_us = 1300 * 1000;
+
 template <typename CHILD, typename CHAR> class terminal
 {
   public:
@@ -144,6 +147,10 @@ template <typename CHILD, typename CHAR> class terminal
         , dirty_(rhs.dirty_)
         , escape_state_(rhs.escape_state_)
         , backend_(rhs.backend_)
+        , placeholder_time_(rhs.placeholder_time_)
+        , enable_placeholder_(rhs.enable_placeholder_)
+        , placeholder_show_(rhs.placeholder_show_)
+        , placeholder_reset_(rhs.placeholder_reset_)
     {
     }
     terminal &operator=(terminal &&rhs) noexcept
@@ -156,6 +163,10 @@ template <typename CHILD, typename CHAR> class terminal
         dirty_ = rhs.dirty_;
         escape_state_ = rhs.escape_state_;
         backend_ = rhs.backend_;
+        placeholder_time_ = rhs.placeholder_time_;
+        enable_placeholder_ = rhs.enable_placeholder_;
+        placeholder_show_ = rhs.placeholder_show_;
+        placeholder_reset_ = rhs.placeholder_reset_;
         return *this;
     }
 
@@ -191,6 +202,25 @@ template <typename CHILD, typename CHAR> class terminal
     void flush_dirty()
     {
         uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        if (enable_placeholder_)
+        {
+            auto current = timer::get_high_resolution_time();
+            if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
+            {
+                placeholder_time_ = current;
+                if (placeholder_reset_)
+                {
+                    placeholder_show_ = true;
+                    placeholder_reset_ = false;
+                }
+                else
+                {
+                    placeholder_show_ = !placeholder_show_;
+                }
+                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+            }
+        }
+
         if (dirty_.empty())
         {
             return;
@@ -222,6 +252,10 @@ template <typename CHILD, typename CHAR> class terminal
                 backend_->commit(row - view.top, col - view.left, child->to_cell(term_char));
             }
         }
+        if (enable_placeholder_)
+        {
+            backend_->commit_placeholder(row_, col_, placeholder_show_);
+        }
         dirty_ = rectangle();
     }
 
@@ -247,10 +281,13 @@ template <typename CHILD, typename CHAR> class terminal
         }
     }
 
+    void enable_placeholder() { enable_placeholder_ = true; }
+
   protected:
     // return if skip current char
     bool goto_next_row(char ch, freelibcxx::const_string_view &str)
     {
+        dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
         auto child = static_cast<CHILD *>(this);
         child->update_row_cols(row_, col_);
         push_new_line();
@@ -277,6 +314,7 @@ template <typename CHILD, typename CHAR> class terminal
         if (p != nullptr)
         {
             child->free_char(row, col, p);
+            dirty_ += rectangle(col, col + 1, row, row + 1);
             dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
             row_ = row;
             col_ = col;
@@ -331,11 +369,17 @@ template <typename CHILD, typename CHAR> class terminal
     escape_string_state escape_state_;
 
     fb::framebuffer_backend *backend_ = nullptr;
+
+    u64 placeholder_time_ = 0;
+    bool enable_placeholder_ = false;
+    bool placeholder_show_ = false;
+    bool placeholder_reset_ = false;
 };
 
 template <typename CHILD, typename CHAR>
 void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool no_escape)
 {
+    placeholder_reset_ = true;
     uctx::RawSpinLockUninterruptibleContext icu(lock_);
     auto child = static_cast<CHILD *>(this);
     while (str.size() > 0)
@@ -550,6 +594,7 @@ class stand_terminal final : public terminal<stand_terminal, stand_term_char_t>
         , history_(memory::MemoryAllocatorV)
         , stack_(memory::MemoryAllocatorV)
     {
+        enable_placeholder();
     }
 
     stand_terminal(stand_terminal &&rhs) noexcept
@@ -597,7 +642,7 @@ class stand_terminal final : public terminal<stand_terminal, stand_term_char_t>
         return &history_[row].cols[col];
     }
 
-    void free_char(int row, int col, stand_term_char_t *term_char) {}
+    void free_char(int row, int col, stand_term_char_t *term_char) { term_char->ch = 0; }
     void update_row_cols(int row, int cols) {}
 
     int pop_history(int rows)

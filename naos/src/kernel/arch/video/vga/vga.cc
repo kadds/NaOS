@@ -27,7 +27,7 @@ term::minimal_terminal *early_init(fb::framebuffer_t fb)
     auto early_terminal = new (memory::pa2va(phy_addr_t::from(0x21200))) term::minimal_terminal();
     early_backend = new (memory::pa2va(phy_addr_t::from(0x21000))) fb::framebuffer_backend(fb, &font);
     early_terminal->attach_backend(early_backend);
-    arch::paging::temp_update_uncached(fb.ptr, (fb.height * fb.pitch + memory::page_size - 1) / memory::page_size);
+    // arch::paging::temp_update_uncached(fb.ptr, (fb.height * fb.pitch + memory::page_size - 1) / memory::page_size);
     return early_terminal;
 }
 

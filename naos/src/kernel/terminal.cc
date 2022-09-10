@@ -422,7 +422,7 @@ void flush_terminal(u64 delta, u64 userdata)
     auto &term = manager->active_terminal();
     if (use_stand_terminal)
     {
-        term.flush_all();
+        term.flush_dirty();
     }
     timer::add_watcher(1000000 / 60, flush_terminal, 0);
 }
@@ -453,6 +453,8 @@ void terminal_manager::switch_term(int index)
     }
     cur_ = index;
     terms_[cur_].attach_backend(&backend_);
+    uctx::UninterruptibleContext icu;
+    terms_[cur_].flush_all();
 }
 
 terminal_manager *get_terms() { return manager; }

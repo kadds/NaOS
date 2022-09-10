@@ -15,6 +15,10 @@ void cpu_data_t::set_task(task::thread_t *task)
     current_task = task;
 }
 
+bool just_init = false;
+
+bool has_init() { return just_init; }
+
 cpu_data_t &current() { return *(cpu_data_t *)arch::cpu::current_user_data(); }
 
 void init()
@@ -22,6 +26,8 @@ void init()
     kassert(arch::cpu::current().get_user_data() == nullptr, "Arch cpu data must be empty");
     cpu_data_t *cpu = memory::New<cpu_data_t>(memory::KernelCommonAllocatorV);
     arch::cpu::current().set_user_data(cpu);
+    just_init = true;
+
     cpu->smp_id = arch::cpu::id();
     cpu->soft_irq_wait_queue = memory::New<task::wait_queue_t>(memory::KernelCommonAllocatorV);
 

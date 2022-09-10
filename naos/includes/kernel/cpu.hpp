@@ -48,9 +48,9 @@ class cpu_data_t
     load_data_t load_data;
     void *timer_queue;
 
-    timeclock::clock_source *clock_source;
-    timeclock::clock_event *clock_ev;
-    void *clock_queue;
+    timeclock::clock_source *clock_source = nullptr;
+    timeclock::clock_event *clock_ev = nullptr;
+    void *clock_queue = nullptr;
 
     call_cpu_func_t cpu_func;
     u64 call_data;
@@ -118,6 +118,7 @@ class cpu_data_t
     lock::spinlock_t &get_microtask_lock() { return microtask_lock; }
 };
 cpu_data_t &current();
+bool has_init();
 void init();
 /// get cpu count
 u64 count();

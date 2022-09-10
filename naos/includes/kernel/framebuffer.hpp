@@ -40,7 +40,7 @@ class framebuffer_backend
 
     void commit(u32 row, u32 col, cell_t cell);
 
-    // void fill_placeholder(u32 row, u32 col, u32 fg, u32 bg);
+    void commit_placeholder(u32 row, u32 col, bool show);
 
     freelibcxx::tuple<u32, u32> rows_cols()
     {

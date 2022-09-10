@@ -1,4 +1,5 @@
 #include "kernel/timer.hpp"
+#include "common.hpp"
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
@@ -58,9 +59,23 @@ struct cpu_timer_t
     }
 };
 
-timeclock::clock_source *get_clock_source() { return cpu::current().get_clock_source(); }
+timeclock::clock_source *get_clock_source()
+{
+    if (likely(cpu::has_init()))
+    {
+        return cpu::current().get_clock_source();
+    }
+    return nullptr;
+}
 
-timeclock::clock_event *get_clock_event() { return cpu::current().get_clock_event(); }
+timeclock::clock_event *get_clock_event()
+{
+    if (likely(cpu::has_init()))
+    {
+        return cpu::current().get_clock_event();
+    }
+    return nullptr;
+}
 
 constexpr u64 tick_us = 1000;
 
@@ -140,7 +155,15 @@ void init()
     timer_spinlock.unlock();
 }
 
-timeclock::microsecond_t get_high_resolution_time() { return get_clock_source()->current(); }
+timeclock::microsecond_t get_high_resolution_time()
+{
+    auto source = get_clock_source();
+    if (likely(source != nullptr))
+    {
+        return source->current();
+    }
+    return 0;
+}
 
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {

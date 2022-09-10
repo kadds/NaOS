@@ -1,11 +1,12 @@
 #include "kernel/arch/cpu.hpp"
+#include "common.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
-#include "kernel/arch/paging.hpp"
-#include "kernel/mm/vm.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
+#include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
@@ -64,7 +65,7 @@ bool cpu_t::is_in_kernel_context(void *rsp)
 
 cpuid_t init()
 {
-    u64 cpuid = last_cpuid++;
+    u64 cpuid = last_cpuid;
     auto &cur_data = per_cpu_data[cpuid];
     cur_data.id = cpuid;
     /// gs kernel base
@@ -76,6 +77,8 @@ cpuid_t init()
     _wrmsr(0xC0000100, 0);
     __asm__("swapgs \n\t" ::: "memory");
     kassert(_rdmsr(0xC0000101) == ((u64)&per_cpu_data[cpuid]), "Unable to swap kernel gs register");
+    memset(per_cpu_data + cpuid, 0, sizeof(cpu_t));
+    last_cpuid++;
 
     return cpuid;
 }
