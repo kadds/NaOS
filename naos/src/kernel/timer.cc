@@ -3,11 +3,16 @@
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/arch/acpipm.hpp"
+#include "kernel/arch/hpet.hpp"
+#include "kernel/arch/io_apic.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/arch/rtc.hpp"
 #include "kernel/arch/tsc.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/clock/clock_source.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
@@ -114,35 +119,132 @@ void on_tick(u64 vector, u64 data)
     }
     icc.end();
 }
+
+bool check_source(timeclock::clock_source *cs)
+{
+    if (cs->get_event())
+    {
+        cs->get_event()->resume();
+    }
+    u64 last = cs->current();
+    for (int i = 0; i < 1'000'000; i++)
+    {
+        u64 v = cs->current();
+        if (v < last || v > last + 10'000)
+        {
+            trace::warning("check clock source ", cs->name(), " current ", v, " last ", last, " jiff ", cs->jiff(),
+                           " at ", i);
+            if (cs->get_event())
+            {
+                cs->get_event()->suspend();
+            }
+            return false;
+        }
+        last = v;
+    }
+    if (cs->get_event())
+    {
+        cs->get_event()->suspend();
+    }
+    return true;
+}
+
 lock::spinlock_t timer_spinlock;
+timeclock::clock_source *global_source = nullptr;
 void init()
 {
     timer_spinlock.lock();
-    timeclock::clock_source *pit_source;
     clock_source_array_t clock_sources(memory::KernelCommonAllocatorV);
-
     {
-        uctx::UninterruptibleContext ctx;
+        bool enable_pit = cmdline::get_bool("pit", true);
+        bool enable_hpet = cmdline::get_bool("hpet", false);
+        bool enable_acpipm = cmdline::get_bool("acpipm", true);
 
         auto cpu_timer = memory::New<cpu_timer_t>(memory::KernelCommonAllocatorV);
         cpu::current().set_timer_queue(cpu_timer);
+        arch::device::PIT::disable_all();
 
-        pit_source = arch::device::PIT::make_clock();
+        if (enable_hpet && global_source == nullptr)
+        {
+            {
+                uctx::UninterruptibleContext ctx;
+                global_source = arch::device::HPET::make_clock();
+            }
+            if (global_source && !check_source(global_source))
+            {
+                trace::warning("hpet timer is not stable");
+                global_source = nullptr;
+            }
+        }
 
-        clock_sources.push_back(arch::TSC::make_clock());
-        clock_sources.push_back(arch::APIC::make_clock());
+        if (global_source == nullptr && enable_acpipm)
+        {
+            {
+                uctx::UninterruptibleContext ctx;
+                global_source = arch::device::ACPI::make_clock();
+            }
+            if (global_source && !check_source(global_source))
+            {
+                trace::warning("acpi pm timer is not stable");
+                global_source = nullptr;
+            }
+        }
 
-        cpu::current().set_clock_event(clock_sources.back()->get_event());
-        cpu::current().set_clock_source(clock_sources.front());
+        if (global_source == nullptr && enable_pit && arch::APIC::exist(arch::APIC::gsi_vector::pit))
+        {
+            {
+                uctx::UninterruptibleContext ctx;
+                global_source = arch::device::PIT::make_clock();
+            }
+            if (global_source && !check_source(global_source))
+            {
+                trace::warning("pit timer is not stable");
+                global_source = nullptr;
+            }
+        }
+
+        if (global_source == nullptr)
+        {
+            trace::panic("timer is not available");
+        }
+        if (cpu::current().is_bsp())
+        {
+            trace::info("Use ", global_source->name(), " as timer");
+        }
+        timeclock::clock_source *tsc, *local_apic;
+        {
+            uctx::UninterruptibleContext ctx;
+            tsc = arch::TSC::make_clock();
+            local_apic = arch::APIC::make_clock();
+        }
+
+        if (tsc != nullptr)
+        {
+            clock_sources.push_back(tsc);
+            cpu::current().set_clock_source(tsc);
+        }
+        else
+        {
+            cpu::current().set_clock_source(local_apic);
+        }
+
+        if (local_apic != nullptr)
+        {
+            clock_sources.push_back(local_apic);
+        }
+
+        // default tsc
+        cpu::current().set_clock_event(local_apic->get_event());
     }
+
     for (auto cs : clock_sources)
     {
-        cs->calibrate(pit_source);
+        cs->calibrate(global_source);
     }
+    // check_source(clock_sources.back());
 
-    auto cev = cpu::current().get_clock_event();
-    cev->resume();
-    cev->wait_next_tick();
+    auto ev = cpu::current().get_clock_event();
+    ev->resume();
     get_clock_source()->reinit();
 
     if (cpu::current().is_bsp())

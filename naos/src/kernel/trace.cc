@@ -96,15 +96,18 @@ void cpu_wait_panic(u64 data)
 
 void keep_panic(const regs_t *regs)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(spinlock);
-    print_stack(regs, 30);
-    trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
-    trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-    for (u32 id = 0; id < cpu::count(); id++)
     {
-        if (id != cpu::current().id())
-            SMP::call_cpu(id, cpu_wait_panic, 0);
+        uctx::RawSpinLockUninterruptibleContext icu(spinlock);
+        print_stack(regs, 30);
+        trace::print<trace::PrintAttribute<trace::CFG::Pink>>("Kernel panic! Try to connect with debugger.\n");
+        trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
+        for (u32 id = 0; id < cpu::count(); id++)
+        {
+            if (id != cpu::current().id())
+                SMP::call_cpu(id, cpu_wait_panic, 0);
+        }
     }
+    uctx::UninterruptibleContext icu;
     volatile bool stop = false;
     while (!stop)
     {

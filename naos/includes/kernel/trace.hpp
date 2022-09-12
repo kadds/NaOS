@@ -40,6 +40,24 @@ template <typename In> struct format
     const char *operator()(const In &in, span<char> buf) { return in; }
 };
 
+template <> struct format<bool>
+{
+    using In = bool;
+    /// \brief return original input string
+    const char *operator()(const bool &in, span<char> buf)
+    {
+        if (in)
+        {
+            memcpy(buf.get(), "true", freelibcxx::min(buf.size(), 5UL));
+        }
+        else
+        {
+            memcpy(buf.get(), "false", freelibcxx::min(buf.size(), 6UL));
+        }
+        return buf.get();
+    }
+};
+
 template <> struct format<const char *>
 {
     using In = const char *;

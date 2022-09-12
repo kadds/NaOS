@@ -8,19 +8,11 @@
 #include "kernel/mm/memory.hpp"
 namespace arch::APIC
 {
-void init()
-{
-    local_init();
-    if (cpu::current().is_bsp())
-    {
-        io_init();
-    }
-}
 
 void EOI(u8 index)
 {
     local_EOI(index);
     if (index < 0x80)
-        io_EOI(index);
+        io_EOI(index - 32);
 }
 } // namespace arch::APIC

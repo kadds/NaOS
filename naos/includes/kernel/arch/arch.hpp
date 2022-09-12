@@ -14,6 +14,7 @@ void early_init(kernel_start_args *args);
 
 void init(const kernel_start_args *args);
 
+void init2();
 /// init before task created
 void post_init();
 

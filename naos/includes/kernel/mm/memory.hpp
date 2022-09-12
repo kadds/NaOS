@@ -128,4 +128,6 @@ extern VirtBootAllocator *VirtBootAllocatorV;
 extern PhyBootAllocator *PhyBootAllocatorV;
 extern zones *KernelBuddyAllocatorV;
 
+u64 alloc_io_mmap_address(u64 bytes, u64 align);
+
 } // namespace memory

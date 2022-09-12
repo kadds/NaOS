@@ -2,7 +2,9 @@
 #include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
+#include "kernel/arch/io_apic.hpp"
 #include "kernel/handle.hpp"
+#include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/lock.hpp"
@@ -12,6 +14,7 @@
 #include "kernel/semaphore.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/types.hpp"
 #include <cstdarg>
 
 ExportC
@@ -23,6 +26,25 @@ ExportC
 #include "actypes.h"
 
     int vsnprintf(char *String, ACPI_SIZE Size, const char *Format, va_list Args);
+}
+
+struct ACPIInterInfo
+{
+    ACPI_OSD_HANDLER handler;
+    void *context;
+    uint32_t index;
+};
+
+irq::request_result _ctx_interrupt_ acpi_interrupt(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+{
+    auto info = reinterpret_cast<ACPIInterInfo *>(user_data);
+    auto ret = info->handler(info->context);
+    if (ret == ACPI_INTERRUPT_NOT_HANDLED)
+    {
+        return irq::request_result::no_handled;
+    }
+
+    return irq::request_result::ok;
 }
 
 ExportC
@@ -200,14 +222,28 @@ ExportC
     ACPI_STATUS
     AcpiOsInstallInterruptHandler(UINT32 InterruptNumber, ACPI_OSD_HANDLER ServiceRoutine, void *Context)
     {
-        // arch::idt::set_interrupt_entry();
-        return -1;
+        trace::debug("ACPI install gsi ", InterruptNumber);
+        auto info = memory::KernelCommonAllocatorV->New<ACPIInterInfo>();
+        info->handler = ServiceRoutine;
+        info->context = Context;
+        info->index = InterruptNumber;
+
+        irq::register_request_func(InterruptNumber + 0x20, acpi_interrupt, reinterpret_cast<u64>(info));
+        return 0;
     }
 
     ACPI_STATUS
     AcpiOsRemoveInterruptHandler(UINT32 InterruptNumber, ACPI_OSD_HANDLER ServiceRoutine)
     {
-        // arch::idt::set_interrupt_entry(int id, void *function, u16 selector, u8 dpl, u8 ist)
+        auto info_address = irq::get_register_request_func(InterruptNumber, acpi_interrupt);
+        if (info_address.has_value())
+        {
+            auto info = reinterpret_cast<ACPIInterInfo *>(info_address.value());
+            memory::KernelCommonAllocatorV->Delete(info);
+
+            irq::unregister_request_func(InterruptNumber + 0x20, acpi_interrupt);
+            return 0;
+        }
         return -1;
     }
 

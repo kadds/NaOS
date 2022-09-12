@@ -70,6 +70,9 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     cpu::init();
     irq::init();
     memory::listen_page_fault();
+
+    arch::init2();
+
     timer::init();
     SMP::init();
 

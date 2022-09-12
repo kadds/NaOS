@@ -5,6 +5,8 @@
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
+#include "kernel/clock.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
@@ -20,7 +22,6 @@ namespace term
 {
 minimal_terminal *early_terminal = nullptr;
 terminal_manager *manager = nullptr;
-lock::spinlock_t early_spin;
 std::atomic_bool use_stand_terminal = false;
 
 constexpr u8 default_bg_index = 0;
@@ -451,6 +452,15 @@ void terminal_manager::switch_term(int index)
     {
         terms_[cur_].detach_backend();
     }
+    if (index > 0)
+    {
+        if (cmdline::get_bool("debug_stand", false))
+        {
+            for (;;)
+            {
+            }
+        }
+    }
     cur_ = index;
     terms_[cur_].attach_backend(&backend_);
     uctx::UninterruptibleContext icu;
@@ -468,6 +478,12 @@ void early_init(kernel_start_args *args)
 }
 void reset_early_paging()
 {
+    if (cmdline::get_bool("debug_early", false))
+    {
+        for (;;)
+        {
+        }
+    }
     void *virt = reinterpret_cast<void *>(memory::kernel_vga_bottom_address);
     memory::kernel_vm_info->paging().big_page_map_to(
         virt, 32 * arch::paging::big_pages, memory::va2pa(early_terminal->backend()->fb().ptr),
@@ -496,7 +512,6 @@ void write_to(freelibcxx::const_string_view sv, int index)
     }
     else
     {
-        uctx::RawSpinLockUninterruptibleContext icu(early_spin);
         early_terminal->push_string(sv);
         early_terminal->flush_dirty();
     }

@@ -1,6 +1,9 @@
 #include "kernel/arch/tsc.hpp"
 #include "freelibcxx/utils.hpp"
+#include "kernel/arch/cpu_info.hpp"
+#include "kernel/arch/hpet.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/pit.hpp"
 #include "kernel/clock/clock_event.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/new.hpp"
@@ -8,27 +11,24 @@
 #include <limits>
 namespace arch::TSC
 {
-void clock_source::init() { begin_tsc = _rdtsc(); }
+void clock_source::init() { begin_tsc_ = _rdtsc(); }
 
 void clock_source::destroy() {}
 
 // 20ms
-constexpr u64 test_duration_us = 200000;
+constexpr u64 test_duration_us = 20000;
 constexpr size_t test_times = 5;
 
 u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
 {
     auto from_ev = cs->get_event();
     from_ev->resume();
-    from_ev->wait_next_tick();
 
     u64 t = test_duration_us + cs->current();
     u64 start_tsc = _rdtsc();
 
     while (cs->current() <= t)
     {
-        __asm__ __volatile__("pause\n\t" : : : "memory");
-        _mfence();
     }
     u64 end_tsc = _rdtsc();
     u64 cost = cs->current() - t + test_duration_us;
@@ -40,6 +40,21 @@ u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
 
 void clock_source::calibrate(::timeclock::clock_source *cs)
 {
+    if (cpu_info::max_basic_cpuid() >= 0x15)
+    {
+        auto f = cpu_info::get_feature(cpu_info::feature::tsc_frequency);
+        for (int i = 0; i < 1000000; i++)
+        {
+        }
+        if (f > 0)
+        {
+            const u64 base_hz = 10;
+            trace::info("TSC builtin frequency ", f * base_hz, "MHZ");
+            tsc_tick_second_ = f * base_hz;
+            builtin_freq_ = true;
+            return;
+        }
+    }
     trace::debug("TSC calibrate");
     u64 tsc_freq[test_times];
     u64 total_freq = 0;
@@ -49,10 +64,12 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     for (auto &freq : tsc_freq)
     {
         freq = calibrate_tsc(cs);
+
         total_freq += freq;
         min_freq = freelibcxx::min(min_freq, freq);
         max_freq = freelibcxx::max(max_freq, freq);
     }
+    freelibcxx::sort(tsc_freq, tsc_freq + test_times);
 
     const u64 avg_freq = total_freq / test_times;
     u64 delta = 0;
@@ -62,30 +79,29 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
         delta += d * d;
     }
     delta /= test_times;
+    const u64 freq = tsc_freq[test_times / 2];
 
-    trace::debug("TSC frequency ", avg_freq / 1000'000UL, "MHZ. delta ", delta, " min ", min_freq / 1000'000UL, "MHZ.",
-                 " max ", max_freq / 1000'000UL, "MHZ.");
+    trace::info("TSC frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ", min_freq / 1000'000UL, "MHZ.",
+                " max ", max_freq / 1000'000UL, "MHZ.");
 
-    tsc_tick_second = avg_freq;
+    tsc_tick_second_ = freq;
 }
 
-u64 clock_source::current() { return (_rdtsc() - begin_tsc) * 1000'000UL / tsc_tick_second; }
-
-clock_source *global_tsc_cs = nullptr;
-clock_event *global_tsc_ev = nullptr;
+u64 clock_source::current() { return (_rdtsc() - begin_tsc_) * 1000'000UL / tsc_tick_second_; }
 
 clock_source *make_clock()
 {
-    if (global_tsc_cs == nullptr)
+    if (arch::cpu_info::has_feature(arch::cpu_info::feature::constant_tsc))
     {
-        global_tsc_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
-        global_tsc_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
-        global_tsc_ev->set_source(global_tsc_cs);
-        global_tsc_cs->set_event(global_tsc_ev);
-        global_tsc_ev->init(1000);
-        global_tsc_cs->init();
+        auto tsc_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
+        tsc_cs->init();
+        return tsc_cs;
     }
-    return global_tsc_cs;
+    else
+    {
+        trace::debug("no constant tsc");
+    }
+    return nullptr;
 }
 
 } // namespace arch::TSC

@@ -21,7 +21,14 @@ const microsecond_t time_1970_to_start = (30ul * 365 + (2000 - 1970) / 4) * 24 *
 void time_tick(microsecond_t expires, u64 user_data)
 {
     current_time_microseconds = expires + start_time_microseconds;
-    timer::add_watcher(100000, time_tick, 0);
+    timer::add_watcher(1000'000UL, time_tick, 0);
+    if (auto val = freelibcxx::tm_t::from_posix_seconds(current_time_microseconds / 1000 / 1000); val.has_value())
+    {
+        freelibcxx::string str(memory::KernelCommonAllocatorV);
+        str.resize(20);
+        val.value().format(str.span());
+        trace::info("current time ", str.data());
+    }
 }
 
 void init()

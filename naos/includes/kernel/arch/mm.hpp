@@ -3,18 +3,15 @@
 
 /**
  *  User space memory zone
-0x0000,0000,0000,0000 - 0x0000,0000,003F,FFFF: resevered (64MB)
-0x0000,0000,0040,0000 - 0x0000,0000,XXXX,XXXX: text
+0x0000,0000,0000,0000 - 0x0000,0000,001F,FFFF: resevered (1MB)
+0x0000,0000,00Y0,0000 - 0x0000,0000,XXXX,XXXX: text
 0x0000,0000,XXXX,XXXX - 0x0000,000X,XXXX,XXXX: head
 0x0000,000X,XXXX,XXXX - 0x0000,7FFF,EFFF,FFFF: mmap zone
 0x0000,7FFF,F000,0000 - 0x0000,8000,0000,0000: resevered (256MB)
+
   Kernel space memory zone
 0xFFFF,8000,0000,0000 - 0xFFFF,9FFF,FFFF,FFFF: fixed phycal memory map (32TB)
-0xFFFF,A000,1000,0000 - 0xFFFF,A000,EFFF,FFFF: fixed mmap address (IO)
-    0xFFFF,A0000,1000,0000 - 0xFFFF,A000,101F,FFFF: io apic (2MB)
-    0xFFFF,A0000,1020,0000 - 0xFFFF,A000,103F,FFFF: local apic (2MB)
-    0xFFFF,A0000,1040,0000 - 0xFFFF,A000,105F,FFFF: rcba apic (2MB)
-    0xFFFF,A0000,2000,0000 - 0xFFFF,A000,23FF,FFFF: vga framebuffer (64MB)
+0xFFFF,A001,0000,0000 - 0xFFFF,A001,FFFF,FFFF: io mmap address (4GB)
 
 0xFFFF,B000,0000,0000 - 0xFFFF,CFFF,FFFF,FFFF: kernel mmap zone (32TB)
 0xFFFF,F000,0000,0000 - 0xFFFF,F000,3FFF,FFFF: Kernel cpu stack memroy map (1GB)
@@ -33,14 +30,10 @@ constexpr u64 large_page_size = 0x20'0000;
 
 constexpr u64 fixed_memory_bottom_address = 0xFFFF'8000'0000'0000UL;
 constexpr u64 fixed_memory_top_address = 0xFFFF'A000'0000'0000UL;
-constexpr u64 io_map_bottom_address = 0xFFFF'A000'1000'0000UL;
-constexpr u64 io_map_top_address = 0xFFFF'A000'2000'0000UL;
-constexpr u64 io_apic_bottom_address = 0xFFFF'A000'1000'0000UL;
-constexpr u64 io_apic_top_address = 0xFFFF'A000'1020'0000UL;
-constexpr u64 local_apic_bottom_address = 0xFFFF'A000'1020'0000UL;
-constexpr u64 local_apic_top_address = 0xFFFF'A000'1040'0000UL;
-constexpr u64 rcba_apic_bottom_address = 0xFFFF'A000'1040'0000UL;
-constexpr u64 rcba_apic_top_address = 0xFFFF'A000'1060'0000UL;
+
+constexpr u64 io_map_bottom_address = 0xFFFF'A001'0000'0000UL;
+constexpr u64 io_map_top_address = 0xFFFF'A002'0000'0000UL;
+
 constexpr u64 kernel_vga_bottom_address = 0xFFFF'A000'2000'0000UL;
 constexpr u64 kernel_vga_top_address = 0xFFFF'A000'2400'0000UL;
 constexpr u64 kernel_mmap_bottom_address = 0xFFFF'B000'0000'0000UL;

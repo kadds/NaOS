@@ -7,6 +7,8 @@
 #include "kernel/arch/dev/serial/8042.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/idt.hpp"
+#include "kernel/arch/io_apic.hpp"
+#include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/tss.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
@@ -98,9 +100,10 @@ void init(const kernel_start_args *args)
         }
 
         trace::debug("APIC init");
-        APIC::init();
-        trace::debug("Arch init done");
+        APIC::local_init();
+        APIC::io_init();
 
+        trace::debug("Arch init done");
         return;
     }
     // ap
@@ -110,10 +113,25 @@ void init(const kernel_start_args *args)
     tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2va(phy_addr_t::from(0x10000)));
     cpu::init_data(cpuid);
     idt::init_after_paging();
-    APIC::init();
+    APIC::local_init();
 }
 
-void post_init() {}
+void init2()
+{
+    if (cpu::current().is_bsp())
+    {
+        if (cmdline::get_bool("acpi", false))
+        {
+            ACPI::enable();
+        }
+    }
+}
+void post_init()
+{
+    if (cpu::current().is_bsp())
+    {
+    }
+}
 
 void init_drivers() { device::chip8042::init(); }
 

@@ -14,7 +14,8 @@ enum class feature
     x2apic,
     msr,
     tsc,
-    contant_tsc,
+    constant_tsc,
+    nostop_tsc,
     sse,
     sse2,
     sse3,
@@ -28,6 +29,12 @@ enum class feature
     xsave,
     osxsave,
     avx,
+
+    crystal_frequency,
+    tsc_frequency,
+    cpu_base_frequency,
+    cpu_max_frequency,
+    bus_frequency,
 };
 
 void init();
@@ -44,6 +51,8 @@ struct cpu_mesh
 };
 
 cpu_mesh get_cpu_mesh_info();
+
+u64 max_basic_cpuid();
 
 const char *get_cpu_manufacturer();
 

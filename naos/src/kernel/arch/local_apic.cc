@@ -15,6 +15,7 @@
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
+#include <atomic>
 
 const u16 id_register = 2;
 const u16 version_register = 3;
@@ -168,6 +169,8 @@ void disable_all_lvt()
     }
 } // namespace arch::APIC
 
+bool builtin_local_apic = false;
+
 void local_init()
 {
     u32 id;
@@ -205,12 +208,14 @@ void local_init()
 
         trace::debug("Local APIC base ", trace::hex(local_apic_base_addr()));
         auto &paging = memory::kernel_vm_info->paging();
-        paging.big_page_map_to(
-            reinterpret_cast<void *>(memory::local_apic_bottom_address), paging::big_pages, local_apic_base_addr,
-            paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through, 0);
+        u64 map_base = memory::alloc_io_mmap_address(paging::frame_size::size_2mb, paging::frame_size::size_2mb);
+
+        paging.big_page_map_to(reinterpret_cast<void *>(map_base), paging::big_pages, local_apic_base_addr,
+                               paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through,
+                               0);
         paging.reload();
 
-        apic_base_addr = (void *)memory::local_apic_bottom_address;
+        apic_base_addr = reinterpret_cast<void *>(map_base);
     }
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))
@@ -222,6 +227,7 @@ void local_init()
     kassert((_rdmsr(0x1B) & v) == v, "Can't enable (IA32_APIC_BASE) APIC value ", (void *)_rdmsr(0x1B));
 
     u64 version_value = read_register(version_register);
+    // timer mask
     v = (1 << 8);
     // u16 lvtCount = ((version_value & 0xFF0000) >> 16) + 1;
     u8 version = version_value & 0xFF;
@@ -234,6 +240,7 @@ void local_init()
         if (version > 0xf)
         {
             trace::debug("Use Intergrated APIC");
+            builtin_local_apic = true;
         }
         else
         {
@@ -317,13 +324,13 @@ void local_post_IPI_mask(u64 intr, u64 mask0)
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
-irq::request_result _ctx_interrupt_ on_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ on_apic_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
 {
     auto event = (clock_event *)user_data;
 
-    if (likely(event && !event->is_suspend.load() && event->id == cpu::current().get_apic_id()))
+    if (likely(event && !event->is_suspend_.load() && event->id_ == cpu::current().get_apic_id()))
     {
-        event->tick_count++;
+        event->jiff_.fetch_add(1);
         irq::raise_soft_irq(irq::soft_vector::timer);
         return irq::request_result::ok;
     }
@@ -341,18 +348,45 @@ divide configuration register
 110: Divide by 128
 111: Divide by 1
 */
-u8 dv_table[] = {2, 4, 8, 16, 32, 64, 128, 1};
-u8 divide_value(u8 d) { return dv_table[d]; }
+constexpr u8 dv_table[] = {2, 4, 8, 16, 32, 64, 128, 1};
+inline constexpr u8 divide_value(u8 d) { return dv_table[d]; }
 
 void clock_event::init(u64 HZ)
 {
-    tick_count = 0;
-    this->hz = HZ;
-    init_counter = 2000'000;
-    divide = 0b000;
-    id = cpu::current().get_apic_id();
+    hz_ = HZ;
+    id_ = cpu::current().get_apic_id();
+    counter_ = 20'000'000;
+    const u64 base_hz = 100'000'000;
 
-    is_suspend = false;
+    // auto freq = cpu_info::get_feature(cpu_info::feature::crystal_frequency);
+    if (builtin_local_apic)
+    {
+        // core freq
+        if (cpu_info::max_basic_cpuid() >= 0x16)
+        {
+            auto freq = cpu_info::get_feature(cpu_info::feature::bus_frequency);
+            bus_frequency_ = freq;
+        }
+    }
+    else
+    {
+        // bus freq
+        auto scale = (_rdmsr(0xCE) & 0xFF00) >> 8; // MSR PlatformInfo
+        if (scale < 0)
+            bus_frequency_ = scale * base_hz;
+    }
+
+    if (bus_frequency_ == 0)
+    {
+        bus_frequency_ = base_hz;
+    }
+    else
+    {
+        builtin_frequency_ = true;
+        trace::debug("load builtin bus frequency ", bus_frequency_);
+    }
+
+    is_suspend_ = false;
     suspend();
     local_irq_setup(lvt_index::timer, irq::hard_vector::local_apic_timer, 0);
     write_register(lvt_index_array[lvt_index::timer], read_register(lvt_index_array[lvt_index::timer]) | (0b01 << 17));
@@ -362,40 +396,38 @@ void clock_event::destroy() {}
 
 void clock_event::suspend()
 {
-    if (!is_suspend)
+    if (!is_suspend_)
     {
+        is_suspend_ = true;
+        local_disable(lvt_index::timer);
         {
             uctx::UninterruptibleContext icu;
-            local_disable(lvt_index::timer);
             write_register(timer_initial_count_register, 0xFFFFFFFF);
             write_register(timer_divide_register, 0);
         }
-        is_suspend = true;
-        irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
+        irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
     }
 }
 
 void clock_event::resume()
 {
-    if (is_suspend)
+    if (is_suspend_)
     {
-        irq::register_request_func(irq::hard_vector::local_apic_timer, on_event, (u64)this);
-        is_suspend = false;
+        is_suspend_ = false;
+        jiff_ = 1;
+        last_tick_ = 0;
+
+        irq::register_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
 
         uctx::UninterruptibleContext icu;
 
-        write_register(timer_initial_count_register, init_counter);
-        write_register(timer_divide_register, divide);
+        write_register(timer_initial_count_register, counter_);
+        write_register(timer_divide_register, divide_);
+        write_register(timer_current_count_register, counter_);
         local_enable(lvt_index::timer);
     }
 }
 
-void clock_event::wait_next_tick()
-{
-    u64 old = tick_count.load();
-    while (tick_count.load() == old)
-        ;
-}
 void clock_source::init() {}
 
 void clock_source::destroy() {}
@@ -403,37 +435,88 @@ void clock_source::destroy() {}
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
-    return 1000000UL * ev->tick_count.load() / ev->hz + (read_register(timer_current_count_register) * 1000000UL) /
-                                                            ev->init_counter / divide_value(ev->divide) / 1000000UL;
+    u64 tick = count();
+    return (tick * 1000'000UL) * divide_value(ev->divide_) / ev->bus_frequency_;
+}
+
+u64 clock_source::count()
+{
+    clock_event *ev = (clock_event *)event;
+    u32 val = read_register(timer_current_count_register);
+    u64 jiff = ev->jiff_;
+    u32 counter = ev->counter_;
+
+    u64 tick = jiff * counter + counter - val;
+    u64 last = ev->last_tick_;
+    if (tick < last)
+    {
+        while (tick < last)
+        {
+            tick += counter;
+        }
+    }
+    ev->last_tick_ = tick;
+    return tick;
+}
+
+u64 clock_source::jiff()
+{
+    clock_event *ev = (clock_event *)event;
+    return ev->jiff_;
 }
 
 // 20ms
-constexpr u64 test_duration_us = 200000;
-constexpr size_t test_times = 4;
+constexpr u64 test_duration_us = 20'000;
+constexpr size_t test_times = 5;
 
 u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
 {
     auto from_ev = cs->get_event();
     from_ev->resume();
-    from_ev->wait_next_tick();
     clock_event *ev = (clock_event *)event;
     ev->resume();
 
     u64 t = test_duration_us + cs->current();
-    u64 start_count = ev->tick_count.load();
+    u64 start_count = count();
+
     while (cs->current() < t)
     {
-        __asm__ __volatile__("pause\n\t" : : : "memory");
     }
-    u64 end_count = ev->tick_count.load();
-    t = cs->current() - t + test_duration_us;
+
+    u64 end_count = count();
+    u64 cost = cs->current() - t + test_duration_us;
 
     from_ev->suspend();
     ev->suspend();
-    return (end_count - start_count) * 1000'000UL / t;
+
+    return (end_count - start_count) * 1000'000UL / (divide_value(ev->divide_) * ev->counter_) / cost;
 }
-u64 lapic_counter = 0;
-u64 lapic_frq = 0;
+
+u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
+{
+    auto from_ev = cs->get_event();
+    from_ev->resume();
+    clock_event *ev = (clock_event *)event;
+    ev->resume();
+
+    u64 t = test_duration_us + cs->current();
+    u64 start_count = count();
+
+    while (cs->current() < t)
+    {
+    }
+
+    u64 end_count = count();
+    u64 cost = cs->current() - t + test_duration_us;
+
+    from_ev->suspend();
+    ev->suspend();
+
+    return (end_count - start_count) * 1000'000UL / cost;
+}
+
+std::atomic_uint64_t lapic_counter = 0;
+std::atomic_uint64_t lapic_freq = 0;
 
 void clock_source::calibrate(::timeclock::clock_source *cs)
 {
@@ -441,51 +524,55 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
 
     if (lapic_counter == 0)
     {
-        for (int i = 0; i < 2; i++)
+        u64 apic_freq[test_times];
+        u64 total_freq = 0;
+        u64 max_freq = 0;
+        u64 min_freq = std::numeric_limits<u64>::max();
+        for (auto &freq : apic_freq)
         {
-            u64 apic_freq[test_times];
-            u64 total_freq = 0;
-            u64 max_freq = 0;
-            u64 min_freq = std::numeric_limits<u64>::max();
-            for (auto &freq : apic_freq)
-            {
-                freq = calibrate_apic(cs);
-                total_freq += freq;
-                min_freq = freelibcxx::min(min_freq, freq);
-                max_freq = freelibcxx::max(max_freq, freq);
-            }
-
-            const u64 avg_freq = total_freq / test_times;
-            u64 frq = avg_freq * ev->init_counter * divide_value(ev->divide);
-            lapic_frq = frq;
-            lapic_counter = frq / (divide_value(ev->divide) * ev->hz);
-
-            if (i == 1)
-            {
-                u64 delta = 0;
-                for (auto freq : apic_freq)
-                {
-                    i64 d = ((i64)freq - (i64)avg_freq);
-                    delta += d * d;
-                }
-                delta /= test_times;
-
-                trace::debug("Local APIC test frequency ", avg_freq, "HZ. delta ", delta, " min ", min_freq, "HZ. max ",
-                             max_freq, "HZ. ");
-
-                trace::debug("Local APIC base frequency ", frq / 1000'000UL, "MHZ");
-                trace::debug("Local APIC set counter ", lapic_counter);
-            }
-            ev->init_counter = lapic_counter;
+            freq = calibrate_counter(cs) / divide_value(ev->divide_);
+            total_freq += freq;
+            min_freq = freelibcxx::min(min_freq, freq);
+            max_freq = freelibcxx::max(max_freq, freq);
         }
+        freelibcxx::sort(apic_freq, apic_freq + test_times);
+
+        const u64 avg_freq = total_freq / test_times;
+
+        const u64 freq = apic_freq[test_times / 2];
+        if (ev->builtin_frequency_)
+        {
+            lapic_freq = ev->bus_frequency_;
+        }
+        else
+        {
+            lapic_freq = freq;
+        }
+
+        // hz = bus_freq / divide * counter
+        // counter = bus_freq / divide / hz
+        lapic_counter = lapic_freq / (divide_value(ev->divide_) * (ev->hz_));
+
+        u64 delta = 0;
+        for (auto freq : apic_freq)
+        {
+            i64 d = ((i64)freq - (i64)avg_freq) / 1000'000;
+            delta += d * d;
+        }
+        delta /= test_times;
+
+        trace::info("Local APIC bus test frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ",
+                    min_freq / 1000'000UL, "MHZ. max ", max_freq / 1000'000UL, "MHZ. ");
+
+        trace::debug("Local APIC set counter ", lapic_counter.load());
     }
-    ev->bus_frequency = lapic_frq;
-    ev->init_counter = lapic_counter;
+    ev->bus_frequency_ = lapic_freq;
+    ev->counter_ = lapic_counter;
 
     u64 current_freq = calibrate_apic(cs);
     trace::debug("Local APIC Timer ", current_freq, "HZ");
 
-    ev->hz = current_freq;
+    ev->hz_ = current_freq;
 }
 
 clock_source *make_clock()
@@ -497,7 +584,7 @@ clock_source *make_clock()
     lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
     lt_ev->set_source(lt_cs);
     lt_cs->set_event(lt_ev);
-    lt_ev->init(1000);
+    lt_ev->init(200);
     lt_cs->init();
 
     return lt_cs;

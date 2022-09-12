@@ -30,6 +30,7 @@ u32 max_basic_number;
 u32 max_extend_number;
 
 void trace_debug_info();
+u64 max_basic_cpuid() { return max_basic_number; }
 
 void load_brand_name()
 {
@@ -87,6 +88,13 @@ void trace_debug_info()
                  ". Maximum extend functional number: ", (void *)(u64)max_extend_number,
                  ".\n    Maximum virtual address bits ", get_feature(feature::max_virt_addr),
                  ". Maximum physical address bits ", get_feature(feature::max_phy_addr));
+
+    if (max_basic_number >= 0x16)
+    {
+        trace::debug("cpu base frequency ", get_feature(feature::cpu_base_frequency), "MHZ", " max frequency ",
+                     get_feature(feature::cpu_max_frequency), "MHZ", " bus frequency ",
+                     get_feature(feature::bus_frequency), "MHZ");
+    }
 }
 
 bool has_feature(feature f)
@@ -112,7 +120,7 @@ bool has_feature(feature f)
             ret_cpu_feature(0x1, edx, 5);
         case feature::tsc:
             ret_cpu_feature(0x1, edx, 4);
-        case feature::contant_tsc:
+        case feature::constant_tsc:
             ret_cpu_feature(0x80000007, edx, 8);
         case feature::sse:
             ret_cpu_feature(0x1, edx, 25);
@@ -152,6 +160,25 @@ u64 get_feature(feature f)
         case feature::max_virt_addr:
             cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
             return bits(eax, 8, 15);
+        case feature::crystal_frequency:
+            cpu_id(0x15, 0, eax, ebx, ecx, edx);
+            return ecx; // hz
+        case feature::tsc_frequency:
+            cpu_id(0x15, 0, eax, ebx, ecx, edx);
+            if (eax != 0 && ebx != 0)
+            {
+                return ecx * ebx / eax;
+            }
+            return 0;
+        case feature::cpu_base_frequency:
+            cpu_id(0x16, 0, eax, ebx, ecx, edx);
+            return eax & 0xFFFF; // mhz
+        case feature::cpu_max_frequency:
+            cpu_id(0x16, 0, eax, ebx, ecx, edx);
+            return ebx & 0xFFFF; // mhz
+        case feature::bus_frequency:
+            cpu_id(0x16, 0, eax, ebx, ecx, edx);
+            return ecx & 0xFFFF; // mhz
         default:
             trace::panic("Unknown feature");
     }

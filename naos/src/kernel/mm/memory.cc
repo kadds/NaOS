@@ -8,12 +8,14 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/lock.hpp"
 #include "kernel/mm/msg_queue.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/trace.hpp"
+#include <atomic>
 
 namespace memory
 {
@@ -388,6 +390,19 @@ void MemoryAllocator::deallocate(void *p) noexcept
         return;
     }
     kfree(p);
+}
+
+std::atomic_uint64_t io_map_bottom_ptr = io_map_bottom_address;
+u64 alloc_io_mmap_address(u64 bytes, u64 align)
+{
+    u64 base, new_base;
+    do
+    {
+        base = io_map_bottom_ptr.load();
+        base = align_up(base, align);
+        new_base = base + bytes;
+    } while (!io_map_bottom_ptr.compare_exchange_strong(base, new_base));
+    return base;
 }
 
 } // namespace memory

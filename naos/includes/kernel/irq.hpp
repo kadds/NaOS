@@ -1,6 +1,7 @@
 #pragma once
 #include "arch/idt.hpp"
 #include "common.hpp"
+#include "freelibcxx/optional.hpp"
 #include "types.hpp"
 namespace irq
 {
@@ -8,8 +9,6 @@ namespace hard_vector
 {
 enum hard_vector
 {
-    pit_timer = 34,
-    HEPT = 56,
     local_apic_timer = 128,
     // sent function to excute on other cpu
     IPI_call = 250,
@@ -58,6 +57,9 @@ void raise_soft_irq(u64 soft_irq_number);
 
 void register_request_func(u32 vector, request_func func, u64 user_data);
 void unregister_request_func(u32 vector, request_func func, u64 user_data);
+void unregister_request_func(u32 vector, request_func func);
+
+freelibcxx::optional<u64> get_register_request_func(u32 vector, request_func func);
 
 void register_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
 void unregister_soft_request_func(u32 vector, soft_request_func func, u64 user_data);

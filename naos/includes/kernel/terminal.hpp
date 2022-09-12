@@ -7,6 +7,7 @@
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/unicode.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/clock.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
