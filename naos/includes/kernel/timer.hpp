@@ -1,6 +1,7 @@
 #pragma once
 #include "clock.hpp"
 #include "common.hpp"
+#include "kernel/types.hpp"
 namespace timer
 {
 
@@ -12,6 +13,8 @@ void init();
 ///
 /// \note the time of each CPU is not synchronized
 timeclock::microsecond_t get_high_resolution_time();
+
+void busywait(timeclock::microsecond_t duration);
 
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data);
 

@@ -596,6 +596,7 @@ void keep_panic(const regs_t *regs = 0);
 ///\brief stop all cpu and report an error.
 template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 {
+    uctx::UninterruptibleContext icu0;
     term::reset_panic_term();
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);
@@ -612,6 +613,7 @@ template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
 
 template <typename... Args> Trace_Section void panic_stack(const regs_t *regs, Args &&...args)
 {
+    uctx::UninterruptibleContext icu0;
     term::reset_panic_term();
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);

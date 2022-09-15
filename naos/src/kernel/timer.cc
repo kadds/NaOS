@@ -267,6 +267,19 @@ timeclock::microsecond_t get_high_resolution_time()
     return 0;
 }
 
+void busywait(timeclock::microsecond_t duration)
+{
+    timeclock::microsecond_t t = get_high_resolution_time() + duration;
+    volatile int v = 0;
+    while (t < get_high_resolution_time())
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            v = v + duration - i;
+        }
+    }
+}
+
 void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
 {
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());

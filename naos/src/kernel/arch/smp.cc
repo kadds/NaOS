@@ -4,6 +4,7 @@
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/local_apic.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
@@ -52,10 +53,18 @@ void init()
     trace::debug("Sending INIT-IPI");
     APIC::local_post_init_IPI();
 
+    timer::busywait(1000 * 10); // 10ms
+
     trace::debug("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
+
     // APIC::local_post_start_up((u64)base_ap_phy_addr);
     u32 count = cpu_info::get_cpu_mesh_info().logic_num;
+    u32 config_cpu_count = cmdline::get_uint("cpu_num", 0);
+    if (config_cpu_count > 0)
+    {
+        count = config_cpu_count;
+    }
     u32 idx = 1;
     if (count > cpu::max_cpu_support)
     {

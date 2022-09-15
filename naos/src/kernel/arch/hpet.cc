@@ -147,9 +147,14 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
-    u64 val = ev->base_[30];
-    _mfence();
-    u64 jiff = ev->jiff_;
+    u64 val;
+    u64 jiff;
+    {
+        uctx::UninterruptibleContext icu;
+        val = ev->base_[30];
+        _mfence();
+        jiff = ev->jiff_;
+    }
     u64 counter = ev->counter_;
     u64 target = ev->target_counter_;
     u64 init_val = ev->init_val_;

@@ -48,7 +48,7 @@ class clock_event : public ::timeclock::clock_event
     std::atomic_bool is_suspend_ = false;
     std::atomic_uint64_t jiff_ = 0;
     u32 counter_ = 0;
-    static constexpr u32 divide_ = 0;
+    static constexpr u32 divide_ = 7;
     u64 bus_frequency_ = 0;
     u64 id_ = 0;
     std::atomic_uint64_t last_tick_ = 0;

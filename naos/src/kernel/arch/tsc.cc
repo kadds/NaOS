@@ -29,6 +29,7 @@ u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
 
     while (cs->current() <= t)
     {
+        cpu_pause();
     }
     u64 end_tsc = _rdtsc();
     u64 cost = cs->current() - t + test_duration_us;
@@ -43,9 +44,6 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     if (cpu_info::max_basic_cpuid() >= 0x15)
     {
         auto f = cpu_info::get_feature(cpu_info::feature::tsc_frequency);
-        for (int i = 0; i < 1000000; i++)
-        {
-        }
         if (f > 0)
         {
             const u64 base_hz = 10;

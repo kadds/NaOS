@@ -16,6 +16,7 @@
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include <atomic>
+#include <cstddef>
 
 const u16 id_register = 2;
 const u16 version_register = 3;
@@ -110,35 +111,40 @@ void write_register_MSR_64(u16 reg, u64 v)
 
 u32 read_register_mm(u16 reg)
 {
-    reg <<= 4;
-    u32 v = *(u32 *)((byte *)apic_base_addr + reg);
+    ptrdiff_t offset = reg;
+    offset <<= 4;
+    u32 v = *(u32 *)((byte *)apic_base_addr + offset);
     _mfence();
     return v;
 }
 
 u64 read_register_mm_64(u16 reg)
 {
-    reg <<= 4;
-    u64 v = *(u32 *)((byte *)apic_base_addr + reg);
+    ptrdiff_t offset = reg;
+    offset <<= 4;
+
+    u64 v = *(u32 *)((byte *)apic_base_addr + offset);
     _mfence();
     v = v << 32;
-    v |= *(u32 *)((byte *)apic_base_addr + reg + 0x10);
+    v |= *(u32 *)((byte *)apic_base_addr + offset + 0x4);
     _mfence();
     return v;
 }
 
 void write_register_mm(u16 reg, u32 v)
 {
-    reg <<= 4;
-    *(u32 *)((byte *)apic_base_addr + reg) = v;
+    ptrdiff_t offset = reg;
+    offset <<= 4;
+    *(u32 *)((byte *)apic_base_addr + offset) = v;
     _mfence();
 }
 
 void write_register_mm_64(u16 reg, u64 v)
 {
-    reg <<= 4;
-    *(u32 *)((byte *)apic_base_addr + reg + 0x10) = v >> 32;
-    *(u32 *)((byte *)apic_base_addr + reg) = v;
+    ptrdiff_t offset = reg;
+    offset <<= 4;
+    *(u32 *)((byte *)apic_base_addr + offset + 0x4) = v >> 32;
+    *(u32 *)((byte *)apic_base_addr + offset) = v;
     _mfence();
 }
 
@@ -220,7 +226,7 @@ void local_init()
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))
     {
-        v |= (1 << 10);
+        // v |= (1 << 10);
     }
 
     _wrmsr(0x1B, _rdmsr(0x1B) | v);
@@ -244,7 +250,7 @@ void local_init()
         }
         else
         {
-            trace::debug("Use 82489DX");
+            trace::warning("Use 82489DX");
         }
     }
 
@@ -289,13 +295,13 @@ void local_enable(u8 index)
     write_register(lvt_index_array[index], read_register(lvt_index_array[index]) & ~(1 << 16));
 }
 
-void local_post_init_IPI() { write_register64(icr_0, 0xc4500); }
+void local_post_init_IPI() { write_register64(icr_0, 0xc2500); }
 
 void local_post_start_up(u64 addr)
 {
     addr &= 0x100000 - 1;
     addr >>= 12;
-    write_register64(icr_0, 0xc4600 | addr);
+    write_register64(icr_0, 0xc2600 | addr);
 }
 
 void local_post_IPI_all(u64 intr)
@@ -355,8 +361,8 @@ void clock_event::init(u64 HZ)
 {
     hz_ = HZ;
     id_ = cpu::current().get_apic_id();
-    counter_ = 20'000'000;
-    const u64 base_hz = 100'000'000;
+    counter_ = 5'000'000;
+    const u64 base_hz = 100'000'000UL;
 
     // auto freq = cpu_info::get_feature(cpu_info::feature::crystal_frequency);
     if (builtin_local_apic)
@@ -365,15 +371,17 @@ void clock_event::init(u64 HZ)
         if (cpu_info::max_basic_cpuid() >= 0x16)
         {
             auto freq = cpu_info::get_feature(cpu_info::feature::bus_frequency);
-            bus_frequency_ = freq;
+            bus_frequency_ = freq * 1000'000UL;
         }
     }
     else
     {
         // bus freq
         auto scale = (_rdmsr(0xCE) & 0xFF00) >> 8; // MSR PlatformInfo
-        if (scale < 0)
+        if (scale < 100)
+        {
             bus_frequency_ = scale * base_hz;
+        }
     }
 
     if (bus_frequency_ == 0)
@@ -383,7 +391,7 @@ void clock_event::init(u64 HZ)
     else
     {
         builtin_frequency_ = true;
-        trace::debug("load builtin bus frequency ", bus_frequency_);
+        trace::debug("load builtin bus frequency ", bus_frequency_ / 1000'000UL, "MHZ");
     }
 
     is_suspend_ = false;
@@ -414,7 +422,7 @@ void clock_event::resume()
     if (is_suspend_)
     {
         is_suspend_ = false;
-        jiff_ = 1;
+        jiff_ = 0;
         last_tick_ = 0;
 
         irq::register_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
@@ -442,8 +450,13 @@ u64 clock_source::current()
 u64 clock_source::count()
 {
     clock_event *ev = (clock_event *)event;
-    u32 val = read_register(timer_current_count_register);
-    u64 jiff = ev->jiff_;
+    u32 val;
+    u64 jiff;
+    {
+        uctx::UninterruptibleContext icu;
+        val = read_register(timer_current_count_register);
+        jiff = ev->jiff_;
+    }
     u32 counter = ev->counter_;
 
     u64 tick = jiff * counter + counter - val;
@@ -466,7 +479,7 @@ u64 clock_source::jiff()
 }
 
 // 20ms
-constexpr u64 test_duration_us = 20'000;
+constexpr u64 test_duration_us = 200'000;
 constexpr size_t test_times = 5;
 
 u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
@@ -481,6 +494,7 @@ u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
 
     while (cs->current() < t)
     {
+        cpu_pause();
     }
 
     u64 end_count = count();
@@ -501,9 +515,11 @@ u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
 
     u64 t = test_duration_us + cs->current();
     u64 start_count = count();
+    u64 tsc = _rdtsc();
 
     while (cs->current() < t)
     {
+        cpu_pause();
     }
 
     u64 end_count = count();
@@ -511,62 +527,68 @@ u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
 
     from_ev->suspend();
     ev->suspend();
+    trace::info("tsc ", (_rdtsc() - tsc) / 100000UL, " ", end_count, " ", start_count);
 
-    return (end_count - start_count) * 1000'000UL / cost;
+    return (end_count - start_count) * 1'000'000UL / cost;
 }
 
-std::atomic_uint64_t lapic_counter = 0;
 std::atomic_uint64_t lapic_freq = 0;
 
 void clock_source::calibrate(::timeclock::clock_source *cs)
 {
     clock_event *ev = (clock_event *)event;
 
-    if (lapic_counter == 0)
+    if (lapic_freq == 0)
     {
-        u64 apic_freq[test_times];
-        u64 total_freq = 0;
-        u64 max_freq = 0;
-        u64 min_freq = std::numeric_limits<u64>::max();
-        for (auto &freq : apic_freq)
+        if (!ev->builtin_frequency_)
         {
-            freq = calibrate_counter(cs) / divide_value(ev->divide_);
-            total_freq += freq;
-            min_freq = freelibcxx::min(min_freq, freq);
-            max_freq = freelibcxx::max(max_freq, freq);
-        }
-        freelibcxx::sort(apic_freq, apic_freq + test_times);
+            u64 apic_freq[test_times];
+            u64 total_freq = 0;
+            u64 max_freq = 0;
+            u64 min_freq = std::numeric_limits<u64>::max();
+            for (auto &freq : apic_freq)
+            {
+                freq = calibrate_counter(cs) * divide_value(ev->divide_);
+                total_freq += freq;
+                min_freq = freelibcxx::min(min_freq, freq);
+                max_freq = freelibcxx::max(max_freq, freq);
+            }
+            freelibcxx::sort(apic_freq, apic_freq + test_times);
 
-        const u64 avg_freq = total_freq / test_times;
+            const u64 avg_freq = total_freq / test_times;
 
-        const u64 freq = apic_freq[test_times / 2];
-        if (ev->builtin_frequency_)
-        {
-            lapic_freq = ev->bus_frequency_;
+            const u64 freq = apic_freq[test_times / 2];
+
+            u64 delta = 0;
+            for (auto freq : apic_freq)
+            {
+                i64 d = ((i64)freq - (i64)avg_freq) / 1000'000;
+                delta += d * d;
+            }
+            delta /= test_times;
+            trace::info("Local APIC bus test frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ",
+                        min_freq / 1000'000UL, "MHZ. max ", max_freq / 1000'000UL, "MHZ. ");
+
+            lapic_freq = freq;
+            ev->bus_frequency_ = freq;
         }
         else
         {
-            lapic_freq = freq;
+            lapic_freq = ev->bus_frequency_;
         }
-
-        // hz = bus_freq / divide * counter
-        // counter = bus_freq / divide / hz
-        lapic_counter = lapic_freq / (divide_value(ev->divide_) * (ev->hz_));
-
-        u64 delta = 0;
-        for (auto freq : apic_freq)
-        {
-            i64 d = ((i64)freq - (i64)avg_freq) / 1000'000;
-            delta += d * d;
-        }
-        delta /= test_times;
-
-        trace::info("Local APIC bus test frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ",
-                    min_freq / 1000'000UL, "MHZ. max ", max_freq / 1000'000UL, "MHZ. ");
-
-        trace::debug("Local APIC set counter ", lapic_counter.load());
     }
-    ev->bus_frequency_ = lapic_freq;
+    if (!ev->builtin_frequency_)
+    {
+        ev->bus_frequency_ = lapic_freq;
+    }
+    // hz = bus_freq / divide * counter
+    // counter = bus_freq / divide / hz
+    u64 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_) * (ev->hz_));
+    if (cpu::current().is_bsp())
+    {
+        trace::debug("Local APIC set counter ", lapic_counter);
+    }
+
     ev->counter_ = lapic_counter;
 
     u64 current_freq = calibrate_apic(cs);

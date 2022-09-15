@@ -19,6 +19,7 @@ const u32 freq = 1193182;
 
 u16 read()
 {
+    io_out8(command_port, 0b1101'0000);
     io_out8(command_port, 0b0000'0000);
     u16 count = io_in8(channel_0_port);
     count |= ((u16)io_in8(channel_0_port)) << 8;
@@ -28,10 +29,8 @@ u16 read()
 u16 read_counter()
 {
     uctx::UninterruptibleContext icu;
-
     u16 val = read();
-    u16 new_val = val;
-    return new_val;
+    return val;
 }
 
 irq::request_result _ctx_interrupt_ on_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
@@ -69,10 +68,10 @@ void clock_event::suspend()
         {
             uctx::UninterruptibleContext icu;
 
-            io_out8(command_port, 0b00110110);
-            u32 p = 0xFFFFFFFF;
-            io_out8(channel_0_port, p & 0xFF);
-            io_out8(channel_0_port, (p >> 8) & 0xFF);
+            // io_out8(command_port, 0b00110110);
+            // u32 p = 0xFFFFFFFF;
+            // io_out8(channel_0_port, p & 0xFF);
+            // io_out8(channel_0_port, (p >> 8) & 0xFF);
         }
         irq::unregister_request_func(APIC::query_gsi(APIC::gsi_vector::pit) + 0x20, on_event, (u64)this);
     }
@@ -92,6 +91,7 @@ void clock_event::resume()
             io_out8(command_port, 0b00110110);
             io_out8(channel_0_port, divisor_ & 0xFF);
             io_out8(channel_0_port, (divisor_ >> 8) & 0xFF);
+            io_out8(command_port, 0b00110110);
 
             init_val_ = divisor_ - read_counter();
             update_tsc_ = 0;
@@ -102,7 +102,7 @@ void clock_event::resume()
 
 void clock_source::init() {}
 
-void clock_source::destroy() { clock_event *ev = (clock_event *)event; }
+void clock_source::destroy() {}
 
 void clock_source::calibrate(::timeclock::clock_source *cs)
 {
@@ -112,9 +112,13 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
+    u64 val, jiff;
+    {
+        uctx::UninterruptibleContext icu;
 
-    u64 val = read_counter();
-    u64 jiff = ev->jiff_.load();
+        jiff = ev->jiff_.load();
+        val = read_counter();
+    }
     u64 init_val = ev->init_val_;
 
     u64 div = ev->divisor_;

@@ -107,7 +107,6 @@ void keep_panic(const regs_t *regs)
                 SMP::call_cpu(id, cpu_wait_panic, 0);
         }
     }
-    uctx::UninterruptibleContext icu;
     volatile bool stop = false;
     while (!stop)
     {
