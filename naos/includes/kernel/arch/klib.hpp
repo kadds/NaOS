@@ -67,6 +67,7 @@ ExportC NoReturn void _call_sys_ret(regs_t *regs);
 ExportC void _switch_stack(u64 param1, u64 param2, u64 param3, u64 param4, void *func, void *rsp);
 ExportC void _enable_sse();
 ExportC void _check_sse();
+ExportC void _reset_power();
 
 class stack_frame_t
 {

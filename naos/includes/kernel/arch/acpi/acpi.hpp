@@ -65,4 +65,7 @@ struct numa_info
 
 freelibcxx::hash_map<u32, numa_info> get_numa_info();
 
+void shutdown();
+void reboot();
+
 } // namespace arch::ACPI

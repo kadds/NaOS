@@ -1,6 +1,16 @@
 
 .section .text
 
+_zero_idt:
+    .word 0
+    .quad 0
+
+.globl _reset_power
+_reset_power:
+    movq _zero_idt(%rip), %rax
+    lidt (%rax)
+    ret
+
 .globl _check_sse
 _check_sse:
     pushq %rdx

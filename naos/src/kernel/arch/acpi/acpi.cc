@@ -4,6 +4,9 @@
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/arch/idt.hpp"
+#include "kernel/arch/io.hpp"
+#include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -73,6 +76,13 @@ void init()
 UINT32 on_power_button(void *context)
 {
     trace::info("ACPI: power down");
+    shutdown();
+    return ACPI_INTERRUPT_HANDLED;
+}
+
+UINT32 on_sleep_button(void *context)
+{
+    trace::info("ACPI: sleep down");
     return ACPI_INTERRUPT_HANDLED;
 }
 
@@ -82,6 +92,7 @@ void enable()
     {
         AcpiEnableSubsystem(0);
         AcpiInstallFixedEventHandler(ACPI_EVENT_POWER_BUTTON, on_power_button, 0);
+        AcpiInstallFixedEventHandler(ACPI_EVENT_SLEEP_BUTTON, on_sleep_button, 0);
     }
 }
 
@@ -301,6 +312,25 @@ freelibcxx::hash_map<u32, numa_info> get_numa_info()
     }
 
     return ret;
+}
+
+void shutdown()
+{
+    idt::disable();
+    // qemu
+    io_out16(0x604, 0x2000);
+    io_out16(0xB004, 0x2000);
+    // vbox
+    io_out16(0x4004, 0x3400);
+
+    trace::panic("shutdown fail");
+}
+
+void reboot()
+{
+    idt::disable();
+    _reset_power();
+    trace::panic("reboot fail");
 }
 
 } // namespace arch::ACPI
