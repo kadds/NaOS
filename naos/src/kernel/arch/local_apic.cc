@@ -410,7 +410,7 @@ void clock_event::suspend()
         local_disable(lvt_index::timer);
         {
             uctx::UninterruptibleContext icu;
-            write_register(timer_initial_count_register, 0xFFFFFFFF);
+            write_register(timer_initial_count_register, 0xFFFF'FFFF);
             write_register(timer_divide_register, 0);
         }
         irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
@@ -443,7 +443,7 @@ void clock_source::destroy() {}
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
-    u64 tick = count();
+    u64 tick = count() * 2;
     return (tick * 1000'000UL) * divide_value(ev->divide_) / ev->bus_frequency_;
 }
 
@@ -503,7 +503,7 @@ u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
     from_ev->suspend();
     ev->suspend();
 
-    return (end_count - start_count) * 1000'000UL / (divide_value(ev->divide_) * ev->counter_) / cost;
+    return (end_count - start_count) * 1000'000UL / ev->counter_ / cost;
 }
 
 u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
@@ -515,7 +515,7 @@ u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
 
     u64 t = test_duration_us + cs->current();
     u64 start_count = count();
-    u64 tsc = _rdtsc();
+    // u64 tsc = _rdtsc();
 
     while (cs->current() < t)
     {
@@ -527,7 +527,7 @@ u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
 
     from_ev->suspend();
     ev->suspend();
-    trace::info("tsc ", (_rdtsc() - tsc) / 100000UL, " ", end_count, " ", start_count);
+    // trace::info("tsc ", (_rdtsc() - tsc) / 100'000UL, " ", end_count - start_count, " ", cost);
 
     return (end_count - start_count) * 1'000'000UL / cost;
 }
@@ -583,7 +583,7 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     }
     // hz = bus_freq / divide * counter
     // counter = bus_freq / divide / hz
-    u64 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_) * (ev->hz_));
+    u32 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_)) / ev->hz_;
     if (cpu::current().is_bsp())
     {
         trace::debug("Local APIC set counter ", lapic_counter);
@@ -606,7 +606,7 @@ clock_source *make_clock()
     lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
     lt_ev->set_source(lt_cs);
     lt_cs->set_event(lt_ev);
-    lt_ev->init(200);
+    lt_ev->init(100);
     lt_cs->init();
 
     return lt_cs;

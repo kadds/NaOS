@@ -136,6 +136,7 @@ u64 clock_source::current()
 
     return ((tick - init_val) * 1000'000UL) / freq / 2;
 }
+
 u64 clock_source::jiff()
 {
     clock_event *ev = (clock_event *)event;

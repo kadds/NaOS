@@ -50,12 +50,12 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
     auto &locked_list = irq_info_list[regs->vector].list;
     auto &info = irq_info_list[regs->vector];
     info.counter++;
-    // if (regs->vector != 14)
+    // if (regs->vector != 14 && regs->vector != 34)
     // {
-    // if ((regs->vector == 128 && info.counter % 200 == 0) || regs->vector != 128)
-    // {
-    //     trace::info("inter vector ", regs->vector, " times ", info.counter.load());
-    // }
+    //     if ((regs->vector == 128 && info.counter % 200 == 0) || regs->vector != 128)
+    //     {
+    //         trace::info("inter vector ", regs->vector, " times ", info.counter.load());
+    //     }
     // }
 
     if (!locked_list.list->empty())
