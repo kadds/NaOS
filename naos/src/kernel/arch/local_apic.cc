@@ -443,8 +443,8 @@ void clock_source::destroy() {}
 u64 clock_source::current()
 {
     clock_event *ev = (clock_event *)event;
-    u64 tick = count() * 2;
-    return (tick * 1000'000UL) * divide_value(ev->divide_) / ev->bus_frequency_;
+    u64 tick = count();
+    return (tick * 1000'000UL) / ev->bus_frequency_;
 }
 
 u64 clock_source::count()
@@ -469,7 +469,7 @@ u64 clock_source::count()
         }
     }
     ev->last_tick_ = tick;
-    return tick;
+    return tick * 2;
 }
 
 u64 clock_source::jiff()
@@ -548,7 +548,7 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
             u64 min_freq = std::numeric_limits<u64>::max();
             for (auto &freq : apic_freq)
             {
-                freq = calibrate_counter(cs) * divide_value(ev->divide_);
+                freq = calibrate_counter(cs);
                 total_freq += freq;
                 min_freq = freelibcxx::min(min_freq, freq);
                 max_freq = freelibcxx::max(max_freq, freq);

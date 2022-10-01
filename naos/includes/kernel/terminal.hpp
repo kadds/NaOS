@@ -211,35 +211,38 @@ template <typename CHILD, typename CHAR> class terminal
 
     void flush_dirty()
     {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        if (enable_placeholder_)
+        rectangle view;
         {
-            auto current = timer::get_high_resolution_time();
-            if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
+            uctx::RawSpinLockUninterruptibleContext icu(lock_);
+            if (enable_placeholder_)
             {
-                placeholder_time_ = current;
-                if (placeholder_reset_)
+                auto current = timer::get_high_resolution_time();
+                if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
                 {
-                    placeholder_show_ = true;
-                    placeholder_reset_ = false;
+                    placeholder_time_ = current;
+                    if (placeholder_reset_)
+                    {
+                        placeholder_show_ = true;
+                        placeholder_reset_ = false;
+                    }
+                    else
+                    {
+                        placeholder_show_ = !placeholder_show_;
+                    }
+                    dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
                 }
-                else
-                {
-                    placeholder_show_ = !placeholder_show_;
-                }
-                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
             }
-        }
 
-        if (dirty_.empty())
-        {
-            return;
+            if (dirty_.empty())
+            {
+                return;
+            }
+            if (backend_ == nullptr)
+            {
+                return;
+            }
+            view = viewport();
         }
-        if (backend_ == nullptr)
-        {
-            return;
-        }
-        auto view = viewport();
         auto child = static_cast<CHILD *>(this);
         if (dirty_.top < view.top)
         {
@@ -301,6 +304,7 @@ template <typename CHILD, typename CHAR> class terminal
     }
 
   protected:
+    void push_string_nolock(freelibcxx::const_string_view str, bool no_escape = false);
     // return if skip current char
     bool goto_next_row(char ch, freelibcxx::const_string_view &str)
     {
@@ -415,10 +419,9 @@ template <typename CHILD, typename CHAR> class terminal
 };
 
 template <typename CHILD, typename CHAR>
-void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool no_escape)
+void terminal<CHILD, CHAR>::push_string_nolock(freelibcxx::const_string_view str, bool no_escape)
 {
     placeholder_reset_ = true;
-    uctx::RawSpinLockUninterruptibleContext icu(lock_);
     auto child = static_cast<CHILD *>(this);
     while (str.size() > 0)
     {
@@ -446,7 +449,7 @@ void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool 
                 if (!child->push_escape_string(str))
                 {
                     auto old_str = child->escape_string();
-                    push_string(old_str, true);
+                    push_string_nolock(old_str, true);
                     child->pop_escape_string();
                 }
                 else
@@ -513,6 +516,13 @@ void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool 
 
         escape_state_.reset();
     }
+}
+
+template <typename CHILD, typename CHAR>
+void terminal<CHILD, CHAR>::push_string(freelibcxx::const_string_view str, bool no_escape)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(lock_);
+    push_string_nolock(str, no_escape);
 }
 
 // minimal terminal support

@@ -67,7 +67,6 @@ cpuid_t init()
 {
     u64 cpuid = last_cpuid;
     auto &cur_data = per_cpu_data[cpuid];
-    cur_data.id = cpuid;
     /// gs kernel base
     _wrmsr(0xC0000102, (u64)&per_cpu_data[cpuid]);
     kassert(_rdmsr(0xC0000102) == ((u64)&per_cpu_data[cpuid]), "Unable to write kernel gs_base");
@@ -79,6 +78,7 @@ cpuid_t init()
     kassert(_rdmsr(0xC0000101) == ((u64)&per_cpu_data[cpuid]), "Unable to swap kernel gs register");
     memset(per_cpu_data + cpuid, 0, sizeof(cpu_t));
     last_cpuid++;
+    cur_data.id = cpuid;
 
     return cpuid;
 }

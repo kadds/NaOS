@@ -34,8 +34,6 @@ constexpr u64 fixed_memory_top_address = 0xFFFF'A000'0000'0000UL;
 constexpr u64 io_map_bottom_address = 0xFFFF'A001'0000'0000UL;
 constexpr u64 io_map_top_address = 0xFFFF'A002'0000'0000UL;
 
-constexpr u64 kernel_vga_bottom_address = 0xFFFF'A000'2000'0000UL;
-constexpr u64 kernel_vga_top_address = 0xFFFF'A000'2400'0000UL;
 constexpr u64 kernel_mmap_bottom_address = 0xFFFF'B000'0000'0000UL;
 constexpr u64 kernel_mmap_top_address = 0xFFFF'D000'0000'0000UL;
 constexpr u64 kernel_cpu_stack_bottom_address = 0xFFFF'F000'0000'0000UL;

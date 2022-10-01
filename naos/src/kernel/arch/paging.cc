@@ -277,14 +277,15 @@ void temp_update_uncached(void *virt, u64 pages)
     __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
 }
 
+void init_ap()
+{
+    auto &kernel_paging = memory::kernel_vm_info->paging();
+    kernel_paging.load();
+}
+
 void init()
 {
     auto &kernel_paging = memory::kernel_vm_info->paging();
-    if (!cpu::current().is_bsp())
-    {
-        kernel_paging.load();
-        return;
-    }
     kernel_paging.prepare_kernel_space();
 
     u64 max_maped_memory = memory::get_max_maped_memory();

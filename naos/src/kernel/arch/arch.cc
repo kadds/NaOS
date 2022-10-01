@@ -11,7 +11,6 @@
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/tss.hpp"
-#include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
@@ -87,10 +86,10 @@ void init(const kernel_start_args *args)
         trace::debug("IDT init");
         idt::init_after_paging();
 
-        trace::debug("New paging reloading");
         term::reset_early_paging();
         idt::enable();
         memory::kernel_vm_info->paging().load();
+
         memory::init2();
 
         if (cmdline::get_bool("acpi", false))
@@ -108,7 +107,7 @@ void init(const kernel_start_args *args)
     }
     // ap
     auto cpuid = cpu::init();
-    paging::init();
+    paging::init_ap();
     gdt::init_after_paging();
     tss::init(cpuid, phy_addr_t::from(0x0), memory::pa2va(phy_addr_t::from(0x10000)));
     cpu::init_data(cpuid);

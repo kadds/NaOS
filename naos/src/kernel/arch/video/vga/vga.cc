@@ -37,32 +37,10 @@ void init()
     u32 bytes = early_backend->frame_bytes();
     auto fb = early_backend->fb();
 
-    auto backbuffer = reinterpret_cast<byte *>(memory::MemoryAllocatorV->allocate(bytes, 8));
-
-    /// XXX: Find memory as backbuffer
-    if (unlikely(backbuffer == nullptr))
-    {
-        trace::panic("Video backing buffer size is insufficient.");
-    }
-
     print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", fb.width, "X", fb.height, ". ", fb.bbp, "bit",
                                            ". frame bytes ", bytes >> 10, "KiB.\n");
 
     test();
-
-    phy_addr_t video_start = memory::align_down(phy_addr_t::from(fb.ptr), paging::frame_size::size_2mb);
-
-    auto pages = (memory::kernel_vga_top_address - memory::kernel_vga_bottom_address) / memory::page_size;
-
-    auto &paging = memory::kernel_vm_info->paging();
-    paging.map_to(reinterpret_cast<void *>(memory::kernel_vga_bottom_address), pages, video_start,
-                  paging::flags::writable | paging::flags::write_through | paging::flags::cache_disable, 0);
-    paging.reload();
-    fb.ptr = video_start();
-
-    /// print video card memory info
-    trace::debug("Vram address ", trace::hex(video_start()), " map to ", trace::hex(memory::kernel_vga_bottom_address));
-    trace::debug("Video backbuffer(VM) ", trace::hex(backbuffer), "-", trace::hex((backbuffer + bytes)));
 }
 
 void test()

@@ -484,9 +484,23 @@ void reset_early_paging()
         {
         }
     }
-    void *virt = reinterpret_cast<void *>(memory::kernel_vga_bottom_address);
+    auto fb = early_terminal->backend()->fb();
+
+    u64 bytes = early_terminal->backend()->frame_bytes();
+    u64 pages = (bytes + memory::page_size - 1) / memory::page_size;
+    pages = memory::align_up(pages, arch::paging::big_pages);
+
+    phy_addr_t pa = memory::va2pa(fb.ptr);
+
+    void *virt =
+        reinterpret_cast<void *>(memory::alloc_io_mmap_address(pages * memory::page_size, arch::paging::big_pages));
+
+    /// print video card memory info
+    trace::debug("Vram address ", trace::hex(pa()), " to ", trace::hex(virt), " pages ", pages, " bytes ", bytes,
+                 " bbp ", fb.bbp);
+
     memory::kernel_vm_info->paging().big_page_map_to(
-        virt, 32 * arch::paging::big_pages, memory::va2pa(early_terminal->backend()->fb().ptr),
+        virt, pages, pa,
         arch::paging::flags::writable | arch::paging::flags::cache_disable | arch::paging::flags::write_through, 0);
     early_terminal->backend()->fb().ptr = virt;
 }
@@ -501,6 +515,7 @@ void init()
 {
     manager = memory::MemoryAllocatorV->New<terminal_manager>(7, *early_terminal->backend());
     use_stand_terminal = true;
+    arch::device::vga::init();
 }
 
 void write_to(freelibcxx::const_string_view sv, int index)
