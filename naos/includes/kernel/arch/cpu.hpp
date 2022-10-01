@@ -94,7 +94,8 @@ cpuid_t id();
 
 bool has_init();
 
-void allocate_stack(int logic_num);
+void allocate_ap_stack(int num);
+void allocate_bsp_stack();
 
 phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id);
 phy_addr_t get_exception_stack_bottom_phy(cpuid_t id);

@@ -1,5 +1,6 @@
 #include "kernel/arch/acpi/acpi.hpp"
 #include "common.hpp"
+#include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
@@ -146,6 +147,37 @@ freelibcxx::vector<freelibcxx::tuple<phy_addr_t, u32>> get_io_apic_list()
     return ret;
 }
 
+freelibcxx::vector<lapic_info> get_local_apic_list()
+{
+    auto madt = load_table<ACPI_TABLE_MADT>(ACPI_SIG_MADT);
+    ACPI_SUBTABLE_HEADER *header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)madt + sizeof(*madt));
+    freelibcxx::vector<lapic_info> ret(memory::MemoryAllocatorV);
+    while ((char *)header < (char *)madt + madt->Header.Length)
+    {
+        if (header->Type == ACPI_MADT_TYPE_LOCAL_APIC)
+        {
+            ACPI_MADT_LOCAL_APIC *lapic = reinterpret_cast<ACPI_MADT_LOCAL_APIC *>(header);
+            lapic_info info;
+            info.apic_id = lapic->Id;
+            info.processor_id = lapic->ProcessorId;
+            info.enabled = lapic->LapicFlags & 0x1;
+            ret.push_back(info);
+        }
+        else if (header->Type == ACPI_MADT_TYPE_LOCAL_X2APIC)
+        {
+            ACPI_MADT_LOCAL_X2APIC *lapic = reinterpret_cast<ACPI_MADT_LOCAL_X2APIC *>(header);
+            lapic_info info;
+            info.apic_id = lapic->LocalApicId;
+            info.processor_id = lapic->Uid;
+            info.enabled = lapic->LapicFlags & 0x1;
+            ret.push_back(info);
+        }
+
+        header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)header + header->Length);
+    }
+    return ret;
+}
+
 freelibcxx::vector<override_irq> get_override_irq_list()
 {
     auto madt = load_table<ACPI_TABLE_MADT>(ACPI_SIG_MADT);
@@ -210,7 +242,65 @@ freelibcxx::optional<pm_info> get_acpipm_base()
 phy_addr_t get_local_apic_base()
 {
     auto madt = load_table<ACPI_TABLE_MADT>(ACPI_SIG_MADT);
+    // check 64 bit address override
+
+    ACPI_SUBTABLE_HEADER *header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)madt + sizeof(*madt));
+    while ((char *)header < (char *)madt + madt->Header.Length)
+    {
+        if (header->Type == ACPI_MADT_TYPE_LOCAL_APIC_OVERRIDE)
+        {
+            ACPI_MADT_LOCAL_APIC_OVERRIDE *lapic = reinterpret_cast<ACPI_MADT_LOCAL_APIC_OVERRIDE *>(header);
+            trace::debug("find local apic address override ", trace::hex(lapic->Address));
+            return phy_addr_t::from(lapic->Address);
+        }
+
+        header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)header + header->Length);
+    }
     return phy_addr_t::from(madt->Address);
+}
+
+freelibcxx::hash_map<u32, numa_info> get_numa_info()
+{
+    freelibcxx::hash_map<u32, numa_info> ret(memory::MemoryAllocatorV);
+    auto srat = load_table<ACPI_TABLE_SRAT>(ACPI_SIG_SRAT, false);
+    if (srat == nullptr)
+    {
+        return ret;
+    }
+    ACPI_SUBTABLE_HEADER *header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)srat + sizeof(*srat));
+    while ((char *)header < (char *)srat + srat->Header.Length)
+    {
+        if (header->Type == ACPI_SRAT_TYPE_CPU_AFFINITY)
+        {
+            ACPI_SRAT_CPU_AFFINITY *affinity = reinterpret_cast<ACPI_SRAT_CPU_AFFINITY *>(header);
+            bool use = affinity->Flags & ACPI_SRAT_CPU_USE_AFFINITY;
+            numa_info info;
+            info.apic_id = affinity->ApicId;
+            info.enabled = use;
+            u32 domain = affinity->ProximityDomainHi[2];
+            domain = (domain << 8) | affinity->ProximityDomainHi[1];
+            domain = (domain << 8) | affinity->ProximityDomainHi[0];
+            domain = (domain << 8) | affinity->ProximityDomainLo;
+
+            info.domain = domain;
+            ret.insert(info.apic_id, info);
+        }
+        else if (header->Type == ACPI_SRAT_TYPE_X2APIC_CPU_AFFINITY)
+        {
+            ACPI_SRAT_X2APIC_CPU_AFFINITY *affinity = reinterpret_cast<ACPI_SRAT_X2APIC_CPU_AFFINITY *>(header);
+            bool use = affinity->Flags & ACPI_SRAT_CPU_USE_AFFINITY;
+            numa_info info;
+            info.apic_id = affinity->ApicId;
+            info.enabled = use;
+            u32 domain = affinity->ProximityDomain;
+            info.domain = domain;
+            ret.insert(info.apic_id, info);
+        }
+
+        header = reinterpret_cast<ACPI_SUBTABLE_HEADER *>((char *)header + header->Length);
+    }
+
+    return ret;
 }
 
 } // namespace arch::ACPI

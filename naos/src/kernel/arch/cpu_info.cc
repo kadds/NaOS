@@ -1,6 +1,15 @@
 #include "kernel/arch/cpu_info.hpp"
+#include "freelibcxx/algorithm.hpp"
+#include "freelibcxx/optional.hpp"
+#include "freelibcxx/tuple.hpp"
+#include "freelibcxx/utils.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/cmdline.hpp"
 #include "kernel/trace.hpp"
+
+#define CPUID_VENDOR_AMD "AuthenticAMD"
+#define CPUID_VENDOR_INTEL "GenuineIntel"
 
 void cpu_id(u32 fn, u32 p, u32 &eax, u32 &ebx, u32 &ecx, u32 &edx) {
     eax = fn;
@@ -28,6 +37,7 @@ char family_name[13];
 char brand_name[64];
 u32 max_basic_number;
 u32 max_extend_number;
+bool intel_cpu = false;
 
 void trace_debug_info();
 u64 max_basic_cpuid() { return max_basic_number; }
@@ -79,6 +89,7 @@ void init()
             trace::panic("Unsupported feature ", (int)feat);
         }
     }
+    intel_cpu = strstr(family_name, CPUID_VENDOR_INTEL) != nullptr;
 }
 
 void trace_debug_info()
@@ -191,57 +202,230 @@ int apic_id()
     return bits(ebx, 24, 31);
 }
 
-int logic_bits()
+int logic_counter()
 {
     u32 eax, ebx, ecx, edx;
     cpu_id(0x1, 0, eax, ebx, ecx, edx);
     return bits(ebx, 16, 23);
 }
 
-cpu_mesh get_cpu_mesh_info_amd()
+int count_bits(int val)
 {
-    cpu_mesh mesh;
-    int logic = logic_bits();
-    u32 eax, ebx, ecx, edx;
-    cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
-    int core_num = bits(ecx, 0, 7) + 1;
-    if (logic == 0)
+    int n = 0;
+    while (val != 0)
     {
-        logic = core_num;
+        val <<= 1;
+        n++;
     }
-    mesh.logic_num = logic;
-    mesh.core_num = core_num;
-    return mesh;
+    return n;
+}
+int count_lbits(int val)
+{
+    int n = 0;
+    while (val != 0)
+    {
+        val >>= 1;
+        n++;
+    }
+    return n;
 }
 
-cpu_mesh get_cpu_mesh_info_intel()
+freelibcxx::tuple<int, int> get_amd_apic_bits()
 {
-    cpu_mesh mesh;
-    int logic = logic_bits();
     u32 eax, ebx, ecx, edx;
-    cpu_id(0x4, 0, eax, ebx, ecx, edx);
-    int core_num = bits(eax, 26, 31) + 1;
-    if (logic == 0)
+    int core_bits = 0, logic_bits = 0;
+    if (max_extend_number >= 0x8000'0008)
     {
-        logic = core_num;
-    }
-    mesh.logic_num = logic;
-    mesh.core_num = core_num;
-    return mesh;
-}
+        cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
+        core_bits = bits(ecx, 12, 15);
+        if (core_bits == 0)
+        {
+            core_bits = bits(ecx, 0, 7);
+            core_bits = freelibcxx::next_pow_of_2(core_bits);
+        }
 
-cpu_mesh get_cpu_mesh_info()
-{
-    if (family_name[0] == 'A')
-    {
-        return get_cpu_mesh_info_amd();
+        int logic_count = logic_counter();
+
+        logic_count >>= core_bits;
+        logic_bits = freelibcxx::next_pow_of_2(logic_count);
     }
     else
     {
-        return get_cpu_mesh_info_intel();
+        int logic_count = logic_counter();
+        core_bits = freelibcxx::next_pow_of_2(logic_count);
+    }
+
+    return freelibcxx::make_tuple(core_bits, logic_bits);
+}
+freelibcxx::tuple<int, int> get_intel_apic_bits()
+{
+    u32 eax, ebx, ecx, edx;
+    if (max_basic_number >= 0xB)
+    {
+        cpu_id(0xB, 0, eax, ebx, ecx, edx);
+        int logic_bits = bits(eax, 0, 4);
+        cpu_id(0xB, 1, eax, ebx, ecx, edx);
+        int tmp = bits(eax, 0, 4);
+        return freelibcxx::make_tuple(tmp - logic_bits, logic_bits);
+    }
+    else if (max_basic_number >= 0x4)
+    {
+        int logic_count = logic_counter();
+        cpu_id(0x4, 0, eax, ebx, ecx, edx);
+        int apic_chip_bits = bits(eax, 26, 31);
+        int max_cores_on_chip = logic_count & 0x3F;
+        int core_bits = count_bits(max_cores_on_chip);
+        return freelibcxx::make_tuple(core_bits, count_bits(apic_chip_bits - 1) - core_bits);
+    }
+    else
+    {
+        return freelibcxx::make_tuple(0, 0);
+    }
+}
+
+freelibcxx::tuple<int, int> get_apic_bits()
+{
+    if (!has_feature(feature::htt))
+    {
+        return freelibcxx::make_tuple(0, 0);
+    }
+    if (intel_cpu)
+    {
+        return get_intel_apic_bits();
+    }
+    else
+    {
+        return get_amd_apic_bits();
     }
 }
 
 const char *get_cpu_manufacturer() { return family_name; }
+
+void load_cpu_mesh(cpu_mesh &mesh)
+{
+    int config_cpu_count = cmdline::get_int("cpu_num", 0);
+    auto [core_bits, logic_bits] = get_apic_bits();
+    int chip_bits = core_bits + logic_bits;
+    trace::debug("cpu core bits ", core_bits, " logic bits ", logic_bits);
+
+    if (ACPI::has_init())
+    {
+        auto list = ACPI::get_local_apic_list();
+        auto numa_map = ACPI::get_numa_info();
+        for (auto &lapic_info : list)
+        {
+            if (!lapic_info.enabled)
+            {
+                trace::info("cpu ", lapic_info.apic_id, " disabled");
+            }
+            auto numa_info = numa_map.get(lapic_info.apic_id);
+            logic_core_id id;
+            if (numa_info.has_value())
+            {
+                auto &numa = numa_info.value();
+                if (numa.enabled)
+                {
+                    // TODO: chip_index should be corrected
+                    id.chip_index = lapic_info.apic_id & ~((1 << chip_bits) - 1);
+                    id.numa_index = numa.domain;
+                }
+                else
+                {
+                    continue;
+                }
+            }
+            else
+            {
+                id.chip_index = lapic_info.apic_id >> chip_bits;
+            }
+            id.logic_index = lapic_info.apic_id & ((1 << logic_bits) - 1);
+            id.core_index = (lapic_info.apic_id >> logic_bits) & ((1 << core_bits) - 1);
+            logic_core logic;
+            logic.enabled = lapic_info.enabled;
+            logic.apic_id = lapic_info.apic_id;
+            logic.apic_process_id = lapic_info.processor_id;
+            logic.exist = true;
+
+            mesh.topology_map.insert(lapic_info.apic_id, freelibcxx::make_tuple(id, logic));
+        }
+    }
+    else
+    {
+        // configure core nums
+        if (config_cpu_count <= 0)
+        {
+            config_cpu_count = 1;
+        }
+        for (int i = 0; i < config_cpu_count; i++)
+        {
+            logic_core_id id;
+            id.core_index = i;
+
+            logic_core logic;
+            logic.apic_id = i;
+            logic.apic_process_id = i;
+            logic.enabled = true;
+            logic.exist = true;
+            mesh.topology_map.insert(i, freelibcxx::make_tuple(id, logic));
+        }
+    }
+
+    // build mesh
+
+    for (auto &item : mesh.topology_map)
+    {
+        auto [id, logic_core_info] = item.value;
+        if (mesh.numa.size() <= id.numa_index)
+        {
+            mesh.numa.resize(id.numa_index + 1, numa_node());
+        }
+        auto &numa = mesh.numa[id.numa_index];
+        if (numa.chip.size() <= id.chip_index)
+        {
+            numa.chip.resize(id.chip_index + 1, chip_node());
+        }
+        auto &chip = numa.chip[id.chip_index];
+        if (chip.cores.size() <= id.core_index)
+        {
+            chip.cores.resize(id.core_index + 1, core());
+        }
+        auto &core = chip.cores[id.core_index];
+        if (core.logics.size() <= id.logic_index)
+        {
+            core.logics.resize(id.logic_index + 1, logic_core());
+        }
+        auto &logic = core.logics[id.logic_index];
+        logic = logic_core_info;
+    }
+
+    // calculate cores
+    for (auto &numa : mesh.numa)
+    {
+        for (auto &chip : numa.chip)
+        {
+            for (auto &core : chip.cores)
+            {
+                bool core_enabled = false;
+                for (auto &logic : core.logics)
+                {
+                    if (logic.enabled && logic.exist)
+                    {
+                        if (config_cpu_count > 0 && mesh.logic_num >= config_cpu_count)
+                        {
+                            logic.enabled = false;
+                            break;
+                        }
+                        mesh.logic_num++;
+                        core_enabled = true;
+                    }
+                }
+                if (core_enabled)
+                {
+                    mesh.core_num++;
+                }
+            }
+        }
+    }
+}
 
 } // namespace arch::cpu_info

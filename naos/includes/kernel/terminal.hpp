@@ -586,8 +586,8 @@ class minimal_terminal final : public terminal<minimal_terminal, minimal_term_ch
     freelibcxx::tuple<minimal_term_char_t *, int, int> previous_term_char(int row, int col);
 
   private:
-    constexpr static size_t max_element_for_line = 100;
-    constexpr static size_t max_lines = 48;
+    constexpr static size_t max_element_for_line = 240;
+    constexpr static size_t max_lines = 68;
 
     minimal_term_char_t term_chars_[max_lines * max_element_for_line];
     unsigned short term_char_cols_[max_lines] = {0};

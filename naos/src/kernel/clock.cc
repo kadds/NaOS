@@ -27,7 +27,7 @@ void time_tick(microsecond_t expires, u64 user_data)
         freelibcxx::string str(memory::KernelCommonAllocatorV);
         str.resize(20);
         val.value().format(str.span());
-        trace::info("current time ", str.data());
+        // trace::info("current time ", str.data());
     }
 }
 

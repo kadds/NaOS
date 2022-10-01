@@ -30,7 +30,10 @@ irq::request_result ipi_call(const irq::interrupt_info *inter, u64 data, u64 use
 
 void init()
 {
-    trace::debug("SMP init");
+    if (cpu::current().is_bsp())
+    {
+        trace::debug("SMP init");
+    }
     arch::SMP::init();
     if (cpu::current().is_bsp())
     {

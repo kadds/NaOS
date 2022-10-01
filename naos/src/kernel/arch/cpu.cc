@@ -1,6 +1,7 @@
 #include "kernel/arch/cpu.hpp"
 #include "common.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
@@ -158,20 +159,25 @@ void map(u64 &base, u64 pg, bool is_bsp = false) {
     base += size;
 }
 
-void allocate_stack(int logic_num)
+u64 allocate_base = memory::kernel_cpu_stack_bottom_address;
+
+void allocate_ap_stack(int num)
 {
-    u64 base = memory::kernel_cpu_stack_bottom_address;
-    for (int i = 0; i < logic_num; i++)
+    for (int i = 0; i < num; i++)
     {
-        if (i != 0) {
-            map(base, memory::kernel_stack_page_count);
-        } else {
-            map(base, memory::kernel_stack_page_count, true);
-        }
-        map(base, memory::exception_stack_page_count);
-        map(base, memory::interrupt_stack_page_count);
-        map(base, memory::exception_nmi_stack_page_count);
+        map(allocate_base, memory::kernel_stack_page_count);
+        map(allocate_base, memory::exception_stack_page_count);
+        map(allocate_base, memory::interrupt_stack_page_count);
+        map(allocate_base, memory::exception_nmi_stack_page_count);
     }
+}
+
+void allocate_bsp_stack()
+{
+    map(allocate_base, memory::kernel_stack_page_count, true);
+    map(allocate_base, memory::exception_stack_page_count);
+    map(allocate_base, memory::interrupt_stack_page_count);
+    map(allocate_base, memory::exception_nmi_stack_page_count);
 }
 
 phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {

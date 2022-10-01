@@ -15,8 +15,9 @@ VBoxManage internalcommands createrawvmdk -filename run/image/disk.vmdk -rawdisk
 ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 
 
-qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 1,sockets=1,cores=1,threads=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log'
-qemu_uefi = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 4,sockets=1,cores=4, -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log'
+qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -m 64 -s -smp 2,sockets=1,cores=2,threads=1 -cpu Skylake-Client-v1,pdpe1gb -serial file:../run/kernel_out.log'
+qemu_uefi = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -cdrom ../run/image/naos.iso -m 64 -s -smp 2,sockets=1,cores=2, -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log -boot order=d'
+qemu_uefi_numa = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -cdrom ../run/image/naos.iso -m 128 -s -smp 8,sockets=2,cores=2, -object memory-backend-ram,id=mem0,size=64M -object memory-backend-ram,id=mem1,size=64M -numa node,memdev=mem0,cpus=0-3,nodeid=0 -numa node,memdev=mem1,cpus=4-7,nodeid=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log -boot order=d'
 qemu_headless_str = ' -nographic -vnc :1'
 
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'

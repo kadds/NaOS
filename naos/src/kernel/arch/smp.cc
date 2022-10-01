@@ -4,7 +4,6 @@
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/local_apic.hpp"
-#include "kernel/cmdline.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
@@ -30,11 +29,11 @@ void init()
 {
     if (!cpu::current().is_bsp())
     {
-        counter--;
+        counter.fetch_sub(1);
         trace::debug("AP ", cpu::current().get_id(), " is arrived entrypoint");
         volatile u64 *stack = (volatile u64 *)memory::pa2va<u64 *>(phy_addr_t::from((u64)_ap_stack));
         *stack = 0;
-        while (counter > 0)
+        while (counter.load() > 0)
         {
             cpu_pause();
         }
@@ -57,14 +56,12 @@ void init()
 
     trace::debug("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
+    cpu_info::cpu_mesh mesh;
+    cpu_info::load_cpu_mesh(mesh);
 
-    // APIC::local_post_start_up((u64)base_ap_phy_addr);
-    u32 count = cpu_info::get_cpu_mesh_info().logic_num;
-    u32 config_cpu_count = cmdline::get_uint("cpu_num", 0);
-    if (config_cpu_count > 0)
-    {
-        count = config_cpu_count;
-    }
+    trace::info("detect cpu logic count ", mesh.logic_num, " core count ", mesh.core_num);
+
+    u32 count = mesh.logic_num;
     u32 idx = 1;
     if (count > cpu::max_cpu_support)
     {
@@ -72,7 +69,9 @@ void init()
         count = cpu::max_cpu_support;
     }
     counter = count;
-    trace::debug("Waiting for AP startup");
+    int aps = count - 1;
+    cpu::allocate_ap_stack(aps);
+    trace::debug("Waiting for APs ", aps, " startup");
 
     while (idx < count)
     {
@@ -90,13 +89,14 @@ void init()
         {
             cpu_pause();
         }
+        trace::debug("Ap ", idx - 1, " done");
         idx++;
     }
 
     trace::debug("Bsp is arrived entrypoint");
     trace::debug("Waiting for all processors to arrive entrypoint");
-    counter--;
-    while (counter > 0)
+    counter.fetch_sub(1);
+    while (counter.load() > 0)
     {
         cpu_pause();
     }

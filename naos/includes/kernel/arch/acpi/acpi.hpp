@@ -1,5 +1,6 @@
 #pragma once
 #include "common.hpp"
+#include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
@@ -19,6 +20,15 @@ void unregister_timer();
 
 // return base address and global irq base
 freelibcxx::vector<freelibcxx::tuple<phy_addr_t, u32>> get_io_apic_list();
+
+struct lapic_info
+{
+    u32 processor_id;
+    u32 apic_id;
+    bool enabled;
+};
+
+freelibcxx::vector<lapic_info> get_local_apic_list();
 
 struct override_irq
 {
@@ -45,5 +55,14 @@ freelibcxx::optional<pm_info> get_acpipm_base();
 phy_addr_t get_local_apic_base();
 
 freelibcxx::optional<phy_addr_t> get_hpet_base();
+
+struct numa_info
+{
+    u32 domain;
+    u32 apic_id;
+    bool enabled;
+};
+
+freelibcxx::hash_map<u32, numa_info> get_numa_info();
 
 } // namespace arch::ACPI
