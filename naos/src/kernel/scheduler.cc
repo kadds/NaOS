@@ -32,6 +32,7 @@ irq::request_result reschedule_func(const irq::interrupt_info *inter, u64 data, 
         thd->attributes &= ~(thread_attributes::on_migrate);
     }
     reschedule_ready = true;
+    thread_to_reschedule = nullptr;
     return irq::request_result::ok;
 }
 
@@ -221,8 +222,11 @@ void timer_tick(u64 pass, u64 user_data)
         }
         normal_schedulers->schedule_tick();
     }
-    if (!reload_load_fac())
-        return; /// time too short. do it after
+
+    if (!migrate_pre_check()) 
+    {
+        return; 
+    }
 
     u64 cpu_count = cpu::count();
     u64 min_fac = cpu::current().edit_load_data().recent_load_fac;
@@ -268,7 +272,7 @@ void timer_tick(u64 pass, u64 user_data)
 constexpr u64 load_calc_time_span = 10000;
 constexpr u64 load_calc_times = 5;
 
-bool reload_load_fac()
+bool migrate_pre_check()
 {
     auto &cpu = cpu::current();
     auto &data = cpu.edit_load_data();

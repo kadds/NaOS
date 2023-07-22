@@ -34,6 +34,7 @@ namespace arch::ACPI
 {
 
 bool acpi_init = false;
+int acpi_version = 0;
 
 bool has_init() { return acpi_init; }
 
@@ -52,10 +53,12 @@ void init()
             if (memcmp(&cfg_table[i].VendorGuid, &target, sizeof(target)) == 0)
             {
                 kernel_args->rsdp_old = (u64)cfg_table[i].VendorTable;
+                acpi_version = 1;
             }
             else if (memcmp(&cfg_table[i].VendorGuid, &target2, sizeof(target2)) == 0)
             {
                 kernel_args->rsdp = (u64)cfg_table[i].VendorTable;
+                acpi_version = 2;
             }
         }
     }
@@ -71,6 +74,7 @@ void init()
     if (addr != kernel_args->rsdp_old && addr != 0)
     {
         kernel_args->rsdp = addr;
+        acpi_version = 1;
     }
 
     AcpiInitializeSubsystem();
@@ -253,6 +257,26 @@ freelibcxx::optional<pm_info> get_acpipm_base()
         return info;
     }
     return freelibcxx::nullopt;
+}
+
+bool is_8042_device_exists()
+{
+    return true;
+    //
+    // auto fadt = load_table<ACPI_TABLE_FADT>(ACPI_SIG_FADT, false);
+    // if (fadt != nullptr)
+    // {
+    //     if (acpi_version == 1) 
+    //     {
+    //         return true;
+    //     }
+    //     if (fadt->BootFlags & ACPI_FADT_8042) 
+    //     {
+    //         return true;
+    //     }
+    //     return false;
+    // }
+    // return true;
 }
 
 phy_addr_t get_local_apic_base()

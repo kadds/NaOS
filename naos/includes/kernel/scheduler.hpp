@@ -112,6 +112,6 @@ u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size);
 
 ExportC void schedule();
 
-bool reload_load_fac();
+bool migrate_pre_check();
 
 } // namespace task::scheduler

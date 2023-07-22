@@ -44,9 +44,9 @@ def mount(image_file):
         current_loop_device = current_loop_device[0:-1]
         config.set(image_file, "loop_device", current_loop_device)
         config.write(open(cfg_file_name, 'w'))
-        data = run_shell("udisksctl mount -b " + current_loop_device + "p1").strip('\n')
-        print(data)
         data = run_shell("udisksctl mount -b " + current_loop_device + "p2").strip('\n')
+        print(data)
+        data = run_shell("udisksctl mount -b " + current_loop_device + "p1").strip('\n')
         print(data)
 
     print(current_loop_device)

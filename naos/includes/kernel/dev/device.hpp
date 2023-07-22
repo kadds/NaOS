@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
 
@@ -43,7 +44,7 @@ class device
 
 struct device_class
 {
-    virtual device *try_scan(int index) = 0;
+    virtual freelibcxx::vector<device *> try_scan() = 0;
 };
 
 using device_map_t = freelibcxx::hash_map<num_t, device *>;

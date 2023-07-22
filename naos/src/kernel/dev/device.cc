@@ -17,27 +17,18 @@ void init()
 
 int enum_device(device_class *clazz)
 {
-    int dev_index = 0;
-    while (1)
-    {
-        device *dev = clazz->try_scan(dev_index);
-        if (dev != nullptr)
+    int n = 0;
+    for (auto &dev : clazz->try_scan()) {
+        auto id = id_gen->next();
+        if (id == util::null_id)
         {
-            auto id = id_gen->next();
-            if (id == util::null_id)
-            {
-                trace::panic("Too many device register to system");
-            }
-            dev->id = id;
-            unbinding_device_map->insert(id, dev);
-            dev_index++;
+            trace::panic("Too many device register to system");
         }
-        else
-        {
-            break;
-        }
+        dev->id = id;
+        unbinding_device_map->insert(id, dev);
+        n++;
     }
-    return dev_index;
+    return n;
 }
 
 device *get_device(num_t dev)

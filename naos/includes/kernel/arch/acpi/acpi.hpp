@@ -51,6 +51,7 @@ struct pm_info
 };
 
 freelibcxx::optional<pm_info> get_acpipm_base();
+bool is_8042_device_exists();
 
 phy_addr_t get_local_apic_base();
 

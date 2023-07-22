@@ -12,12 +12,12 @@ namespace arch::device::chip8042
 {
 struct kb_device_class : public ::dev::device_class
 {
-    ::dev::device *try_scan(int index) override;
+    freelibcxx::vector<::dev::device *> try_scan() override;
 };
 
 struct mouse_device_class : public ::dev::device_class
 {
-    ::dev::device *try_scan(int index) override;
+    freelibcxx::vector<::dev::device *> try_scan() override;
 };
 
 struct kb_data_t
@@ -52,9 +52,9 @@ using keyboard_io_list_t = freelibcxx::vector<io::keyboard_request_t *>;
 class kb_device : public ::dev::device
 {
   public:
+    int port_index;
     kb_buffer_t buffer;
     lock::spinlock_t buffer_lock;
-    u8 id;
     u8 led_status;
     keyboard_io_list_t io_list;
     lock::spinlock_t io_list_lock;
@@ -62,8 +62,9 @@ class kb_device : public ::dev::device
 
     u8 last_prefix_count;
     u8 last_prefix[2];
-    kb_device()
+    kb_device(int port_index)
         : device(::dev::type::chr, "8042keyboard")
+        , port_index(port_index)
         , buffer(memory::KernelCommonAllocatorV, kb_cache_count)
         , io_list(memory::KernelCommonAllocatorV)
         , last_prefix_count(0)
@@ -115,18 +116,21 @@ using mouse_io_list_t = freelibcxx::vector<io::mouse_request_t *>;
 class mouse_device : public ::dev::device
 {
   public:
+    int port_index;
     mouse_buffer_t buffer;
     lock::spinlock_t buffer_lock;
 
-    u8 id;
     mouse_io_list_t io_list;
     lock::spinlock_t io_list_lock;
     irq::tasklet_t tasklet;
 
     u8 last_index = 0;
     u8 last_data[4];
-    mouse_device()
+    bool extension_z = false;
+    bool extension_buttons = false;
+    mouse_device(int port_index)
         : device(::dev::type::chr, "8042mouse")
+        , port_index(port_index)
         , buffer(memory::KernelCommonAllocatorV, mouse_cache_count)
         , io_list(memory::KernelCommonAllocatorV)
     {

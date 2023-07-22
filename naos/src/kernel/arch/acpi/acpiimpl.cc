@@ -353,7 +353,7 @@ ExportC
     {
         char *buf = (char *)memory::kmalloc(4096, 1);
         vsnprintf(buf, 4095, Format, Args);
-        trace::print("[ACPI] ", buf);
+        trace::print(buf);
         memory::kfree(buf);
     }
 
