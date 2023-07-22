@@ -26,7 +26,11 @@ extern "C" void main(int argc, char **argv)
         else if (pid > 0)
         {
             int status = 0;
-            waitpid(pid, &status, 0);
+            int ret = waitpid(pid, &status, 0);
+            if (ret != 0) 
+            {
+                printf("wait pid %d fail, error %d\n", pid, ret);
+            }
             if (status != 0)
             {
                 printf("process exit %d\n", status);

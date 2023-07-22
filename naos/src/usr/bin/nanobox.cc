@@ -43,7 +43,7 @@ using namespace freelibcxx;
 DefaultAllocator alloc;
 
 extern "C" int main(int argc, char **argv)
-{
+{ 
     if (strstr(argv[0], "nanobox") != nullptr)
     {
         if (argc == 1)

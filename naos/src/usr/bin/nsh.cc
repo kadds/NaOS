@@ -426,7 +426,6 @@ void config_source(const char *path)
 
 int nsh(int argc, char **argv)
 {
-    // read shell config
     config_source("/etc/nshrc");
 
     do_input();

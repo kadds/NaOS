@@ -799,7 +799,9 @@ void exit_process_inner(thread_t *thd)
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
     // TODO: write core_dump from flags
-    // trace::debug("process ", process->pid, " exit with code ", ret);
+    if (ret != 0) {
+        trace::debug("process ", process->pid, " exit with code ", ret);
+    }
     process->ret_val = ret;
     exit_process_thread(process);
 }

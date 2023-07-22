@@ -14,11 +14,14 @@ VBoxManage internalcommands createrawvmdk -filename run/image/disk.vmdk -rawdisk
 # set ovmf_path if boot from UEFI 
 ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 
+qemu_bin = 'qemu-system-x86_64 -serial file:../run/kernel_out.log -cpu Haswell-v4,pdpe1gb '
 
-qemu = 'qemu-system-x86_64 -drive file=../run/image/disk.img,format=raw,index=0 -s -smp 2,sockets=1,cores=2,threads=1 -cpu Skylake-Client-v1,pdpe1gb -serial file:../run/kernel_out.log'
-qemu_uefi = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -cdrom ../run/image/naos.iso -s -smp 2,sockets=1,cores=2, -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log -boot order=d'
-qemu_uefi_numa = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly,if=pflash -cdrom ../run/image/naos.iso -s -smp 8,sockets=2,cores=2, -object memory-backend-ram,id=mem0,size=64M -object memory-backend-ram,id=mem1,size=64M -numa node,memdev=mem0,cpus=0-3,nodeid=0 -numa node,memdev=mem1,cpus=4-7,nodeid=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log -boot order=d'
+qemu_uefi_numa = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash -s -smp 8,sockets=2,cores=2, -object memory-backend-ram,id=mem0,size=64M -object memory-backend-ram,id=mem1,size=64M -numa node,memdev=mem0,cpus=0-3,nodeid=0 -numa node,memdev=mem1,cpus=4-7,nodeid=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log '
 qemu_headless_str = ' -nographic -vnc :1'
+qemu_uefi = ' -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash '
+
+ios_file = ' -cdrom ../run/image/naos.iso '
+image_file = ' -drive file=../run/image/disk.img,format=raw,index=1 '
 
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
 vbox = 'VBoxManage startvm boot'
@@ -32,10 +35,14 @@ if __name__ == "__main__":
         "-n", "--nographic",  action='store_true', help="try don't show GUI")
     parser.add_argument(
         "-u", "--uefi",  action='store_true', help="open qemu with uefi firmware")
+    parser.add_argument(
+        "--iso",  action='store_true', help="iso")
     parser.add_argument("emulator_name", type=str,
                         choices=["q", "b", "v"],  help="q: run qemu\nb: run bochs\nv: run virtual box")
     parser.add_argument(
         "-m", "--memory",  help="memory max(M)", default='128')
+    parser.add_argument(
+        "-c", "--cores",  help="cpu cores", default='2')
 
     args = parser.parse_args()
     base_mnt = None
@@ -52,21 +59,28 @@ if __name__ == "__main__":
         run_shell('mkdir -p ' + base_mnt + '/boot/')
         run_shell('cp -R ../build/bin/system/* ' + base_mnt + '/boot/')
         run_shell('sync')
-        mem = ' -m ' + args.memory + ' '
         tp = args.emulator_name
         if tp == 'q':
+            cores = int(args.cores)
+            mem = ' -m ' + args.memory + ' ' 
+            cores = ' -s -smp ' + str(cores) + ',sockets=1,cores=' + str(cores)
+
+            command = qemu_bin
+            command += cores
+            command += mem
+
             if args.uefi:
-                print('run qemu uefi')
-                if args.nographic:
-                    run_shell(qemu_uefi + qemu_headless_str + mem)
-                else:
-                    run_shell(qemu_uefi + mem)
+                command += qemu_uefi
+
+            if args.nographic:
+                command += qemu_headless_str
+
+            if args.iso:
+                command += ios_file
             else:
-                print("run qemu")
-                if args.nographic:
-                    run_shell(qemu + qemu_headless_str + mem)
-                else:
-                    run_shell(qemu + mem)
+                command += image_file
+            
+            run_shell(command)
 
         elif tp == 'b':
             print('run bochs')
