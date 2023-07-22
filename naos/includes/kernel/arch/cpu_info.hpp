@@ -4,7 +4,7 @@
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/mm/new.hpp"
-#include <string>
+#include "freelibcxx/string.hpp"
 
 namespace arch::cpu_info
 {

@@ -40,6 +40,7 @@
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "kernel/wait.hpp"
+#include "kernel/errno.hpp"
 
 #include "kernel/dev/tty/tty.hpp"
 

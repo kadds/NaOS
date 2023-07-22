@@ -50,7 +50,7 @@ void init()
         trace::panic("rtc get clock fail ", start_time_microseconds);
     }
 
-    trace::debug("Clock: ", str.data());
+    trace::info("RTC: ", str.data());
 }
 
 void start_tick()

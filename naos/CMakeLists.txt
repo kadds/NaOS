@@ -1,4 +1,5 @@
 add_subdirectory(freelibcxx)
+add_subdirectory(libc)
 include_directories(includes)
 add_subdirectory(src/acpica)
 

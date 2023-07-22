@@ -68,7 +68,7 @@
 #ifdef ENOEXEC
 #undef ENOEXEC
 #endif
-#define NOEXEC -13
+#define ENOEXEC -13
 
 #ifdef ENOTTYPE
 #undef ENOTYPE
@@ -79,3 +79,8 @@
 #undef ENOTTY
 #endif
 #define ENOTTY 25
+
+#ifdef EACCES
+#undef EACCES
+#endif
+#define EACCES -18

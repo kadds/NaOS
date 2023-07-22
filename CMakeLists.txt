@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.3)
+cmake_minimum_required (VERSION 3.9)
 
 project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
@@ -38,7 +38,12 @@ set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 set(FREE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++20 -Wno-pedantic \
 -fno-rtti -fno-asynchronous-unwind-tables -fno-common \
 -fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
--ffreestanding -fno-stack-protector -fno-builtin")
+-ffreestanding -fno-stack-protector -fno-builtin -U__linux__ -U_LINUX")
+
+set(FREE_C_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c11 -Wno-pedantic \
+-fno-asynchronous-unwind-tables -fno-common \
+-fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
+-ffreestanding -fno-stack-protector -fno-builtin -U__linux__ -U_LINUX")
 
 set(CMAKE_ASM_FLAGS "${CMAKE_ASM_FLAGS} -fno-plt")
 set(FREE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostdlib -nostartfiles -nodefaultlibs")

@@ -555,7 +555,7 @@ bool info_t::umap_file(u64 addr, u64 size)
     return true;
 }
 
-void info_t::share_to(pid_t from_id, pid_t to_id, info_t *info)
+void info_t::share_to(process_id from_id, process_id to_id, info_t *info)
 {
     vma_.clone(info, info->vma_, flags::cow);
     {

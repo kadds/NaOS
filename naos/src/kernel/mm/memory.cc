@@ -104,9 +104,9 @@ freelibcxx::tuple<int, int> detect_zones(const kernel_start_args *args, memory_r
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
-        trace::debug("Memory map ", i, " type:", get_type_str(mm_item->map_type), " from:", trace::hex(mm_item->addr),
-                     "-", trace::hex((char *)mm_item->addr + mm_item->len), " size:", mm_item->len, "bytes->",
-                     mm_item->len >> 10, "Kib->", mm_item->len >> 20, "Mib");
+        trace::info("Memory map ", i, " type:", get_type_str(mm_item->map_type), " from:", trace::hex(mm_item->addr),
+                     "-", trace::hex((char *)mm_item->addr + mm_item->len), " size:", mm_item->len, "bytes -> ",
+                     mm_item->len >> 10, "Kib -> ", mm_item->len >> 20, "Mib");
         if (mm_item->map_type == map_type_t::available)
         {
             phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
@@ -226,7 +226,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
-        trace::debug("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
+        trace::info("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
                      " num of page ", z->total_pages());
     }
     global_zones->tag_alloc(phy_addr_t::from(0x100000), va2pa(end_used_memory_addr));

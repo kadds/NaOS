@@ -11,7 +11,8 @@ set(KERNEL_CXX_FLAGS "-mno-red-zone -fvisibility-inlines-hidden \
     -mno-omit-leaf-frame-pointer")
 
 set_source_files_properties(${DIR_SRCS_S} PROPERTIES COMPILE_FLAGS "${ASM_X64}")
-set_source_files_properties(${DIR_SRCS} PROPERTIES COMPILE_FLAGS "${CXX_X64} ${FREE_CXX_FLAGS} ${KERNEL_CXX_FLAGS}")
+set_source_files_properties(${DIR_SRCS} PROPERTIES COMPILE_FLAGS 
+  "${CXX_X64} ${FREE_CXX_FLAGS} ${KERNEL_CXX_FLAGS}")
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system)
 add_definitions(-DOS_KERNEL)
@@ -22,7 +23,7 @@ target_link_libraries(kernel acpica)
 set(KERNEL_LINK_TAG "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")
 
 set_target_properties(kernel PROPERTIES LINK_FLAGS "${CXX_X64} ${FREE_CXX_FLAGS}  ${KERNEL_CXX_FLAGS} ${LINKER_X64} \
-  ${KERNEL_LINK_TAG} ${FREE_LINKER_FLAGS}")
+  ${KERNEL_LINK_TAG} ${FREE_LINKER_FLAGS} -Bsymbolic")
 
 Set(Target ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/kernel)
 

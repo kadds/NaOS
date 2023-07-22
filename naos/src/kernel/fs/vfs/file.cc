@@ -5,6 +5,8 @@
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/errno.hpp"
+
 namespace fs::vfs
 {
 
@@ -56,7 +58,7 @@ i64 file::read(byte *ptr, u64 max_size, flag_t flags)
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
             return pd->read(ptr, max_size, flags);
-        return EINVAL;
+        return EFAILED;
     }
     return 0;
 }

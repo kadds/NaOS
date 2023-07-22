@@ -131,7 +131,7 @@ class info_t
     bool umap_file(u64 addr, u64 size);
     void sync_map_file(u64 addr);
 
-    void share_to(pid_t from_id, pid_t to_id, info_t *info);
+    void share_to(process_id from_id, process_id to_id, info_t *info);
     bool copy_at(u64 vir);
 
     void load() { paging_.load(); }

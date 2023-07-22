@@ -3,6 +3,7 @@
 #include "kernel/handle.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/errno.hpp"
 namespace fs::ramfs
 {
 

@@ -17,6 +17,7 @@ View [Features](./FEATURES.MD) .
 
 ### **Requirements**  
 * **GNU Binutils** *(version 2.38 tested)*
+* **GNU EFI lib** pacman -S gnu-efi
 * **GCC** or **Clang** *(GCC 12.1.1 tested)*
 * **CMake 3.3+**
 * **ninja** and **meson** are required to build libc   
@@ -122,20 +123,30 @@ grub-mkrescue -o ./run/image/naos.iso ./run/iso
 ```
 
 #### B. Disk target
+```bash 
+dd if=/dev/zero of=run/image/disk.img bs=1024 count=140240
+```
 ##### Option1. **Legacy mode**
-Make partitions by `gdisk`.   
+Make partitions by `gdisk ./run/image/disk.img`.   
 Example of disk partition (MBR):    
 | Partition number | Type  | (Gdisk) Code |  FS   |  Content  |  Size  |
 | :--------------: | :---: | :----------: | :---: | :-------: | :----: |
-|        1         | Grub  |     8300     | FAT32 | Grub data | 50MiB  |
-|        2         | Root  |     8300     | FAT32 | NaOS data | 100MiB |
+|        1         | Grub  |     8300     | FAT32 | Grub data | 70MiB  |
+|        2         | Root  |     8300     | FAT32 | NaOS data | 70MiB |
+
+Then mount disk and make filesystem
+```bash
+python ./util/disk.py mount
+mkfs.fat -F32 /dev/loopxp1
+mkfs.fat -F32 /dev/loopxp2
+```
 
 Install (MBR):
 ```bash
-sudo grub-install --boot-directory=/mnt/Root/boot  --targe=i386-pc run/image/disk.img
+sudo grub-install --boot-directory=/run/media/user/xxx --targe=i386-pc run/image/disk.img
 ```
 
-*grub.cfg* (MBR):
+vim *grub.cfg* (MBR):
 ```
 root=(hd0,msdos1)
 set default=0
@@ -150,22 +161,37 @@ menuentry "NaOS multiboot2" {
 }
 ```
 
+```bash
+python ./util/disk.py umount
+```
+
 ##### Option2. **UEFI mode**
 Install [OVMF](https://sourceforge.net/projects/tianocore/) and configure `OVMF_CODE.fd` in *util/run.py*.  
-Make partitions by `gdisk`.   
+
+```bash 
+dd if=/dev/zero of=run/image/disk.img bs=1024 count=140240
+```
+
+Make partitions by `gdisk ./run/image/disk.img`.   
 Example of disk partitions (UEFI):  
 | Partition number | Type  | (Gdisk) Code |  FS   |      Content       |  Size  |
 | :--------------: | :---: | :----------: | :---: | :----------------: | :----: |
-|        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 50MiB  |
-|        2         | Root  |     8300     | FAT32 | Grub and NaOS data | 100MiB |
+|        1         |  ESP  |     EF00     | FAT32 |  Grub EFI loader   | 70MiB  |
+|        2         | Root  |     8300     | FAT32 | Grub and NaOS data | 70MiB |
 
+
+```bash
+python ./util/disk.py mount
+mkfs.fat -F32 /dev/loopxp1
+mkfs.fat -F32 /dev/loopxp2
+```
 
 Install (UEFI):
 ```bash
-sudo grub-install --boot-directory=/mnt/Root/boot  --efi-directory=/mnt/ESP --targe=x86_64-efi run/image/disk.img
+sudo grub-install --boot-directory=/run/media/user/root_xxx  --efi-directory=/run/media/user/esp_xxx  --targe=x86_64-efi run/image/disk.img
 ```
 
-*grub.cfg* (UEFI):
+vim */run/media/user/root_xxx/grub/grub.cfg* (UEFI):
 ```
 root=(hd0,gpt2)
 set default=0
@@ -181,6 +207,11 @@ menuentry "NaOS multiboot2" {
     boot
 }
 ```
+
+```bash
+python ./util/disk.py umount
+```
+
 ---
 
 The raw disk file should be in the path *run/image/disk.img*.   
@@ -206,6 +237,8 @@ build
 ```Bash
 # Run emulator
 python util/run.py q
+# or uefi
+python util/run.py q --uefi
 ```
 
 The kernel log will be generated in *run/kernel_out.log*, 

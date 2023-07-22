@@ -344,7 +344,6 @@ ExportC
     // debug
     void ACPI_INTERNAL_VAR_XFACE AcpiOsPrintf(const char *Format, ...)
     {
-
         va_list st;
         va_start(st, Format);
         AcpiOsVprintf(Format, st);
@@ -354,7 +353,7 @@ ExportC
     {
         char *buf = (char *)memory::kmalloc(4096, 1);
         vsnprintf(buf, 4095, Format, Args);
-        trace::print(buf);
+        trace::print("[ACPI] ", buf);
         memory::kfree(buf);
     }
 

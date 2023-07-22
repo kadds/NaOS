@@ -45,7 +45,7 @@ void init()
     {
         build(i, 0);
     }
-    trace::debug("Interrupt entry address: ", code_buffer, " size: ", a_code_len);
+    trace::info("Interrupt entry address: ", code_buffer, " size: ", a_code_len);
 }
 
 ExportC void on_intr_exit(const regs_t *regs) {}

@@ -496,7 +496,7 @@ void reset_early_paging()
         reinterpret_cast<void *>(memory::alloc_io_mmap_address(pages * memory::page_size, arch::paging::big_pages));
 
     /// print video card memory info
-    trace::debug("Vram address ", trace::hex(pa()), " to ", trace::hex(virt), " pages ", pages, " bytes ", bytes,
+    trace::info("Vram address ", trace::hex(pa()), " to ", trace::hex(virt), " pages ", pages, " bytes ", bytes,
                  " bbp ", fb.bbp);
 
     memory::kernel_vm_info->paging().big_page_map_to(

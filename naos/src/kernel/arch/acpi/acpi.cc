@@ -22,8 +22,13 @@ ExportC
 #include "actbl2.h"
 #include "actbl3.h"
 #include "actypes.h"
+#ifdef BOOLEAN
+#undef BOOLEAN
+#endif
 }
+namespace efi{
 #include "efi/efi.h"
+}
 
 namespace arch::ACPI
 {
@@ -34,14 +39,14 @@ bool has_init() { return acpi_init; }
 
 void init()
 {
-    auto p = (EFI_SYSTEM_TABLE *)kernel_args->efi_system_table;
+    auto p = (efi::EFI_SYSTEM_TABLE *)kernel_args->efi_system_table;
     if (p != nullptr)
     {
-        p = (EFI_SYSTEM_TABLE *)memory::pa2va(phy_addr_t::from(p));
-        EFI_GUID target = ACPI_TABLE_GUID;
-        EFI_GUID target2 = ACPI_20_TABLE_GUID;
-        EFI_CONFIGURATION_TABLE *cfg_table =
-            (EFI_CONFIGURATION_TABLE *)memory::pa2va(phy_addr_t::from(p->ConfigurationTable));
+        p = (efi::EFI_SYSTEM_TABLE *)memory::pa2va(phy_addr_t::from(p));
+        efi::EFI_GUID target = ACPI_TABLE_GUID;
+        efi::EFI_GUID target2 = ACPI_20_TABLE_GUID;
+        efi::EFI_CONFIGURATION_TABLE *cfg_table =
+            (efi::EFI_CONFIGURATION_TABLE *)memory::pa2va(phy_addr_t::from(p->ConfigurationTable));
         for (unsigned int i = 0; i < p->NumberOfTableEntries; i++)
         {
             if (memcmp(&cfg_table[i].VendorGuid, &target, sizeof(target)) == 0)
@@ -55,14 +60,14 @@ void init()
         }
     }
 
-    trace::debug("rsdp ", trace::hex(kernel_args->rsdp), " old rsdp ", trace::hex(kernel_args->rsdp_old));
+    trace::debug("rsdp from args ", trace::hex(kernel_args->rsdp), " old ", trace::hex(kernel_args->rsdp_old));
     if (kernel_args->rsdp == 0 && kernel_args->rsdp_old == 0)
     {
         trace::warning("rsdp empty");
     }
     ACPI_PHYSICAL_ADDRESS addr = 0;
     AcpiFindRootPointer(&addr);
-    trace::info("find rsdp ", trace::hex(addr));
+    trace::info("find rsdp ", trace::hex(addr), " by acpi table");
     if (addr != kernel_args->rsdp_old && addr != 0)
     {
         kernel_args->rsdp = addr;
@@ -316,6 +321,7 @@ freelibcxx::hash_map<u32, numa_info> get_numa_info()
 
 void shutdown()
 {
+    trace::info("shutdown");
     idt::disable();
     // qemu
     io_out16(0x604, 0x2000);
@@ -328,6 +334,7 @@ void shutdown()
 
 void reboot()
 {
+    trace::info("reboot");
     idt::disable();
     _reset_power();
     trace::panic("reboot fail");
