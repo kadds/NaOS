@@ -8,11 +8,15 @@
 #include "kernel/dev/device.hpp"
 #include "kernel/fs/pipefs/pipefs.hpp"
 #include "kernel/fs/rootfs/rootfs.hpp"
+#include "kernel/fs/vfs/defines.hpp"
+#include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/handle.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/ksybs.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/terminal.hpp"
@@ -55,6 +59,30 @@ ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args)
 
 u64 build_version_timestamp = BUILD_VERSION_TS;
 
+handle_t<fs::vfs::file>* dmesg_file;
+
+void trace_callback(const byte *data, u64 len) 
+{
+    (*dmesg_file)->write(data, len, 0);
+}
+
+void fs_init() 
+{
+    // create /var/log/dmesg
+    fs::vfs::mkdir("/var", fs::vfs::global_root, fs::vfs::global_root, 0);
+    fs::vfs::mkdir("/var/log", fs::vfs::global_root, fs::vfs::global_root, 0);
+    auto file = fs::vfs::open("/var/log/dmesg", fs::vfs::global_root, fs::vfs::global_root,
+        fs::mode::write, fs::path_walk_flags::auto_create_file | fs::path_walk_flags::file);
+    if (!file) 
+    {
+        trace::panic("create dmesg fail failed");
+    }
+
+    dmesg_file = memory::KernelCommonAllocatorV->New<handle_t<fs::vfs::file>>(file);
+
+    trace::register_callback(true, trace_callback);
+}
+
 NoReturn void kstart_bsp(kernel_start_args *args)
 {
     memset((void *)((u64)_bss_start), 0, (u64)_bss_end - (u64)_bss_start);
@@ -83,10 +111,11 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     fs::pipefs::init();
     ksybs::init();
 
+    fs_init();
+    term::init();
+
     io::init();
     dev::init();
-
-    term::init();
 
     task::init();
     arch::init_drivers();

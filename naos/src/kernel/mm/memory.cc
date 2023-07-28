@@ -354,9 +354,10 @@ void vfree(void *addr)
     auto vm = kernel_vm_info->vma().get_vm_area((u64)addr);
     if (vm)
     {
-        /// TODO: free page memory
+        auto start = vm->start;
+        auto end = vm->end;
         kernel_vm_info->vma().deallocate_map(vm);
-        kernel_vm_info->paging().unmap(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size);
+        kernel_vm_info->paging().unmap(reinterpret_cast<void *>(start), (end - start) / page_size);
     }
 }
 

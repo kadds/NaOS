@@ -25,6 +25,8 @@ extern bool output_debug;
 
 void init();
 void early_init();
+typedef void(*trace_callback)(const byte*, u64);
+void register_callback(bool trace_all, trace_callback callback);
 
 template <typename T> using span = freelibcxx::span<T>;
 
@@ -527,8 +529,6 @@ void print_klog(char ch);
 
 /// the kernel print to the serial device. recv com1
 extern arch::device::com::serial serial_device;
-
-freelibcxx::circular_buffer<byte> &get_kernel_log_buffer();
 
 /// ---------- template functions for kernel print logic ----------------
 

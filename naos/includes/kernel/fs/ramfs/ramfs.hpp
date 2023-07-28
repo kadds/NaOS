@@ -24,8 +24,8 @@ class inode : public vfs::inode
     friend class super_block;
     friend class file;
 
-    byte *start_ptr;
-    u64 ram_size;
+    byte *start_ptr = nullptr;
+    u64 ram_size = 0;
 
   public:
     bool create_symbolink(vfs::dentry *entry, const char *target) override;

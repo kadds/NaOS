@@ -4,6 +4,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/errno.hpp"
+#include "kernel/trace.hpp"
 namespace fs::ramfs
 {
 
@@ -27,35 +28,40 @@ const char *inode::symbolink() { return (const char *)start_ptr; }
 
 i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
 {
-
+    // TODO: lock
     inode *node = (inode *)entry->get_inode();
     super_block *sublock = (super_block *)node->su_block;
 
     if (unlikely(offset + size >= node->ram_size || node->start_ptr == nullptr))
     {
-        sublock->add_ram_used(-node->ram_size);
-        if (node->start_ptr != nullptr)
-        {
-            memory::KernelVirtualAllocatorV->deallocate(node->start_ptr);
-        }
         auto file_size = offset + size;
         auto ram_size = (file_size + memory::page_size - 1) & ~(memory::page_size - 1);
 
         if (sublock->get_current_used() + ram_size < sublock->get_max_ram_size())
         {
-            node->file_size = file_size;
+            sublock->add_ram_used(ram_size);
+            auto ptr = (byte *)memory::KernelVirtualAllocatorV->allocate(ram_size, 0);
+            if (node->start_ptr != nullptr)
+            {
+                memcpy(ptr, node->start_ptr, offset);
+                memory::KernelVirtualAllocatorV->deallocate(node->start_ptr);
+                sublock->add_ram_used(-node->ram_size);
+            }
+            node->file_size = offset;
             node->ram_size = ram_size;
-            node->start_ptr = (byte *)memory::KernelVirtualAllocatorV->allocate(node->ram_size, 0);
-            sublock->add_ram_used(node->ram_size);
+            node->start_ptr = ptr;
         }
         else
         {
+            // write fail
+            trace::warning("ramfs memory limit");
             return 0;
         }
     }
 
     memcpy(node->start_ptr + offset, buffer, size);
     offset += size;
+    node->file_size += size;
     return size;
 }
 
