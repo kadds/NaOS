@@ -9,7 +9,7 @@ namespace naos::syscall
 {
 file_desc open(const char *path, u64 mode, u64 flags)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -38,7 +38,7 @@ u64 close(file_desc fd)
 
 i64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
-    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
+    if (!is_user_space_range(buffer, max_len))
     {
         return EBUFFER;
     }
@@ -60,7 +60,7 @@ i64 write(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 
 i64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 {
-    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
+    if (!is_user_space_range(buffer, max_len))
     {
         return EBUFFER;
     }
@@ -83,7 +83,7 @@ i64 read(file_desc fd, byte *buffer, u64 max_len, u64 flags)
 
 i64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
-    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
+    if (!is_user_space_range(buffer, max_len))
     {
         return EBUFFER;
     }
@@ -105,7 +105,7 @@ i64 pwrite(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 
 i64 pread(file_desc fd, i64 offset, byte *buffer, u64 max_len, u64 flags)
 {
-    if (!is_user_space_pointer_or_null(buffer) || !is_user_space_pointer_or_null(buffer + max_len))
+    if (!is_user_space_range(buffer, max_len))
     {
         return EBUFFER;
     }
@@ -162,6 +162,9 @@ i64 select(u64 fd_count, file_desc *in, file_desc *out, file_desc *err, u64 flag
 
 i64 pipe(file_desc *fd1, file_desc *fd2)
 {
+    if (!is_user_space_range(fd1, sizeof(*fd1)) || !is_user_space_range(fd2, sizeof(*fd2)))
+        return EPARAM;
+
     auto file = fs::vfs::open_pipe();
     if (!file)
         return EFAILED;
@@ -188,7 +191,7 @@ i64 pipe(file_desc *fd1, file_desc *fd2)
 
 file_desc fifo(const char *path, u64 mode)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -205,6 +208,9 @@ file_desc fifo(const char *path, u64 mode)
 
 i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size)
 {
+    if (!is_user_space_range(value, sizeof(*value)))
+        return EBUFFER;
+
     auto &res = task::current_process()->resource;
     auto obj = res.get_kobject(fd);
     if (!obj)

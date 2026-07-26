@@ -18,7 +18,7 @@ void log(const char *message)
 
 int clock_get(int clock_index, timeclock::time *time)
 {
-    if (!is_user_space_pointer_or_null(time))
+    if (!is_user_space_range(time, sizeof(*time)))
     {
         return EPARAM;
     }

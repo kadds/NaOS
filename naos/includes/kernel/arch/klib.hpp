@@ -102,12 +102,22 @@ void *print_stack(const regs_t *regs, int max_depth);
 
 template <typename T> static inline bool is_user_space_pointer(T ptr)
 {
-    return (u64)ptr >= memory::minimum_user_addr && (u64)ptr <= memory::maximum_user_addr;
+    auto address = (u64)ptr;
+    return address != 0 && address >= memory::minimum_user_addr && address <= memory::maximum_user_addr;
 }
 
 template <typename T> static inline bool is_user_space_pointer_or_null(T ptr)
 {
     return (u64)ptr == 0 || ((u64)ptr >= memory::minimum_user_addr && (u64)ptr <= memory::maximum_user_addr);
+}
+
+template <typename T> static inline bool is_user_space_range(T ptr, u64 size)
+{
+    if (size == 0)
+        return (u64)ptr == 0 || is_user_space_pointer(ptr);
+
+    auto address = (u64)ptr;
+    return is_user_space_pointer(ptr) && size - 1 <= memory::maximum_user_addr - address;
 }
 
 template <typename T> static inline bool is_kernel_space_pointer(T ptr)

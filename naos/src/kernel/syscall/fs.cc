@@ -63,13 +63,14 @@ class list_entries : public kobject
         {
             auto name = entries[offset]->get_name();
             auto len = strlen(name) + 1;
-            if (len + buffer_used < buffer_limit)
+            if (len <= buffer_limit - buffer_used)
             {
                 auto &d = dentries->entry[i];
                 d.type = 0;
                 d.inode = 1;
                 d.name_offset = buffer_used;
                 memcpy(buf + buffer_used, name, len);
+                buffer_used += len;
             }
             else
             {
@@ -88,7 +89,7 @@ class list_entries : public kobject
 
 int open_dir(const char *path)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -106,11 +107,17 @@ int open_dir(const char *path)
 
 int list_dir(file_desc fd, dentries *entries)
 {
-    if (!is_user_space_pointer_or_null(entries))
+    if (!is_user_space_range(entries, sizeof(dentries)))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer(entries->entry_name_buffer))
+    if (entries->entry_count > (memory::maximum_user_addr - sizeof(dentries)) / sizeof(dentry))
+    {
+        return EPARAM;
+    }
+    auto entries_size = sizeof(dentries) + entries->entry_count * sizeof(dentry);
+    if (!is_user_space_range(entries, entries_size) ||
+        !is_user_space_range(entries->entry_name_buffer, entries->buffer_size))
     {
         return EPARAM;
     }
@@ -133,11 +140,11 @@ int list_dir(file_desc fd, dentries *entries)
 
 int rename(const char *src, const char *target)
 {
-    if (!is_user_space_pointer_or_null(src))
+    if (!is_user_space_pointer(src))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer_or_null(target))
+    if (!is_user_space_pointer(target))
     {
         return EPARAM;
     }
@@ -147,11 +154,11 @@ int rename(const char *src, const char *target)
 
 int symbolink(const char *src_path, const char *target_path, flag_t flags)
 {
-    if (!is_user_space_pointer_or_null(src_path))
+    if (!is_user_space_pointer(src_path))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer_or_null(target_path))
+    if (!is_user_space_pointer(target_path))
     {
         return EPARAM;
     }
@@ -163,7 +170,7 @@ int symbolink(const char *src_path, const char *target_path, flag_t flags)
 
 u64 create(const char *pathname)
 {
-    if (!is_user_space_pointer_or_null(pathname))
+    if (!is_user_space_pointer(pathname))
     {
         return EPARAM;
     }
@@ -177,7 +184,7 @@ u64 create(const char *pathname)
 
 u64 access(const char *filename, flag_t mode)
 {
-    if (!is_user_space_pointer_or_null(filename))
+    if (!is_user_space_pointer(filename))
     {
         return EPARAM;
     }
@@ -191,7 +198,7 @@ u64 access(const char *filename, flag_t mode)
 
 int mkdir(const char *pathname)
 {
-    if (!is_user_space_pointer_or_null(pathname))
+    if (!is_user_space_pointer(pathname))
     {
         return EPARAM;
     }
@@ -203,7 +210,7 @@ int mkdir(const char *pathname)
 
 int rmdir(const char *pathname)
 {
-    if (!is_user_space_pointer_or_null(pathname))
+    if (!is_user_space_pointer(pathname))
     {
         return EPARAM;
     }
@@ -215,11 +222,11 @@ int rmdir(const char *pathname)
 
 int link(const char *src, const char *target)
 {
-    if (!is_user_space_pointer_or_null(src))
+    if (!is_user_space_pointer(src))
     {
         return EPARAM;
     }
-    if (!is_user_space_pointer_or_null(target))
+    if (!is_user_space_pointer(target))
     {
         return EPARAM;
     }
@@ -231,7 +238,7 @@ int link(const char *src, const char *target)
 
 int unlink(file_desc fd, const char *path, flag_t flag)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -259,7 +266,7 @@ int unlink(file_desc fd, const char *path, flag_t flag)
 
 int mount(const char *dev, const char *path, const char *fs_type, flag_t flags, const byte *data, u64 size)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -269,7 +276,7 @@ int mount(const char *dev, const char *path, const char *fs_type, flag_t flags, 
         return EPARAM;
     }
 
-    if (!is_user_space_pointer_or_null(fs_type))
+    if (!is_user_space_pointer(fs_type))
     {
         return EPARAM;
     }
@@ -295,7 +302,7 @@ int mount(const char *dev, const char *path, const char *fs_type, flag_t flags, 
 
 int umount(const char *path)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }

@@ -64,7 +64,7 @@ void before_user_thread(task::thread_start_info_t *info)
 
 process_id create_process(const char *path, const char *argv[], const char *envp[], flag_t flags)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -140,7 +140,13 @@ long wait_process(process_id pid, i64 *ret)
 }
 
 /// sleep current thread
-void sleep(const timeclock::time *time) { task::do_sleep(*time); }
+int sleep(const timeclock::time *time)
+{
+    if (!is_user_space_range(time, sizeof(*time)))
+        return EPARAM;
+    task::do_sleep(*time);
+    return OK;
+}
 
 struct sig_info_t
 {
@@ -153,7 +159,7 @@ struct sig_info_t
 
 i64 raise(task::signal_num_t num, sig_info_t *info)
 {
-    if (!is_user_space_pointer(info))
+    if (info != nullptr && !is_user_space_range(info, sizeof(*info)))
     {
         return EPARAM;
     }
@@ -181,9 +187,9 @@ enum target_flags : flag_t
 
 u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 {
-    if (!is_user_space_pointer_or_null(target))
+    if (!is_user_space_range(target, sizeof(*target)))
         return EPARAM;
-    if (!is_user_space_pointer(info))
+    if (info != nullptr && !is_user_space_range(info, sizeof(*info)))
         return EPARAM;
 
     if (target->flags & send_to_process)
@@ -206,9 +212,9 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 
 u64 sigwait(task::signal_num_t *num, sig_info_t *info)
 {
-    if (!is_user_space_pointer(num))
+    if (num != nullptr && !is_user_space_range(num, sizeof(*num)))
         return EPARAM;
-    if (!is_user_space_pointer(info))
+    if (info != nullptr && !is_user_space_range(info, sizeof(*info)))
         return EPARAM;
     task::signal_info_t inf;
     task::current_process()->signal_pack.wait(&inf);
@@ -313,7 +319,7 @@ void setcpu_mask(u64 mask0, u64 mask1)
 
 int getcpu_mask(u64 *mask0, u64 *mask1)
 {
-    if (!is_user_space_pointer_or_null(mask0))
+    if (!is_user_space_range(mask0, sizeof(*mask0)))
         return EPARAM;
     *mask0 = task::current()->cpumask.mask;
     return 0;
@@ -331,7 +337,7 @@ int set_tcb(void *p)
 
 int chdir(const char *path)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -347,7 +353,7 @@ int chdir(const char *path)
 
 int current_dir(char *path, u64 max_len)
 {
-    if (!is_user_space_pointer_or_null(path) || !is_user_space_pointer_or_null(path + max_len))
+    if (max_len == 0 || !is_user_space_range(path, max_len))
     {
         return EBUFFER;
     }
@@ -358,7 +364,7 @@ int current_dir(char *path, u64 max_len)
 
 int chroot(const char *path)
 {
-    if (!is_user_space_pointer_or_null(path))
+    if (!is_user_space_pointer(path))
     {
         return EPARAM;
     }
@@ -393,6 +399,10 @@ int clone(void *entry, void *arg, void *tcb)
 
 int execve(const char *path, char *const argv[], char *const envp[])
 {
+    if (!is_user_space_pointer(path))
+    {
+        return EPARAM;
+    }
     if (!is_user_space_pointer_or_null(argv))
     {
         return EPARAM;

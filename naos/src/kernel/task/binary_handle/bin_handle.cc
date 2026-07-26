@@ -27,12 +27,17 @@ bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     auto new_vm = new_mm_info->map_file(memory::user_code_bottom_address, file, 0, file->size(), file->size(),
                                         memory::vm::flags::readable | memory::vm::flags::writeable |
                                             memory::vm::flags::executeable | memory::vm::flags::user_mode);
+    if (new_vm == nullptr)
+        return false;
     info->entry_start_address = (void *)new_vm->start;
 
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
                                      memory::vm::page_fault_method::common, 0);
+
+    if (stack_vm == nullptr)
+        return false;
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;

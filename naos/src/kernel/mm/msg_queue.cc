@@ -87,7 +87,7 @@ u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
     {
         messsage_seg_t *msgs = (messsage_seg_t *)memory::KernelBuddyAllocatorV->allocate(1, 0);
         u64 mlen = (plen > length - len) ? length - len : plen;
-        memcpy(msgs->buffer + len, buffer + len, mlen);
+        memcpy(msgs->buffer, buffer + len, mlen);
         len += mlen;
         msgs->next = nullptr;
         if (msg->rest_msg == nullptr)

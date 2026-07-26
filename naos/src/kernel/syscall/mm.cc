@@ -40,7 +40,9 @@ u64 sbrk(i64 offset)
 /// \param flags 1:read;2:write;4:exec;8:file;16:share
 u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
 {
-    if (!is_user_space_pointer(map_address) || !is_user_space_pointer(map_address + length))
+    if (length == 0 ||
+        (map_address != 0 &&
+         (!is_user_space_pointer(map_address) || length - 1 > memory::maximum_user_addr - map_address)))
     {
         return EPARAM;
     }
@@ -50,8 +52,11 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
     if (flags & 8)
     {
         auto obj = res.get_kobject(fd);
-        if (obj)
+        if (!obj)
             return ENOEXIST;
+        file = obj->get<fs::vfs::file>();
+        if (!file)
+            return ENOTYPE;
     }
     auto vm = vm_info->map_file(map_address, file, offset, length, length, flags);
 
@@ -88,7 +93,7 @@ unsigned long write_msg_queue(unsigned long key, unsigned long type, void *buffe
     auto q = memory::get_msg_queue(key);
     if (q == nullptr)
         return EPARAM;
-    if (!is_user_space_pointer(buffer) || !is_user_space_pointer((byte *)buffer + size))
+    if (!is_user_space_range(buffer, size))
         return EBUFFER;
     return memory::write_msg(q, type, (byte *)buffer, size, flags);
 }
@@ -99,7 +104,7 @@ unsigned long read_msg_queue(unsigned long key, unsigned long type, void *buffer
     auto q = memory::get_msg_queue(key);
     if (q == nullptr)
         return EPARAM;
-    if (!is_user_space_pointer(buffer) || !is_user_space_pointer((byte *)buffer + size))
+    if (!is_user_space_range(buffer, size))
         return EBUFFER;
     auto ret = memory::read_msg(q, type, (byte *)buffer, size, flags);
     if (ret == -1)
