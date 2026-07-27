@@ -2,6 +2,8 @@
 import sys
 import os
 import argparse
+import shutil
+import subprocess
 import traceback
 from disk import mount_point
 from mod import set_self_dir, run_shell, run_shell_input
@@ -17,7 +19,8 @@ ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 qemu_bin = 'qemu-system-x86_64 -serial file:../run/kernel_out.log -cpu Haswell-v4,pdpe1gb '
 
 qemu_uefi_numa = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash -s -smp 8,sockets=2,cores=2, -object memory-backend-ram,id=mem0,size=64M -object memory-backend-ram,id=mem1,size=64M -numa node,memdev=mem0,cpus=0-3,nodeid=0 -numa node,memdev=mem1,cpus=4-7,nodeid=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log '
-qemu_headless_str = ' -nographic -vnc :1'
+qemu_graphic_str = ' -display gtk'
+qemu_headless_str = ' -nographic'
 qemu_uefi = ' -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash '
 
 ios_file = ' -cdrom ../run/image/naos.iso '
@@ -25,6 +28,28 @@ image_file = ' -drive file=../run/image/disk.img,format=raw,index=1 '
 
 bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
 vbox = 'VBoxManage startvm boot'
+
+
+def prepare_iso():
+    system_dir = "../build/bin/system"
+    iso_dir = "../run/iso"
+    image_dir = "../run/image"
+
+    os.makedirs(iso_dir, exist_ok=True)
+    os.makedirs(image_dir, exist_ok=True)
+
+    for name in ("kernel", "rfsimg"):
+        source = os.path.join(system_dir, name)
+        if not os.path.isfile(source):
+            raise FileNotFoundError(
+                source + " does not exist; build NaOS before starting QEMU"
+            )
+        shutil.copy2(source, os.path.join(iso_dir, name))
+
+    subprocess.run(
+        ["grub-mkrescue", "-o", os.path.join(image_dir, "naos.iso"), iso_dir],
+        check=True,
+    )
 
 if __name__ == "__main__":
     set_self_dir()
@@ -45,20 +70,24 @@ if __name__ == "__main__":
         "-c", "--cores",  help="cpu cores", default='2')
 
     args = parser.parse_args()
-    base_mnt = None
-    if args.uefi:
-        base_mnt = mount_point("../run/image/disk.img", 2)
-    else:
-        base_mnt = mount_point("../run/image/disk.img", 1)
-
-    if base_mnt == "" or base_mnt == None:
-        print("Mount disk before run.\n    try 'python disk.py mount'")
-        exit(-1)
 
     try:
-        run_shell('mkdir -p ' + base_mnt + '/boot/')
-        run_shell('cp -R ../build/bin/system/* ' + base_mnt + '/boot/')
-        run_shell('sync')
+        if args.iso:
+            prepare_iso()
+        else:
+            if args.uefi:
+                base_mnt = mount_point("../run/image/disk.img", 2)
+            else:
+                base_mnt = mount_point("../run/image/disk.img", 1)
+
+            if base_mnt == "" or base_mnt == None:
+                print("Mount disk before run.\n    try 'python disk.py mount'")
+                exit(-1)
+
+            run_shell('mkdir -p ' + base_mnt + '/boot/')
+            run_shell('cp -R ../build/bin/system/* ' + base_mnt + '/boot/')
+            run_shell('sync')
+
         tp = args.emulator_name
         if tp == 'q':
             cores = int(args.cores)
@@ -74,6 +103,8 @@ if __name__ == "__main__":
 
             if args.nographic:
                 command += qemu_headless_str
+            else:
+                command += qemu_graphic_str
 
             if args.iso:
                 command += ios_file

@@ -47,7 +47,7 @@ void main(void *arg)
     while (1)
     {
         kassert(arch::idt::is_enable(), "Bug check failed.");
-        __asm__ __volatile__("pause\n\t" : : : "memory");
+        cpu_halt();
     }
 }
 } // namespace task::builtin::idle

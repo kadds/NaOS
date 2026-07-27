@@ -97,6 +97,11 @@ inline static void cpu_pause()
     return;
 }
 
+inline static void cpu_halt()
+{
+    __asm__ __volatile__("hlt \n\t" : : : "memory");
+}
+
 /// print kernel stack (when panic)
 void *print_stack(const regs_t *regs, int max_depth);
 
