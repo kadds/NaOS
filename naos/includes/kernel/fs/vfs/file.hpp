@@ -34,6 +34,8 @@ class file : public kobject
 
     i64 pread(i64 offset, byte *ptr, u64 max_size, flag_t flags);
     i64 pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags);
+    i64 ioctl(u64 request, u64 argument);
+    u64 ioctl_arg_size(u64 request) const;
 
     virtual void flush() = 0;
 

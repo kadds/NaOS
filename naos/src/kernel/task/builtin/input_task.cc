@@ -66,8 +66,6 @@ bool is_key_down(key k) { return key_down_state.get_bit((u64)k); }
 bool is_ctrl_key_down() { return is_key_down(key::left_control) || is_key_down(key::right_control); }
 bool is_alt_key_down() { return is_key_down(key::left_alt) || is_key_down(key::right_alt); }
 
-bool is_fkey(key k) { return (k >= key::f1 && k <= key::f10) || (k >= key::f11 && k <= key::f12); }
-
 void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req,
                     freelibcxx::span<handle_t<fs::vfs::file>> tty_file_list)
 {
@@ -110,11 +108,11 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 {
                     tty->send_EOF();
                 }
-                else if (is_fkey(k) && is_alt_key_down())
+                else if (is_alt_key_down() && (k == key::f1 || k == key::f12))
                 {
-                    // control + alt + f1-f12
-                    auto to_idx = k > key::f11 ? ((int)k - (int)key::f11) + 10 : (int)k - (int)key::f1;
-                    if (to_idx < terms->total())
+                    const auto to_idx = k == key::f12 ? term::terminal_manager::kernel_console_index
+                                                      : term::terminal_manager::user_terminal_index;
+                    if (terms->valid_index(to_idx))
                     {
                         terms->switch_term(to_idx);
                     }
@@ -212,11 +210,10 @@ io::keyboard_request_t request;
 void listen_keyboard()
 {
     freelibcxx::vector<handle_t<fs::vfs::file>> tty_file_list(memory::MemoryAllocatorV);
-    freelibcxx::string ttyname(memory::MemoryAllocatorV, "/dev/tty/0");
-    for (int i = 0; i < term::get_terms()->total(); i++)
+    const char *tty_names[] = {"/dev/console", "/dev/tty0"};
+    for (const auto *tty_name : tty_names)
     {
-        ttyname.view()[ttyname.size() - 1] = '0' + i;
-        auto input_file = fs::vfs::open(ttyname.data(), fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
+        auto input_file = fs::vfs::open(tty_name, fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
         tty_file_list.push_back(input_file);
     }
 

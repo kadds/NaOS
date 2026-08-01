@@ -10,6 +10,35 @@ class pseudo_t
   public:
     virtual i64 write(const byte *data, u64 size, flag_t flags) = 0;
     virtual i64 read(byte *data, u64 max_size, flag_t flags) = 0;
+    virtual i64 write_at(i64 &offset, const byte *data, u64 size, flag_t flags)
+    {
+        (void)offset;
+        return write(data, size, flags);
+    }
+    virtual i64 read_at(i64 &offset, byte *data, u64 max_size, flag_t flags)
+    {
+        (void)offset;
+        return read(data, max_size, flags);
+    }
+    virtual i64 ioctl(u64 request, u64 argument)
+    {
+        (void)request;
+        (void)argument;
+        return -1;
+    }
+    virtual u64 ioctl_arg_size(u64 request) const
+    {
+        (void)request;
+        return 0;
+    }
+    virtual bool supports_physical_mmap() const { return false; }
+    virtual bool get_physical_mmap(u64 offset, u64 length, phy_addr_t &physical_address) const
+    {
+        (void)offset;
+        (void)length;
+        (void)physical_address;
+        return false;
+    }
     virtual void close() = 0;
     virtual ~pseudo_t() {}
 };

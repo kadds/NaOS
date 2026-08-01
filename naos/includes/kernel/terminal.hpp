@@ -191,9 +191,24 @@ template <typename CHILD, typename CHAR> class terminal
         cols_ = cols;
         dirty_ = viewport();
     }
-    void reattach_backend() { attach_backend(backend_); }
+    void reattach_backend()
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        if (backend_ == nullptr)
+        {
+            return;
+        }
+        auto [rows, cols] = backend_->rows_cols();
+        rows_ = rows;
+        cols_ = cols;
+        dirty_ = viewport();
+    }
 
-    void detach_backend() { backend_ = nullptr; }
+    void detach_backend()
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        backend_ = nullptr;
+    }
 
     void push_string(freelibcxx::const_string_view str, bool no_escape = false);
 
@@ -205,44 +220,41 @@ template <typename CHILD, typename CHAR> class terminal
 
     void flush_all()
     {
-        dirty_ = viewport();
+        {
+            uctx::RawSpinLockUninterruptibleContext icu(lock_);
+            dirty_ = viewport();
+        }
         flush_dirty();
     }
 
     void flush_dirty()
     {
-        rectangle view;
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        if (enable_placeholder_)
         {
-            uctx::RawSpinLockUninterruptibleContext icu(lock_);
-            if (enable_placeholder_)
+            auto current = timer::get_high_resolution_time();
+            if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
             {
-                auto current = timer::get_high_resolution_time();
-                if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
+                placeholder_time_ = current;
+                if (placeholder_reset_)
                 {
-                    placeholder_time_ = current;
-                    if (placeholder_reset_)
-                    {
-                        placeholder_show_ = true;
-                        placeholder_reset_ = false;
-                    }
-                    else
-                    {
-                        placeholder_show_ = !placeholder_show_;
-                    }
-                    dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+                    placeholder_show_ = true;
+                    placeholder_reset_ = false;
                 }
+                else
+                {
+                    placeholder_show_ = !placeholder_show_;
+                }
+                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
             }
-
-            if (dirty_.empty())
-            {
-                return;
-            }
-            if (backend_ == nullptr)
-            {
-                return;
-            }
-            view = viewport();
         }
+
+        if (dirty_.empty() || backend_ == nullptr)
+        {
+            return;
+        }
+
+        auto view = viewport();
         auto child = static_cast<CHILD *>(this);
         if (dirty_.top < view.top)
         {
@@ -294,7 +306,11 @@ template <typename CHILD, typename CHAR> class terminal
         }
     }
 
-    void enable_placeholder() { enable_placeholder_ = true; }
+    void enable_placeholder()
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        enable_placeholder_ = true;
+    }
 
     void commit_changes()
     {
@@ -737,18 +753,25 @@ class stand_terminal final : public terminal<stand_terminal, stand_term_char_t>
 class terminal_manager
 {
   public:
-    stand_terminal &active_terminal() { return terms_[cur_]; }
+    static constexpr int kernel_console_index = 0;
+    static constexpr int user_terminal_index = 1;
+    static constexpr int default_terminal_count = 2;
 
     terminal_manager(int nums, const fb::framebuffer_backend &backend);
-    void switch_term(int index);
-    stand_terminal &get(int index);
-    int term_index() { return cur_; }
-    static int klog_term_index() { return 0; }
-    int total() { return terms_.size(); }
+    bool switch_term(int index);
+    void flush_active_terminal();
+    void push_string(int index, freelibcxx::const_string_view str);
+    void commit_changes(int index);
+    int term_index() const;
+    static int klog_term_index() { return kernel_console_index; }
+    int total() const { return terms_.size(); }
+    bool valid_index(int index) const { return index >= 0 && index < total(); }
+    const fb::framebuffer_backend &backend() const { return backend_; }
 
   private:
     freelibcxx::vector<stand_terminal> terms_;
     fb::framebuffer_backend backend_;
+    mutable lock::spinlock_t manager_lock_;
     int cur_ = -1;
 };
 

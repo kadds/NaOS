@@ -23,7 +23,11 @@ int cols;
 font::font_16X8 font;
 term::minimal_terminal *early_init(fb::framebuffer_t fb)
 {
-    fb.ptr = memory::pa2va(phy_addr_t::from(fb.ptr));
+    if (fb.bbp != 32)
+    {
+        trace::panic("Unsupported framebuffer format: only 32bpp is supported");
+    }
+    fb.ptr = memory::pa2va(fb.physical_addr);
     auto early_terminal = new (memory::pa2va(phy_addr_t::from(0x21200))) term::minimal_terminal();
     early_backend = new (memory::pa2va(phy_addr_t::from(0x21000))) fb::framebuffer_backend(fb, &font);
     early_terminal->attach_backend(early_backend);

@@ -420,10 +420,9 @@ freelibcxx::tuple<stand_term_char_t *, int, int> stand_terminal::previous_term_c
 
 void flush_terminal(u64 delta, u64 userdata)
 {
-    auto &term = manager->active_terminal();
     if (use_stand_terminal)
     {
-        term.flush_dirty();
+        manager->flush_active_terminal();
     }
     timer::add_watcher(1000000 / 60, flush_terminal, 0);
 }
@@ -440,13 +439,16 @@ terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &back
     timer::add_watcher(1000000 / 60, flush_terminal, 0);
 }
 
-stand_terminal &terminal_manager::get(int index) { return terms_[index]; }
-
-void terminal_manager::switch_term(int index)
+bool terminal_manager::switch_term(int index)
 {
+    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+    if (!valid_index(index))
+    {
+        return false;
+    }
     if (index == cur_)
     {
-        return;
+        return true;
     }
     if (cur_ >= 0)
     {
@@ -463,8 +465,42 @@ void terminal_manager::switch_term(int index)
     }
     cur_ = index;
     terms_[cur_].attach_backend(&backend_);
-    uctx::UninterruptibleContext icu;
+    uctx::UninterruptibleContext uninterruptible;
     terms_[cur_].flush_all();
+    return true;
+}
+
+void terminal_manager::flush_active_terminal()
+{
+    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+    if (valid_index(cur_))
+    {
+        terms_[cur_].flush_dirty();
+    }
+}
+
+void terminal_manager::push_string(int index, freelibcxx::const_string_view str)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+    if (valid_index(index))
+    {
+        terms_[index].push_string(str);
+    }
+}
+
+void terminal_manager::commit_changes(int index)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+    if (valid_index(index))
+    {
+        terms_[index].commit_changes();
+    }
+}
+
+int terminal_manager::term_index() const
+{
+    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+    return cur_;
 }
 
 terminal_manager *get_terms() { return manager; }
@@ -472,7 +508,8 @@ terminal_manager *get_terms() { return manager; }
 void early_init(kernel_start_args *args)
 {
     fb::framebuffer_t fb{
-        reinterpret_cast<void *>(args->fb_addr), args->fb_pitch, args->fb_width, args->fb_height, args->fb_bbp,
+        reinterpret_cast<void *>(args->fb_addr), phy_addr_t::from(args->fb_addr), args->fb_pitch, args->fb_width,
+        args->fb_height, args->fb_bbp,
     };
     early_terminal = arch::device::vga::early_init(fb);
 }
@@ -513,7 +550,8 @@ void reset_panic_term()
 
 void init()
 {
-    manager = memory::MemoryAllocatorV->New<terminal_manager>(7, *early_terminal->backend());
+    manager = memory::MemoryAllocatorV->New<terminal_manager>(terminal_manager::default_terminal_count,
+                                                              *early_terminal->backend());
     use_stand_terminal = true;
     arch::device::vga::init();
 }
@@ -522,8 +560,7 @@ void write_to(freelibcxx::const_string_view sv, int index)
 {
     if (use_stand_terminal)
     {
-        auto &term = manager->get(index);
-        term.push_string(sv);
+        manager->push_string(index, sv);
     }
     else
     {
@@ -538,8 +575,7 @@ void commit_changes(int index)
 {
     if (use_stand_terminal)
     {
-        auto &term = manager->get(index);
-        term.commit_changes();
+        manager->commit_changes(index);
     }
 }
 

@@ -57,7 +57,7 @@ i64 file::read(byte *ptr, u64 max_size, flag_t flags)
     {
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
-            return pd->read(ptr, max_size, flags);
+            return pd->read_at(offset, ptr, max_size, flags);
         return EFAILED;
     }
     return 0;
@@ -74,7 +74,7 @@ i64 file::write(const byte *ptr, u64 size, flag_t flags)
     {
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
-            return pd->write(ptr, size, flags);
+            return pd->write_at(offset, ptr, size, flags);
         return -1;
     }
     return 0;
@@ -91,7 +91,10 @@ i64 file::pread(i64 offset, byte *ptr, u64 max_size, flag_t flags)
     {
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
-            return pd->read(ptr, max_size, flags);
+        {
+            i64 current_offset = offset;
+            return pd->read_at(current_offset, ptr, max_size, flags);
+        }
         return -1;
     }
     return 0;
@@ -109,12 +112,35 @@ i64 file::pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags)
     {
         auto pd = entry->get_inode()->get_pseudo_data();
         if (pd)
-            return pd->write(ptr, size, flags);
+        {
+            i64 current_offset = offset;
+            return pd->write_at(current_offset, ptr, size, flags);
+        }
         return -1;
     }
     return 0;
 }
 
 pseudo_t *file::get_pseudo() { return entry->get_inode()->get_pseudo_data(); }
+
+i64 file::ioctl(u64 request, u64 argument)
+{
+    auto pd = get_pseudo();
+    if (pd == nullptr)
+    {
+        return -1;
+    }
+    return pd->ioctl(request, argument);
+}
+
+u64 file::ioctl_arg_size(u64 request) const
+{
+    auto pd = entry->get_inode()->get_pseudo_data();
+    if (pd == nullptr)
+    {
+        return 0;
+    }
+    return pd->ioctl_arg_size(request);
+}
 
 } // namespace fs::vfs

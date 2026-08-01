@@ -74,4 +74,32 @@ void framebuffer_backend::commit_placeholder(u32 row, u32 col, bool show)
     }
 }
 
+u64 framebuffer_backend::read_bytes(i64 &offset, byte *data, u64 max_size) const
+{
+    if (offset < 0 || static_cast<u64>(offset) >= frame_bytes() || max_size == 0)
+    {
+        return 0;
+    }
+
+    const u64 available = frame_bytes() - static_cast<u64>(offset);
+    const u64 count = freelibcxx::min(max_size, available);
+    memcpy(data, reinterpret_cast<const byte *>(fb_.ptr) + offset, count);
+    offset += count;
+    return count;
+}
+
+u64 framebuffer_backend::write_bytes(i64 &offset, const byte *data, u64 size) const
+{
+    if (offset < 0 || static_cast<u64>(offset) >= frame_bytes() || size == 0)
+    {
+        return 0;
+    }
+
+    const u64 available = frame_bytes() - static_cast<u64>(offset);
+    const u64 count = freelibcxx::min(size, available);
+    memcpy(reinterpret_cast<byte *>(fb_.ptr) + offset, data, count);
+    offset += count;
+    return count;
+}
+
 } // namespace fb

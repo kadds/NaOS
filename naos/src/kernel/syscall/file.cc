@@ -230,6 +230,29 @@ i64 fcntl(file_desc fd, u64 operator_type, u64 target, u64 attr, u64 *value, u64
     return ENOTYPE;
 }
 
+i64 ioctl(file_desc fd, u64 request, u64 argument)
+{
+    auto &res = task::current_process()->resource;
+    auto obj = res.get_kobject(fd);
+    if (!obj)
+    {
+        return ENOEXIST;
+    }
+
+    auto file = obj->get<fs::vfs::file>();
+    if (file == nullptr || file->get_pseudo() == nullptr)
+    {
+        return ENOTTY;
+    }
+
+    const u64 argument_size = file->ioctl_arg_size(request);
+    if (!is_user_space_range(reinterpret_cast<void *>(argument), argument_size))
+    {
+        return EBUFFER;
+    }
+    return file->ioctl(request, argument);
+}
+
 file_desc dup(file_desc fd)
 {
     auto &res = task::current_process()->resource;
@@ -394,6 +417,7 @@ SYSCALL(17, fallocate);
 
 SYSCALL(65, pipe)
 SYSCALL(66, fifo)
+SYSCALL(67, ioctl)
 
 END_SYSCALL
 } // namespace syscall

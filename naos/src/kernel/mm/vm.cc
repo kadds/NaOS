@@ -271,7 +271,12 @@ void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
     {
         item.flags |= flag;
         auto new_item = item;
-        if (item.flags & flags::file)
+        if (item.method == page_fault_method::physical)
+        {
+            auto *mt = reinterpret_cast<map_t *>(item.user_data);
+            new_item.user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, *mt, info);
+        }
+        else if (item.flags & flags::file)
         {
             map_t *mt = (map_t *)item.user_data;
             new_item.user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, mt->file, mt->file_offset,
@@ -416,6 +421,8 @@ bool info_t::expand(page_fault_method method, u64 alignment_page, u64 access_add
             return expand_brk(alignment_page, access_address, item);
         case page_fault_method::file:
             return expand_file(alignment_page, access_address, item);
+        case page_fault_method::physical:
+            return expand_physical(alignment_page, access_address, item);
         default:
             return false;
     }
@@ -496,6 +503,25 @@ bool info_t::expand_file(u64 alignment_page, u64 access_address, vm_t *item)
     return true;
 }
 
+bool info_t::expand_physical(u64 alignment_page, u64 access_address, vm_t *item)
+{
+    (void)access_address;
+    auto *mt = reinterpret_cast<map_t *>(item->user_data);
+    if (mt == nullptr || mt->physical_address == nullptr)
+    {
+        return false;
+    }
+
+    const auto offset = static_cast<ptrdiff_t>(alignment_page - item->start);
+    const phy_addr_t physical_address = mt->physical_address + offset;
+
+    const u64 page_flags = to_paging_flags(item->flags);
+    uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+    paging_.map_to(reinterpret_cast<void *>(alignment_page), 1, physical_address, page_flags,
+                   arch::paging::action_flags::override);
+    return true;
+}
+
 const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_offset, u64 file_length, u64 mmap_length,
                              flag_t page_ext_attr)
 {
@@ -508,12 +534,31 @@ const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_offset, u6
     auto cflags = flags::lock | flags::user_mode | flags::expand | page_ext_attr;
     page_fault_method method = page_fault_method::common;
     u64 user_data = (u64)this;
+    phy_addr_t physical_address = nullptr;
 
     if (file)
     {
         cflags |= flags::file;
         method = page_fault_method::file;
-        user_data = (u64)memory::KernelCommonAllocatorV->New<map_t>(file, file_offset, file_length, mmap_length, this);
+        auto *pseudo = file->get_pseudo();
+        if (pseudo != nullptr && pseudo->supports_physical_mmap())
+        {
+            if (!pseudo->get_physical_mmap(file_offset, mmap_length, physical_address))
+            {
+                return nullptr;
+            }
+            method = page_fault_method::physical;
+        }
+        if (method == page_fault_method::physical)
+        {
+            user_data = (u64)memory::KernelCommonAllocatorV->New<map_t>(physical_address, file_offset, file_length,
+                                                                         mmap_length, this);
+        }
+        else
+        {
+            user_data = (u64)memory::KernelCommonAllocatorV->New<map_t>(file, file_offset, file_length, mmap_length,
+                                                                         this);
+        }
     }
 
     const vm_t *vm = nullptr;

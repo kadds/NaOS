@@ -52,6 +52,7 @@ enum class page_fault_method
     common,
     common_with_bss,
     file,
+    physical,
 };
 
 class vm_allocator
@@ -146,6 +147,7 @@ class info_t
     bool expand_vm(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_bss(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_file(u64 alignment_page, u64 access_address, vm_t *item);
+    bool expand_physical(u64 alignment_page, u64 access_address, vm_t *item);
 
   private:
     memory::vm::vm_allocator vma_;
@@ -160,15 +162,31 @@ class info_t
 struct map_t
 {
     fs::vfs::file *file;
+    phy_addr_t physical_address;
     u64 file_offset;
     u64 file_length;
     u64 mmap_length;
     info_t *vm_info;
     map_t(fs::vfs::file *f, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
         : file(f)
+        , physical_address(nullptr)
         , file_offset(file_offset)
         , file_length(file_length)
         , mmap_length(mmap_length)
+        , vm_info(vmi){};
+    map_t(phy_addr_t physical_address, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
+        : file(nullptr)
+        , physical_address(physical_address)
+        , file_offset(file_offset)
+        , file_length(file_length)
+        , mmap_length(mmap_length)
+        , vm_info(vmi){};
+    map_t(const map_t &rhs, info_t *vmi)
+        : file(rhs.file)
+        , physical_address(rhs.physical_address)
+        , file_offset(rhs.file_offset)
+        , file_length(rhs.file_length)
+        , mmap_length(rhs.mmap_length)
         , vm_info(vmi){};
 };
 

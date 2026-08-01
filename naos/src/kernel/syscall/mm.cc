@@ -40,7 +40,8 @@ u64 sbrk(i64 offset)
 /// \param flags 1:read;2:write;4:exec;8:file;16:share
 u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
 {
-    if (length == 0 ||
+    if (length == 0 || (offset & (memory::page_size - 1)) != 0 ||
+        (map_address != 0 && (map_address & (memory::page_size - 1)) != 0) ||
         (map_address != 0 &&
          (!is_user_space_pointer(map_address) || length - 1 > memory::maximum_user_addr - map_address)))
     {
@@ -58,7 +59,21 @@ u64 map(u64 map_address, file_desc fd, u64 offset, u64 length, flag_t flags)
         if (!file)
             return ENOTYPE;
     }
-    auto vm = vm_info->map_file(map_address, file, offset, length, length, flags);
+    flag_t vm_flags = 0;
+    if (flags & 1)
+    {
+        vm_flags |= memory::vm::flags::readable;
+    }
+    if (flags & 2)
+    {
+        vm_flags |= memory::vm::flags::writeable;
+    }
+    if (flags & 4)
+    {
+        vm_flags |= memory::vm::flags::executeable;
+    }
+
+    auto vm = vm_info->map_file(map_address, file, offset, length, length, vm_flags);
 
     if (vm)
     {

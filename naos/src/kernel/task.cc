@@ -43,6 +43,7 @@
 #include "kernel/errno.hpp"
 
 #include "kernel/dev/tty/tty.hpp"
+#include "kernel/dev/framebuffer.hpp"
 
 using mm_info_t = memory::vm::info_t;
 namespace task
@@ -271,22 +272,23 @@ void create_devs()
     auto root = fs::vfs::global_root;
     fs::vfs::create("/dev", root, root, fs::create_flags::directory);
 
-    fs::vfs::create("/dev/tty", root, root, fs::create_flags::directory);
-    dev::tty::tty_pseudo_t *ps;
-
-    char fname[] = "/dev/tty/x";
-    int max = term::get_terms()->total();
-    for (int i = 0; i < max; i++)
-    {
-        fname[sizeof(fname) / sizeof(fname[0]) - 2] = '0' + i;
-        fs::vfs::create(fname, root, root, fs::create_flags::chr);
-        auto f = fs::vfs::open(fname, root, root, fs::mode::read | fs::mode::write, 0);
-
-        ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(i, memory::page_size * 2);
+    auto create_tty = [&](const char *name, int terminal_index) {
+        fs::vfs::create(name, root, root, fs::create_flags::chr);
+        auto f = fs::vfs::open(name, root, root, fs::mode::read | fs::mode::write, 0);
+        auto *ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(terminal_index, memory::page_size * 2);
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&ps), 8);
-    }
+    };
 
-    fs::vfs::link("/dev/console", "/dev/tty/0", root, root);
+    create_tty("/dev/console", term::terminal_manager::kernel_console_index);
+    create_tty("/dev/tty0", term::terminal_manager::user_terminal_index);
+
+    {
+        constexpr const char *fb_name = "/dev/fb0";
+        fs::vfs::create(fb_name, root, root, fs::create_flags::chr);
+        auto f = fs::vfs::open(fb_name, root, root, fs::mode::read | fs::mode::write, 0);
+        auto *fb = memory::KernelCommonAllocatorV->New<dev::framebuffer::framebuffer_pseudo_t>(term::get_terms());
+        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&fb), 8);
+    }
 }
 
 std::atomic_bool is_init = false, init_ok = false;
@@ -343,17 +345,17 @@ void init()
     if (cpu::current().is_bsp())
     {
         create_devs();
-        auto tty1read = fs::vfs::open("/dev/tty/1", root, root, fs::mode::read, 0);
-        auto tty1write = fs::vfs::open("/dev/tty/1", root, root, fs::mode::write, 0);
-        auto tty1err = fs::vfs::open("/dev/tty/1", root, root, fs::mode::write, 0);
+        auto tty0read = fs::vfs::open("/dev/tty0", root, root, fs::mode::read, 0);
+        auto tty0write = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
+        auto tty0err = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
         auto &res = current_process()->resource;
-        kassert(tty1read, "invalid tty");
+        kassert(tty0read, "invalid tty");
 
-        res.set_handle(console_in, tty1read);
-        res.set_handle(console_out, tty1write);
-        res.set_handle(console_err, tty1err);
+        res.set_handle(console_in, tty0read);
+        res.set_handle(console_out, tty0write);
+        res.set_handle(console_err, tty0err);
         is_init = true;
-        term::get_terms()->switch_term(1);
+        term::get_terms()->switch_term(term::terminal_manager::user_terminal_index);
 
         bin_handle::init();
         init_ok = true;
