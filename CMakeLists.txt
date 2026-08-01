@@ -55,6 +55,7 @@ set(UTIL_STRIP ${UTILDIR}/strip.sh)
 set(UTIL_LN ${UTILDIR}/ln.sh)
 set(UTIL_MKIMG ${UTILDIR}/pack.py)
 set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
+set(UTIL_BUSYBOX_CONFIG ${UTILDIR}/config_busybox.sh)
 
 set(UEFI_BASE_INCLUDES "/usr/include/efi/;/usr/include/efi/x86_64/")
 

@@ -21,6 +21,11 @@ struct execute_info
     void *stack_bottom;
     u64 err_code;
     u64 user_data;
+    void *program_header = nullptr;
+    u64 program_header_entry_size = 0;
+    u64 program_header_count = 0;
+    u64 base_address = 0;
+    u64 hwcap = 0;
 };
 class handle
 {

@@ -223,11 +223,23 @@ struct process_args_t
 {
     byte *data_ptr;
     u64 size;
+    u32 execfn_offset;
+    void *program_header;
+    u64 program_header_entry_size;
+    u64 program_header_count;
+    u64 base_address;
+    u64 hwcap;
     freelibcxx::vector<args_array_item_t> argv;
     freelibcxx::vector<args_array_item_t> env;
     process_args_t(freelibcxx::Allocator *allocator)
         : data_ptr(nullptr)
         , size(0)
+        , execfn_offset(0)
+        , program_header(nullptr)
+        , program_header_entry_size(0)
+        , program_header_count(0)
+        , base_address(0)
+        , hwcap(0)
         , argv(allocator)
         , env(allocator)
     {

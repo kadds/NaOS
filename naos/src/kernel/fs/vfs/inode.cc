@@ -1,6 +1,6 @@
 #include "kernel/fs/vfs/inode.hpp"
+#include "kernel/clock.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
-#include "kernel/timer.hpp"
 namespace fs::vfs
 {
 bool inode::has_permission(flag_t pf, user_id uid, group_id gid)
@@ -25,7 +25,7 @@ void inode::create(vfs::dentry *entry)
     link_count = 1;
     ref_count = 0;
     file_size = 0;
-    last_write_time = timer::get_high_resolution_time();
+    last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
     last_attr_change_time = last_write_time;
     birth_time = last_write_time;
@@ -38,7 +38,7 @@ void inode::mkdir(vfs::dentry *entry)
     link_count = 1;
     ref_count = 0;
     file_size = 0;
-    last_write_time = timer::get_high_resolution_time();
+    last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
     last_attr_change_time = last_write_time;
     birth_time = last_write_time;
@@ -73,7 +73,7 @@ bool inode::create_symbolink(dentry *entry, const char *target)
     link_count = 1;
     ref_count = 0;
     file_size = 0;
-    last_write_time = timer::get_high_resolution_time();
+    last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
     last_attr_change_time = last_write_time;
     birth_time = last_write_time;
@@ -87,8 +87,8 @@ bool inode::create_pseudo(dentry *entry, inode_type_t t, u64 size)
     entry->set_inode(this);
     link_count = 1;
     ref_count = 0;
-    file_size = 0;
-    last_write_time = timer::get_high_resolution_time();
+    file_size = size;
+    last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
     last_attr_change_time = last_write_time;
     birth_time = last_write_time;
@@ -100,9 +100,9 @@ bool inode::create_pseudo(dentry *entry, inode_type_t t, u64 size)
 
 u64 inode::hash() { return ((u64)this) >> 5; }
 
-void inode::update_last_read_time() { last_read_time = timer::get_high_resolution_time(); }
+void inode::update_last_read_time() { last_read_time = timeclock::get_current_clock(); }
 
-void inode::update_last_write_time() { last_write_time = timer::get_high_resolution_time(); }
+void inode::update_last_write_time() { last_write_time = timeclock::get_current_clock(); }
 
-void inode::update_last_attr_change_time() { last_attr_change_time = timer::get_high_resolution_time(); }
+void inode::update_last_attr_change_time() { last_attr_change_time = timeclock::get_current_clock(); }
 } // namespace fs::vfs

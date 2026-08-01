@@ -229,6 +229,15 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 
     program_64 *program_last = program + elf->phnum;
     u64 loaded_max_address = 0;
+    const u64 program_header_size = static_cast<u64>(elf->phentsize) * elf->phnum;
+
+    info->program_header = nullptr;
+    info->program_header_entry_size = elf->phentsize;
+    info->program_header_count = elf->phnum;
+    // NaOS currently loads the executable at its linked address and does not
+    // load a separate ELF interpreter, so both values are zero for now.
+    info->base_address = 0;
+    info->hwcap = 0;
 
     struct map_info
     {
@@ -253,6 +262,14 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     {
         if (program->type == program_type::load)
         {
+            const u64 program_file_end = program->offset + program->file_size;
+            const u64 program_header_end = elf->phoff + program_header_size;
+            if (info->program_header == nullptr && program_header_end >= elf->phoff &&
+                elf->phoff >= program->offset && program_header_end <= program_file_end)
+            {
+                info->program_header = reinterpret_cast<void *>(program->vaddr + (elf->phoff - program->offset));
+            }
+
             flag_t flag = flags::user_mode;
             if (program->flags & 1)
             {

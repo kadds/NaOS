@@ -7,3 +7,6 @@
 [submodule "naos/src/acpica"]
 	path = naos/src/acpica
 	url = https://github.com/kadds/acpica
+[submodule "naos/src/usr/busybox"]
+	path = naos/src/usr/busybox
+	url = https://git.busybox.net/busybox.git

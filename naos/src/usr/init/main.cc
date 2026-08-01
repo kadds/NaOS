@@ -12,13 +12,13 @@ extern "C" void main(int argc, char **argv)
 {
     while (1)
     {
-        printf("fork nsh...\n");
+        printf("fork sh...\n");
         int pid = fork();
         if (pid == 0)
         {
             // child process
             // run shell
-            int ret = execl("/bin/nanobox", "nsh", nullptr);
+            int ret = execl("/bin/sh", "sh", nullptr);
             printf("execute process %d return %d\n", pid, ret);
             sleep(5);
             exit(ret);

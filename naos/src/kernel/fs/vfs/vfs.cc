@@ -10,6 +10,7 @@
 #include "kernel/fs/vfs/nameidata.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
+#include "kernel/fs/stat.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
@@ -82,6 +83,93 @@ file_system *get_file_system(const char *name)
         }
     }
     return nullptr;
+}
+
+namespace
+{
+constexpr u64 stat_device = 1;
+constexpr u64 stat_block_size = 512;
+constexpr u64 stat_block_size_bytes = 4096;
+
+u32 stat_permission(u64 permission)
+{
+    u32 mode = 0;
+    if (permission & permission_flags::read)
+        mode |= naos_stat_mode::user_read;
+    if (permission & permission_flags::write)
+        mode |= naos_stat_mode::user_write;
+    if (permission & permission_flags::x)
+        mode |= naos_stat_mode::user_execute;
+
+    if (permission & permission_flags::group_read)
+        mode |= naos_stat_mode::group_read;
+    if (permission & permission_flags::group_write)
+        mode |= naos_stat_mode::group_write;
+    if (permission & permission_flags::group_x)
+        mode |= naos_stat_mode::group_execute;
+
+    if (permission & permission_flags::other_read)
+        mode |= naos_stat_mode::other_read;
+    if (permission & permission_flags::other_write)
+        mode |= naos_stat_mode::other_write;
+    if (permission & permission_flags::other_x)
+        mode |= naos_stat_mode::other_execute;
+    return mode;
+}
+
+u32 stat_type(inode_type_t type)
+{
+    switch (type)
+    {
+    case inode_type_t::file:
+        return naos_stat_mode::regular;
+    case inode_type_t::directory:
+        return naos_stat_mode::directory;
+    case inode_type_t::symbolink:
+        return naos_stat_mode::symlink;
+    case inode_type_t::socket:
+        return naos_stat_mode::socket;
+    case inode_type_t::block:
+        return naos_stat_mode::block;
+    case inode_type_t::chr:
+        return naos_stat_mode::character;
+    case inode_type_t::pipe:
+        return naos_stat_mode::fifo;
+    }
+    return 0;
+}
+
+naos_stat_timespec stat_time(timeclock::microsecond_t timestamp)
+{
+    return {
+        static_cast<i64>(timestamp / 1'000'000),
+        static_cast<i64>((timestamp % 1'000'000) * 1000),
+    };
+}
+} // namespace
+
+bool fill_stat(const dentry *entry, naos_stat *out)
+{
+    if (entry == nullptr || entry->get_inode() == nullptr || out == nullptr)
+        return false;
+
+    const auto *node = entry->get_inode();
+    const u64 size = node->get_size();
+    *out = {};
+    out->st_dev = stat_device;
+    out->st_ino = node->get_index();
+    out->st_nlink = node->get_link_count();
+    out->st_mode = stat_type(node->get_type()) | stat_permission(node->get_permission());
+    out->st_uid = static_cast<i32>(node->get_owner());
+    out->st_gid = static_cast<i32>(node->get_group());
+    out->st_rdev = 0;
+    out->st_size = static_cast<i64>(size);
+    out->st_blksize = stat_block_size_bytes;
+    out->st_blocks = static_cast<i64>(size / stat_block_size + (size % stat_block_size != 0));
+    out->st_atim = stat_time(node->get_last_read_time());
+    out->st_mtim = stat_time(node->get_last_write_time());
+    out->st_ctim = stat_time(node->get_last_attr_change_time());
+    return true;
 }
 
 i64 rest_dir_name(nameidata &idata)

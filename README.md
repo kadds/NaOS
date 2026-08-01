@@ -32,7 +32,7 @@ View [Features](./FEATURES.MD) .
 Clone this repo 
 ```bash
 git clone https://url/path/to/repo
-git submodule update --init
+git submodule update --init --recursive
 ``` 
 
 ### 2. Compile 
@@ -59,11 +59,11 @@ strip = '/usr/bin/strip'
 needs_exe_wrapper = true
 EOF
 
-meson setup build --cross-file cross_file.txt
+meson setup build --cross-file cross_file.txt -Ddefault_library=static
 cd build && ninja
 
 cd /path/to/repo
-# build kernel & nanobox binary
+# build kernel and userland binaries (BusyBox + legacy nanobox)
 mkdir build
 cd build
 # CMAKE_BUILD_TYPE: Debug\Release
@@ -96,11 +96,11 @@ strip = '/usr/bin/strip'
 [properties]
 needs_exe_wrapper = true
 EOF
-meson setup build --cross-file cross_file.txt
+meson setup build --cross-file cross_file.txt -Ddefault_library=static
 cd build && ninja 
 
 cd /path/to/repo
-# build kernel & nanobox binary
+# build kernel and userland binaries (BusyBox + legacy nanobox)
 mkdir build
 cd build
 
@@ -272,7 +272,8 @@ NaOS
 │       │   └── util # util functions: memcpy, strcpy, cxxlib, formatter, containers
 │       └── usr
 │           ├── init # the userland init program 
-│           └── bin # nanobox program, like busybox
+│           ├── busybox # BusyBox 1.37.0 source and independent build input
+│           └── bin # legacy nanobox program
 ├── run
 │   ├── fakeroot # the files in fake root path will be overwritten to the real root path
 │   ├── cfg # include emulator config file: bochsrc

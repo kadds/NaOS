@@ -2,6 +2,7 @@
 #include "common.hpp"
 #include "defines.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
+#include "kernel/fs/stat.hpp"
 #include "kernel/handle.hpp"
 namespace fs::vfs
 {
@@ -40,6 +41,8 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
 bool umount(const char *path, dentry *path_root, dentry *cur_dir);
 
 bool fcntl(handle_t<file>, u64 operator_type, u64 target, u64 attr, u64 *value, u64 size);
+
+bool fill_stat(const dentry *entry, naos_stat *out);
 
 u64 size(handle_t<file>);
 

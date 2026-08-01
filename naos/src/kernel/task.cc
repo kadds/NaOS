@@ -85,6 +85,62 @@ inline void *new_kernel_stack() { return memory::KernelBuddyAllocatorV->allocate
 
 inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallocate(p); }
 
+namespace
+{
+constexpr u64 aux_at_null = 0;
+constexpr u64 aux_at_phdr = 3;
+constexpr u64 aux_at_phent = 4;
+constexpr u64 aux_at_phnum = 5;
+constexpr u64 aux_at_base = 7;
+constexpr u64 aux_at_pagesz = 6;
+constexpr u64 aux_at_entry = 9;
+constexpr u64 aux_at_uid = 11;
+constexpr u64 aux_at_euid = 12;
+constexpr u64 aux_at_gid = 13;
+constexpr u64 aux_at_egid = 14;
+constexpr u64 aux_at_platform = 15;
+constexpr u64 aux_at_hwcap = 16;
+constexpr u64 aux_at_clktck = 17;
+constexpr u64 aux_at_secure = 23;
+constexpr u64 aux_at_random = 25;
+constexpr u64 aux_at_execfn = 31;
+
+constexpr char aux_platform[] = "x86_64";
+constexpr u64 aux_random_size = 16;
+constexpr u64 aux_random_offset = (sizeof(aux_platform) + sizeof(u64) - 1) & ~(sizeof(u64) - 1);
+constexpr u64 aux_data_size = aux_random_offset + aux_random_size;
+constexpr u64 aux_vector_entries = 17;
+
+void fill_auxiliary_vector(byte **&tail, const process_args_t &args, void *entry, const char *platform,
+                           const byte *random, const char *execfn)
+{
+    auto push = [&tail](u64 type, u64 value) {
+        *(reinterpret_cast<u64 *>(tail)) = type;
+        tail++;
+        *(reinterpret_cast<u64 *>(tail)) = value;
+        tail++;
+    };
+
+    push(aux_at_phdr, reinterpret_cast<u64>(args.program_header));
+    push(aux_at_phent, args.program_header_entry_size);
+    push(aux_at_phnum, args.program_header_count);
+    push(aux_at_base, args.base_address);
+    push(aux_at_pagesz, memory::page_size);
+    push(aux_at_entry, reinterpret_cast<u64>(entry));
+    push(aux_at_platform, reinterpret_cast<u64>(platform));
+    push(aux_at_hwcap, args.hwcap);
+    push(aux_at_random, reinterpret_cast<u64>(random));
+    push(aux_at_execfn, reinterpret_cast<u64>(execfn));
+    push(aux_at_uid, 0);
+    push(aux_at_euid, 0);
+    push(aux_at_gid, 0);
+    push(aux_at_egid, 0);
+    push(aux_at_clktck, 100);
+    push(aux_at_secure, 0);
+    push(aux_at_null, 0);
+}
+} // namespace
+
 inline process_t *new_kernel_process()
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
@@ -345,15 +401,34 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
 {
     thread_t *thd = current();
     byte *base = reinterpret_cast<byte *>(thd->user_stack_top);
-    memcpy(base - args->size, args->data_ptr, args->size);
-    byte *base_array = base - args->size;
+    u64 argument_size = args->size;
+    u64 stack_data_size = argument_size + aux_data_size;
+    byte *base_array = base - stack_data_size;
+    memcpy(base_array, args->data_ptr, argument_size);
+
+    byte *aux_data = base_array + argument_size;
+    memcpy(aux_data, aux_platform, sizeof(aux_platform));
+    byte *random = aux_data + aux_random_offset;
+    u64 random_value0 = _rdtsc() ^ reinterpret_cast<u64>(base) ^ current()->process->pid;
+    u64 random_value1 = _rdtsc() ^ random_value0 ^ (random_value0 << 17);
+    memcpy(random, &random_value0, sizeof(random_value0));
+    memcpy(random + sizeof(random_value0), &random_value1, sizeof(random_value1));
+    const char *execfn = reinterpret_cast<const char *>(base_array + args->execfn_offset);
 
     // bytes
     // env[0], env[1], nullptr
     // argv[0], argv[1], nullptr
+    // AT_NULL, 0
     // argv_pointer
     // argc
-    u64 base_bytes = sizeof(void *) * (args->argv.size() + args->env.size() + 1 + 1 + 1);
+    // Keep the initial stack in the usual ELF form. mlibc parses the
+    // auxiliary vector after envp, even for statically linked binaries.
+    u64 base_bytes = sizeof(void *) *
+                     (args->argv.size() + args->env.size() + 1 + 1 + 1 + aux_vector_entries * 2);
+    u64 size = stack_data_size;
+    // crt1 calls into mlibc immediately, so the stack pointer at the ELF
+    // entry point must be 16-byte aligned to satisfy the x86-64 call ABI.
+    base_bytes += (-((size + base_bytes) & 0xF)) & 0xF;
 
     byte **tail = reinterpret_cast<byte **>(base_array - base_bytes);
     // argc
@@ -380,7 +455,8 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
     *(reinterpret_cast<byte **>(tail)) = nullptr;
     tail++;
 
-    u64 size = args->size;
+    fill_auxiliary_vector(tail, *args, entry, reinterpret_cast<const char *>(aux_data), random, execfn);
+
     memory::DeleteArray(memory::KernelCommonAllocatorV, args->data_ptr, args->size);
     memory::Delete(memory::KernelCommonAllocatorV, args);
 
@@ -426,27 +502,32 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
 {
     process_args_t *ret = memory::New<process_args_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     constexpr int max_args_bytes = memory::page_size * 8 - 2;
+    int path_bytes = strlen(path) + 1;
 
-    // argv[0]
-    int path_bytes = strlen(path) + 1 + sizeof(u64);
-    int count_bytes = path_bytes;
+    int count_bytes = 0;
 
     freelibcxx::vector<str_len_t> argvs = do_count_string_array(argv, &count_bytes, max_args_bytes);
-    // int argv_bytes = count_bytes - path_bytes;
+    // execve() supplies argv[0] itself. Keep a useful fallback for callers
+    // that pass an empty argument vector, but do not prepend path in the
+    // normal case: execl(path, arg0, ...) must not gain an extra argument.
+    if (argvs.empty())
+    {
+        count_bytes += path_bytes;
+    }
 
     freelibcxx::vector<str_len_t> envs = do_count_string_array(env, &count_bytes, max_args_bytes);
-    // int env_bytes = count_bytes - argv_bytes;
-
-    // argv[0] argv[1]
-    // env[0]
+    count_bytes += path_bytes;
 
     byte *ptr = memory::NewArray<byte>(memory::KernelCommonAllocatorV, count_bytes);
     byte *cur = ptr;
 
     // argv
-    memcpy(cur, path, path_bytes);
-    ret->argv.push_back(args_array_item_t(path_bytes, cur - ptr));
-    cur += path_bytes;
+    if (argvs.empty())
+    {
+        memcpy(cur, path, path_bytes);
+        ret->argv.push_back(args_array_item_t(path_bytes, cur - ptr));
+        cur += path_bytes;
+    }
 
     for (auto item : argvs)
     {
@@ -462,6 +543,10 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
         memcpy(cur, item.ptr, item.len);
         cur += item.len;
     }
+
+    ret->execfn_offset = cur - ptr;
+    memcpy(cur, path, path_bytes);
+    cur += path_bytes;
 
     ret->data_ptr = ptr;
     ret->size = count_bytes;
@@ -559,6 +644,11 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     thd->state = thread_state::ready;
 
     auto process_args = copy_args(path, args, envp);
+    process_args->program_header = exec_info.program_header;
+    process_args->program_header_entry_size = exec_info.program_header_entry_size;
+    process_args->program_header_count = exec_info.program_header_count;
+    process_args->base_address = exec_info.base_address;
+    process_args->hwcap = exec_info.hwcap;
 
     arch::task::create_thread(thd, (void *)befor_run_process, reinterpret_cast<u64>(start_func),
                               reinterpret_cast<u64>(process_args), 0,
@@ -701,6 +791,11 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
         return ENOEXEC;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
+    process_args->program_header = exec_info.program_header;
+    process_args->program_header_entry_size = exec_info.program_header_entry_size;
+    process_args->program_header_count = exec_info.program_header_count;
+    process_args->base_address = exec_info.base_address;
+    process_args->hwcap = exec_info.hwcap;
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
 

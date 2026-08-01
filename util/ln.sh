@@ -1,10 +1,12 @@
 #!/bin/bash
+set -e
+
 r=${1}/bin
-ln -sf /bin/nanobox ${r}/cat
-ln -sf /bin/nanobox ${r}/mkdir
-ln -sf /bin/nanobox ${r}/ls
-ln -sf /bin/nanobox ${r}/nsh
-ln -sf /bin/nanobox ${r}/rmdir
-ln -sf /bin/nanobox ${r}/touch
-ln -sf /bin/nanobox ${r}/rm
-ln -sf /bin/nanobox ${r}/env
+mkdir -p "${r}"
+
+for applet in sh ls cat echo pwd true false mkdir rmdir touch rm env; do
+    ln -sf /bin/busybox "${r}/${applet}"
+done
+
+# Keep the original NaOS shell entry point available for existing scripts.
+ln -sf /bin/nanobox "${r}/nsh"

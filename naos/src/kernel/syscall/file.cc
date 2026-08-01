@@ -1,6 +1,8 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/errno.hpp"
+#include "kernel/fs/stat.hpp"
+#include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
@@ -269,7 +271,103 @@ int istty(int fd)
     return ENOTTY;
 }
 
-int stat(int fd, const char *path, int flags) { return 0; }
+namespace
+{
+constexpr int stat_target_path = 1;
+constexpr int stat_target_fd = 2;
+constexpr int stat_target_fd_path = 3;
+constexpr file_desc at_fdcwd = -100;
+constexpr int at_symlink_nofollow = 0x100;
+constexpr int at_empty_path = 0x1000;
+
+fs::vfs::dentry *file_entry(file_desc fd)
+{
+    auto obj = task::current_process()->resource.get_kobject(fd);
+    if (!obj || !obj->is<fs::vfs::file>())
+        return nullptr;
+
+    auto file = obj->get<fs::vfs::file>();
+    return file != nullptr ? file->get_entry() : nullptr;
+}
+} // namespace
+
+int stat(int target, file_desc fd, const char *path, int flags, naos_stat *out)
+{
+    if (!is_user_space_range(out, sizeof(*out)))
+        return EBUFFER;
+
+    auto &res = task::current_process()->resource;
+    fs::vfs::dentry *entry = nullptr;
+
+    if (target == stat_target_fd)
+    {
+        entry = file_entry(fd);
+        if (entry == nullptr)
+            return ENOEXIST;
+    }
+    else if (target == stat_target_path || target == stat_target_fd_path)
+    {
+        fs::vfs::dentry *current = res.current();
+        fs::vfs::dentry *dirfd_entry = nullptr;
+        if (target == stat_target_fd_path && fd != at_fdcwd)
+        {
+            dirfd_entry = file_entry(fd);
+            if (dirfd_entry == nullptr)
+                return ENOEXIST;
+        }
+
+        if (path == nullptr)
+        {
+            if ((flags & at_empty_path) && target == stat_target_fd_path)
+            {
+                entry = fd == at_fdcwd ? res.current() : dirfd_entry;
+            }
+            else
+            {
+                return EPARAM;
+            }
+        }
+        else if (!is_user_space_pointer(path))
+        {
+            return EPARAM;
+        }
+        else if (*path == '\0')
+        {
+            if (!(flags & at_empty_path))
+                return ENOEXIST;
+            if (target != stat_target_fd_path)
+                return ENOEXIST;
+            entry = fd == at_fdcwd ? res.current() : dirfd_entry;
+        }
+        else
+        {
+            if (dirfd_entry != nullptr)
+            {
+                if (dirfd_entry->get_inode() == nullptr ||
+                    dirfd_entry->get_inode()->get_type() != fs::inode_type_t::directory)
+                    return ENOTYPE;
+                current = dirfd_entry;
+            }
+            flag_t walk_flags = 0;
+            if (flags & at_symlink_nofollow)
+                walk_flags |= fs::path_walk_flags::not_resolve_symbolic_link;
+            entry = fs::vfs::path_walk(path, res.root(), current, walk_flags);
+        }
+
+        if (entry == nullptr)
+            return ENOEXIST;
+    }
+    else
+    {
+        return EPARAM;
+    }
+
+    naos_stat value{};
+    if (!fs::vfs::fill_stat(entry, &value))
+        return ENOEXIST;
+    *out = value;
+    return OK;
+}
 
 int fsync(int fd) { return 0; }
 int ftruncate(int fd) { return 0; }

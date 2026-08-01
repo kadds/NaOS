@@ -482,6 +482,10 @@ bool info_t::expand_file(u64 alignment_page, u64 access_address, vm_t *item)
         buffer = (byte *)pa2va(phy);
     }
 
+    // A file-backed mapping may extend past EOF into the ELF BSS. Clear the
+    // whole fresh page before reading so the tail cannot expose stale page
+    // contents if the filesystem reports a short read at the boundary.
+    memset(buffer, 0, memory::page_size);
     u64 length_can_read = length_read > mt->file_length ? 0 : mt->file_length - length_read;
     auto ksize = mt->file->pread(mt->file_offset + length_read, buffer,
                                  length_can_read > memory::page_size ? memory::page_size : length_can_read, 0);
@@ -489,7 +493,6 @@ bool info_t::expand_file(u64 alignment_page, u64 access_address, vm_t *item)
     {
         ksize = 0;
     }
-    memset(buffer + ksize, 0, memory::page_size - ksize);
     return true;
 }
 

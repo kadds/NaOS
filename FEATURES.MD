@@ -105,7 +105,7 @@ Features / TODO
         - [ ] Window manager
     - [x] Kernel logger
     - [ ] Basic commands
-      - [ ] nanobox
+      - [x] BusyBox 1.37.0 (static sh/ls/cat and basic applet links)
+      - [ ] nanobox (legacy command binary, retained for compatibility)
       - [ ] nano shell
-
 

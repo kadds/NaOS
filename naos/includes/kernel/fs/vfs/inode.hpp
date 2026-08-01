@@ -27,7 +27,23 @@ class inode
     pseudo_t *pseudo_data;
 
   public:
-    inode() = default;
+    inode()
+        : info(0)
+        , file_size(0)
+        , index(0)
+        , link_count(0)
+        , ref_count(0)
+        , su_block(nullptr)
+        , last_read_time(0)
+        , last_write_time(0)
+        , last_attr_change_time(0)
+        , birth_time(0)
+        , owner(0)
+        , group(0)
+        , permission(permission_flags::all_xwr)
+        , pseudo_data(nullptr)
+    {
+    }
     virtual ~inode() = default;
     // create file in disk
     virtual void create(dentry *entry);
@@ -58,10 +74,10 @@ class inode
     void set_index(u64 index) { this->index = index; }
     u64 get_index() const { return index; }
 
-    timeclock::microsecond_t get_last_read_time() { return last_read_time; }
-    timeclock::microsecond_t get_last_write_time() { return last_write_time; }
-    timeclock::microsecond_t get_last_attr_change_time() { return last_attr_change_time; }
-    timeclock::microsecond_t get_birth_time() { return birth_time; }
+    timeclock::microsecond_t get_last_read_time() const { return last_read_time; }
+    timeclock::microsecond_t get_last_write_time() const { return last_write_time; }
+    timeclock::microsecond_t get_last_attr_change_time() const { return last_attr_change_time; }
+    timeclock::microsecond_t get_birth_time() const { return birth_time; }
 
     void set_last_read_time(timeclock::microsecond_t t) { last_read_time = t; }
     void set_last_write_time(timeclock::microsecond_t t) { last_write_time = t; }
@@ -72,8 +88,8 @@ class inode
     void update_last_write_time();
     void update_last_attr_change_time();
 
-    user_id get_owner() { return owner; }
-    group_id get_group() { return group; }
+    user_id get_owner() const { return owner; }
+    group_id get_group() const { return group; }
 
     void set_owner(user_id uid) { this->owner = uid; }
     void set_group(group_id gid) { this->group = gid; };
@@ -85,12 +101,12 @@ class inode
 
     void set_permission(u64 p) { permission = p; }
 
-    u64 get_link_count() { return link_count; }
-    u64 get_ref_count() { return ref_count; }
+    u64 get_link_count() const { return link_count; }
+    u64 get_ref_count() const { return ref_count; }
 
-    pseudo_t *get_pseudo_data() { return pseudo_data; }
+    pseudo_t *get_pseudo_data() const { return pseudo_data; }
     void set_pseudo_data(pseudo_t *f) { pseudo_data = f; }
 
-    u64 get_permission() { return permission; }
+    u64 get_permission() const { return permission; }
 };
 } // namespace fs::vfs
