@@ -1,38 +1,82 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "common.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
-#include "kernel/errno.hpp"
 
 namespace fs::vfs
 {
 
 file::~file()
 {
-    auto type = entry->get_inode()->get_type();
-    if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory && type != fs::inode_type_t::symbolink)
+    if (entry == nullptr)
+        return;
+
+    auto *opened_entry = entry;
+    auto *node = opened_entry->get_inode();
+    if (node == nullptr)
     {
-        // auto pd = entry->get_inode()->get_pseudo_data();
-        // if (pd)
-        //     pd->close();
+        entry = nullptr;
+        return;
     }
-    auto entry = this->entry;
-    // auto su = entry->get_inode()->get_super_block();
-    if (mode & mode::unlink_on_close)
+
+    const bool unlink_on_close = mode & mode::unlink_on_close;
+    bool last_open_reference = false;
+    if (open_reference)
     {
-        unlink(entry);
+        last_open_reference = node->release_open_reference();
+        open_reference = false;
     }
-    return;
+
+    // A pseudo object belongs to the inode, so close it only after the last open file
+    // description goes away. This also wakes any readers or writers blocked on it.
+    if (last_open_reference)
+    {
+        auto *pd = node->get_pseudo_data();
+        if (pd != nullptr)
+            pd->close();
+    }
+
+    // An unlinked inode is reaped by the last file description that references it.
+    // Calling unlink again is intentional: vfs::unlink treats link_count == 0 as a
+    // reap request and does not decrement it a second time.
+    if (unlink_on_close || node->get_link_count() == 0)
+        unlink(opened_entry);
+
+    entry = nullptr;
 }
 
 int file::open(dentry *entry, flag_t mode)
 {
+    if (entry == nullptr || entry->get_inode() == nullptr || open_reference)
+        return -1;
+
     this->entry = entry;
     this->mode = mode;
     this->offset = 0;
+
+    auto *node = entry->get_inode();
+    const bool first_open = node->acquire_open_reference();
+    if (first_open)
+    {
+        auto *pd = node->get_pseudo_data();
+        if (pd != nullptr)
+        {
+            const int result = pd->open(mode);
+            if (result != 0)
+            {
+                node->release_open_reference();
+                this->entry = nullptr;
+                this->mode = 0;
+                return result;
+            }
+        }
+    }
+
+    open_reference = true;
     return 0;
 }
 
@@ -121,26 +165,21 @@ i64 file::pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags)
     return 0;
 }
 
-pseudo_t *file::get_pseudo() { return entry->get_inode()->get_pseudo_data(); }
+pseudo_t *file::get_pseudo()
+{
+    if (entry == nullptr || entry->get_inode() == nullptr)
+        return nullptr;
+    return entry->get_inode()->get_pseudo_data();
+}
 
-i64 file::ioctl(u64 request, u64 argument)
+i64 file::ioctl(ioctl_context &context)
 {
     auto pd = get_pseudo();
     if (pd == nullptr)
     {
         return -1;
     }
-    return pd->ioctl(request, argument);
-}
-
-u64 file::ioctl_arg_size(u64 request) const
-{
-    auto pd = entry->get_inode()->get_pseudo_data();
-    if (pd == nullptr)
-    {
-        return 0;
-    }
-    return pd->ioctl_arg_size(request);
+    return pd->ioctl(context);
 }
 
 } // namespace fs::vfs

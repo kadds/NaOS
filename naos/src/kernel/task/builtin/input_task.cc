@@ -43,6 +43,34 @@ void complation(io::request_t *req, bool intr, u64 user_data)
     q->do_wake_up();
 }
 
+void handle_tty_control_event(dev::tty::control_event event, group_id foreground_group, u64 user_data)
+{
+    (void)user_data;
+    signal_num_t signal_number = signal::sigint;
+    switch (event)
+    {
+        case dev::tty::control_event::interrupt:
+            signal_number = signal::sigint;
+            break;
+        case dev::tty::control_event::quit:
+            signal_number = signal::sigquit;
+            break;
+        case dev::tty::control_event::suspend:
+            signal_number = signal::sigstop;
+            break;
+    }
+
+    if (foreground_group != 0)
+    {
+        task::send_signal_to_process_group(foreground_group, signal_number);
+        return;
+    }
+
+    auto *init_process = task::get_init_process();
+    if (init_process != nullptr)
+        init_process->signal_pack.send(init_process, signal_number, 0, 0, 0);
+}
+
 enum class switchable_key
 {
     caps = 0,
@@ -215,6 +243,12 @@ void listen_keyboard()
     {
         auto input_file = fs::vfs::open(tty_name, fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
         tty_file_list.push_back(input_file);
+        if (input_file)
+        {
+            auto *tty = reinterpret_cast<dev::tty::tty_pseudo_t *>(input_file->get_pseudo());
+            if (tty != nullptr)
+                tty->core().set_control_event_handler(handle_tty_control_event);
+        }
     }
 
     key_down_state.reset_all();

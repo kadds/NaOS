@@ -31,6 +31,9 @@ signal_func_t default_signal_handler[max_signal_count] = {
 
 void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status)
 {
+    if (to == nullptr || num == 0 || num >= max_signal_count)
+        return;
+
     auto t = task::current();
     if (unlikely(events.size() > 1024))
         return;

@@ -115,64 +115,73 @@ i64 framebuffer_pseudo_t::fill_fix_screeninfo(fb::ioctl::fix_screeninfo *info) c
     return OK;
 }
 
-i64 framebuffer_pseudo_t::ioctl(u64 request, u64 argument)
+i64 framebuffer_pseudo_t::ioctl(fs::vfs::ioctl_context &context)
 {
-    switch (request)
+    switch (context.request())
     {
-        case fb::ioctl::get_vscreeninfo:
-            return fill_var_screeninfo(reinterpret_cast<fb::ioctl::var_screeninfo *>(argument));
-        case fb::ioctl::get_fscreeninfo:
-            return fill_fix_screeninfo(reinterpret_cast<fb::ioctl::fix_screeninfo *>(argument));
-        case fb::ioctl::get_con2fbmap:
-        {
-            auto *map = reinterpret_cast<fb::ioctl::con2fbmap *>(argument);
-            if (map == nullptr || manager_ == nullptr || map->console >= static_cast<u32>(manager_->total()))
+        case fb::ioctl::get_vscreeninfo: {
+            fb::ioctl::var_screeninfo info;
+            const auto result = fill_var_screeninfo(&info);
+            return result == OK ? context.write_user(info) : result;
+        }
+        case fb::ioctl::get_fscreeninfo: {
+            fb::ioctl::fix_screeninfo info;
+            const auto result = fill_fix_screeninfo(&info);
+            return result == OK ? context.write_user(info) : result;
+        }
+        case fb::ioctl::get_con2fbmap: {
+            fb::ioctl::con2fbmap map;
+            const auto result = context.read_user(map);
+            if (result != OK)
+                return result;
+            if (manager_ == nullptr || map.console >= static_cast<u32>(manager_->total()))
             {
                 return EPARAM;
             }
-            map->framebuffer = 0;
-            return OK;
+            map.framebuffer = 0;
+            return context.write_user(map);
         }
-        case fb::ioctl::put_con2fbmap:
-        {
-            auto *map = reinterpret_cast<fb::ioctl::con2fbmap *>(argument);
-            if (map == nullptr || manager_ == nullptr || map->console >= static_cast<u32>(manager_->total()) ||
-                map->framebuffer != 0)
+        case fb::ioctl::put_con2fbmap: {
+            fb::ioctl::con2fbmap map;
+            const auto result = context.read_user(map);
+            if (result != OK)
+                return result;
+            if (manager_ == nullptr || map.console >= static_cast<u32>(manager_->total()) || map.framebuffer != 0)
             {
                 return EPARAM;
             }
             return OK;
         }
-        case fb::ioctl::get_active_terminal:
-        {
-            auto *active = reinterpret_cast<u32 *>(argument);
-            if (active == nullptr || manager_ == nullptr)
+        case fb::ioctl::get_active_terminal: {
+            if (manager_ == nullptr)
             {
                 return EFAILED;
             }
-            *active = manager_->term_index();
-            return OK;
+            const u32 active = manager_->term_index();
+            return context.write_user(active);
         }
         case fb::ioctl::set_active_terminal:
-            if (manager_ == nullptr || argument >= static_cast<u64>(manager_->total()))
+            if (manager_ == nullptr || context.value() >= static_cast<u64>(manager_->total()))
             {
                 return EPARAM;
             }
-            return manager_->switch_term(static_cast<int>(argument)) ? OK : EPARAM;
+            return manager_->switch_term(static_cast<int>(context.value())) ? OK : EPARAM;
         case fb::ioctl::blank:
             return OK;
-        case fb::ioctl::put_vscreeninfo:
-        {
-            auto *info = reinterpret_cast<fb::ioctl::var_screeninfo *>(argument);
-            if (info == nullptr || manager_ == nullptr || manager_->backend().fb().bbp != 32)
+        case fb::ioctl::put_vscreeninfo: {
+            fb::ioctl::var_screeninfo info;
+            const auto result = context.read_user(info);
+            if (result != OK)
+                return result;
+            if (manager_ == nullptr || manager_->backend().fb().bbp != 32)
             {
                 return EFAILED;
             }
 
             const auto &framebuffer = manager_->backend().fb();
-            if (info->xres != framebuffer.width || info->yres != framebuffer.height ||
-                info->xres_virtual < framebuffer.width || info->yres_virtual < framebuffer.height ||
-                info->bits_per_pixel != framebuffer.bbp)
+            if (info.xres != framebuffer.width || info.yres != framebuffer.height ||
+                info.xres_virtual < framebuffer.width || info.yres_virtual < framebuffer.height ||
+                info.bits_per_pixel != framebuffer.bbp)
             {
                 return EPARAM;
             }
@@ -183,22 +192,4 @@ i64 framebuffer_pseudo_t::ioctl(u64 request, u64 argument)
     }
 }
 
-u64 framebuffer_pseudo_t::ioctl_arg_size(u64 request) const
-{
-    switch (request)
-    {
-        case fb::ioctl::get_vscreeninfo:
-        case fb::ioctl::put_vscreeninfo:
-            return sizeof(fb::ioctl::var_screeninfo);
-        case fb::ioctl::get_fscreeninfo:
-            return sizeof(fb::ioctl::fix_screeninfo);
-        case fb::ioctl::get_con2fbmap:
-        case fb::ioctl::put_con2fbmap:
-            return sizeof(fb::ioctl::con2fbmap);
-        case fb::ioctl::get_active_terminal:
-            return sizeof(u32);
-        default:
-            return 0;
-    }
-}
 } // namespace dev::framebuffer

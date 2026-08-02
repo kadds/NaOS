@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "defines.hpp"
+#include <atomic>
 namespace fs::vfs
 {
 class pseudo_t;
@@ -14,8 +15,8 @@ class inode
     u64 file_size;
     u64 index;
     /// hard link count
-    u64 link_count;
-    u64 ref_count;
+    std::atomic_uint64_t link_count;
+    std::atomic_uint64_t ref_count;
     super_block *su_block;
     timeclock::microsecond_t last_read_time;
     timeclock::microsecond_t last_write_time;
@@ -103,6 +104,11 @@ class inode
 
     u64 get_link_count() const { return link_count; }
     u64 get_ref_count() const { return ref_count; }
+
+    /// Acquire one open file description reference. Returns true for the first reference.
+    bool acquire_open_reference();
+    /// Release one open file description reference. Returns true for the last reference.
+    bool release_open_reference();
 
     pseudo_t *get_pseudo_data() const { return pseudo_data; }
     void set_pseudo_data(pseudo_t *f) { pseudo_data = f; }

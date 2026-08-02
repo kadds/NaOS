@@ -22,8 +22,8 @@ bool inode::has_permission(flag_t pf, user_id uid, group_id gid)
 void inode::create(vfs::dentry *entry)
 {
     entry->set_inode(this);
-    link_count = 1;
-    ref_count = 0;
+    link_count.store(1);
+    ref_count.store(0);
     file_size = 0;
     last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
@@ -35,8 +35,8 @@ void inode::create(vfs::dentry *entry)
 void inode::mkdir(vfs::dentry *entry)
 {
     entry->set_inode(this);
-    link_count = 1;
-    ref_count = 0;
+    link_count.store(1);
+    ref_count.store(0);
     file_size = 0;
     last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
@@ -47,21 +47,30 @@ void inode::mkdir(vfs::dentry *entry)
 
 void inode::rename(vfs::dentry *new_entry) {}
 
-void inode::rmdir() { link_count--; }
+void inode::rmdir()
+{
+    auto count = link_count.load();
+    while (count != 0 && !link_count.compare_exchange_weak(count, count - 1))
+    {
+    }
+}
 
 void inode::link(dentry *old_entry, dentry *new_entry)
 {
     if (old_entry == new_entry)
         return;
     new_entry->set_inode(this);
-    link_count++;
+    link_count.fetch_add(1);
 }
 
 bool inode::unlink(dentry *entry)
 {
     if (likely(entry->get_inode() == this))
     {
-        link_count--;
+        auto count = link_count.load();
+        while (count != 0 && !link_count.compare_exchange_weak(count, count - 1))
+        {
+        }
         return true;
     }
     return false;
@@ -70,8 +79,8 @@ bool inode::unlink(dentry *entry)
 bool inode::create_symbolink(dentry *entry, const char *target)
 {
     entry->set_inode(this);
-    link_count = 1;
-    ref_count = 0;
+    link_count.store(1);
+    ref_count.store(0);
     file_size = 0;
     last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
@@ -85,8 +94,8 @@ bool inode::create_symbolink(dentry *entry, const char *target)
 bool inode::create_pseudo(dentry *entry, inode_type_t t, u64 size)
 {
     entry->set_inode(this);
-    link_count = 1;
-    ref_count = 0;
+    link_count.store(1);
+    ref_count.store(0);
     file_size = size;
     last_write_time = timeclock::get_current_clock();
     last_read_time = last_write_time;
@@ -96,6 +105,17 @@ bool inode::create_pseudo(dentry *entry, inode_type_t t, u64 size)
     pseudo_data = nullptr;
 
     return true;
+}
+
+bool inode::acquire_open_reference() { return ref_count.fetch_add(1) == 0; }
+
+bool inode::release_open_reference()
+{
+    auto count = ref_count.load();
+    while (count != 0 && !ref_count.compare_exchange_weak(count, count - 1))
+    {
+    }
+    return count == 1;
 }
 
 u64 inode::hash() { return ((u64)this) >> 5; }

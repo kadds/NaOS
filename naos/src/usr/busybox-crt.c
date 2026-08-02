@@ -4,6 +4,23 @@
 
 void *__dso_handle;
 
+#define TCGETS 0x5401
+#define TCSETS 0x5402
+#define TCSETSW 0x5403
+#define TCSETSF 0x5404
+#define TCSBRK 0x5409
+#define TCXONC 0x540A
+#define TCFLSH 0x540B
+#define TIOCSCTTY 0x540E
+#define TIOCGPGRP 0x540F
+#define TIOCSPGRP 0x5410
+#define TIOCGWINSZ 0x5413
+#define TIOCSWINSZ 0x5414
+#define TIOCGSID 0x5429
+#define TCSBRKP 0x5425
+#define TIOCGPTN 0x80045430
+#define TIOCSPTLCK 0x40045431
+
 extern void *memcpy(void *destination, const void *source, size_t size);
 extern int *__errno_location(void);
 
@@ -23,6 +40,24 @@ static enum ioctl_argument_kind get_ioctl_argument_kind(unsigned long request)
 {
     switch (request)
     {
+        case TCGETS:
+        case TCSETS:
+        case TCSETSW:
+        case TCSETSF:
+        case TIOCGPGRP:
+        case TIOCSPGRP:
+        case TIOCGWINSZ:
+        case TIOCSWINSZ:
+        case TIOCGSID:
+        case TIOCGPTN:
+        case TIOCSPTLCK:
+            return ioctl_argument_pointer;
+        case TCSBRK:
+        case TCXONC:
+        case TCFLSH:
+        case TCSBRKP:
+        case TIOCSCTTY:
+            return ioctl_argument_integer;
         case 0x4600: // FBIOGET_VSCREENINFO
         case 0x4601: // FBIOPUT_VSCREENINFO
         case 0x4602: // FBIOGET_FSCREENINFO

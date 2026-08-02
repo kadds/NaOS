@@ -28,10 +28,10 @@ typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
 
 using thread_id = u64;
 using process_id = u64;
+using session_id = u64;
 using group_id = u64;
 using file_desc = i32;
 using user_id = u64;
-using group_id = u64;
 using dev_t = u64;
 
 constexpr file_desc console_in = 0;
@@ -55,4 +55,4 @@ typedef u64 microsecond_t;
 typedef u64 millisecond_t;
 typedef u64 nanosecond_t;
 
-} // namespace time
+} // namespace timeclock

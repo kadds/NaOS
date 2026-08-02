@@ -43,6 +43,7 @@ enum signal : signal_num_t
     signone3,
     signone4,
     signone5,
+    sigwinch = 28,
     sigio = 29,
     sigpower = 30,
     siglimit = 31,
@@ -190,5 +191,9 @@ struct signal_pack_t
 
     void wait(signal_info_t *info);
 };
+
+/// Queue a signal for every live process in a process group. The return value
+/// is the number of matching processes, or a negative kernel errno.
+i64 send_signal_to_process_group(group_id process_group, signal_num_t num, i64 error = 0, i64 code = 0, i64 status = 0);
 
 } // namespace task

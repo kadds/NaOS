@@ -1,5 +1,7 @@
 #pragma once
 
+// Kernel syscall results use Linux/POSIX errno numbers with a negative sign.
+// User-space syscall wrappers convert negative results to errno.
 #ifdef OK
 #undef OK
 #endif
@@ -10,77 +12,134 @@
 #endif
 #define EOF -1
 
-#ifdef ETIMEOUT
-#undef ETIMEOUT
+#ifdef EPERM
+#undef EPERM
 #endif
-#define ETIMEOUT -2
+#define EPERM -1
+
+#ifdef ENOENT
+#undef ENOENT
+#endif
+#define ENOENT -2
 
 #ifdef EINTR
 #undef EINTR
 #endif
-#define EINTR -3
+#define EINTR -4
 
-#ifdef EPARAM
-#undef EPARAM
+#ifdef EIO
+#undef EIO
 #endif
-#define EPARAM -4
+#define EIO -5
 
-#ifdef EBUFFER
-#undef EBUFFER
+#ifdef ENXIO
+#undef ENXIO
 #endif
-#define EBUFFER -5
-
-#ifdef ESIZE
-#undef ESIZE
-#endif
-#define ESIZE -6
-
-#ifdef EPERMISSION
-#undef EPERMISION
-#endif
-#define EPERMISSION -7
-
-#ifdef ERESOURCE_NOT_NULL
-#undef ERESOURCE_NOT_NULL
-#endif
-#define ERESOURCE_NOT_NULL -8
-
-#ifdef ENOEXIST
-#undef ENOEXIST
-#endif
-#define ENOEXIST -9
-
-#ifdef EINNER
-#undef EINNER
-#endif
-#define EINNER -10
-
-#ifdef EFAILED
-#undef EFAILED
-#endif
-#define EFAILED -11
-
-#ifdef EOUNTI
-#undef ECOUNI
-#endif
-#define ECONTI -12ul
+#define ENXIO -6
 
 #ifdef ENOEXEC
 #undef ENOEXEC
 #endif
-#define ENOEXEC -13
+#define ENOEXEC -8
 
-#ifdef ENOTTYPE
-#undef ENOTYPE
+#ifdef EAGAIN
+#undef EAGAIN
 #endif
-#define ENOTYPE -14
-
-#ifdef ENOTTY
-#undef ENOTTY
-#endif
-#define ENOTTY 25
+#define EAGAIN -11
 
 #ifdef EACCES
 #undef EACCES
 #endif
-#define EACCES -18
+#define EACCES -13
+
+#ifdef EFAULT
+#undef EFAULT
+#endif
+#define EFAULT -14
+
+#ifdef EBUSY
+#undef EBUSY
+#endif
+#define EBUSY -16
+
+#ifdef EINVAL
+#undef EINVAL
+#endif
+#define EINVAL -22
+
+#ifdef ENOTTY
+#undef ENOTTY
+#endif
+#define ENOTTY -25
+
+#ifdef EOVERFLOW
+#undef EOVERFLOW
+#endif
+#define EOVERFLOW -75
+
+#ifdef ENOTSUP
+#undef ENOTSUP
+#endif
+#define ENOTSUP -95
+
+#ifdef ETIMEDOUT
+#undef ETIMEDOUT
+#endif
+#define ETIMEDOUT -110
+
+// Compatibility names used by existing kernel code. They intentionally alias
+// standard errno values so there is one canonical error-number vocabulary.
+#ifdef ETIMEOUT
+#undef ETIMEOUT
+#endif
+#define ETIMEOUT ETIMEDOUT
+
+#ifdef EPARAM
+#undef EPARAM
+#endif
+#define EPARAM EINVAL
+
+#ifdef EBUFFER
+#undef EBUFFER
+#endif
+#define EBUFFER EFAULT
+
+#ifdef ESIZE
+#undef ESIZE
+#endif
+#define ESIZE EOVERFLOW
+
+#ifdef EPERMISSION
+#undef EPERMISSION
+#endif
+#define EPERMISSION EACCES
+
+#ifdef ERESOURCE_NOT_NULL
+#undef ERESOURCE_NOT_NULL
+#endif
+#define ERESOURCE_NOT_NULL EBUSY
+
+#ifdef ENOEXIST
+#undef ENOEXIST
+#endif
+#define ENOEXIST ENOENT
+
+#ifdef EINNER
+#undef EINNER
+#endif
+#define EINNER EIO
+
+#ifdef EFAILED
+#undef EFAILED
+#endif
+#define EFAILED EIO
+
+#ifdef ECONTI
+#undef ECONTI
+#endif
+#define ECONTI EAGAIN
+
+#ifdef ENOTYPE
+#undef ENOTYPE
+#endif
+#define ENOTYPE EINVAL

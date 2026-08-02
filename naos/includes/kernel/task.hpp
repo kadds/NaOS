@@ -21,6 +21,11 @@ namespace task::scheduler
 class scheduler;
 }
 
+namespace dev::tty
+{
+class tty_core;
+}
+
 namespace task
 {
 
@@ -41,7 +46,12 @@ extern const process_id max_process_id;
 
 /// 65536
 extern const group_id max_group_id;
+
+extern const session_id max_session_id;
+
 struct thread_t;
+struct session_t;
+struct process_group_t;
 
 namespace process_attributes
 {
@@ -50,6 +60,7 @@ enum attributes : flag_t
     destroy = 1,
     no_thread = 2,
     userspace = 4,
+    job_control_cleanup_done = 8,
 };
 } // namespace process_attributes
 
@@ -58,9 +69,9 @@ struct process_t
 {
     process_id pid;
     std::atomic_uint64_t attributes;
-    u64 parent_pid;             ///< The parent process id
-    void *mm_info;              ///< Memory map infomation
-    resource_table_t resource;  ///< Resource table
+    process_id parent_pid;     ///< The parent process id
+    void *mm_info;             ///< Memory map infomation
+    resource_table_t resource; ///< Resource table
     void *thread_id_gen;
     wait_queue_t wait_queue;
     std::atomic_int wait_counter;
@@ -73,6 +84,17 @@ struct process_t
     void *schedule_data;
     handle_t<fs::vfs::file> file;
     signal_pack_t signal_pack;
+
+    /// Session and process-group membership used by job control.
+    ::session_id session_id = 0;
+    group_id process_group_id = 0;
+    session_t *session = nullptr;
+    process_group_t *process_group = nullptr;
+    dev::tty::tty_core *controlling_tty = nullptr;
+
+    /// Only meaningful on the session leader. The value is shared through the
+    /// session leader rather than duplicated in every process in the session.
+    group_id foreground_process_group = 0;
     process_t();
 };
 
@@ -286,6 +308,29 @@ void continue_thread(thread_t *thread, flag_t flags);
 
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);
+
+/// Create a new session for a process and make it the session and process-group
+/// leader. Returns a negative kernel errno on failure, or the new session id.
+i64 setsid(process_t *process);
+
+/// Return the process group/session id for pid. pid == 0 means the caller.
+i64 getpgid(process_t *caller, process_id pid);
+i64 getsid(process_t *caller, process_id pid);
+
+/// Move a process into an existing process group, or create the group's leader
+/// group when pgid == target pid. pid == 0 means the caller.
+int setpgid(process_t *caller, process_id pid, group_id pgid);
+
+/// Attach/detach the controlling tty associated with a session.
+int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force = false);
+void detach_controlling_tty(process_t *process);
+
+/// Query or update the foreground process group for a controlling tty.
+i64 get_foreground_process_group(dev::tty::tty_core *tty);
+int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, group_id pgid);
+
+/// Return the controlling tty without exposing its definition to task users.
+dev::tty::tty_core *get_controlling_tty(process_t *process);
 
 void exit_process(process_t *process, i64 ret, flag_t flags);
 

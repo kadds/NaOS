@@ -1,5 +1,6 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/dev/tty/pty_manager.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/stat.hpp"
 #include "kernel/fs/vfs/inode.hpp"
@@ -9,6 +10,19 @@
 #include "kernel/types.hpp"
 namespace naos::syscall
 {
+namespace
+{
+bool has_prefix(const char *value, const char *prefix)
+{
+    while (*prefix != 0)
+    {
+        if (*value++ != *prefix++)
+            return false;
+    }
+    return true;
+}
+} // namespace
+
 file_desc open(const char *path, u64 mode, u64 flags)
 {
     if (!is_user_space_pointer(path))
@@ -17,7 +31,31 @@ file_desc open(const char *path, u64 mode, u64 flags)
     }
 
     auto &res = task::current_process()->resource;
-    auto file = fs::vfs::open(path, res.root(), res.current(), mode, flags);
+    handle_t<fs::vfs::file> file;
+    if (strcmp(path, "/dev/ptmx") == 0)
+    {
+        file = dev::pty::open_master(mode);
+    }
+    else if (has_prefix(path, "/dev/pts/"))
+    {
+        u64 parsed_index = 0;
+        const char *cursor = path + 9;
+        if (*cursor == 0)
+            return ENOEXIST;
+        for (; *cursor != 0; cursor++)
+        {
+            if (*cursor < '0' || *cursor > '9')
+                return ENOEXIST;
+            parsed_index = parsed_index * 10 + static_cast<u64>(*cursor - '0');
+            if (parsed_index > 0xFFFFFFFFULL)
+                return ENOEXIST;
+        }
+        file = dev::pty::open_slave(static_cast<u32>(parsed_index), mode);
+    }
+    else
+    {
+        file = fs::vfs::open(path, res.root(), res.current(), mode, flags);
+    }
     if (file)
     {
         auto fd = res.new_kobject(file);
@@ -245,12 +283,8 @@ i64 ioctl(file_desc fd, u64 request, u64 argument)
         return ENOTTY;
     }
 
-    const u64 argument_size = file->ioctl_arg_size(request);
-    if (!is_user_space_range(reinterpret_cast<void *>(argument), argument_size))
-    {
-        return EBUFFER;
-    }
-    return file->ioctl(request, argument);
+    fs::vfs::ioctl_context context(request, argument);
+    return file->ioctl(context);
 }
 
 file_desc dup(file_desc fd)
@@ -420,4 +454,4 @@ SYSCALL(66, fifo)
 SYSCALL(67, ioctl)
 
 END_SYSCALL
-} // namespace syscall
+} // namespace naos::syscall

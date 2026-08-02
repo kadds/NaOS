@@ -1,9 +1,8 @@
 #include "kernel/dev/tty/tty.hpp"
+
 #include "freelibcxx/string.hpp"
 #include "kernel/fs/vfs/defines.hpp"
-#include "kernel/task.hpp"
 #include "kernel/terminal.hpp"
-#include "kernel/trace.hpp"
 
 namespace dev::tty
 {
@@ -11,117 +10,73 @@ using namespace fs;
 
 bool tty_read_func(u64 data)
 {
-    auto *tty = (tty_pseudo_t *)data;
-    auto buffer = &tty->buffer;
-    return tty->eof_count > 0 || (tty->input_chars > 0 && !buffer->empty() && tty->enter > 0);
+    auto *tty = reinterpret_cast<tty_pseudo_t *>(data);
+    return tty != nullptr && tty->readable();
 }
 
-/// print to screen
 i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 {
-    term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), term_index);
-    term::commit_changes(term_index);
-    return size;
+    const auto result = core_.write_output(data, size, flags);
+    render_master_output();
+    return result;
 }
+
+i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags) { return core_.read_input(data, max_size, flags); }
 
 u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
 {
-    term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), term_index);
-    for (u64 i = 0; i < size; i++)
-    {
-        auto ch = (char)data[i];
-        if (ch == '\n')
-        {
-            input_chars++;
-            enter++;
-        }
-
-        if (buffer.full())
-        {
-            byte p = (byte)0;
-            buffer.last(&p);
-            if ((char)p == '\n')
-                input_chars--;
-        }
-        if (ch == '\b')
-        {
-        }
-        buffer.write(data[i]);
-    }
-    if (enter > 0)
-    {
-        wait_queue.do_wake_up();
-    }
-
-    return size;
+    const auto result = master_.write(data, size, flags);
+    render_master_output();
+    return result < 0 ? 0 : static_cast<u64>(result);
 }
 
 void tty_pseudo_t::send_EOF()
 {
-    eof_count++;
-    wait_queue.do_wake_up();
+    core_.send_eof();
+    render_master_output();
 }
 
-i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
+i64 tty_pseudo_t::ioctl(fs::vfs::ioctl_context &context) { return core_.ioctl(context); }
+
+void tty_pseudo_t::render_master_output()
 {
-    if ((input_chars == 0 || enter == 0) && eof_count == 0)
+    byte buffer[128];
+    tty_output_source sources[128];
+    while (true)
     {
-        if (flags & rw_flags::no_block)
+        const auto count = master_.read(buffer, sizeof(buffer), fs::rw_flags::no_block, sources);
+        if (count <= 0)
+            break;
+
+        u64 offset = 0;
+        while (offset < static_cast<u64>(count))
         {
-            return -1;
-        }
-        wait_queue.do_wait(tty_read_func, (u64)this);
-    }
-    for (u64 i = 0; i < max_size;)
-    {
-        if (buffer.empty())
-        {
-            if (i > 0)
-                return i;
-            if (flags & rw_flags::no_block)
-                return i;
-            if (eof_count > 0)
+            const auto source = sources[offset];
+            u64 end = offset + 1;
+            while (end < static_cast<u64>(count) && sources[end] == source)
+                end++;
+
+            term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(buffer + offset), end - offset),
+                           term_index_);
+            bool ends_line = false;
+            for (u64 index = offset; index < end; index++)
             {
-                int old;
-                bool ok = false;
-                do
+                if (static_cast<u8>(buffer[index]) == '\n')
                 {
-                    old = eof_count;
-                    if (old == 0)
-                    {
-                        ok = true;
-                        break;
-                    }
-                } while (!eof_count.compare_exchange_strong(old, old - 1, std::memory_order_acquire));
-                if (!ok)
-                    return -1;
+                    ends_line = true;
+                    break;
+                }
             }
-            wait_queue.do_wait(tty_read_func, (u64)this);
+            if (source == tty_output_source::normal || ends_line)
+                term::commit_changes(term_index_);
+            offset = end;
         }
-        char ch = '\0';
-        buffer.read((byte *)&ch);
-        if (ch == '\n') // keep \n
-        {
-            data[i++] = (byte)ch;
-            enter--;
-            input_chars--;
-            return i;
-        }
-        else if (ch == '\b')
-        {
-            if (i > 0)
-                i--;
-            continue;
-        }
-        data[i++] = (byte)ch;
     }
-    return max_size;
 }
 
-void tty_pseudo_t::close()
-{
-    wait_queue.remove(task::current_process());
-    wait_queue.do_wake_up();
-};
+// The framebuffer console is a persistent device node. Closing the temporary
+// setup handle (or the last inherited fd) must not permanently hang up the
+// console core; PTY endpoints own the actual hangup transition.
+void tty_pseudo_t::close() {}
 
 } // namespace dev::tty

@@ -34,16 +34,17 @@
 #include "kernel/ucontext.hpp"
 
 #include "kernel/cpu.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "kernel/wait.hpp"
-#include "kernel/errno.hpp"
 
-#include "kernel/dev/tty/tty.hpp"
 #include "kernel/dev/framebuffer.hpp"
+#include "kernel/dev/tty/pty_manager.hpp"
+#include "kernel/dev/tty/tty.hpp"
 
 using mm_info_t = memory::vm::info_t;
 namespace task
@@ -53,6 +54,8 @@ const thread_id max_thread_id = 0x10000;
 const process_id max_process_id = 0x100000;
 
 const group_id max_group_id = 0x10000;
+
+const session_id max_session_id = 0x10000;
 
 using thread_list_t = freelibcxx::linked_list<thread_t *>;
 
@@ -78,7 +81,55 @@ struct thread_hash
 using process_map_t = freelibcxx::hash_map<process_id, process_t *, process_hash>;
 using thread_map_t = freelibcxx::hash_map<process_id, process_t *, process_hash>;
 
+struct session_hash
+{
+    u64 operator()(::session_id id) { return id; }
+};
+
+struct process_group_hash
+{
+    u64 operator()(group_id id) { return id; }
+};
+
+/// A session owns its membership index and the controlling-terminal state.
+/// Process pointers in this index are non-owning; global_process_map remains
+/// the owner of process lifetime.
+struct session_t
+{
+    ::session_id id;
+    process_map_t members;
+    dev::tty::tty_core *controlling_tty = nullptr;
+    group_id foreground_process_group = 0;
+
+    explicit session_t(::session_id id)
+        : id(id)
+        , members(memory::KernelCommonAllocatorV)
+    {
+    }
+};
+
+/// Process-group membership is indexed independently so group-directed signal
+/// delivery does not need to scan every process in the system.
+struct process_group_t
+{
+    ::session_id session;
+    group_id id;
+    process_map_t members;
+
+    process_group_t(::session_id session, group_id id)
+        : session(session)
+        , id(id)
+        , members(memory::KernelCommonAllocatorV)
+    {
+    }
+};
+
+using session_map_t = freelibcxx::hash_map<::session_id, session_t *, session_hash>;
+using process_group_map_t = freelibcxx::hash_map<group_id, process_group_t *, process_group_hash>;
+
 process_map_t *global_process_map;
+session_map_t *global_session_map;
+process_group_map_t *global_process_group_map;
 // process_list_t *global_process_list;
 lock::spinlock_t process_list_lock;
 
@@ -142,6 +193,138 @@ void fill_auxiliary_vector(byte **&tail, const process_args_t &args, void *entry
 }
 } // namespace
 
+namespace
+{
+session_t *find_session_unlocked(::session_id id)
+{
+    if (global_session_map == nullptr)
+        return nullptr;
+    return global_session_map->get(id).value_or(nullptr);
+}
+
+process_group_t *find_process_group_unlocked(group_id id)
+{
+    if (global_process_group_map == nullptr)
+        return nullptr;
+    return global_process_group_map->get(id).value_or(nullptr);
+}
+
+session_t *get_or_create_session_unlocked(::session_id id)
+{
+    auto *session = find_session_unlocked(id);
+    if (session != nullptr)
+        return session;
+
+    session = memory::New<session_t>(memory::KernelCommonAllocatorV, id);
+    global_session_map->insert(id, session);
+    return session;
+}
+
+process_group_t *get_or_create_process_group_unlocked(::session_id session_id, group_id id)
+{
+    auto *process_group = find_process_group_unlocked(id);
+    if (process_group != nullptr)
+    {
+        kassert(process_group->session == session_id, "process group belongs to another session");
+        return process_group;
+    }
+
+    process_group = memory::New<process_group_t>(memory::KernelCommonAllocatorV, session_id, id);
+    global_process_group_map->insert(id, process_group);
+    return process_group;
+}
+
+void remove_process_group_if_empty_unlocked(process_group_t *process_group)
+{
+    if (process_group == nullptr || process_group->members.size() != 0)
+        return;
+
+    global_process_group_map->remove(process_group->id);
+    memory::Delete<>(memory::KernelCommonAllocatorV, process_group);
+}
+
+void remove_session_if_empty_unlocked(session_t *session)
+{
+    if (session == nullptr || session->members.size() != 0 || session->controlling_tty != nullptr)
+        return;
+
+    global_session_map->remove(session->id);
+    memory::Delete<>(memory::KernelCommonAllocatorV, session);
+}
+
+void register_process_job_control_unlocked(process_t *process)
+{
+    auto *session = get_or_create_session_unlocked(process->session_id);
+    auto *process_group = get_or_create_process_group_unlocked(process->session_id, process->process_group_id);
+    session->members.insert(process->pid, process);
+    process_group->members.insert(process->pid, process);
+    process->session = session;
+    process->process_group = process_group;
+}
+
+void unregister_process_job_control_unlocked(process_t *process)
+{
+    if (process == nullptr)
+        return;
+
+    auto *session = process->session;
+    auto *process_group = process->process_group;
+    if (process_group != nullptr)
+    {
+        process_group->members.remove(process->pid);
+        remove_process_group_if_empty_unlocked(process_group);
+    }
+    if (session != nullptr)
+    {
+        session->members.remove(process->pid);
+        remove_session_if_empty_unlocked(session);
+    }
+    process->session = nullptr;
+    process->process_group = nullptr;
+}
+
+void move_process_session_unlocked(process_t *process, ::session_id session_id, group_id process_group_id)
+{
+    if (process->session_id == session_id && process->process_group_id == process_group_id &&
+        process->session != nullptr && process->process_group != nullptr)
+        return;
+
+    unregister_process_job_control_unlocked(process);
+    process->session_id = session_id;
+    process->process_group_id = process_group_id;
+    register_process_job_control_unlocked(process);
+}
+
+void move_process_group_unlocked(process_t *process, group_id process_group_id)
+{
+    if (process->process_group_id == process_group_id && process->process_group != nullptr)
+        return;
+
+    auto *session = process->session;
+    auto *old_process_group = process->process_group;
+    const auto old_process_group_id = process->process_group_id;
+    bool old_process_group_empty = false;
+    if (old_process_group != nullptr)
+    {
+        old_process_group->members.remove(process->pid);
+        old_process_group_empty = old_process_group->members.size() == 0;
+        remove_process_group_if_empty_unlocked(old_process_group);
+    }
+
+    process->process_group_id = process_group_id;
+    auto *new_process_group = get_or_create_process_group_unlocked(process->session_id, process_group_id);
+    new_process_group->members.insert(process->pid, process);
+    process->process_group = new_process_group;
+
+    if (session != nullptr && session->foreground_process_group == old_process_group_id && old_process_group_empty)
+    {
+        session->foreground_process_group = 0;
+        if (session->controlling_tty != nullptr)
+            session->controlling_tty->set_foreground_process_group(0);
+    }
+}
+} // namespace
+
 inline process_t *new_kernel_process()
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
@@ -149,11 +332,15 @@ inline process_t *new_kernel_process()
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
+    process->attributes.store(0);
     process->pid = id;
+    process->session_id = id;
+    process->process_group_id = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::kernel_vm_info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
     global_process_map->insert(id, process);
+    register_process_job_control_unlocked(process);
     return process;
 }
 
@@ -166,10 +353,13 @@ inline process_t *new_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->attributes = process_attributes::userspace;
     process->pid = id;
+    process->session_id = id;
+    process->process_group_id = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     process->mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
     global_process_map->insert(id, process);
+    register_process_job_control_unlocked(process);
 
     return process;
 }
@@ -181,16 +371,21 @@ inline process_t *copy_process(process_t *p)
     if (id == util::null_id)
         return nullptr;
     process_t *process = memory::New<process_t>(process_t_allocator);
-    process->attributes.store(p->attributes.load());
+    process->attributes.store(p->attributes.load() & ~process_attributes::job_control_cleanup_done);
     process->pid = id;
     process->file = p->file;
     process->parent_pid = p->pid;
+    process->session_id = p->session_id;
+    process->process_group_id = p->process_group_id;
+    process->controlling_tty = p->controlling_tty;
+    process->foreground_process_group = 0;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     auto info = memory::New<mm_info_t>(mm_info_t_allocator);
     reinterpret_cast<mm_info_t *>(p->mm_info)->share_to(p->pid, id, info);
     process->mm_info = info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
     global_process_map->insert(id, process);
+    register_process_job_control_unlocked(process);
 
     return process;
 }
@@ -198,6 +393,7 @@ inline process_t *copy_process(process_t *p)
 inline void delete_process(process_t *p)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    unregister_process_job_control_unlocked(p);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
 
@@ -271,6 +467,9 @@ void create_devs()
 {
     auto root = fs::vfs::global_root;
     fs::vfs::create("/dev", root, root, fs::create_flags::directory);
+    fs::vfs::mkdir("/dev/pts", root, root, fs::create_flags::directory);
+    fs::vfs::create("/dev/ptmx", root, root, fs::create_flags::chr);
+    dev::pty::init();
 
     auto create_tty = [&](const char *name, int terminal_index) {
         fs::vfs::create(name, root, root, fs::create_flags::chr);
@@ -302,6 +501,9 @@ void init()
     {
         uctx::UninterruptibleContext icu;
         global_process_map = memory::New<process_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        global_session_map = memory::New<session_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+        global_process_group_map =
+            memory::New<process_group_map_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
 
         thread_t_allocator = memory::New<memory::SlabObjectAllocator>(
             memory::KernelCommonAllocatorV, NewSlabGroup(memory::global_object_slab_domain, thread_t, 8, 0));
@@ -425,8 +627,7 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
     // argc
     // Keep the initial stack in the usual ELF form. mlibc parses the
     // auxiliary vector after envp, even for statically linked binaries.
-    u64 base_bytes = sizeof(void *) *
-                     (args->argv.size() + args->env.size() + 1 + 1 + 1 + aux_vector_entries * 2);
+    u64 base_bytes = sizeof(void *) * (args->argv.size() + args->env.size() + 1 + 1 + 1 + aux_vector_entries * 2);
     u64 size = stack_data_size;
     // crt1 calls into mlibc immediately, so the stack pointer at the ELF
     // entry point must be 16-byte aligned to satisfy the x86-64 call ABI.
@@ -614,7 +815,13 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     if (!process)
         return nullptr;
 
-    process->parent_pid = current_process()->pid;
+    auto *parent = current_process();
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+        process->parent_pid = parent->pid;
+        process->controlling_tty = parent->controlling_tty;
+        move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
+    }
     process->file = file;
 
     copy_fd(file, process, current_process(), flags);
@@ -677,7 +884,13 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
     if (!process)
         return nullptr;
 
-    process->parent_pid = current_process()->pid;
+    auto *parent = current_process();
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+        process->parent_pid = parent->pid;
+        process->controlling_tty = parent->controlling_tty;
+        move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
+    }
     copy_fd(nullptr, process, current_process(), flags);
 
     /// create thread
@@ -839,6 +1052,11 @@ struct process_data_t
 };
 
 void exit_process_inner(thread_t *thd);
+namespace
+{
+void cleanup_process_job_control(process_t *process);
+}
+
 void exit_process_thread(process_t *process)
 {
     uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
@@ -874,7 +1092,6 @@ void exit_process_inner(thread_t *thd)
         scheduler::remove(
             thd,
             [](u64 data) {
-                
                 auto *dt = reinterpret_cast<process_data_t *>(data);
                 auto process = dt->thd->process;
 
@@ -896,10 +1113,12 @@ void exit_process_inner(thread_t *thd)
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
     // TODO: write core_dump from flags
-    if (ret != 0) {
+    if (ret != 0)
+    {
         trace::debug("process ", process->pid, " exit with code ", ret);
     }
     process->ret_val = ret;
+    cleanup_process_job_control(process);
     exit_process_thread(process);
 }
 
@@ -1054,6 +1273,301 @@ thread_t *find_kernel_stack_thread(void *stack_ptr)
 void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::stop); }
 
 void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
+
+namespace
+{
+bool process_is_live(const process_t *process)
+{
+    return process != nullptr && !(process->attributes.load() & process_attributes::no_thread);
+}
+
+bool process_group_exists_unlocked(::session_id session_id, group_id process_group, const process_t *exclude = nullptr)
+{
+    auto *group = find_process_group_unlocked(process_group);
+    if (group == nullptr || group->session != session_id)
+        return false;
+    if (exclude == nullptr)
+        return group->members.size() != 0;
+    if (!group->members.has(exclude->pid))
+        return group->members.size() != 0;
+    return group->members.size() > 1;
+}
+
+process_t *find_session_leader_unlocked(::session_id session_id)
+{
+    auto *session = find_session_unlocked(session_id);
+    auto leader = session == nullptr ? nullptr : session->members.get(session_id).value_or(nullptr);
+    if (process_is_live(leader) && leader->pid == leader->session_id)
+        return leader;
+    return nullptr;
+}
+
+void detach_session_tty_unlocked(::session_id session_id, dev::tty::tty_core *tty)
+{
+    auto *session = find_session_unlocked(session_id);
+    if (session == nullptr)
+        return;
+
+    for (auto item : session->members)
+    {
+        auto *process = item.value;
+        if (process->controlling_tty == tty)
+            process->controlling_tty = nullptr;
+    }
+
+    if (session->controlling_tty == tty)
+    {
+        session->controlling_tty = nullptr;
+        session->foreground_process_group = 0;
+        auto *leader = find_session_leader_unlocked(session_id);
+        if (leader != nullptr)
+            leader->foreground_process_group = 0;
+        tty->set_foreground_process_group(0);
+        tty->set_session_id(0);
+    }
+}
+
+void cleanup_process_job_control(process_t *process)
+{
+    if (process == nullptr)
+        return;
+
+    auto old_attributes = process->attributes.fetch_or(process_attributes::job_control_cleanup_done);
+    if (old_attributes & process_attributes::job_control_cleanup_done)
+        return;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+
+    auto *tty = process->controlling_tty;
+    if (tty != nullptr && process->pid == process->session_id)
+    {
+        detach_session_tty_unlocked(process->session_id, tty);
+    }
+    else if (tty != nullptr)
+    {
+        process->controlling_tty = nullptr;
+    }
+
+    auto *session = find_session_unlocked(process->session_id);
+    if (session != nullptr && session->foreground_process_group == process->process_group_id &&
+        !process_group_exists_unlocked(process->session_id, process->process_group_id, process))
+    {
+        session->foreground_process_group = 0;
+        auto *leader = find_session_leader_unlocked(process->session_id);
+        if (leader != nullptr)
+            leader->foreground_process_group = 0;
+        if (session->controlling_tty != nullptr)
+            session->controlling_tty->set_foreground_process_group(0);
+    }
+
+    unregister_process_job_control_unlocked(process);
+}
+} // namespace
+
+int setpgid(process_t *caller, process_id pid, group_id pgid)
+{
+    if (caller == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+
+    auto *target = pid == 0 ? caller : global_process_map->get(pid).value_or(nullptr);
+    if (!process_is_live(target))
+        return ENOEXIST;
+    if (target != caller && target->parent_pid != caller->pid)
+        return EPERMISSION;
+    if (target->session_id != caller->session_id)
+        return EPERMISSION;
+    if (target->pid == target->session_id)
+        return EPERMISSION;
+
+    if (pgid == 0)
+        pgid = target->pid;
+
+    if (!process_group_exists_unlocked(target->session_id, pgid) && pgid != target->pid)
+        return ENOEXIST;
+
+    move_process_group_unlocked(target, pgid);
+    auto *session = find_session_unlocked(target->session_id);
+    if (session != nullptr)
+    {
+        auto *leader = find_session_leader_unlocked(target->session_id);
+        if (leader != nullptr)
+            leader->foreground_process_group = session->foreground_process_group;
+    }
+
+    return OK;
+}
+
+i64 setsid(process_t *process)
+{
+    if (process == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    if (!process_is_live(process))
+        return ENOEXIST;
+    if (process->process_group_id == process->pid)
+        return EPERMISSION;
+
+    process->controlling_tty = nullptr;
+    process->foreground_process_group = 0;
+    move_process_session_unlocked(process, process->pid, process->pid);
+    return process->session_id;
+}
+
+i64 getpgid(process_t *caller, process_id pid)
+{
+    if (caller == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *target = pid == 0 ? caller : global_process_map->get(pid).value_or(nullptr);
+    if (!process_is_live(target))
+        return ENOEXIST;
+    return target->process_group_id;
+}
+
+i64 getsid(process_t *caller, process_id pid)
+{
+    if (caller == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *target = pid == 0 ? caller : global_process_map->get(pid).value_or(nullptr);
+    if (!process_is_live(target))
+        return ENOEXIST;
+    return target->session_id;
+}
+
+int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force)
+{
+    if (process == nullptr || tty == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    if (!process_is_live(process))
+        return ENOEXIST;
+    if (process->pid != process->session_id)
+        return EPERMISSION;
+    if (process->controlling_tty != nullptr && process->controlling_tty != tty && !force)
+        return ERESOURCE_NOT_NULL;
+
+    ::session_id foreign_session = tty->session_id();
+    auto *foreign = find_session_unlocked(foreign_session);
+    if (foreign == nullptr || foreign->controlling_tty != tty || foreign_session == process->session_id)
+        foreign_session = 0;
+
+    if (foreign_session != 0 && !force)
+        return EPERMISSION;
+    if (foreign_session != 0)
+        detach_session_tty_unlocked(foreign_session, tty);
+
+    if (process->controlling_tty != nullptr && process->controlling_tty != tty)
+        detach_session_tty_unlocked(process->session_id, process->controlling_tty);
+
+    auto *session = find_session_unlocked(process->session_id);
+    if (session == nullptr)
+        return ENOEXIST;
+
+    process->controlling_tty = tty;
+    session->controlling_tty = tty;
+    session->foreground_process_group = process->process_group_id;
+    process->foreground_process_group = process->process_group_id;
+    tty->set_session_id(process->session_id);
+    tty->set_foreground_process_group(process->process_group_id);
+    return OK;
+}
+
+void detach_controlling_tty(process_t *process)
+{
+    if (process == nullptr || global_process_map == nullptr)
+        return;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *tty = process->controlling_tty;
+    if (tty == nullptr)
+        return;
+
+    if (process->pid == process->session_id)
+        detach_session_tty_unlocked(process->session_id, tty);
+    else
+        process->controlling_tty = nullptr;
+}
+
+i64 get_foreground_process_group(dev::tty::tty_core *tty)
+{
+    if (tty == nullptr || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *session = find_session_unlocked(tty->session_id());
+    if (session != nullptr && session->controlling_tty == tty)
+        return session->foreground_process_group;
+    return ENOEXIST;
+}
+
+int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, group_id pgid)
+{
+    if (process == nullptr || tty == nullptr || pgid == 0 || global_process_map == nullptr)
+        return EPARAM;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    if (!process_is_live(process) || process->controlling_tty != tty)
+        return EPERMISSION;
+
+    auto *session = find_session_unlocked(process->session_id);
+    if (session == nullptr || session->controlling_tty != tty)
+        return ENOEXIST;
+    auto *leader = find_session_leader_unlocked(process->session_id);
+    if (leader == nullptr)
+        return ENOEXIST;
+    if (!process_group_exists_unlocked(process->session_id, pgid))
+        return ENOEXIST;
+
+    session->foreground_process_group = pgid;
+    leader->foreground_process_group = pgid;
+    tty->set_foreground_process_group(pgid);
+    return OK;
+}
+
+dev::tty::tty_core *get_controlling_tty(process_t *process)
+{
+    return process == nullptr ? nullptr : process->controlling_tty;
+}
+
+i64 send_signal_to_process_group(group_id process_group, signal_num_t num, i64 error, i64 code, i64 status)
+{
+    if (global_process_group_map == nullptr || process_group == 0 || num == 0 || num >= max_signal_count)
+        return EPARAM;
+
+    {
+        freelibcxx::vector<process_t *> recipients(memory::KernelCommonAllocatorV);
+        {
+            uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+            auto *group = find_process_group_unlocked(process_group);
+            if (group == nullptr)
+                return ENOEXIST;
+            for (auto item : group->members)
+            {
+                auto *process = item.value;
+                if (process_is_live(process))
+                    recipients.push_back(process);
+            }
+        }
+
+        i64 count = 0;
+        for (auto *process : recipients)
+        {
+            if (!process_is_live(process))
+                continue;
+            process->signal_pack.send(process, num, error, code, status);
+            count++;
+        }
+
+        return count == 0 ? ENOEXIST : count;
+    }
+}
 
 process_t *find_pid(process_id pid)
 {

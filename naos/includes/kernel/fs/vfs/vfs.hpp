@@ -1,13 +1,15 @@
 #pragma once
 #include "common.hpp"
 #include "defines.hpp"
-#include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/stat.hpp"
+#include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/handle.hpp"
 namespace fs::vfs
 {
 extern super_block *pipe_block;
 extern dentry *global_root;
+
+class pseudo_t;
 
 void init();
 int register_fs(file_system *fs);
@@ -47,6 +49,8 @@ bool fill_stat(const dentry *entry, naos_stat *out);
 u64 size(handle_t<file>);
 
 handle_t<file> open_pipe();
+handle_t<file> open_anonymous_pseudo(pseudo_t *pseudo, inode_type_t type = inode_type_t::chr,
+                                     flag_t file_mode = mode::read | mode::write);
 handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag_t mode);
 
 bool temporary_dir(int domain, char *buffer, u64 size);

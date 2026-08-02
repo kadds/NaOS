@@ -1,5 +1,6 @@
 #include "kernel/fs/vfs/vfs.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/fs/stat.hpp"
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -10,7 +11,6 @@
 #include "kernel/fs/vfs/nameidata.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
-#include "kernel/fs/stat.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
@@ -121,20 +121,20 @@ u32 stat_type(inode_type_t type)
 {
     switch (type)
     {
-    case inode_type_t::file:
-        return naos_stat_mode::regular;
-    case inode_type_t::directory:
-        return naos_stat_mode::directory;
-    case inode_type_t::symbolink:
-        return naos_stat_mode::symlink;
-    case inode_type_t::socket:
-        return naos_stat_mode::socket;
-    case inode_type_t::block:
-        return naos_stat_mode::block;
-    case inode_type_t::chr:
-        return naos_stat_mode::character;
-    case inode_type_t::pipe:
-        return naos_stat_mode::fifo;
+        case inode_type_t::file:
+            return naos_stat_mode::regular;
+        case inode_type_t::directory:
+            return naos_stat_mode::directory;
+        case inode_type_t::symbolink:
+            return naos_stat_mode::symlink;
+        case inode_type_t::socket:
+            return naos_stat_mode::socket;
+        case inode_type_t::block:
+            return naos_stat_mode::block;
+        case inode_type_t::chr:
+            return naos_stat_mode::character;
+        case inode_type_t::pipe:
+            return naos_stat_mode::fifo;
     }
     return 0;
 }
@@ -352,12 +352,17 @@ void rmdir(dentry *entry)
         return;
 
     super_block *su_block = entry->get_inode()->get_super_block();
-    entry->get_parent()->remove_child(entry);
+    if (entry->get_parent() != nullptr)
+        entry->get_parent()->remove_child(entry);
+    entry->set_parent(nullptr);
     entry->get_inode()->rmdir();
     su_block->save_dentry(entry);
     su_block->write_inode(entry->get_inode());
-    su_block->dealloc_inode(entry->get_inode());
-    su_block->dealloc_dentry(entry);
+    if (entry->get_inode()->get_ref_count() == 0)
+    {
+        su_block->dealloc_inode(entry->get_inode());
+        su_block->dealloc_dentry(entry);
+    }
 }
 
 dentry *rename(const char *new_path, dentry *old, dentry *root, dentry *cur_dir)
@@ -627,7 +632,8 @@ handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t 
     }
 
     auto f = entry->get_inode()->get_super_block()->alloc_file();
-    f->open(entry, mode);
+    if (f->open(entry, mode) != 0)
+        return {};
     return f;
 }
 
@@ -717,23 +723,35 @@ bool link(const char *src, const char *target, dentry *root, dentry *cur_dir)
 
 bool unlink(dentry *entry)
 {
+    if (entry == nullptr || entry->get_inode() == nullptr)
+        return false;
+
     auto su = entry->get_inode()->get_super_block();
     auto inode = entry->get_inode();
-    inode->unlink(entry);
+    if (inode->get_link_count() != 0 && !inode->unlink(entry))
+        return false;
+
     /// save to disk
     su->write_inode(inode);
-    if (inode->get_link_count() == 0)
+    if (inode->get_link_count() == 0 && entry->get_parent() != nullptr)
+    {
+        entry->get_parent()->remove_child(entry);
+        entry->set_parent(nullptr);
+    }
+
+    if (inode->get_link_count() == 0 && inode->get_ref_count() == 0)
     {
         auto type = inode->get_type();
         if (type != fs::inode_type_t::file && type != fs::inode_type_t::directory &&
             type != fs::inode_type_t::symbolink)
         {
             auto pd = inode->get_pseudo_data();
-            if (pd)
+            if (pd && pd->owned_by_inode())
+            {
                 memory::Delete<>(memory::KernelCommonAllocatorV, pd);
+                inode->set_pseudo_data(nullptr);
+            }
         }
-        if (entry->get_parent())
-            entry->get_parent()->remove_child(entry);
         // link count is 0, delete file
         su->dealloc_inode(inode);
         su->dealloc_dentry(entry);
@@ -946,8 +964,31 @@ handle_t<file> open_pipe()
     node->set_pseudo_data(ps);
 
     handle_t<file> f = entry->get_inode()->get_super_block()->alloc_file();
-    f->open(entry, mode::read | mode::write | mode::unlink_on_close);
+    if (f->open(entry, mode::read | mode::write | mode::unlink_on_close) != 0)
+        return {};
     return f;
+}
+
+handle_t<file> open_anonymous_pseudo(pseudo_t *pseudo, inode_type_t type, flag_t file_mode)
+{
+    if (pipe_block == nullptr || pseudo == nullptr)
+        return {};
+
+    dentry *entry = pipe_block->alloc_dentry();
+    if (entry == nullptr)
+        return {};
+    entry->set_name(nullptr);
+    entry->set_parent(nullptr);
+
+    inode *node = pipe_block->alloc_inode();
+    if (node == nullptr || !node->create_pseudo(entry, type, 0))
+        return {};
+    node->set_pseudo_data(pseudo);
+
+    auto file = pipe_block->alloc_file();
+    if (!file || file->open(entry, file_mode | mode::unlink_on_close) != 0)
+        return {};
+    return file;
 }
 
 handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag_t mode)
@@ -974,7 +1015,8 @@ handle_t<file> create_fifo(const char *path, dentry *root, dentry *current, flag
     }
 
     handle_t<file> f = entry->get_inode()->get_super_block()->alloc_file();
-    f->open(entry, mode);
+    if (f->open(entry, mode) != 0)
+        return {};
     return f;
 }
 

@@ -2,12 +2,19 @@
 #include "../../wait.hpp"
 #include "common.hpp"
 #include "freelibcxx/circular_buffer.hpp"
+#include "kernel/fs/vfs/ioctl.hpp"
 namespace fs::vfs
 {
 /// pseudo device interface
 class pseudo_t
 {
   public:
+    virtual int open(flag_t flags)
+    {
+        (void)flags;
+        return 0;
+    }
+
     virtual i64 write(const byte *data, u64 size, flag_t flags) = 0;
     virtual i64 read(byte *data, u64 max_size, flag_t flags) = 0;
     virtual i64 write_at(i64 &offset, const byte *data, u64 size, flag_t flags)
@@ -20,17 +27,13 @@ class pseudo_t
         (void)offset;
         return read(data, max_size, flags);
     }
-    virtual i64 ioctl(u64 request, u64 argument)
+    virtual i64 ioctl(ioctl_context &context)
     {
-        (void)request;
-        (void)argument;
+        (void)context;
         return -1;
     }
-    virtual u64 ioctl_arg_size(u64 request) const
-    {
-        (void)request;
-        return 0;
-    }
+    virtual u32 poll_events() const { return 0; }
+    virtual bool owned_by_inode() const { return true; }
     virtual bool supports_physical_mmap() const { return false; }
     virtual bool get_physical_mmap(u64 offset, u64 length, phy_addr_t &physical_address) const
     {

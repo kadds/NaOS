@@ -4,6 +4,7 @@ project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
 
 enable_testing ()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 
 set(ASM_X64 "-mcmodel=large -Wa,--64")

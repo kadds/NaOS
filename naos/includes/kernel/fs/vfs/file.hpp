@@ -12,6 +12,7 @@ class file : public kobject
     i64 offset;
     flag_t mode;
     dentry *entry;
+    bool open_reference;
 
   public:
     file()
@@ -19,6 +20,7 @@ class file : public kobject
         , offset(0)
         , mode(0)
         , entry(nullptr)
+        , open_reference(false)
     {
     }
 
@@ -34,8 +36,7 @@ class file : public kobject
 
     i64 pread(i64 offset, byte *ptr, u64 max_size, flag_t flags);
     i64 pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags);
-    i64 ioctl(u64 request, u64 argument);
-    u64 ioctl_arg_size(u64 request) const;
+    i64 ioctl(ioctl_context &context);
 
     virtual void flush() = 0;
 
