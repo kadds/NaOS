@@ -1,0 +1,6 @@
+add_executable(phase1_channel_queue_test phase1_channel_queue_test.cc)
+target_include_directories(phase1_channel_queue_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/naos/includes
+)
+set_target_properties(phase1_channel_queue_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME phase1_channel_queue_test COMMAND phase1_channel_queue_test)

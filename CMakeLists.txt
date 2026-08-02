@@ -74,3 +74,4 @@ string(TIMESTAMP BUILD_VERSION_TS "%s")
 add_definitions(-DBUILD_VERSION_TS=${BUILD_VERSION_TS})
 
 add_subdirectory(naos)
+add_subdirectory(tests)
