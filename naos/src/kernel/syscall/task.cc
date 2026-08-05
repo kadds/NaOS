@@ -575,6 +575,45 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
 }
 int yield() { return 0; }
 
+int64_t pipe_create(na_pipe_create_frame_t *frame)
+{
+    if (frame == nullptr || !is_user_space_range(frame, sizeof(*frame)))
+        return EFAULT;
+
+    auto file = fs::vfs::open_pipe();
+    if (!file)
+        return EIO;
+
+    capability::metadata metadata;
+    metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.scope = NA_SCOPE_FILE;
+    metadata.revision = 1;
+    metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+
+    auto &resources = task::current_process()->resource;
+    khandle read_object = file;
+    khandle write_object = file;
+    const auto read_handle = resources.install_native(std::move(read_object), metadata);
+    const auto write_handle = resources.install_native(std::move(write_object), metadata);
+    if (read_handle == NA_HANDLE_INVALID || write_handle == NA_HANDLE_INVALID)
+    {
+        resources.close_native(read_handle);
+        resources.close_native(write_handle);
+        return EIO;
+    }
+
+    na_pipe_create_frame_t values{read_handle, write_handle};
+    const auto status = naos::usercopy::copy_to(reinterpret_cast<u64>(frame), &values, sizeof(values));
+    if (status != NA_STATUS_OK)
+    {
+        resources.close_native(read_handle);
+        resources.close_native(write_handle);
+        return EFAULT;
+    }
+    return 0;
+}
+
 BEGIN_SYSCALL
 
 SYSCALL(NA_SYSCALL_FUTEX, futex)
@@ -592,6 +631,7 @@ SYSCALL(NA_SYSCALL_YIELD, yield)
 SYSCALL(NA_SYSCALL_PROCESS_EXEC, process_exec)
 SYSCALL(NA_SYSCALL_PROCESS_HANDLE_OPEN, process_handle_open)
 SYSCALL(NA_SYSCALL_PROCESS_SPAWN, process_spawn)
+SYSCALL(NA_SYSCALL_PIPE_CREATE, pipe_create)
 
 END_SYSCALL
 

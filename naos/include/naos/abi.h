@@ -484,6 +484,13 @@ typedef struct na_wait_item
     na_signal_t observed;
 } na_wait_item_t;
 
+/* Create a pair of native file capabilities for the POSIX pipe wrapper. */
+typedef struct na_pipe_create_frame
+{
+    na_handle_t read_end;
+    na_handle_t write_end;
+} na_pipe_create_frame_t;
+
 /* Syscall numbers are compact v1 native ABI assignments. */
 enum
 {
@@ -528,7 +535,8 @@ enum
     NA_SYSCALL_PROCESS_EXEC = 38,
     NA_SYSCALL_PROCESS_HANDLE_OPEN = 39,
     NA_SYSCALL_PROCESS_SPAWN = 40,
-    NA_SYSCALL_COUNT = 40,
+    NA_SYSCALL_PIPE_CREATE = 41,
+    NA_SYSCALL_COUNT = 42,
 };
 
 #ifdef __cplusplus
