@@ -10,19 +10,16 @@
 #include "kernel/ucontext.hpp"
 namespace arch::device::HPET
 {
-irq::request_result _ctx_interrupt_ on_hpet_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
 {
-    clock_event *ev = (clock_event *)user_data;
-    if (unlikely(ev == nullptr))
-        return irq::request_result::no_handled;
-    if (!ev->is_suspend.load())
+    if (!is_suspend.load())
     {
-        if (!ev->mode_periodic_)
+        if (!mode_periodic_)
         {
-            ev->target_counter_ = ev->target_counter_ + ev->counter_;
-            ev->base_[32 + 1] = ev->target_counter_;
+            target_counter_ = target_counter_ + counter_;
+            base_[32 + 1] = target_counter_;
         }
-        ev->jiff_.fetch_add(1);
+        jiff_.fetch_add(1);
     }
 
     irq::raise_soft_irq(irq::soft_vector::timer);
@@ -111,7 +108,7 @@ void clock_event::suspend()
             base_[32] = n_config_reg & ~0b100UL;
         }
 
-        irq::unregister_request_func(APIC::query_gsi(APIC::gsi_vector::hpet) + 0x20, on_hpet_event, (u64)this);
+        irq_registration_.reset();
     }
 }
 
@@ -122,7 +119,8 @@ void clock_event::resume()
         is_suspend = false;
         jiff_ = 1;
         last_tick_ = 0;
-        irq::register_request_func(APIC::query_gsi(APIC::gsi_vector::hpet) + 0x20, on_hpet_event, (u64)this);
+        irq_registration_ = irq::register_handler(APIC::query_gsi(APIC::gsi_vector::hpet) + 0x20,
+                                                  irq::hard_handler::bind<&clock_event::on_interrupt>(*this));
         {
             uctx::UninterruptibleContext icu;
 

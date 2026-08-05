@@ -74,6 +74,10 @@ void test_zero_length_ranges_require_null()
     int value = 0;
     assert(naos::usercopy::valid_range(0, 0));
     assert(!naos::usercopy::valid_range(reinterpret_cast<std::uint64_t>(&value), 0));
+
+    assert(naos::usercopy::valid_output_range(reinterpret_cast<std::uint64_t>(&value), sizeof(value)));
+    assert(naos::usercopy::valid_output_range(0, 0));
+    assert(!naos::usercopy::valid_output_range(reinterpret_cast<std::uint64_t>(&value), 0));
 }
 } // namespace
 

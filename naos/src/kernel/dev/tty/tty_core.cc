@@ -86,32 +86,6 @@ bool tty_core::input_ready_for_read(const termios_t &termios) const
     return input_available_.load() != 0;
 }
 
-bool tty_input_wait_condition(u64 data)
-{
-    auto *tty = reinterpret_cast<tty_core *>(data);
-    if (tty == nullptr)
-        return true;
-    return tty->input_readable() || tty->master_hung_up() || tty->slave_hung_up();
-}
-
-bool tty_input_space_wait_condition(u64 data)
-{
-    auto *tty = reinterpret_cast<tty_core *>(data);
-    return tty == nullptr || (tty->input_poll_events() & tty_poll::writable) != 0;
-}
-
-bool tty_output_wait_condition(u64 data)
-{
-    auto *tty = reinterpret_cast<tty_core *>(data);
-    return tty == nullptr || tty->output_readable() || tty->slave_hung_up();
-}
-
-bool tty_output_space_wait_condition(u64 data)
-{
-    auto *tty = reinterpret_cast<tty_core *>(data);
-    return tty == nullptr || (tty->output_poll_events() & tty_poll::writable) != 0;
-}
-
 bool tty_core::enqueue_input_byte(byte value)
 {
     uctx::RawSpinLockUninterruptibleContext guard(input_lock_);
@@ -162,7 +136,7 @@ bool tty_core::enqueue_output_byte(byte value, flag_t flags, u64 bytes_done, tty
         }
         if (flags & fs::rw_flags::no_block)
             return false;
-        output_wait_queue_.do_wait(tty_output_space_wait_condition, reinterpret_cast<u64>(this));
+        output_wait_queue_.do_wait([this] { return (output_poll_events() & tty_poll::writable) != 0; });
     }
 }
 
@@ -320,7 +294,7 @@ i64 tty_core::receive_input(const byte *data, u64 size, flag_t flags)
         {
             if (flags & fs::rw_flags::no_block)
                 return consumed == 0 ? EAGAIN : static_cast<i64>(consumed);
-            input_wait_queue_.do_wait(tty_input_space_wait_condition, reinterpret_cast<u64>(this));
+            input_wait_queue_.do_wait([this] { return (input_poll_events() & tty_poll::writable) != 0; });
             consumed--;
             continue;
         }
@@ -354,7 +328,7 @@ i64 tty_core::read_input(byte *data, u64 max_size, flag_t flags)
             return EIO;
         if (flags & fs::rw_flags::no_block)
             return EAGAIN;
-        input_wait_queue_.do_wait(tty_input_wait_condition, reinterpret_cast<u64>(this));
+        input_wait_queue_.do_wait([this] { return input_readable() || master_hung_up() || slave_hung_up(); });
     }
 
     u64 read;
@@ -407,7 +381,7 @@ i64 tty_core::read_output(byte *data, u64 max_size, flag_t flags, tty_output_sou
             return EIO;
         if (flags & fs::rw_flags::no_block)
             return EAGAIN;
-        output_wait_queue_.do_wait(tty_output_wait_condition, reinterpret_cast<u64>(this));
+        output_wait_queue_.do_wait([this] { return output_readable() || slave_hung_up(); });
     }
 
     u64 read = 0;

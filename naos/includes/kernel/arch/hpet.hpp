@@ -3,6 +3,7 @@
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
 #include "kernel/common.hpp"
+#include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
 #include <atomic>
 
@@ -12,7 +13,6 @@ class clock_source;
 class clock_event : public ::timeclock::clock_event
 {
     friend class clock_source;
-    friend irq::request_result on_hpet_event(const irq::interrupt_info *, u64 extra_data, u64 user_data);
 
   public:
     volatile u64 *base_ = nullptr;
@@ -29,6 +29,9 @@ class clock_event : public ::timeclock::clock_event
 
     bool mode64_ = false;
     bool mode_periodic_ = false;
+    irq::registration irq_registration_;
+
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
 
   public:
     clock_event() {}

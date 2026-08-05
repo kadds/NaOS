@@ -125,6 +125,8 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
 
     if (state == thread_state::ready)
     {
+        if (thread->attributes & thread_attributes::job_control_stopped)
+            return;
         if (thread->process->pid == 0)
         {
             thread->state = thread_state::ready;
@@ -144,6 +146,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         }
         else if (thread->state == thread_state::running)
         {
+            thread->attributes &= ~(thread_attributes::block_to_stop);
             return;
         }
         else if (thread->state == thread_state::ready)

@@ -4,12 +4,12 @@
 #include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/ipc/invocation.hpp"
+#include "kernel/mm/memory.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/usercopy.hpp"
-#include "naos/generated/system_uapi.h"
 #include "naos/bootstrap.hpp"
-#include "kernel/mm/memory.hpp"
+#include "naos/generated/system_uapi.h"
 #include <limits>
 
 namespace naos::syscall
@@ -306,8 +306,8 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
             }
         };
 
-        auto *message_bytes = reinterpret_cast<byte *>(memory::MemoryAllocatorV->allocate(NA_CHANNEL_MAX_MESSAGE_BYTES,
-                                                                                            alignof(byte)));
+        auto *message_bytes =
+            reinterpret_cast<byte *>(memory::MemoryAllocatorV->allocate(NA_CHANNEL_MAX_MESSAGE_BYTES, alignof(byte)));
         if (message_bytes == nullptr)
         {
             close_endpoint();
@@ -317,8 +317,8 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         u64 actual_bytes = 0;
         for (;;)
         {
-            status = ipc::receive_raw_channel_kernel(resources, endpoint, message_bytes,
-                                                     NA_CHANNEL_MAX_MESSAGE_BYTES, actual_bytes, received);
+            status = ipc::receive_raw_channel_kernel(resources, endpoint, message_bytes, NA_CHANNEL_MAX_MESSAGE_BYTES,
+                                                     actual_bytes, received);
             if (status != NA_STATUS_WOULD_BLOCK)
                 break;
             status = ipc::wait_for_signal(resources, endpoint, NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED,
@@ -363,6 +363,25 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
             close_received_handles(resources, received);
             return NA_STATUS_INVALID_MESSAGE;
         }
+
+        // Keep the process-owned console capabilities in sync with the
+        // handles installed by the child bootstrap.  Forked children use
+        // these capabilities to rebuild their userland bootstrap state.
+        process->console_in_handle = stdin_handle;
+        process->console_out_handle = stdout_handle;
+        process->console_err_handle = stderr_handle;
+
+        capability::entry root_entry;
+        capability::entry current_entry;
+        if (!resources.lookup_native(root_handle, root_entry) || !resources.lookup_native(current_handle, current_entry) ||
+            !root_entry.object || !current_entry.object ||
+            root_entry.object->get<fs::vfs::native_directory>() == nullptr ||
+            current_entry.object->get<fs::vfs::native_directory>() == nullptr)
+            return NA_STATUS_INVALID_MESSAGE;
+        process->bootstrap_root_directory =
+            handle_t<fs::vfs::native_directory>(root_entry.object.get_control());
+        process->bootstrap_current_directory =
+            handle_t<fs::vfs::native_directory>(current_entry.object.get_control());
 
         values.root_directory = root_handle;
         values.current_directory = current_handle;

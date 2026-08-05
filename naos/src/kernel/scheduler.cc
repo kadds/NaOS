@@ -2,6 +2,7 @@
 #include "freelibcxx/hash_map.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/schedulers/completely_fair.hpp"
 #include "kernel/schedulers/round_robin.hpp"
 #include "kernel/smp.hpp"
@@ -14,15 +15,16 @@ namespace task::scheduler
 scheduler *real_time_schedulers;
 scheduler *normal_schedulers;
 
-void timer_tick(u64 pass, u64 user_data);
+void timer_tick(timeclock::microsecond_t) noexcept;
 
 std::atomic_bool is_init = false;
 
 task::thread_t *thread_to_reschedule;
 
 std::atomic_bool reschedule_ready;
+irq::registration *reschedule_registration;
 
-irq::request_result reschedule_func(const irq::interrupt_info *inter, u64 data, u64 user_data)
+irq::request_result reschedule_func(const irq::interrupt_info *, u64) noexcept
 {
     task::thread_t *thd = thread_to_reschedule;
 
@@ -63,9 +65,11 @@ void init()
 
         is_init = true;
         reschedule_ready = true;
-        irq::register_request_func(irq::hard_vector::IPI_reschedule, reschedule_func, 0);
+        reschedule_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
+        *reschedule_registration =
+            irq::register_handler(irq::hard_vector::IPI_reschedule, irq::hard_handler::bind<&reschedule_func>());
     }
-    timer::add_watcher(5000, timer_tick, 0);
+    (void)timer::schedule_after(5000, timer::timer_handler::bind<&timer_tick>());
 }
 
 void init_cpu()
@@ -205,9 +209,9 @@ u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size)
     return target->scheduler->sctl(operator_type, target, attr, value, size);
 }
 
-void timer_tick(u64 pass, u64 user_data)
+void timer_tick(timeclock::microsecond_t) noexcept
 {
-    timer::add_watcher(5000, timer_tick, user_data);
+    (void)timer::schedule_after(5000, timer::timer_handler::bind<&timer_tick>());
     thread_t *thd = current();
 
     uctx::UninterruptibleContext icu;
@@ -223,9 +227,9 @@ void timer_tick(u64 pass, u64 user_data)
         normal_schedulers->schedule_tick();
     }
 
-    if (!migrate_pre_check()) 
+    if (!migrate_pre_check())
     {
-        return; 
+        return;
     }
 
     u64 cpu_count = cpu::count();

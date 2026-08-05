@@ -4,6 +4,7 @@
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
 #include "kernel/common.hpp"
+#include "kernel/irq.hpp"
 #include <atomic>
 
 namespace arch::APIC
@@ -43,7 +44,6 @@ class clock_source;
 class clock_event : public ::timeclock::clock_event
 {
   private:
-    friend irq::request_result on_apic_event(const irq::interrupt_info *, u64 extra_data, u64 user_data);
     friend class clock_source;
     std::atomic_bool is_suspend_ = false;
     std::atomic_uint64_t jiff_ = 0;
@@ -55,6 +55,9 @@ class clock_event : public ::timeclock::clock_event
 
     u64 hz_ = 0;
     bool builtin_frequency_ = false;
+    irq::registration irq_registration_;
+
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
 
   public:
     clock_event() {}

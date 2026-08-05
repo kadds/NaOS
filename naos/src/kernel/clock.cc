@@ -18,10 +18,10 @@ i64 location_offset;
 microsecond_t start_time_microseconds, current_time_microseconds;
 const microsecond_t time_1970_to_start = (30ul * 365 + (2000 - 1970) / 4) * 24 * 60 * 60 * 1000 * 1000;
 
-void time_tick(microsecond_t expires, u64 user_data)
+void time_tick(microsecond_t expires) noexcept
 {
     current_time_microseconds = expires + start_time_microseconds;
-    timer::add_watcher(1000'000UL, time_tick, 0);
+    (void)timer::schedule_after(1000'000UL, timer::timer_handler::bind<&time_tick>());
     if (auto val = freelibcxx::tm_t::from_posix_seconds(current_time_microseconds / 1000 / 1000); val.has_value())
     {
         freelibcxx::string str(memory::KernelCommonAllocatorV);
@@ -56,7 +56,7 @@ void init()
 void start_tick()
 {
     // add 100 ms
-    timer::add_watcher(100000, time_tick, 0);
+    (void)timer::schedule_after(100000, timer::timer_handler::bind<&time_tick>());
 }
 
 microsecond_t get_current_clock() { return current_time_microseconds; }

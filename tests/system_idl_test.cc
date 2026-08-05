@@ -63,6 +63,21 @@ int main()
     naos::system::TtyControl::Termios termios{};
     termios.input_flags = 11;
     termios.control_chars[3] = 0x7f;
+
+    // tcgetpgrp() has an empty wire request. Its zero-length buffer must be
+    // represented by a null pointer at the native ABI boundary.
+    naos::system::TtyControl::get_pgrp_request get_pgrp_request{};
+    if (!naos::system::TtyControl::encode_get_pgrp_request(buffer, sizeof(buffer), get_pgrp_request, written) ||
+        written != 0 || !naos::system::TtyControl::decode_get_pgrp_request(nullptr, 0, get_pgrp_request))
+        return 100;
+
+    // getcwd() uses the empty Directory::PATH request. Keep its wire shape
+    // covered as well, since the native ABI requires nullptr for zero bytes.
+    naos::system::Directory::path_request path_request{};
+    if (!naos::system::Directory::encode_path_request(buffer, sizeof(buffer), path_request, written) ||
+        written != 0 || !naos::system::Directory::decode_path_request(nullptr, 0, path_request))
+        return 101;
+
     naos::system::TtyControl::set_attributes_request tty_request{};
     tty_request.attributes = termios;
     if (!naos::system::TtyControl::encode_set_attributes_request(buffer, sizeof(buffer), tty_request, written) ||

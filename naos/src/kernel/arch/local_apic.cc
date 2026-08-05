@@ -330,13 +330,11 @@ void local_post_IPI_mask(u64 intr, u64 mask0)
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
-irq::request_result _ctx_interrupt_ on_apic_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
 {
-    auto event = (clock_event *)user_data;
-
-    if (likely(event && !event->is_suspend_.load() && event->id_ == cpu::current().get_apic_id()))
+    if (likely(!is_suspend_.load() && id_ == cpu::current().get_apic_id()))
     {
-        event->jiff_.fetch_add(1);
+        jiff_.fetch_add(1);
         irq::raise_soft_irq(irq::soft_vector::timer);
         return irq::request_result::ok;
     }
@@ -413,7 +411,7 @@ void clock_event::suspend()
             write_register(timer_initial_count_register, 0xFFFF'FFFF);
             write_register(timer_divide_register, 0);
         }
-        irq::unregister_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
+        irq_registration_.reset();
     }
 }
 
@@ -425,7 +423,8 @@ void clock_event::resume()
         jiff_ = 0;
         last_tick_ = 0;
 
-        irq::register_request_func(irq::hard_vector::local_apic_timer, on_apic_event, (u64)this);
+        irq_registration_ = irq::register_handler(irq::hard_vector::local_apic_timer,
+                                                  irq::hard_handler::bind<&clock_event::on_interrupt>(*this));
 
         uctx::UninterruptibleContext icu;
 

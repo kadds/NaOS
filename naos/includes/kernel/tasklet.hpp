@@ -1,9 +1,10 @@
 #pragma once
+#include "freelibcxx/delegate.hpp"
 #include "kernel/common.hpp"
 namespace irq
 {
 
-typedef void (*tasklet_func)(u64 user_data);
+using tasklet_func = freelibcxx::delegate<void() noexcept>;
 
 struct tasklet_t
 {
@@ -11,7 +12,6 @@ struct tasklet_t
     /// used by per cpu
     tasklet_t *next_cpu;
     tasklet_func func;
-    u64 user_data;
     /// 0: idle, 1: queued or running, 2: raised while queued or running
     u8 state;
     /// >= 0 enable, < 0 disable

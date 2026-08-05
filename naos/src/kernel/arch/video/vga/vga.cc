@@ -72,16 +72,4 @@ void test()
     print<PA<TextAttribute::Reset>>();
 }
 
-// void flush_timer(u64 dt, u64 ud)
-// {
-//     flush_kbuffer();
-//     timer::add_watcher(1000000 / 60, flush_timer, 0);
-// }
-
-// void auto_flush()
-// {
-//     // 60HZ
-//     timer::add_watcher(1000000 / 60, flush_timer, 0);
-// }
-
 } // namespace arch::device::vga

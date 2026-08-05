@@ -18,12 +18,22 @@ bool tty_read_func(u64 data)
 
 i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 {
+    const auto job_control = task::check_tty_job_control(
+        task::current_process(), &core_, false, (core_.get_termios().c_lflag & termios_lflag::tostop) != 0);
+    if (job_control != 0)
+        return job_control;
     const auto result = core_.write_output(data, size, flags);
     render_master_output();
     return result;
 }
 
-i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags) { return core_.read_input(data, max_size, flags); }
+i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags)
+{
+    const auto job_control = task::check_tty_job_control(task::current_process(), &core_, true);
+    if (job_control != 0)
+        return job_control;
+    return core_.read_input(data, max_size, flags);
+}
 
 i64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
 {

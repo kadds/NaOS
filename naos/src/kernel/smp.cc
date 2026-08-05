@@ -6,6 +6,7 @@
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
@@ -13,13 +14,16 @@
 namespace SMP
 {
 
-irq::request_result flush_tlb_irq(const irq::interrupt_info *inter, u64 data, u64 user_data)
+irq::registration *tlb_registration;
+irq::registration *call_registration;
+
+irq::request_result flush_tlb_irq(const irq::interrupt_info *, u64) noexcept
 {
     arch::paging::page_table_t::reload();
     return irq::request_result::ok;
 }
 
-irq::request_result ipi_call(const irq::interrupt_info *inter, u64 data, u64 user_data)
+irq::request_result ipi_call(const irq::interrupt_info *, u64) noexcept
 {
     auto &cpu = cpu::current();
     cpu.call_cpu();
@@ -37,8 +41,10 @@ void init()
     arch::SMP::init();
     if (cpu::current().is_bsp())
     {
-        irq::register_request_func(irq::hard_vector::IPI_tlb, flush_tlb_irq, 0);
-        irq::register_request_func(irq::hard_vector::IPI_call, ipi_call, 0);
+        tlb_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
+        call_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
+        *tlb_registration = irq::register_handler(irq::hard_vector::IPI_tlb, irq::hard_handler::bind<&flush_tlb_irq>());
+        *call_registration = irq::register_handler(irq::hard_vector::IPI_call, irq::hard_handler::bind<&ipi_call>());
     }
 }
 

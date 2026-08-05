@@ -27,26 +27,28 @@ using clock_source_array_t = freelibcxx::vector<timeclock::clock_source *>;
 
 struct watcher_t
 {
+    enum class state : u8
+    {
+        enabled,
+        canceled,
+    };
+
+    watcher_id id;
     /// target time microsecond
     u64 expires;
-    watcher_func function;
-    u64 data;
+    timer_handler handler;
+    state current_state = state::enabled;
 
-    /// HACK: save bit 1 to function
+    watcher_t(watcher_id id, u64 expires, timer_handler handler)
+        : id(id)
+        , expires(expires)
+        , handler(handler)
+    {
+    }
 
-    void set_enable() { function = (watcher_func)((u64)function | (1ul << 63)); }
-
-    void clear_enable() { function = (watcher_func)((u64)function & ~(1ul << 63)); }
-
-    bool is_enable() { return (u64)function >> 63; }
-
-    watcher_t(u64 expires, watcher_func func, u64 data)
-        : expires(expires)
-        , function(func)
-        , data(data) {};
-
-    bool operator==(const watcher_t &w) { return expires == w.expires && function == w.function && data == w.data; }
+    bool operator==(const watcher_t &w) { return id == w.id; }
     bool operator<(const watcher_t &w) { return expires < w.expires; }
+    bool is_enabled() const { return current_state == state::enabled; }
 };
 
 using watcher_list_t = freelibcxx::linked_list<watcher_t>;
@@ -84,7 +86,7 @@ timeclock::clock_event *get_clock_event()
 
 constexpr u64 tick_us = 1000;
 
-void on_tick(u64 vector, u64 data)
+void on_tick(u64 vector) noexcept
 {
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
     u64 us = get_clock_source()->current();
@@ -94,7 +96,7 @@ void on_tick(u64 vector, u64 data)
         uctx::UninterruptibleContext icu;
         for (auto &ws : cpu_timer.watcher_list)
         {
-            if (likely(ws.is_enable()))
+            if (likely(ws.is_enabled()))
             {
                 cpu_timer.tick_list.insert(ws);
             }
@@ -106,13 +108,12 @@ void on_tick(u64 vector, u64 data)
     auto it = cpu_timer.tick_list.begin();
     for (; it != cpu_timer.tick_list.end() && it->expires <= us + tick_us / 2;)
     {
-        if (likely(it->is_enable()))
+        if (likely(it->is_enabled()))
         {
-            auto f = it->function;
+            auto handler = it->handler;
             auto exp = it->expires;
-            auto d = it->data;
             icc.end();
-            f(exp, d);
+            handler(exp);
             icc.begin();
         }
         it = cpu_timer.tick_list.remove(it);
@@ -151,6 +152,8 @@ bool check_source(timeclock::clock_source *cs)
 
 lock::spinlock_t timer_spinlock;
 timeclock::clock_source *global_source = nullptr;
+std::atomic_uint64_t next_watcher_id{1};
+irq::registration *tick_registration;
 void init()
 {
     timer_spinlock.lock();
@@ -251,7 +254,8 @@ void init()
     {
         timeclock::init();
         timeclock::start_tick();
-        irq::register_soft_request_func(irq::soft_vector::timer, on_tick, 0);
+        tick_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
+        *tick_registration = irq::register_soft_handler(irq::soft_vector::timer, irq::soft_handler::bind<&on_tick>());
     }
 
     timer_spinlock.unlock();
@@ -280,50 +284,55 @@ void busywait(timeclock::microsecond_t duration)
     }
 }
 
-void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data)
+watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handler)
 {
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
-    cpu_timer.watcher_list.push_back(watcher_t(expires_delta_time + get_high_resolution_time(), func, user_data));
+    const auto id = next_watcher_id.fetch_add(1);
+    cpu_timer.watcher_list.push_back(watcher_t(id, duration + get_high_resolution_time(), handler));
+    return id;
 }
 
-bool add_time_point_watcher(u64 expires_time_point, watcher_func func, u64 user_data)
+watcher_id schedule_at(timeclock::microsecond_t expires_time_point, timer_handler handler)
 {
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     if (get_high_resolution_time() < expires_time_point)
     {
-        cpu_timer.watcher_list.push_back(watcher_t(expires_time_point, func, user_data));
-        return true;
+        const auto id = next_watcher_id.fetch_add(1);
+        cpu_timer.watcher_list.push_back(watcher_t(id, expires_time_point, handler));
+        return id;
     }
-    return false;
+    return invalid_watcher_id;
 }
 
-///< don't remove timer in soft irq context
-void remove_watcher(watcher_func func)
+bool cancel(watcher_id id)
 {
+    if (id == invalid_watcher_id)
+        return false;
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     for (auto it = cpu_timer.watcher_list.begin(); it != cpu_timer.watcher_list.end(); ++it)
     {
-        if (it->function == func)
+        if (it->id == id)
         {
             cpu_timer.watcher_list.remove(it);
-            return;
+            return true;
         }
     }
     uctx::UninterruptibleContext icu;
     for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
     {
-        if (it->function == func)
+        if (it->id == id)
         {
-            it->clear_enable();
-            return;
+            it->current_state = watcher_t::state::canceled;
+            return true;
         }
         else
         {
             ++it;
         }
     }
+    return false;
 }
 
 } // namespace timer

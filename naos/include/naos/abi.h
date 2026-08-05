@@ -108,6 +108,11 @@ enum
     NA_PROCESS_WAIT_FLAG_NOHANG = ((uint64_t)1 << 0),
 };
 
+static inline uint64_t na_process_wait_status_exit(int64_t exit_code)
+{
+    return ((uint64_t)exit_code & UINT64_C(0xff)) << 8;
+}
+
 typedef struct na_uuid
 {
     uint8_t bytes[16];

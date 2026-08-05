@@ -3,6 +3,7 @@
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
 #include "kernel/common.hpp"
+#include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
 #include <atomic>
 
@@ -12,7 +13,6 @@ class clock_source;
 class clock_event : public ::timeclock::clock_event
 {
     friend class clock_source;
-    friend irq::request_result on_event(const irq::interrupt_info *, u64 extra_data, u64 user_data);
 
   private:
     u64 hz_ = 0;
@@ -23,6 +23,9 @@ class clock_event : public ::timeclock::clock_event
     std::atomic_uint64_t jiff_ = 0;
     std::atomic_uint64_t last_tick_ = 0;
     u64 update_tsc_ = 0;
+    irq::registration irq_registration_;
+
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
 
   public:
     clock_event() {}

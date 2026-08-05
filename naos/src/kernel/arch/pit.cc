@@ -33,15 +33,12 @@ u16 read_counter()
     return val;
 }
 
-irq::request_result _ctx_interrupt_ on_event(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
 {
-    clock_event *ev = (clock_event *)user_data;
-    if (unlikely(ev == nullptr))
-        return irq::request_result::no_handled;
-    if (!ev->is_suspend_.load())
+    if (!is_suspend_.load())
     {
-        ev->jiff_.fetch_add(1);
-        ev->update_tsc_ = _rdtsc();
+        jiff_.fetch_add(1);
+        update_tsc_ = _rdtsc();
     }
     irq::raise_soft_irq(irq::soft_vector::timer);
     return irq::request_result::ok;
@@ -73,7 +70,7 @@ void clock_event::suspend()
             // io_out8(channel_0_port, p & 0xFF);
             // io_out8(channel_0_port, (p >> 8) & 0xFF);
         }
-        irq::unregister_request_func(APIC::query_gsi(APIC::gsi_vector::pit) + 0x20, on_event, (u64)this);
+        irq_registration_.reset();
     }
 }
 
@@ -85,7 +82,8 @@ void clock_event::resume()
         jiff_ = 1;
         last_tick_ = 0;
 
-        irq::register_request_func(APIC::query_gsi(APIC::gsi_vector::pit) + 0x20, on_event, (u64)this);
+        irq_registration_ = irq::register_handler(APIC::query_gsi(APIC::gsi_vector::pit) + 0x20,
+                                                  irq::hard_handler::bind<&clock_event::on_interrupt>(*this));
         {
             uctx::UninterruptibleContext icu;
             io_out8(command_port, 0b00110110);

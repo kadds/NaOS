@@ -7,11 +7,13 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/time.hpp"
+#include "kernel/timer.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
 #include "naos/generated/system_uapi.h"
 #include <atomic>
+#include <limits>
 #include <utility>
 
 namespace naos::syscall
@@ -23,20 +25,115 @@ enum futex_op
     futex_wait = 2,
 };
 
+struct futex_bucket
+{
+    task::wait_queue_t waiters;
+    std::atomic_uint64_t generation{0};
+
+    void wake(timeclock::microsecond_t) noexcept
+    {
+        generation.fetch_add(1, std::memory_order_release);
+        waiters.do_wake_up();
+    }
+};
+
+constexpr u64 futex_bucket_count = 64;
+std::atomic<futex_bucket *> futex_buckets{nullptr};
+std::atomic_flag futex_buckets_lock = ATOMIC_FLAG_INIT;
+
+futex_bucket *ensure_futex_buckets()
+{
+    auto *buckets = futex_buckets.load(std::memory_order_acquire);
+    if (buckets != nullptr)
+        return buckets;
+    while (futex_buckets_lock.test_and_set(std::memory_order_acquire))
+        cpu_pause();
+    buckets = futex_buckets.load(std::memory_order_relaxed);
+    if (buckets == nullptr)
+    {
+        buckets = memory::NewArray<futex_bucket>(memory::KernelCommonAllocatorV, futex_bucket_count);
+        futex_buckets.store(buckets, std::memory_order_release);
+    }
+    futex_buckets_lock.clear(std::memory_order_release);
+    return buckets;
+}
+
+futex_bucket &bucket_for(futex_bucket *buckets, const int *ptr)
+{
+    const auto key = reinterpret_cast<u64>(ptr) >> 2;
+    return buckets[key % futex_bucket_count];
+}
+
 int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
 {
-    if (op & futex_op::futex_wait)
+    (void)val2;
+    if (ptr == nullptr || !is_user_space_range(ptr, sizeof(*ptr)))
+        return EFAULT;
+
+    auto *buckets = ensure_futex_buckets();
+    if (buckets == nullptr)
+        return EFAILED;
+    auto &bucket = bucket_for(buckets, ptr);
+    if (op == futex_op::futex_wait)
     {
+        int observed = 0;
+        if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
+            return EFAULT;
+        if (observed != val)
+            return EAGAIN;
+
+        timeclock::time relative(0, 0);
+        bool has_timeout = timeout != nullptr;
+        if (has_timeout &&
+            naos::usercopy::copy_from(&relative, reinterpret_cast<u64>(timeout), sizeof(relative)) != NA_STATUS_OK)
+            return EFAULT;
+        if (has_timeout && (relative.tv_sec < 0 || relative.tv_nsec < 0 || relative.tv_nsec >= 1000000000))
+            return EPARAM;
+
+        const auto generation = bucket.generation.load(std::memory_order_acquire);
+        timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
+        if (has_timeout)
+        {
+            const auto seconds = static_cast<u64>(relative.tv_sec);
+            const auto nanoseconds = static_cast<u64>(relative.tv_nsec);
+            if (seconds > std::numeric_limits<u64>::max() / 1000000 ||
+                seconds * 1000000 > std::numeric_limits<u64>::max() - nanoseconds / 1000)
+                return EOVERFLOW;
+            const auto duration = seconds * 1000000 + nanoseconds / 1000;
+            const auto now = timer::get_high_resolution_time();
+            if (duration > std::numeric_limits<u64>::max() - now)
+                return EOVERFLOW;
+            if (duration == 0)
+                return ETIMEDOUT;
+            deadline_watcher = timer::schedule_at(
+                now + duration, timer::timer_handler::bind<&futex_bucket::wake>(bucket));
+            if (deadline_watcher == timer::invalid_watcher_id)
+                return EFAILED;
+        }
+
+        bucket.waiters.do_wait([&bucket, generation, ptr, val] {
+            int current = 0;
+            if (naos::usercopy::copy_from(&current, reinterpret_cast<u64>(ptr), sizeof(current)) != NA_STATUS_OK)
+                return true;
+            return bucket.generation.load(std::memory_order_acquire) != generation || current != val;
+        });
+        if (deadline_watcher != timer::invalid_watcher_id)
+            (void)timer::cancel(deadline_watcher);
+
+        if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
+            return EFAULT;
+        if (observed == val && bucket.generation.load(std::memory_order_acquire) == generation)
+            return has_timeout ? ETIMEDOUT : EAGAIN;
         return 0;
     }
-    else if (op & futex_op::futex_wake)
+    else if (op == futex_op::futex_wake)
     {
-        return 0;
+        bucket.generation.fetch_add(1, std::memory_order_release);
+        if (val <= 0)
+            return 0;
+        return static_cast<int>(bucket.waiters.do_wake_up(static_cast<u64>(val)));
     }
-    else
-    {
-        return EPARAM;
-    }
+    return EPARAM;
 }
 
 /// exit process with return value
@@ -117,7 +214,10 @@ int sleep(const timeclock::time *time)
 {
     if (!is_user_space_range(time, sizeof(*time)))
         return EPARAM;
-    task::do_sleep(*time);
+    timeclock::time value(0, 0);
+    if (naos::usercopy::copy_from(&value, reinterpret_cast<u64>(time), sizeof(value)) != NA_STATUS_OK)
+        return EFAULT;
+    task::do_sleep(value);
     return OK;
 }
 
@@ -149,19 +249,42 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
     if (info != nullptr && !is_user_space_range(info, sizeof(*info)))
         return EPARAM;
 
-    if (target->flags & send_to_process)
+    target_t target_values{};
+    if (naos::usercopy::copy_from(&target_values, reinterpret_cast<u64>(target), sizeof(target_values)) != NA_STATUS_OK)
+        return EFAULT;
+
+    sig_info_t info_values{};
+    if (info != nullptr &&
+        naos::usercopy::copy_from(&info_values, reinterpret_cast<u64>(info), sizeof(info_values)) != NA_STATUS_OK)
+        return EFAULT;
+
+    if (target_values.flags != send_to_process && target_values.flags != send_to_group)
+        return EPARAM;
+    if (num >= task::max_signal_count)
+        return EPARAM;
+
+    if (target_values.flags == send_to_process)
     {
-        auto proc = task::find_pid(target->id);
+        auto proc = task::find_pid(target_values.id);
         if (proc == nullptr)
             return ENOEXIST;
-        if (info)
-            proc->signal_pack.send(proc, num, info->error, info->code, info->status);
-        else
-            proc->signal_pack.send(proc, num, 0, 0, 0);
+        if (num != 0)
+        {
+            if (info != nullptr)
+                proc->signal_pack.send(proc, num, info_values.error, info_values.code, info_values.status);
+            else
+                proc->signal_pack.send(proc, num, 0, 0, 0);
+        }
     }
-    else if (target->flags & send_to_group)
+    else
     {
-        /// TODO: send signal to group
+        const auto group = target_values.id == 0 ? task::current_process()->process_group_id
+                                                 : static_cast<group_id>(target_values.id);
+        const auto result = task::send_signal_to_process_group(
+            group, num, info != nullptr ? info_values.error : 0, info != nullptr ? info_values.code : 0,
+            info != nullptr ? info_values.status : 0);
+        if (result < 0)
+            return result;
     }
 
     return OK;
@@ -176,12 +299,30 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
 
 i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
 {
-    if (valid_mask && !is_user_space_pointer(valid_mask))
-        return EFAILED;
-    if (block_mask && !is_user_space_pointer(block_mask))
-        return EFAILED;
-    if (ignore_mask && !is_user_space_pointer(ignore_mask))
-        return EFAILED;
+    if ((valid_mask && !is_user_space_range(valid_mask, sizeof(*valid_mask))) ||
+        (block_mask && !is_user_space_range(block_mask, sizeof(*block_mask))) ||
+        (ignore_mask && !is_user_space_range(ignore_mask, sizeof(*ignore_mask))))
+        return EFAULT;
+
+    u64 valid_value = 0;
+    u64 block_value = 0;
+    u64 ignore_value = 0;
+    const auto read_mask = [](u64 *source, u64 &destination) {
+        if (source == nullptr)
+            return true;
+        return naos::usercopy::copy_from(
+                   &destination, reinterpret_cast<u64>(source), sizeof(destination)) == NA_STATUS_OK;
+    };
+    const auto write_mask = [](u64 *destination, u64 value) {
+        return destination == nullptr ||
+               naos::usercopy::copy_to(reinterpret_cast<u64>(destination), &value, sizeof(value)) == NA_STATUS_OK;
+    };
+    if (opt != SIGOPT_GET && opt != SIGOPT_INVALID_ALL)
+    {
+        if (!read_mask(valid_mask, valid_value) || !read_mask(block_mask, block_value) ||
+            !read_mask(ignore_mask, ignore_value))
+            return EFAULT;
+    }
     auto &sigpack = task::current_process()->signal_pack;
 
     auto &valid = sigpack.get_mask().get_valid_set();
@@ -191,47 +332,50 @@ i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
     if (opt == SIGOPT_GET)
     {
         if (valid_mask)
-            *valid_mask = valid.get();
+            valid_value = valid.get();
         if (block_mask)
-            *block_mask = block.get();
+            block_value = block.get();
         if (ignore_mask)
-            *ignore_mask = ignore.get();
+            ignore_value = ignore.get();
+        if (!write_mask(valid_mask, valid_value) || !write_mask(block_mask, block_value) ||
+            !write_mask(ignore_mask, ignore_value))
+            return EFAULT;
     }
     else if (opt == SIGOPT_SET)
     {
         if (valid_mask)
-            valid.set(*valid_mask);
+            valid.set(valid_value);
         if (block_mask)
-            block.set(*block_mask);
+            block.set(block_value);
         if (ignore_mask)
-            ignore.set(*ignore_mask);
+            ignore.set(ignore_value);
     }
     else if (opt == SIGOPT_OR)
     {
         if (valid_mask)
-            valid.set(*valid_mask | valid.get());
+            valid.set(valid_value | valid.get());
         if (block_mask)
-            block.set(*block_mask | block.get());
+            block.set(block_value | block.get());
         if (ignore_mask)
-            ignore.set(*ignore_mask | ignore.get());
+            ignore.set(ignore_value | ignore.get());
     }
     else if (opt == SIGOPT_AND)
     {
         if (valid_mask)
-            valid.set(*valid_mask & valid.get());
+            valid.set(valid_value & valid.get());
         if (block_mask)
-            block.set(*block_mask & block.get());
+            block.set(block_value & block.get());
         if (ignore_mask)
-            ignore.set(*ignore_mask & ignore.get());
+            ignore.set(ignore_value & ignore.get());
     }
     else if (opt == SIGOPT_XOR)
     {
         if (valid_mask)
-            valid.set(*valid_mask ^ valid.get());
+            valid.set(valid_value ^ valid.get());
         if (block_mask)
-            block.set(*block_mask ^ block.get());
+            block.set(block_value ^ block.get());
         if (ignore_mask)
-            ignore.set(*ignore_mask ^ ignore.get());
+            ignore.set(ignore_value ^ ignore.get());
     }
     else if (opt == SIGOPT_INVALID_ALL)
     {
@@ -241,6 +385,14 @@ i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
     {
         return EPARAM;
     }
+
+    // SIGKILL and SIGSTOP cannot be caught, ignored, or blocked.
+    valid -= task::signal::sigkill;
+    valid -= task::signal::sigstop;
+    block -= task::signal::sigkill;
+    block -= task::signal::sigstop;
+    ignore -= task::signal::sigkill;
+    ignore -= task::signal::sigstop;
     return OK;
 }
 
@@ -315,16 +467,14 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     if (copy_status != NA_STATUS_OK)
         return copy_status == NA_STATUS_FAULT ? EFAULT : EINVAL;
     if (values.struct_size < sizeof(values) || values.flags != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
-        values.executable == NA_HANDLE_INVALID || values.bootstrap_endpoint == NA_HANDLE_INVALID ||
-        values.process == 0)
+        values.executable == NA_HANDLE_INVALID || values.bootstrap_endpoint == NA_HANDLE_INVALID || values.process == 0)
         return EINVAL;
 
     const auto path = reinterpret_cast<const char *>(values.path);
     const auto argv = reinterpret_cast<char *const *>(values.argv);
     const auto envp = reinterpret_cast<char *const *>(values.envp);
-    if (!is_user_space_pointer(path) || !is_user_space_pointer_or_null(argv) ||
-        !is_user_space_pointer_or_null(envp) || !is_user_space_range(reinterpret_cast<void *>(values.process),
-                                                                       sizeof(na_handle_t)) ||
+    if (!is_user_space_pointer(path) || !is_user_space_pointer_or_null(argv) || !is_user_space_pointer_or_null(envp) ||
+        !is_user_space_range(reinterpret_cast<void *>(values.process), sizeof(na_handle_t)) ||
         (values.pid != 0 && !is_user_space_range(reinterpret_cast<void *>(values.pid), sizeof(process_id))))
         return EFAULT;
     if (values.pid != 0 &&
@@ -361,22 +511,19 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
         return EINVAL;
     }
     handle_t<fs::vfs::file> file(records[0].resource.object().get_control());
-    const auto child_flags = task::create_process_flags::deferred_start |
-                             task::create_process_flags::no_shared_root |
+    const auto child_flags = task::create_process_flags::deferred_start | task::create_process_flags::no_shared_root |
                              task::create_process_flags::no_shared_work_dir |
-                             task::create_process_flags::no_shared_files |
-                             task::create_process_flags::no_shared_stdin |
+                             task::create_process_flags::no_shared_files | task::create_process_flags::no_shared_stdin |
                              task::create_process_flags::no_shared_stdout |
                              task::create_process_flags::no_shared_stderror;
-    auto *child = task::create_process(std::move(file), path, before_user_thread,
-                                       reinterpret_cast<const char *const *>(argv),
-                                       reinterpret_cast<const char *const *>(envp), child_flags);
+    auto *child =
+        task::create_process(std::move(file), path, before_user_thread, reinterpret_cast<const char *const *>(argv),
+                             reinterpret_cast<const char *const *>(envp), child_flags);
     if (child == nullptr)
     {
         parent->resource.restore_native_batch(records);
         return EFAILED;
     }
-
     child->bootstrap_root_directory.reset();
     child->bootstrap_current_directory.reset();
     child->console_in_handle = NA_HANDLE_INVALID;
@@ -384,7 +531,8 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     child->console_err_handle = NA_HANDLE_INVALID;
 
     auto process_object = handle_t<task::process_object>::make(child);
-    const auto process_handle = parent->resource.install_native(std::move(process_object), process_capability_metadata());
+    const auto process_handle =
+        parent->resource.install_native(std::move(process_object), process_capability_metadata());
     if (process_handle == NA_HANDLE_INVALID)
     {
         task::abort_unstarted_process(child);

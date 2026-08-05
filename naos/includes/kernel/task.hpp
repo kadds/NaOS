@@ -62,6 +62,7 @@ enum attributes : flag_t
     no_thread = 2,
     userspace = 4,
     job_control_cleanup_done = 8,
+    job_control_stopped = 16,
 };
 } // namespace process_attributes
 
@@ -166,6 +167,7 @@ enum attributes : flag_t
     main = 16,
     real_time = 32,
     on_migrate = 128,
+    job_control_stopped = 256,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -245,6 +247,8 @@ struct thread_t
     // process may have concurrent syscalls touching different user buffers.
     volatile bool usercopy_active = false;
     volatile u64 usercopy_resume = 0;
+
+    void wake_from_sleep(timeclock::microsecond_t) noexcept;
 
     thread_t();
 };
@@ -369,6 +373,8 @@ enum : flag_t
 
 void stop_thread(thread_t *thread, flag_t flags);
 void continue_thread(thread_t *thread, flag_t flags);
+void stop_process(process_t *process, flag_t flags = 0);
+void continue_process(process_t *process, flag_t flags = 0);
 
 process_t *find_pid(process_id pid);
 thread_t *find_tid(process_t *process, thread_id tid);
@@ -391,6 +397,11 @@ void detach_controlling_tty(process_t *process);
 /// Query or update the foreground process group for a controlling tty.
 i64 get_foreground_process_group(dev::tty::tty_core *tty);
 int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, group_id pgid);
+
+/// Enforce the controlling-terminal rules for a process using a tty.
+/// Returns zero when the operation may proceed, or a negative errno after
+/// delivering the appropriate job-control signal.
+i64 check_tty_job_control(process_t *process, dev::tty::tty_core *tty, bool input, bool tostop = false);
 
 /// Return the controlling tty without exposing its definition to task users.
 dev::tty::tty_core *get_controlling_tty(process_t *process);

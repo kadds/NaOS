@@ -126,9 +126,8 @@ struct wait_request
     freelibcxx::vector<na_wait_item_t> *items;
 };
 
-bool wait_condition(u64 data)
+bool wait_condition(wait_request *request)
 {
-    auto *request = reinterpret_cast<wait_request *>(data);
     for (auto &item : *request->items)
     {
         item.observed = request->resources->native_signals(item.handle);
@@ -138,7 +137,7 @@ bool wait_condition(u64 data)
     return false;
 }
 
-void wait_deadline_wakeup(u64, u64)
+void wait_deadline_wakeup(timeclock::microsecond_t) noexcept
 {
     if (waiters != nullptr)
         waiters->do_wake_up();
@@ -737,12 +736,12 @@ na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t e
         cancel();
         return finish(status == NA_STATUS_OK ? NA_STATUS_BUFFER_TOO_SMALL : status);
     }
-    if (!naos::usercopy::valid_range(values.bytes, message->byte_count()))
+    if (!naos::usercopy::valid_output_range(values.bytes, values.byte_capacity))
     {
         cancel();
         return finish(NA_STATUS_FAULT);
     }
-    if (!naos::usercopy::valid_range(values.resources, message->resource_count() * sizeof(na_handle_t)))
+    if (!naos::usercopy::valid_output_range(values.resources, values.resource_capacity * sizeof(na_handle_t)))
     {
         cancel();
         return finish(NA_STATUS_FAULT);
@@ -812,8 +811,7 @@ na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t e
 }
 
 na_status_t receive_raw_channel_kernel(task::resource_table_t &resources, na_handle_t endpoint, byte *bytes,
-                                        u64 byte_capacity, u64 &actual_bytes,
-                                        freelibcxx::vector<na_handle_t> &handles)
+                                       u64 byte_capacity, u64 &actual_bytes, freelibcxx::vector<na_handle_t> &handles)
 {
     actual_bytes = 0;
     handles.clear();
@@ -930,8 +928,9 @@ na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, 
             return NA_STATUS_ACCESS_DENIED;
     }
     wait_request request{&resources, &snapshot};
-    if (!wait_condition(reinterpret_cast<u64>(&request)))
+    if (!wait_condition(&request))
     {
+        timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
         if (deadline == 0)
             return NA_STATUS_WOULD_BLOCK;
         if (deadline != std::numeric_limits<u64>::max())
@@ -939,15 +938,16 @@ na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, 
             if (timer::get_high_resolution_time() >= deadline)
                 return NA_STATUS_WAIT_TIMED_OUT;
             ensure_waiters();
-            timer::add_time_point_watcher(deadline, wait_deadline_wakeup, 0);
-            waiters->do_wait(wait_condition, reinterpret_cast<u64>(&request));
-            if (!wait_condition(reinterpret_cast<u64>(&request)) && timer::get_high_resolution_time() >= deadline)
+            deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&wait_deadline_wakeup>());
+            waiters->do_wait([&request] { return wait_condition(&request); });
+            (void)timer::cancel(deadline_watcher);
+            if (!wait_condition(&request) && timer::get_high_resolution_time() >= deadline)
                 return NA_STATUS_WAIT_TIMED_OUT;
         }
         else
         {
             ensure_waiters();
-            waiters->do_wait(wait_condition, reinterpret_cast<u64>(&request));
+            waiters->do_wait([&request] { return wait_condition(&request); });
         }
     }
     if (copy_to_user(reinterpret_cast<u64>(items), snapshot.data(), count * sizeof(na_wait_item_t)) != NA_STATUS_OK)
@@ -971,8 +971,9 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
     if (snapshot.data() == nullptr)
         return NA_STATUS_RESOURCE_EXHAUSTED;
     wait_request request{&resources, &snapshot};
-    if (!wait_condition(reinterpret_cast<u64>(&request)))
+    if (!wait_condition(&request))
     {
+        timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
         if (deadline == 0)
             return NA_STATUS_WOULD_BLOCK;
         if (deadline != std::numeric_limits<u64>::max())
@@ -982,7 +983,7 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
             ensure_waiters();
             if (waiters == nullptr)
                 return NA_STATUS_RESOURCE_EXHAUSTED;
-            timer::add_time_point_watcher(deadline, wait_deadline_wakeup, 0);
+            deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&wait_deadline_wakeup>());
         }
         else
         {
@@ -990,8 +991,10 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
             if (waiters == nullptr)
                 return NA_STATUS_RESOURCE_EXHAUSTED;
         }
-        waiters->do_wait(wait_condition, reinterpret_cast<u64>(&request));
-        if (!wait_condition(reinterpret_cast<u64>(&request)) && deadline != std::numeric_limits<u64>::max() &&
+        waiters->do_wait([&request] { return wait_condition(&request); });
+        if (deadline_watcher != timer::invalid_watcher_id)
+            (void)timer::cancel(deadline_watcher);
+        if (!wait_condition(&request) && deadline != std::numeric_limits<u64>::max() &&
             timer::get_high_resolution_time() >= deadline)
             return NA_STATUS_WAIT_TIMED_OUT;
     }

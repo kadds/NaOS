@@ -71,3 +71,12 @@ target_include_directories(system_binding_contract_test PRIVATE
 set_target_properties(system_binding_contract_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_dependencies(system_binding_contract_test naos_system_idl)
 add_test(NAME system_binding_contract_test COMMAND system_binding_contract_test)
+
+add_executable(signal_policy_test signal_policy_test.cc)
+target_include_directories(signal_policy_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
+    ${PROJECT_SOURCE_DIR}/naos/includes
+    ${PROJECT_SOURCE_DIR}/naos/include
+)
+set_target_properties(signal_policy_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME signal_policy_test COMMAND signal_policy_test)

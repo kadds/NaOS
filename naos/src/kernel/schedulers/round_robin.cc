@@ -90,6 +90,8 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     }
     else if (state == thread_state::ready)
     {
+        if (thread->attributes & thread_attributes::job_control_stopped)
+            return;
         if (thread->state == thread_state::stop)
         {
             auto it = l->block_threads.find(thread);
@@ -104,6 +106,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         }
         else if (thread->state == thread_state::running)
         {
+            thread->attributes &= ~(thread_attributes::block_to_stop);
             return;
         }
         else if (thread->state == thread_state::ready)
@@ -128,6 +131,10 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
                 l->runable_list.push_back(thread);
             }
         }
+        return;
+    }
+    else if (state == thread_state::stop && thread->state == thread_state::stop)
+    {
         return;
     }
     trace::panic("Unreachable control flow.", " RR thread state:", (int)thread->state, ", to state: ", (int)state);

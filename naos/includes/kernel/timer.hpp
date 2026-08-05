@@ -1,11 +1,14 @@
 #pragma once
 #include "clock.hpp"
+#include "freelibcxx/delegate.hpp"
 #include "kernel/common.hpp"
 #include "kernel/types.hpp"
 namespace timer
 {
 
-typedef void (*watcher_func)(timeclock::microsecond_t expires, u64 user_data);
+using timer_handler = freelibcxx::delegate<void(timeclock::microsecond_t) noexcept>;
+using watcher_id = u64;
+constexpr watcher_id invalid_watcher_id = 0;
 void init();
 
 ///
@@ -16,10 +19,8 @@ timeclock::microsecond_t get_high_resolution_time();
 
 void busywait(timeclock::microsecond_t duration);
 
-void add_watcher(u64 expires_delta_time, watcher_func func, u64 user_data);
-
-bool add_time_point_watcher(u64 expires_time_point, watcher_func func, u64 user_data);
-
-void remove_watcher(watcher_func func);
+[[nodiscard]] watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handler);
+[[nodiscard]] watcher_id schedule_at(timeclock::microsecond_t deadline, timer_handler handler);
+bool cancel(watcher_id id);
 
 } // namespace timer

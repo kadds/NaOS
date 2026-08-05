@@ -1,4 +1,5 @@
 #pragma once
+#include "freelibcxx/delegate.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/span.hpp"
 #include "kernel/common.hpp"
@@ -20,8 +21,8 @@ struct interrupt_info
     uint32_t error_code;
 };
 
-typedef request_result (*request_func)(const interrupt_info *inter, u64 extra_data, u64 user_data);
-typedef void (*soft_request_func)(u64 soft_irq_vector, u64 user_data);
+using hard_handler = freelibcxx::delegate<request_result(const interrupt_info *, u64) noexcept>;
+using soft_handler = freelibcxx::delegate<void(u64) noexcept>;
 
 } // namespace irq
 #endif

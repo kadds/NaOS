@@ -392,6 +392,7 @@ inline process_t *copy_process(process_t *p)
     process->session_id = p->session_id;
     process->process_group_id = p->process_group_id;
     process->controlling_tty = p->controlling_tty;
+    process->signal_pack.inherit_mask_from(p->signal_pack);
     process->foreground_process_group = 0;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
     auto info = memory::New<mm_info_t>(mm_info_t_allocator);
@@ -882,6 +883,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
         uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
         process->parent_pid = parent->pid;
         process->controlling_tty = parent->controlling_tty;
+        process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
     process->file = file;
@@ -991,6 +993,7 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
         uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
         process->parent_pid = parent->pid;
         process->controlling_tty = parent->controlling_tty;
+        process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
     copy_fd(nullptr, process, current_process(), flags);
@@ -1130,15 +1133,9 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     return 0;
 }
 
-void sleep_callback_func(u64 pass, u64 data)
+void thread_t::wake_from_sleep(timeclock::microsecond_t) noexcept
 {
-    thread_t *thd = (thread_t *)data;
-    if (thd != nullptr)
-    {
-        scheduler::update_state(thd, thread_state::ready);
-        return;
-    }
-    return;
+    scheduler::update_state(this, thread_state::ready);
 }
 
 void do_sleep(const timeclock::time &time)
@@ -1150,7 +1147,7 @@ void do_sleep(const timeclock::time &time)
     if (us != 0)
     {
         scheduler::update_state(current(), thread_state::stop);
-        timer::add_watcher(us, sleep_callback_func, (u64)current());
+        (void)timer::schedule_after(us, timer::timer_handler::bind<&thread_t::wake_from_sleep>(*current()));
     }
     else
     {
@@ -1262,12 +1259,6 @@ void start_task_idle()
     task::builtin::idle::main(0);
 }
 
-bool wait_process_exit(u64 user_data)
-{
-    auto proc = (process_t *)user_data;
-    return proc->attributes & process_attributes::no_thread;
-}
-
 namespace
 {
 struct child_wait_context
@@ -1276,9 +1267,8 @@ struct child_wait_context
     u64 generation;
 };
 
-bool child_wait_generation_changed(u64 user_data)
+bool child_wait_generation_changed(const child_wait_context *context)
 {
-    auto *context = reinterpret_cast<child_wait_context *>(user_data);
     return context == nullptr || context->parent == nullptr ||
            context->parent->child_wait_generation.load() != context->generation;
 }
@@ -1355,7 +1345,7 @@ void notify_parent_of_exit(process_t *process)
 
 u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
 {
-    ret = static_cast<i64>(process->ret_val);
+    ret = static_cast<i64>(na_process_wait_status_exit(static_cast<i64>(process->ret_val)));
     waited_pid = process->pid;
     if (--process->wait_counter == 0)
     {
@@ -1388,7 +1378,7 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
     auto *reserved = reserve_child(parent, target->pid, false);
     if (reserved == nullptr)
         return ECHILD;
-    reserved->wait_queue.do_wait(wait_process_exit, reinterpret_cast<u64>(reserved));
+    reserved->wait_queue.do_wait([reserved] { return reserved->attributes & process_attributes::no_thread; });
     return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
 }
 
@@ -1437,20 +1427,18 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
 
         if (wait_any)
         {
-            parent->child_wait_queue.do_wait(child_wait_generation_changed, reinterpret_cast<u64>(&context));
+            parent->child_wait_queue.do_wait([&context] { return child_wait_generation_changed(&context); });
         }
         else
         {
             auto target = reserve_child(parent, requested_pid, false);
             if (target == nullptr)
                 return ECHILD;
-            target->wait_queue.do_wait(wait_process_exit, reinterpret_cast<u64>(target));
+            target->wait_queue.do_wait([target] { return target->attributes & process_attributes::no_thread; });
             return reap_waited_child(target, ret, waited_pid);
         }
     }
 }
-
-bool wait_exit(u64 user_data) { return ((thread_t *)user_data)->state == thread_state::destroy; }
 
 void exit_thread(thread_t *thd, i64 ret)
 {
@@ -1517,7 +1505,7 @@ u64 join_thread(thread_t *thd, i64 &ret)
         return 4;
     uctx::UninterruptibleContext icu;
     thd->wait_counter++;
-    thd->wait_queue.do_wait(wait_exit, (u64)thd);
+    thd->wait_queue.do_wait([thd] { return thd->state == thread_state::destroy; });
 
     ret = (i64)thd->user_stack_top;
     thd->wait_counter--;
@@ -1549,9 +1537,51 @@ thread_t *find_kernel_stack_thread(void *stack_ptr)
     return nullptr;
 }
 
-void stop_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::stop); }
+void stop_thread(thread_t *thread, flag_t flags)
+{
+    (void)flags;
+    if (thread == nullptr || thread->state == thread_state::destroy)
+        return;
+    thread->attributes |= thread_attributes::job_control_stopped;
+    if (thread->state == thread_state::ready || thread->state == thread_state::running)
+        scheduler::update_state(thread, thread_state::stop);
+}
 
-void continue_thread(thread_t *thread, flag_t flags) { scheduler::update_state(thread, thread_state::ready); }
+void continue_thread(thread_t *thread, flag_t flags)
+{
+    (void)flags;
+    if (thread == nullptr || thread->state == thread_state::destroy)
+        return;
+    thread->attributes &= ~(thread_attributes::job_control_stopped);
+    if (thread->state == thread_state::stop || thread->state == thread_state::running)
+        scheduler::update_state(thread, thread_state::ready);
+}
+
+void stop_process(process_t *process, flag_t flags)
+{
+    (void)flags;
+    if (process == nullptr || (process->attributes.load() & process_attributes::no_thread))
+        return;
+
+    process->attributes |= process_attributes::job_control_stopped;
+    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+    auto &list = *(thread_list_t *)process->thread_list;
+    for (auto *thread : list)
+        stop_thread(thread, 0);
+}
+
+void continue_process(process_t *process, flag_t flags)
+{
+    (void)flags;
+    if (process == nullptr)
+        return;
+
+    process->attributes &= ~(process_attributes::job_control_stopped);
+    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+    auto &list = *(thread_list_t *)process->thread_list;
+    for (auto *thread : list)
+        continue_thread(thread, 0);
+}
 
 namespace
 {
@@ -1780,6 +1810,10 @@ int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, gr
     if (process == nullptr || tty == nullptr || pgid == 0 || global_process_map == nullptr)
         return EPARAM;
 
+    const auto job_control = check_tty_job_control(process, tty, false, true);
+    if (job_control != 0)
+        return static_cast<int>(job_control);
+
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     if (!process_is_live(process) || process->controlling_tty != tty)
         return EPERMISSION;
@@ -1799,6 +1833,29 @@ int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, gr
     return OK;
 }
 
+i64 check_tty_job_control(process_t *process, dev::tty::tty_core *tty, bool input, bool tostop)
+{
+    if (process == nullptr || tty == nullptr)
+        return EPARAM;
+    if (process->controlling_tty != tty || process->session_id != tty->session_id())
+        return OK;
+
+    const auto foreground_group = tty->foreground_process_group();
+    if (foreground_group == 0 || foreground_group == process->process_group_id)
+        return OK;
+    if (!input && !tostop)
+        return OK;
+
+    const auto signal_number = input ? signal::sigttin : signal::sigttou;
+    if (input && process->signal_pack.is_ignored_or_blocked(signal_number))
+        return EIO;
+    if (!input && process->signal_pack.is_ignored_or_blocked(signal_number))
+        return OK;
+
+    const auto result = send_signal_to_process_group(process->process_group_id, signal_number);
+    return result < 0 ? result : EINTR;
+}
+
 dev::tty::tty_core *get_controlling_tty(process_t *process)
 {
     return process == nullptr ? nullptr : process->controlling_tty;
@@ -1806,7 +1863,7 @@ dev::tty::tty_core *get_controlling_tty(process_t *process)
 
 i64 send_signal_to_process_group(group_id process_group, signal_num_t num, i64 error, i64 code, i64 status)
 {
-    if (global_process_group_map == nullptr || process_group == 0 || num == 0 || num >= max_signal_count)
+    if (global_process_group_map == nullptr || process_group == 0 || num >= max_signal_count)
         return EPARAM;
 
     {
@@ -1829,7 +1886,8 @@ i64 send_signal_to_process_group(group_id process_group, signal_num_t num, i64 e
         {
             if (!process_is_live(process))
                 continue;
-            process->signal_pack.send(process, num, error, code, status);
+            if (num != 0)
+                process->signal_pack.send(process, num, error, code, status);
             count++;
         }
 

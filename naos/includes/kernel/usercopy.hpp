@@ -22,6 +22,14 @@ inline bool valid_range(u64 address, u64 size)
     return size == 0 ? address == 0 : is_user_space_range(reinterpret_cast<const void *>(address), size);
 }
 
+// Output buffers are described by capacity before the producer knows the
+// actual byte count. A non-null buffer is therefore valid when its capacity
+// is non-zero, even if the response ultimately contains zero bytes.
+inline bool valid_output_range(u64 address, u64 capacity)
+{
+    return capacity == 0 ? address == 0 : is_user_space_range(reinterpret_cast<const void *>(address), capacity);
+}
+
 inline bool valid_struct_size(u32 actual, u64 expected) { return actual >= expected; }
 
 // The IPC ABI uses a size-prefixed frame. Read the prefix before copying the

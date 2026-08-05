@@ -3,18 +3,6 @@
 namespace fs::vfs
 {
 
-bool pipe_write_func(u64 data)
-{
-    auto *pipe = (pseudo_pipe_t *)data;
-    return pipe->is_close || !pipe->buffer.full();
-}
-
-bool pipe_read_func(u64 data)
-{
-    auto *pipe = (pseudo_pipe_t *)data;
-    return pipe->is_close || !pipe->buffer.empty();
-}
-
 i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
 {
     for (u64 i = 0; i < size; i++)
@@ -28,7 +16,7 @@ i64 pseudo_pipe_t::write(const byte *data, u64 size, flag_t flags)
             if (flags & rw_flags::no_block)
                 return -1;
             wait_queue.do_wake_up();
-            wait_queue.do_wait(pipe_write_func, (u64)this);
+            wait_queue.do_wait([this] { return is_close || !buffer.full(); });
         }
         buffer.write(data[i]);
     }
@@ -49,7 +37,7 @@ i64 pseudo_pipe_t::read(byte *data, u64 max_size, flag_t flags)
             if (flags & rw_flags::no_block)
                 return -1;
             wait_queue.do_wake_up();
-            wait_queue.do_wait(pipe_read_func, (u64)this);
+            wait_queue.do_wait([this] { return is_close || !buffer.empty(); });
         }
         buffer.read(&data[i]);
     }

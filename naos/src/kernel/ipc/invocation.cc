@@ -43,6 +43,14 @@ struct deadline_watch
         : state(state)
     {
     }
+
+    void invoke(timeclock::microsecond_t) noexcept
+    {
+        if (state)
+            state->expire_deadline();
+        state.reset();
+        memory::Delete<>(memory::KernelCommonAllocatorV, this);
+    }
 };
 
 std::atomic_uint64_t global_protocol_messages{0};
@@ -87,17 +95,6 @@ void release_protocol_global(u64 bytes, u64 resources)
 }
 
 void wake_invocation_waiters() { notify_channel_waiters(); }
-
-void invocation_deadline_wakeup(timeclock::microsecond_t, u64 user_data)
-{
-    auto *watch = reinterpret_cast<deadline_watch *>(user_data);
-    if (watch == nullptr)
-        return;
-    if (watch->state)
-        watch->state->expire_deadline();
-    watch->state.reset();
-    memory::Delete<>(memory::KernelCommonAllocatorV, watch);
-}
 
 freelibcxx::vector<byte> empty_bytes() { return freelibcxx::vector<byte>(memory::MemoryAllocatorV); }
 
@@ -1237,7 +1234,8 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
             return NA_STATUS_INVALID_MESSAGE;
         const auto session = task::setsid(target);
         if (session < 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), session) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+            return state.complete_reply(empty_bytes(), empty_resources(), session) ? NA_STATUS_OK
+                                                                                   : NA_STATUS_PEER_CLOSED;
         naos::system::Process::set_session_response encoded{};
         encoded.session = session;
         if (!encode_message(response, encoded, naos::system::Process::encode_set_session_response))
@@ -1838,7 +1836,8 @@ na_status_t invocation_state::arm_deadline(const handle_t<invocation_state> &sel
     auto *watch = memory::New<deadline_watch>(memory::KernelCommonAllocatorV, self);
     if (watch == nullptr)
         return NA_STATUS_RESOURCE_EXHAUSTED;
-    if (!timer::add_time_point_watcher(operation_deadline_, invocation_deadline_wakeup, reinterpret_cast<u64>(watch)))
+    if (timer::schedule_at(operation_deadline_, timer::timer_handler::bind<&deadline_watch::invoke>(*watch)) ==
+        timer::invalid_watcher_id)
     {
         memory::Delete<>(memory::KernelCommonAllocatorV, watch);
         expire_deadline();
@@ -2754,8 +2753,8 @@ na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endp
             endpoint->state()->cancel_claim(request);
             return finish(write_status == NA_STATUS_OK ? NA_STATUS_BUFFER_TOO_SMALL : write_status);
         }
-        if (!naos::usercopy::valid_range(values.bytes, request->bytes.size()) ||
-            !naos::usercopy::valid_range(values.resources, request->resources.size() * sizeof(na_handle_t)))
+        if (!naos::usercopy::valid_output_range(values.bytes, values.byte_capacity) ||
+            !naos::usercopy::valid_output_range(values.resources, values.resource_capacity * sizeof(na_handle_t)))
         {
             endpoint->state()->cancel_claim(request);
             return finish(NA_STATUS_FAULT);
@@ -2896,8 +2895,8 @@ na_status_t invocation_take_result(task::resource_table_t &resources, na_handle_
         write_frame(frame, values);
         return status;
     }
-    if (!naos::usercopy::valid_range(values.bytes, bytes.size()) ||
-        !naos::usercopy::valid_range(values.resources, records.size() * sizeof(na_handle_t)))
+    if (!naos::usercopy::valid_output_range(values.bytes, values.byte_capacity) ||
+        !naos::usercopy::valid_output_range(values.resources, values.resource_capacity * sizeof(na_handle_t)))
     {
         invocation->state()->restore_result(std::move(bytes), std::move(records));
         return NA_STATUS_FAULT;

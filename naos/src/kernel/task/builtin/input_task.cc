@@ -37,12 +37,6 @@ char key_char_table2[256] = {
     0,   0,   0,   0,   0,   '7', '8',  '9', '-', '4', '5', '6', '+', '1', '2', '3', '0', '.', 0,   0,   0,    0,
     0,   0,   0,   0,   0,   0,   0,    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   '\n', 0};
 
-void complation(io::request_t *req, bool intr, u64 user_data)
-{
-    wait_queue_t *q = (wait_queue_t *)user_data;
-    q->do_wake_up();
-}
-
 void handle_tty_control_event(dev::tty::control_event event, group_id foreground_group, u64 user_data)
 {
     (void)user_data;
@@ -56,7 +50,7 @@ void handle_tty_control_event(dev::tty::control_event event, group_id foreground
             signal_number = signal::sigquit;
             break;
         case dev::tty::control_event::suspend:
-            signal_number = signal::sigstop;
+            signal_number = signal::sigtstp;
             break;
     }
 
@@ -332,10 +326,10 @@ void listen_keyboard()
     key_switch_state = 0;
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;
-    request.final_completion_func = complation;
     request.status.io_is_completion = true;
     wait_queue_t input_wait_queue;
-    request.completion_user_data = (u64)&input_wait_queue;
+    auto completion = [&input_wait_queue](io::request_t *, bool) noexcept { input_wait_queue.do_wake_up(); };
+    request.final_completion_func = io::completion_result_func_t::borrow(completion);
     request.poll = false;
     while (1)
     {
@@ -349,7 +343,7 @@ void listen_keyboard()
         }
         if (!request.status.io_is_completion)
         {
-            input_wait_queue.do_wait([](u64 data) { return request.status.io_is_completion.load(); }, 0);
+            input_wait_queue.do_wait([] { return request.status.io_is_completion.load(); });
         }
         print_keyboard(request.result, request.status, &request, tty_file_list.span());
     };
@@ -373,9 +367,9 @@ void listen_mouse()
 
     mreq.type = io::chain_number::mouse;
     mreq.cmd_type = io::mouse_request_t::command::get;
-    mreq.final_completion_func = complation;
     wait_queue_t input_wait_queue;
-    mreq.completion_user_data = (u64)&input_wait_queue;
+    auto completion = [&input_wait_queue](io::request_t *, bool) noexcept { input_wait_queue.do_wake_up(); };
+    mreq.final_completion_func = io::completion_result_func_t::borrow(completion);
     mreq.poll = false;
     mreq.status.io_is_completion = true;
 
@@ -392,7 +386,7 @@ void listen_mouse()
 
         if (!mreq.status.io_is_completion)
         {
-            input_wait_queue.do_wait([](u64 data) { return mreq.status.io_is_completion.load(); }, 0);
+            input_wait_queue.do_wait([] { return mreq.status.io_is_completion.load(); });
         }
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
     };

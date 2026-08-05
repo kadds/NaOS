@@ -59,12 +59,6 @@ struct wait_t
     flag_t flags;
 };
 
-bool wait_sender_func(u64 data)
-{
-    auto *queue = (message_queue_t *)data;
-    return queue->msg_count < queue->maximum_msg_count || queue->close;
-}
-
 u64 write_msg_data(message_pack_t *msg, const byte *buffer, u64 length)
 {
     msg->msg_length = length;
@@ -105,7 +99,8 @@ bool write_for_write(message_queue_t *queue, flag_t flags)
     {
         if (flags & msg_flags::no_block)
             return false;
-        queue->sender_wait_queue.do_wait(wait_sender_func, (u64)queue);
+        queue->sender_wait_queue.do_wait(
+            [queue] { return queue->msg_count < queue->maximum_msg_count || queue->close; });
         if (unlikely(queue->close))
             return false;
     }
@@ -145,9 +140,8 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
     return length;
 }
 
-bool wait_reader_func(u64 data)
+bool wait_reader_condition(wait_t *w)
 {
-    auto *w = reinterpret_cast<wait_t *>(data);
     uctx::RawSpinLockUninterruptibleContext icu(w->queue->spinlock);
     auto list_opt = w->queue->msg_packs.get(w->type);
     if (!list_opt.has_value() || list_opt.value()->empty())
@@ -222,7 +216,7 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
             wait->queue = queue;
             wait->type = type;
             wait->flags = flags;
-            queue->receiver_wait_queue.do_wait(wait_reader_func, (u64)wait);
+            queue->receiver_wait_queue.do_wait([wait] { return wait_reader_condition(wait); });
             memory::Delete<>(memory::KernelCommonAllocatorV, wait);
         }
         else

@@ -6,12 +6,37 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/time.hpp"
+#include "kernel/usercopy.hpp"
 namespace naos::syscall
 {
 void log(const char *message)
 {
 #ifdef _DEBUG
-    trace::print(message);
+    if (message == nullptr)
+        return;
+
+    char buffer[128];
+    for (u64 index = 0; index < 4096; index++)
+    {
+        char value = 0;
+        if (naos::usercopy::copy_from(&value, reinterpret_cast<u64>(message) + index, sizeof(value)) != NA_STATUS_OK)
+        {
+            trace::print("<invalid user log>");
+            break;
+        }
+        buffer[index % (sizeof(buffer) - 1)] = value;
+        if (value == '\0')
+        {
+            buffer[index % (sizeof(buffer) - 1)] = '\0';
+            trace::print(buffer);
+            break;
+        }
+        if (index % (sizeof(buffer) - 1) == sizeof(buffer) - 2)
+        {
+            buffer[sizeof(buffer) - 1] = '\0';
+            trace::print(buffer);
+        }
+    }
     trace::print("\n");
 #endif
 }
@@ -23,10 +48,11 @@ int clock_get(int clock_index, timeclock::time *time)
         return EPARAM;
     }
 
+    timeclock::time value(0, 0);
     auto us = timeclock::get_current_clock();
-    time->tv_nsec = us / 1000 % 1000;
-    time->tv_sec = us / 1000000;
-    return 0;
+    value.tv_nsec = us / 1000 % 1000;
+    value.tv_sec = us / 1000000;
+    return naos::usercopy::copy_to(reinterpret_cast<u64>(time), &value, sizeof(value)) == NA_STATUS_OK ? 0 : EFAULT;
 }
 
 BEGIN_SYSCALL

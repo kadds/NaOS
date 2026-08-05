@@ -39,11 +39,6 @@ enum class control_event : u8
 
 using control_event_handler = void (*)(control_event event, group_id foreground_group, u64 user_data);
 
-bool tty_input_wait_condition(u64 data);
-bool tty_input_space_wait_condition(u64 data);
-bool tty_output_wait_condition(u64 data);
-bool tty_output_space_wait_condition(u64 data);
-
 class tty_core final
 {
   public:

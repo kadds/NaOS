@@ -1,6 +1,5 @@
 #pragma once
 #include "arch/idt.hpp"
-#include "freelibcxx/optional.hpp"
 #include "kernel/common.hpp"
 #include "types.hpp"
 namespace irq
@@ -33,20 +32,40 @@ enum soft_vector
 };
 } // namespace soft_vector
 
-struct request_func_data
+class registration
 {
-    union
+  public:
+    registration() noexcept = default;
+    registration(const registration &) = delete;
+    registration &operator=(const registration &) = delete;
+    registration(registration &&other) noexcept;
+    registration &operator=(registration &&other) noexcept;
+    ~registration();
+
+    void reset() noexcept;
+    explicit operator bool() const noexcept { return id_ != 0; }
+
+  private:
+    enum class kind : u8
     {
-        request_func hard_func;
-        soft_request_func soft_func;
-        void *func;
+        none,
+        hard,
+        soft,
     };
-    u64 user_data;
-    request_func_data(void *func, u64 user_data)
-        : func(func)
-        , user_data(user_data)
+
+    registration(kind kind, u32 vector, u64 id) noexcept
+        : kind_(kind)
+        , vector_(vector)
+        , id_(id)
     {
     }
+
+    kind kind_ = kind::none;
+    u32 vector_ = 0;
+    u64 id_ = 0;
+
+    friend registration register_handler(u32 vector, hard_handler handler);
+    friend registration register_soft_handler(u32 vector, soft_handler handler);
 };
 
 // fn
@@ -55,13 +74,7 @@ void init();
 void wakeup_soft_irq_daemon();
 void raise_soft_irq(u64 soft_irq_number);
 
-void register_request_func(u32 vector, request_func func, u64 user_data);
-void unregister_request_func(u32 vector, request_func func, u64 user_data);
-void unregister_request_func(u32 vector, request_func func);
-
-freelibcxx::optional<u64> get_register_request_func(u32 vector, request_func func);
-
-void register_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
-void unregister_soft_request_func(u32 vector, soft_request_func func, u64 user_data);
+[[nodiscard]] registration register_handler(u32 vector, hard_handler handler);
+[[nodiscard]] registration register_soft_handler(u32 vector, soft_handler handler);
 
 } // namespace irq

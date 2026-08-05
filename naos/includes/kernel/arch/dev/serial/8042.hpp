@@ -7,6 +7,7 @@
 #include "../../../wait.hpp"
 #include "freelibcxx/circular_buffer.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/irq.hpp"
 
 namespace arch::device::chip8042
 {
@@ -62,6 +63,10 @@ class kb_device : public ::dev::device
     keyboard_io_list_t io_list;
     lock::spinlock_t io_list_lock;
     irq::tasklet_t tasklet;
+    irq::registration irq_registration;
+
+    void run_tasklet() noexcept;
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
 
     u8 last_prefix_count;
     u8 last_prefix[2];
@@ -128,6 +133,10 @@ class mouse_device : public ::dev::device
     mouse_io_list_t io_list;
     lock::spinlock_t io_list_lock;
     irq::tasklet_t tasklet;
+    irq::registration irq_registration;
+
+    void run_tasklet() noexcept;
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
 
     u8 last_index = 0;
     u8 last_data[4];

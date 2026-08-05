@@ -1,6 +1,5 @@
 #include "kernel/irq.hpp"
 #include "freelibcxx/linked_list.hpp"
-#include "freelibcxx/optional.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
@@ -16,27 +15,62 @@
 #include <atomic>
 namespace irq
 {
-using request_list_t = freelibcxx::linked_list<request_func_data>;
+struct request_entry
+{
+    u64 id;
+    hard_handler handler;
 
-struct request_lock_list_t
+    request_entry(u64 id, hard_handler handler)
+        : id(id)
+        , handler(handler)
+    {
+    }
+
+    request_result invoke(const interrupt_info *info, u64 extra_data) const noexcept
+    {
+        return handler(info, extra_data);
+    }
+};
+
+struct soft_request_entry
+{
+    u64 id;
+    soft_handler handler;
+
+    soft_request_entry(u64 id, soft_handler handler)
+        : id(id)
+        , handler(handler)
+    {
+    }
+
+    void invoke(u64 vector) const noexcept { handler(vector); }
+};
+
+using request_list_t = freelibcxx::linked_list<request_entry>;
+using soft_request_list_t = freelibcxx::linked_list<soft_request_entry>;
+
+template <typename Entry> struct request_lock_list_t
 {
     lock::rw_lock_t lock;
-    request_list_t *list;
+    freelibcxx::linked_list<Entry> *list;
     explicit request_lock_list_t()
-        : list(memory::New<request_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV))
+        : list(memory::New<freelibcxx::linked_list<Entry>>(memory::KernelCommonAllocatorV,
+                                                           memory::KernelCommonAllocatorV))
     {
     }
 };
 
-struct irq_info_t
+template <typename Entry> struct irq_info_t
 {
-    request_lock_list_t list;
+    request_lock_list_t<Entry> list;
     std::atomic_uint64_t counter;
 };
 
-irq_info_t *irq_info_list;
+irq_info_t<request_entry> *irq_info_list;
 
-irq_info_t *soft_irq_info_list;
+irq_info_t<soft_request_entry> *soft_irq_info_list;
+
+std::atomic_uint64_t next_registration_id{1};
 
 const int irq_count = 256;
 
@@ -58,22 +92,22 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
     //     }
     // }
 
-    if (!locked_list.list->empty())
+    // The read lock is deliberately the callback quiescence barrier: a
+    // registration reset takes the write lock and therefore cannot return
+    // until this interrupt has left the handler.  Handlers must not reset
+    // their own registration recursively.
+    uctx::RawReadLockContext icu(locked_list.lock);
+    bool ok = false;
+    for (auto &it : *locked_list.list)
     {
-        uctx::RawReadLockContext icu(locked_list.lock);
-        bool ok = false;
-        for (auto &it : *locked_list.list)
-        {
-            auto ret = it.hard_func(&inter, extra_data, it.user_data);
-            if (ret == request_result::ok)
-                ok = true;
-        }
-        return ok;
+        auto ret = it.invoke(&inter, extra_data);
+        if (ret == request_result::ok)
+            ok = true;
     }
-    return false;
+    return ok;
 }
 
-bool wakeup_condition(u64 ud);
+bool wakeup_condition();
 
 void do_soft_irq()
 {
@@ -87,19 +121,16 @@ void do_soft_irq()
             if (cpu.is_irq_pending(i))
             {
                 cpu.clean_irq_pending(i);
-                request_list_t &list = *soft_irq_info_list[i].list.list;
+                soft_request_list_t &list = *soft_irq_info_list[i].list.list;
                 for (auto &it : list)
                 {
-                    request_func_data fd = it;
-                    ctr.end();
-                    fd.soft_func(i, fd.user_data);
-                    ctr.begin();
+                    it.invoke(i);
                 }
             }
             ctr.end();
         }
     }
-    if (unlikely(wakeup_condition(0)))
+    if (unlikely(wakeup_condition()))
         cpu::current().get_soft_irq_wait_queue()->do_wake_up();
 }
 
@@ -109,7 +140,7 @@ bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
     return true;
 }
 
-bool wakeup_condition(u64 user_data)
+bool wakeup_condition()
 {
     auto &cpu = arch::cpu::current();
     for (int i = 0; i < soft_vector::COUNT; i++)
@@ -122,7 +153,7 @@ bool wakeup_condition(u64 user_data)
 
 void wakeup_soft_irq_daemon()
 {
-    cpu::current().get_soft_irq_wait_queue()->do_wait(wakeup_condition, 0);
+    cpu::current().get_soft_irq_wait_queue()->do_wait(wakeup_condition);
     do_soft_irq();
 }
 
@@ -136,8 +167,9 @@ void init()
 {
     if (cpu::current().is_bsp())
     {
-        irq_info_list = memory::NewArray<irq_info_t>(memory::KernelBuddyAllocatorV, irq_count);
-        soft_irq_info_list = memory::NewArray<irq_info_t>(memory::KernelCommonAllocatorV, soft_vector::COUNT);
+        irq_info_list = memory::NewArray<irq_info_t<request_entry>>(memory::KernelBuddyAllocatorV, irq_count);
+        soft_irq_info_list =
+            memory::NewArray<irq_info_t<soft_request_entry>>(memory::KernelCommonAllocatorV, soft_vector::COUNT);
     }
     arch::exception::set_callback(&do_irq);
     arch::interrupt::set_callback(&do_irq);
@@ -146,21 +178,14 @@ void init()
     arch::idt::enable();
 }
 
-void register_request_func(u32 vector, request_func func, u64 user_data)
-{
-    auto &locked_list = irq_info_list[vector].list;
-    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
-    locked_list.list->push_back(request_func_data((void *)func, user_data));
-}
-
-void unregister_request_func(u32 vector, request_func func, u64 user_data)
+void unregister_hard_handler(u32 vector, u64 id)
 {
     auto &locked_list = irq_info_list[vector].list;
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
     auto &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        if (it->hard_func == func && it->user_data == user_data)
+        if (it->id == id)
         {
             list.remove(it);
             return;
@@ -168,55 +193,84 @@ void unregister_request_func(u32 vector, request_func func, u64 user_data)
     }
 }
 
-void unregister_request_func(u32 vector, request_func func)
+void unregister_soft_handler(u32 vector, u64 id)
 {
-    auto &locked_list = irq_info_list[vector].list;
+    auto &locked_list = soft_irq_info_list[vector].list;
     uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
     auto &list = *locked_list.list;
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        if (it->hard_func == func)
-        {
-            list.remove(it);
-        }
-    }
-}
-
-freelibcxx::optional<u64> get_register_request_func(u32 vector, request_func func)
-{
-    auto &locked_list = irq_info_list[vector].list;
-    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
-    auto &list = *locked_list.list;
-    for (auto it = list.begin(); it != list.end(); ++it)
-    {
-        if (it->hard_func == func)
-        {
-            return it->user_data;
-        }
-    }
-    return freelibcxx::nullopt;
-}
-
-void register_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
-{
-    auto &locked_list = soft_irq_info_list[vector].list;
-    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
-    locked_list.list->push_back(request_func_data((void *)func, user_data));
-}
-
-void unregister_soft_request_func(u32 vector, soft_request_func func, u64 user_data)
-{
-    auto &locked_list = soft_irq_info_list[vector].list;
-    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
-    request_list_t &list = *locked_list.list;
-    for (auto it = list.begin(); it != list.end(); ++it)
-    {
-        if (it->soft_func == func && it->user_data == user_data)
+        if (it->id == id)
         {
             list.remove(it);
             return;
         }
     }
+}
+
+registration::registration(registration &&other) noexcept
+    : kind_(other.kind_)
+    , vector_(other.vector_)
+    , id_(other.id_)
+{
+    other.kind_ = kind::none;
+    other.vector_ = 0;
+    other.id_ = 0;
+}
+
+registration &registration::operator=(registration &&other) noexcept
+{
+    if (this != &other)
+    {
+        reset();
+        kind_ = other.kind_;
+        vector_ = other.vector_;
+        id_ = other.id_;
+        other.kind_ = kind::none;
+        other.vector_ = 0;
+        other.id_ = 0;
+    }
+    return *this;
+}
+
+registration::~registration() { reset(); }
+
+void registration::reset() noexcept
+{
+    const auto kind = kind_;
+    const auto vector = vector_;
+    const auto id = id_;
+    kind_ = kind::none;
+    vector_ = 0;
+    id_ = 0;
+    if (id == 0)
+        return;
+    if (kind == kind::hard)
+        unregister_hard_handler(vector, id);
+    else if (kind == kind::soft)
+        unregister_soft_handler(vector, id);
+}
+
+registration register_handler(u32 vector, hard_handler handler)
+{
+    if (!handler)
+        return {};
+    const auto id = next_registration_id.fetch_add(1);
+    auto &locked_list = irq_info_list[vector].list;
+    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
+    locked_list.list->push_back(request_entry(id, handler));
+    return registration(registration::kind::hard, vector, id);
+}
+
+registration register_soft_handler(u32 vector, soft_handler handler)
+{
+    if (!handler)
+        return {};
+    const auto id = next_registration_id.fetch_add(1);
+    auto &locked_list = soft_irq_info_list[vector].list;
+    uctx::RawWriteLockUninterruptibleContext icu(locked_list.lock);
+    locked_list.list->push_back(soft_request_entry(id, handler));
+    return registration(registration::kind::soft, vector, id);
 }
 
 } // namespace irq

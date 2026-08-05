@@ -5,17 +5,17 @@
 namespace task
 {
 
-bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
+bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition)
 {
-    if (condition(user_data))
+    if (condition())
         return true;
     thread_state state = thread_state::stop;
 
     uctx::UninterruptibleContext icu;
     {
         uctx::RawSpinLockContext ctx(lock);
-        auto waiter = list.push_back(current(), condition, user_data);
-        if (condition(user_data))
+        auto waiter = list.push_back(current(), condition);
+        if (condition())
         {
             // The condition may become true after the initial check but
             // before the waiter is linked into the queue.  Do not leave a
@@ -32,18 +32,18 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
         thd->do_wait_queue_now = this;
         scheduler::update_state(thd, state);
         scheduler::schedule();
-        if (condition(user_data))
+        if (condition())
             break;
         // false wake up, try sleep.
     }
     {
         uctx::RawSpinLockContext ctx(lock);
-        auto it = list.find(wait_context_t(current(), condition, user_data));
+        auto it = list.find(wait_context_t(current(), condition));
         list.remove(it);
         current()->do_wait_queue_now = nullptr;
     }
 
-    return condition(user_data);
+    return condition();
 }
 
 u64 wait_queue_t::do_wake_up(u64 count)
@@ -52,7 +52,7 @@ u64 wait_queue_t::do_wake_up(u64 count)
     u64 i = 0;
     for (auto it = list.begin(); it != list.end() && i < count;)
     {
-        if (it->condition(it->user_data))
+        if (it->condition())
         {
             scheduler::update_state(it->thd, thread_state::ready);
             it = list.remove(it);

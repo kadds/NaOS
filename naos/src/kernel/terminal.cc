@@ -441,13 +441,13 @@ freelibcxx::tuple<stand_term_char_t *, int, int> stand_terminal::previous_term_c
     return freelibcxx::make_tuple(nullptr, row, col);
 }
 
-void flush_terminal(u64 delta, u64 userdata)
+void flush_terminal(timeclock::microsecond_t) noexcept
 {
     if (use_stand_terminal)
     {
         manager->flush_active_terminal();
     }
-    timer::add_watcher(1000000 / 60, flush_terminal, 0);
+    (void)timer::schedule_after(1000000 / 60, timer::timer_handler::bind<&flush_terminal>());
 }
 
 terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &backend)
@@ -459,7 +459,7 @@ terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &back
         terms_.push_back(1000);
     }
     switch_term(0);
-    timer::add_watcher(1000000 / 60, flush_terminal, 0);
+    (void)timer::schedule_after(1000000 / 60, timer::timer_handler::bind<&flush_terminal>());
 }
 
 bool terminal_manager::switch_term(int index)

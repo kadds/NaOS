@@ -35,7 +35,7 @@ bool send_io_request(request_t *request)
         for (u64 i = 0; i < size; i++)
         {
             request->inner.io_stack[i].dev_num = (*chain)[i];
-            request->inner.io_stack[i].completion_callback = nullptr;
+            request->inner.io_stack[i].completion_callback = {};
         }
 
         auto dev = chain->at(0);
@@ -140,9 +140,9 @@ void completion(request_t *request)
     {
         auto &io_stack = inner_data.io_stack;
         auto cur_io = io_stack[inner_data.cur_stack_index];
-        if (cur_io.completion_callback != 0)
+        if (cur_io.completion_callback)
         {
-            if (cur_io.completion_callback(request, cur_io.completion_user_data) == completion_result_t::inter)
+            if (cur_io.completion_callback(request) == completion_result_t::inter)
             {
                 inter = true;
                 break;
@@ -150,9 +150,9 @@ void completion(request_t *request)
         }
     }
 
-    if (request->final_completion_func != nullptr)
+    if (request->final_completion_func)
     {
-        request->final_completion_func(request, inter, request->completion_user_data);
+        request->final_completion_func(request, inter);
     }
 }
 

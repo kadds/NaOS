@@ -2,17 +2,20 @@
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/ucontext.hpp"
 namespace irq
 {
 tasklet_t *tasklet_head;
 lock::spinlock_t lock;
+registration *tasklet_registration;
 
-void do_tasklet(u64 vec, u64 user_data) { exec_tasklet(); }
+void do_tasklet(u64 vec) noexcept { exec_tasklet(); }
 
 void init_tasklet()
 {
-    irq::register_soft_request_func(soft_vector::task, do_tasklet, 0);
+    tasklet_registration = memory::New<registration>(memory::KernelCommonAllocatorV);
+    *tasklet_registration = irq::register_soft_handler(soft_vector::task, soft_handler::bind<&do_tasklet>());
     tasklet_head = nullptr;
 }
 
@@ -65,7 +68,7 @@ void exec_tasklet()
         tasklet->next_cpu = nullptr;
         if (tasklet->enable >= 0)
         {
-            tasklet->func(tasklet->user_data);
+            tasklet->func();
         }
 
         bool rerun = false;

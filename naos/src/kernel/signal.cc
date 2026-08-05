@@ -19,15 +19,27 @@ void sig_kill_dump(process_t *proc, signal_info_t *info)
     task::exit_process(proc, 0, task::exit_control_flags::core_dump);
 }
 
+void sig_stop(process_t *proc, signal_info_t *info)
+{
+    trace::info("signal ", info->number, ": stop process ", proc->pid);
+    task::stop_process(proc);
+}
+
+void sig_continue(process_t *proc, signal_info_t *info)
+{
+    trace::info("signal ", info->number, ": continue process ", proc->pid);
+    task::continue_process(proc);
+}
+
 #define IGRE sig_ignore,
 #define KILL sig_kill,
 #define DUMP sig_kill_dump,
-#define STOP sig_kill,
-#define CONT sig_kill,
+#define STOP sig_stop,
+#define CONT sig_continue,
 
 signal_func_t default_signal_handler[max_signal_count] = {
-    KILL KILL KILL KILL DUMP DUMP DUMP DUMP KILL KILL DUMP KILL KILL KILL KILL KILL IGRE CONT STOP IGRE IGRE IGRE IGRE
-        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE};
+    KILL KILL KILL KILL DUMP DUMP DUMP DUMP KILL KILL DUMP KILL KILL KILL KILL KILL IGRE CONT STOP STOP STOP STOP
+        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE};
 
 void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status)
 {
@@ -35,9 +47,15 @@ void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i
         return;
 
     auto t = task::current();
+    signal_info_t info(num, error, code, t == nullptr ? 0 : t->process->pid, t == nullptr ? 0 : t->tid, status);
+    if (num == signal::sigkill || num == signal::sigstop || num == signal::sigcout)
+    {
+        default_signal_handler[num](to, &info);
+        return;
+    }
+
     if (unlikely(events.size() > 1024))
         return;
-    signal_info_t info(num, error, code, t->process->pid, t->tid, status);
     if (!masks.is_valid(num))
     {
         default_signal_handler[num](to, &info);
@@ -56,21 +74,19 @@ void signal_pack_t::wait(signal_info_t *info)
 {
     while (1)
     {
-        wait_queue.do_wait(
-            [](u64 data) -> bool {
-                signal_pack_t *that = (signal_pack_t *)data;
-                auto &ev = that->get_events();
-                auto &mask = that->get_mask();
-                for (auto &e : ev)
+        wait_queue.do_wait([this]() -> bool {
+            signal_pack_t *that = this;
+            auto &ev = that->get_events();
+            auto &mask = that->get_mask();
+            for (auto &e : ev)
+            {
+                if (!mask.is_block(e.number))
                 {
-                    if (!mask.is_block(e.number))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
-                return false;
-            },
-            (u64)this);
+            }
+            return false;
+        });
 
         auto &mask = this->get_mask();
         auto &ev = this->get_events();

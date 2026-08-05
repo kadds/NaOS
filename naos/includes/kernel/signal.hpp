@@ -48,6 +48,54 @@ enum signal : signal_num_t
     sigpower = 30,
     siglimit = 31,
 };
+
+enum class default_action : u8
+{
+    ignore,
+    terminate,
+    core_dump,
+    stop,
+    continue_process,
+};
+
+constexpr default_action default_action_for(signal_num_t num) noexcept
+{
+    switch (num)
+    {
+        case sigkill:
+        case sighup:
+        case sigint:
+        case sigquit:
+        case sigfpe:
+        case siguser1:
+        case siguser2:
+        case sigpipe:
+        case sigalarm:
+        case sigterm:
+            return default_action::terminate;
+        case sigill:
+        case sigtrap:
+        case sigabrt:
+        case sigbus:
+        case sigsegv:
+        case sigstkflt:
+            return default_action::core_dump;
+        case sigcout:
+            return default_action::continue_process;
+        case sigstop:
+        case signone1:
+        case signone2:
+        case signone3:
+            return default_action::stop;
+        default:
+            return default_action::ignore;
+    }
+}
+
+inline constexpr signal sigcont = sigcout;
+inline constexpr signal sigtstp = signone1;
+inline constexpr signal sigttin = signone2;
+inline constexpr signal sigttou = signone3;
 }
 
 struct signal_set_t
@@ -131,6 +179,11 @@ struct signal_mask_t
     bool is_ignore(signal_num_t num) { return ignore_bitmap[num]; }
     bool is_block(signal_num_t num) { return block_bitmap[num]; }
     bool is_valid(signal_num_t num) { return def_bitmap[num]; }
+
+    bool is_ignored_or_blocked(signal_num_t num)
+    {
+        return is_ignore(num) || is_block(num);
+    }
 };
 
 struct signal_info_t
@@ -186,6 +239,10 @@ struct signal_pack_t
     void send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status);
 
     signal_mask_t &get_mask() { return masks; }
+
+    void inherit_mask_from(const signal_pack_t &other) { masks = other.masks; }
+
+    bool is_ignored_or_blocked(signal_num_t num) { return masks.is_ignored_or_blocked(num); }
 
     freelibcxx::linked_list<signal_info_t> &get_events() { return events; }
 

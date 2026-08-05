@@ -1,3 +1,4 @@
+#include "freelibcxx/linked_list.hpp"
 #include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
@@ -15,6 +16,7 @@
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
+#include "kernel/ucontext.hpp"
 #include <cstdarg>
 
 ExportC
@@ -33,19 +35,23 @@ struct ACPIInterInfo
     ACPI_OSD_HANDLER handler;
     void *context;
     uint32_t index;
+    irq::registration registration;
+
+    irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept
+    {
+        auto ret = handler(context);
+        if (ret == ACPI_INTERRUPT_NOT_HANDLED)
+        {
+            return irq::request_result::no_handled;
+        }
+
+        return irq::request_result::ok;
+    }
 };
 
-irq::request_result _ctx_interrupt_ acpi_interrupt(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
-{
-    auto info = reinterpret_cast<ACPIInterInfo *>(user_data);
-    auto ret = info->handler(info->context);
-    if (ret == ACPI_INTERRUPT_NOT_HANDLED)
-    {
-        return irq::request_result::no_handled;
-    }
-
-    return irq::request_result::ok;
-}
+using acpi_interrupt_list_t = freelibcxx::linked_list<ACPIInterInfo *>;
+acpi_interrupt_list_t *acpi_interrupt_list;
+lock::spinlock_t acpi_interrupt_list_lock;
 
 ExportC
 {
@@ -227,21 +233,50 @@ ExportC
         info->handler = ServiceRoutine;
         info->context = Context;
         info->index = InterruptNumber;
+        info->registration =
+            irq::register_handler(InterruptNumber + 0x20, irq::hard_handler::bind<&ACPIInterInfo::on_interrupt>(*info));
 
-        irq::register_request_func(InterruptNumber + 0x20, acpi_interrupt, reinterpret_cast<u64>(info));
+        if (!info->registration)
+        {
+            memory::KernelCommonAllocatorV->Delete(info);
+            return -1;
+        }
+
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(acpi_interrupt_list_lock);
+            if (acpi_interrupt_list == nullptr)
+            {
+                acpi_interrupt_list =
+                    memory::New<acpi_interrupt_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
+            }
+            acpi_interrupt_list->push_back(info);
+        }
         return 0;
     }
 
     ACPI_STATUS
     AcpiOsRemoveInterruptHandler(UINT32 InterruptNumber, ACPI_OSD_HANDLER ServiceRoutine)
     {
-        auto info_address = irq::get_register_request_func(InterruptNumber, acpi_interrupt);
-        if (info_address.has_value())
+        ACPIInterInfo *info = nullptr;
         {
-            auto info = reinterpret_cast<ACPIInterInfo *>(info_address.value());
+            uctx::RawSpinLockUninterruptibleContext guard(acpi_interrupt_list_lock);
+            if (acpi_interrupt_list != nullptr)
+            {
+                for (auto it = acpi_interrupt_list->begin(); it != acpi_interrupt_list->end(); ++it)
+                {
+                    if ((*it)->index == InterruptNumber && (*it)->handler == ServiceRoutine)
+                    {
+                        info = *it;
+                        acpi_interrupt_list->remove(it);
+                        break;
+                    }
+                }
+            }
+        }
+        if (info != nullptr)
+        {
+            info->registration.reset();
             memory::KernelCommonAllocatorV->Delete(info);
-
-            irq::unregister_request_func(InterruptNumber + 0x20, acpi_interrupt);
             return 0;
         }
         return -1;

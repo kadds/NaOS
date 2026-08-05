@@ -23,7 +23,7 @@ void pty_control_event(dev::tty::control_event event, group_id foreground_group,
             signal_number = task::signal::sigquit;
             break;
         case control_event::suspend:
-            signal_number = task::signal::sigstop;
+            signal_number = task::signal::sigtstp;
             break;
     }
     task::send_signal_to_process_group(foreground_group, signal_number);
@@ -69,6 +69,9 @@ i64 pty_endpoint::read(byte *data, u64 max_size, flag_t flags)
         return EIO;
     if (role_ == pty_endpoint_role::master)
         return pair_->core().read_output(data, max_size, flags);
+    const auto job_control = task::check_tty_job_control(task::current_process(), &pair_->core(), true);
+    if (job_control != 0)
+        return job_control;
     return pair_->core().read_input(data, max_size, flags);
 }
 
@@ -78,6 +81,11 @@ i64 pty_endpoint::write(const byte *data, u64 size, flag_t flags)
         return EIO;
     if (role_ == pty_endpoint_role::master)
         return pair_->core().receive_input(data, size, flags);
+    const auto job_control = task::check_tty_job_control(
+        task::current_process(), &pair_->core(), false,
+        (pair_->core().get_termios().c_lflag & termios_lflag::tostop) != 0);
+    if (job_control != 0)
+        return job_control;
     return pair_->core().write_output(data, size, flags);
 }
 

@@ -22,7 +22,7 @@
 namespace memory::vm
 {
 
-irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *inter, u64 extra_data)
 {
     auto *thread = cpu::current().get_task();
     if (thread != nullptr)
@@ -53,7 +53,7 @@ irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *in
     return irq::request_result::no_handled;
 }
 
-irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info *inter, u64 extra_data)
 {
     auto *thread = cpu::current().get_task();
     if (thread != nullptr)
@@ -104,7 +104,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
     return irq::request_result::no_handled;
 }
 
-irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *inter, u64 extra_data, u64 user_data)
+irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *inter, u64 extra_data) noexcept
 {
     using flags = arch::paging::page_fault_flags;
     kassert(!(inter->error_code & flags::reserved_write), inter->error_code);
@@ -121,12 +121,12 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
         if (inter->error_code & flags::present)
         {
             // trace::warning("page ", trace::hex(extra_data), " is not writeable");
-            return page_fault_cow(inter, extra_data, user_data);
+            return page_fault_cow(inter, extra_data);
         }
     }
     if (!(inter->error_code & flags::present))
     {
-        return page_fault_present(inter, extra_data, user_data);
+        return page_fault_present(inter, extra_data);
     }
     if (inter->error_code & flags::instruction_fetch)
     {
@@ -142,7 +142,13 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
 
 void init() {}
 
-void listen_page_fault() { irq::register_request_func(arch::exception::vector::page_fault, page_fault_func, 0); }
+void listen_page_fault()
+{
+    static irq::registration *page_fault_registration;
+    page_fault_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
+    *page_fault_registration =
+        irq::register_handler(arch::exception::vector::page_fault, irq::hard_handler::bind<&page_fault_func>());
+}
 
 template <typename _T> _T *new_page_table()
 {

@@ -2,6 +2,7 @@
 #include "../dev/device.hpp"
 #include "../dev/driver.hpp"
 #include "../wait.hpp"
+#include "freelibcxx/delegate.hpp"
 #include "kernel/common.hpp"
 #include <atomic>
 namespace io
@@ -59,14 +60,13 @@ struct mouse_result_t
 
 struct request_t;
 
-typedef completion_result_t (*completion_stack_func)(request_t *req, u64 user_data);
-typedef void (*completion_result_func_t)(request_t *req, bool intr, u64 user_data);
+using completion_stack_func = freelibcxx::delegate<completion_result_t(request_t *)>;
+using completion_result_func_t = freelibcxx::delegate<void(request_t *, bool)>;
 
 struct io_stack_t
 {
     dev::num_t dev_num;
     completion_stack_func completion_callback;
-    u64 completion_user_data;
 };
 
 struct request_inner_t
@@ -76,9 +76,8 @@ struct request_inner_t
     io_stack_t *io_stack;
     dev::num_t get_current_dev() { return io_stack[cur_stack_index].dev_num; }
     dev::device *get_current_device() { return dev::get_device(io_stack[cur_stack_index].dev_num); }
-    void set_current_device_completion_callback(completion_stack_func func, u64 user_data)
+    void set_current_device_completion_callback(completion_stack_func func)
     {
-        io_stack[cur_stack_index].completion_user_data = user_data;
         io_stack[cur_stack_index].completion_callback = func;
     }
 };
@@ -88,7 +87,6 @@ struct request_t
     request_chain_number_t type;
     bool poll;
     completion_result_func_t final_completion_func;
-    u64 completion_user_data;
     status_t status;
     /// --- for inner use
     request_inner_t inner;
