@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "defines.hpp"
+#include "kernel/common.hpp"
 #include "kernel/handle.hpp"
 namespace fs::vfs
 {
@@ -16,7 +16,7 @@ class super_block
   public:
     super_block(file_system *fs)
         : root(nullptr)
-        , fs(fs){};
+        , fs(fs) {};
 
     virtual ~super_block() = default;
     dentry *get_root() { return root; };

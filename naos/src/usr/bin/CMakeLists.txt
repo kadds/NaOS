@@ -6,6 +6,8 @@ set_source_files_properties(${DIR_SRCS} PROPERTIES COMPILE_FLAGS "${CXX_X64} ${F
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/rfsroot/bin)
 
 add_executable(nanobox ${OBJS} ${DIR_ALL})
+add_dependencies(nanobox naos_system_idl)
+target_include_directories(nanobox PRIVATE ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR} ${PROJECT_SOURCE_DIR}/naos/include)
 
 set(EXTEND_LDS "")
 

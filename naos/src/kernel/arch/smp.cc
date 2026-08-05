@@ -1,9 +1,9 @@
 #include "kernel/arch/smp.hpp"
-#include "common.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/local_apic.hpp"
+#include "kernel/common.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
@@ -20,8 +20,8 @@ namespace arch::SMP
 {
 volatile bool tick = false;
 std::atomic_int counter;
-volatile void * ap_stack;
-volatile void * ap_stack_phy;
+volatile void *ap_stack;
+volatile void *ap_stack_phy;
 
 void timer_tick(u64 pass, u64 user_data) { tick = true; }
 

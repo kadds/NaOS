@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/allocator.hpp"
+#include "kernel/common.hpp"
 #include <new>
 #include <utility>
 
@@ -47,8 +47,8 @@ class KernelCommonAllocator : public freelibcxx::Allocator
 {
   private:
   public:
-    KernelCommonAllocator(){};
-    ~KernelCommonAllocator(){};
+    KernelCommonAllocator() {};
+    ~KernelCommonAllocator() {};
     void *allocate(u64 size, u64 align) noexcept override;
     void deallocate(void *p) noexcept override;
 };
@@ -58,8 +58,8 @@ class KernelVirtualAllocator : public freelibcxx::Allocator
 {
   private:
   public:
-    KernelVirtualAllocator(){};
-    ~KernelVirtualAllocator(){};
+    KernelVirtualAllocator() {};
+    ~KernelVirtualAllocator() {};
     void *allocate(u64 size, u64 align) noexcept override;
     void deallocate(void *p) noexcept override;
 };

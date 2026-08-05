@@ -1,7 +1,7 @@
 #pragma once
-#include "common.hpp"
 #include "defines.hpp"
 #include "file.hpp"
+#include "kernel/common.hpp"
 #include "pseudo.hpp"
 namespace fs::vfs
 {
@@ -14,7 +14,7 @@ class standalone_file : public file
     standalone_file(const standalone_file &f) = delete;
     file &operator=(const standalone_file &f) = delete;
 
-    virtual ~standalone_file(){};
+    virtual ~standalone_file() {};
 
     void flush() override;
 

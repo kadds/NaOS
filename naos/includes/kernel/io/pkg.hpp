@@ -2,7 +2,8 @@
 #include "../dev/device.hpp"
 #include "../dev/driver.hpp"
 #include "../wait.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
+#include <atomic>
 namespace io
 {
 enum class completion_result_t
@@ -30,7 +31,9 @@ struct status_t
     u8 poll_status;
     u8 failed_code;
 
-    bool io_is_completion;
+    // The device interrupt/tasklet and the input service run concurrently.
+    // This flag is the hand-off between them and must not be a plain bool.
+    std::atomic_bool io_is_completion;
 };
 
 struct mouse_data

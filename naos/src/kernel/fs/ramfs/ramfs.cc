@@ -1,9 +1,9 @@
 #include "kernel/fs/ramfs/ramfs.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/errno.hpp"
 #include "kernel/trace.hpp"
 namespace fs::ramfs
 {
@@ -68,27 +68,30 @@ i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
 i64 file::iread(i64 &offset, byte *buffer, u64 max_size, flag_t flags)
 {
     inode *node = (inode *)entry->get_inode();
-    if (max_size > node->file_size - offset)
-        max_size = node->file_size - offset;
+    if (offset < 0 || static_cast<u64>(offset) >= node->file_size || max_size == 0)
+        return 0;
 
-    if (node->ram_size < offset + max_size)
+    const auto file_offset = static_cast<u64>(offset);
+    const auto available = node->file_size - file_offset;
+    if (max_size > available)
+        max_size = available;
+
+    if (node->ram_size < file_offset + max_size)
     {
-        if (node->ram_size < (uint64_t)offset)
+        if (node->ram_size < file_offset)
         {
             max_size = 0;
         }
         else
         {
-            max_size = node->ram_size - offset;
+            max_size = node->ram_size - file_offset;
         }
     }
 
     if (max_size == 0)
-    {
-        return EOF;
-    }
+        return 0;
 
-    memcpy(buffer, node->start_ptr + offset, max_size);
+    memcpy(buffer, node->start_ptr + file_offset, max_size);
     offset += max_size;
     return max_size;
 }

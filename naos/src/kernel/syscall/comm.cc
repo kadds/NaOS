@@ -30,7 +30,7 @@ int clock_get(int clock_index, timeclock::time *time)
 }
 
 BEGIN_SYSCALL
-SYSCALL(1, log)
-SYSCALL(2, clock_get)
+SYSCALL(NA_SYSCALL_LOG, log)
+SYSCALL(NA_SYSCALL_CLOCK_GET, clock_get)
 END_SYSCALL
 } // namespace naos::syscall

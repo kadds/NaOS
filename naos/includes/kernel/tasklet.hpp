@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 namespace irq
 {
 
@@ -12,7 +12,7 @@ struct tasklet_t
     tasklet_t *next_cpu;
     tasklet_func func;
     u64 user_data;
-    /// 1: wait for runing
+    /// 0: idle, 1: queued or running, 2: raised while queued or running
     u8 state;
     /// >= 0 enable, < 0 disable
     i8 enable;

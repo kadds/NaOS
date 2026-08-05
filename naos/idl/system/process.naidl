@@ -1,0 +1,41 @@
+library naos.system;
+
+protocol Process @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1009") @revision(1) @features(0) @scope(9) @uapi_name("PROCESS") {
+    method wait @id(96) {
+        u64 flags @id(1);
+    } -> {
+        i64 status @id(1);
+        i64 pid @id(2);
+    };
+    method get_info @id(97) -> {
+        u64 pid @id(1);
+        u64 parent_pid @id(2);
+        u64 attributes @id(3);
+        i64 return_value @id(4);
+    };
+    method wait_children @id(98) {
+        i64 pid @id(1);
+        u64 flags @id(2);
+    } -> {
+        i64 status @id(1);
+        i64 pid @id(2);
+    };
+    method get_job_control_info @id(99) -> {
+        i64 session @id(1);
+        i64 process_group @id(2);
+        i64 foreground_process_group @id(3);
+        u64 has_controlling_tty @id(4);
+    };
+    method set_session @id(100) -> {
+        i64 session @id(1);
+    };
+    method get_process_group @id(101) -> {
+        i64 process_group @id(1);
+    };
+    method set_process_group @id(102) {
+        i64 process_group @id(1);
+    } ->;
+    method get_session @id(103) -> {
+        i64 session @id(1);
+    };
+};

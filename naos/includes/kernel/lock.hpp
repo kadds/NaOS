@@ -1,6 +1,6 @@
 #pragma once
 #include "arch/klib.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include <atomic>
 
 /// locks aren't disable interrupt, use it by 'ucontext::guard'

@@ -21,7 +21,8 @@ View [Features](./FEATURES.MD) .
 * **GCC** or **Clang** *(GCC 12.1.1 tested)*
 * **CMake 3.3+**
 * **ninja** and **meson** are required to build libc   
-* **Python 3** *(For running utility)*
+* **Python 3** *(For running utilities and the NaoIDL compiler)*
+* **Lark 1.3.1** (`python3 -m pip install -r util/requirements.txt`)
 * An emulator or virtual machine such as **Bochs**, **QEMU**, **Virtual Box**, **hyper-v** and **VMware Workstation** *(For running OS)*
 * **Grub2**, **fdisk / gdisk**, **udisks2** *(For making runnable raw disk file and mounting raw disk without root privilege)*
 
@@ -33,6 +34,7 @@ Clone this repo
 ```bash
 git clone https://url/path/to/repo
 git submodule update --init --recursive
+python3 -m pip install -r util/requirements.txt
 ``` 
 
 ### 2. Compile 

@@ -1,0 +1,103 @@
+#ifndef NAOIDL_RUNTIME_H
+#define NAOIDL_RUNTIME_H
+namespace naoidl {
+struct bounded_bytes { const std::uint8_t *data; std::uint32_t size; };
+struct bounded_string { const char *data; std::uint32_t size; };
+template <typename T> struct bounded_vector { T *data = nullptr; std::uint32_t count = 0; };
+struct resource_index { std::uint32_t value = 0; };
+using resource_metadata_validator = bool (*)(void *, na_handle_t, std::uint32_t, std::uint64_t, na_meta_rights_t);
+using resource_closer = void (*)(void *, na_handle_t);
+struct async_transport {
+    void *context = nullptr;
+    na_status_t (*submit)(void *, na_handle_t, std::uint64_t, const std::uint8_t *, std::uint64_t, const na_resource_disposition_t *, std::uint64_t, std::uint64_t, na_handle_t *) = nullptr;
+    na_status_t (*send_oneway)(void *, na_handle_t, std::uint64_t, const std::uint8_t *, std::uint64_t, const na_resource_disposition_t *, std::uint64_t) = nullptr;
+    na_status_t (*take_result)(void *, na_handle_t, na_result_frame_t *) = nullptr;
+    resource_metadata_validator validate_resource = nullptr;
+    resource_closer close_resource = nullptr;
+};
+struct responder_transport {
+    void *context = nullptr;
+    na_status_t (*reply)(void *, na_handle_t, const std::uint8_t *, std::uint64_t, const na_resource_disposition_t *, std::uint64_t) = nullptr;
+    na_status_t (*fail)(void *, na_handle_t, na_execution_outcome_t, na_outcome_reason_t) = nullptr;
+    na_status_t (*close_endpoint)(void *, na_handle_t) = nullptr;
+    resource_metadata_validator validate_resource = nullptr;
+    resource_closer close_resource = nullptr;
+};
+struct native_transport_api {
+    void *context = nullptr;
+    na_status_t (*handle_close)(void *, na_handle_t) = nullptr;
+    na_status_t (*handle_get_info)(void *, na_handle_t, na_handle_info_t *) = nullptr;
+    na_status_t (*invoke_submit)(void *, na_handle_t, const na_submit_frame_t *, na_handle_t *) = nullptr;
+    na_status_t (*invoke_send_oneway)(void *, na_handle_t, const na_submit_frame_t *) = nullptr;
+    na_status_t (*invocation_take_result)(void *, na_handle_t, na_result_frame_t *) = nullptr;
+    na_status_t (*channel_receive)(void *, na_handle_t, na_channel_receive_frame_t *) = nullptr;
+    na_status_t (*responder_reply)(void *, na_handle_t, const na_reply_frame_t *) = nullptr;
+    na_status_t (*responder_fail)(void *, na_handle_t, const na_fail_frame_t *) = nullptr;
+};
+inline void close_resource_batch(const na_handle_t *handles, std::uint64_t count, resource_closer close_resource, void *context) {
+    if (handles == nullptr || close_resource == nullptr || count > NA_CHANNEL_MAX_RESOURCES) return;
+    for (std::uint64_t i = 0; i < count; ++i) close_resource(context, handles[i]);
+}
+class native_transport {
+  public:
+    explicit native_transport(native_transport_api api) : api_(api) {}
+    async_transport async() {
+        async_transport result{}; result.context = this; result.submit = submit; result.send_oneway = send_oneway;
+        result.take_result = take_result; result.validate_resource = validate_resource; result.close_resource = close_resource; return result;
+    }
+    responder_transport responder() {
+        responder_transport result{}; result.context = this; result.reply = reply; result.fail = fail;
+        result.close_endpoint = close_endpoint; result.validate_resource = validate_resource; result.close_resource = close_resource; return result;
+    }
+    na_status_t receive(na_handle_t endpoint, na_channel_receive_frame_t &frame) const {
+        if (api_.channel_receive == nullptr) return NA_STATUS_NOT_SUPPORTED;
+        frame.struct_size = sizeof(frame); frame.flags = 0; return api_.channel_receive(api_.context, endpoint, &frame);
+    }
+  private:
+    static native_transport *from(void *context) { return static_cast<native_transport *>(context); }
+    static na_status_t submit(void *context, na_handle_t target, std::uint64_t method, const std::uint8_t *wire, std::uint64_t wire_bytes, const na_resource_disposition_t *resources, std::uint64_t resource_count, std::uint64_t operation_budget, na_handle_t *invocation) {
+        auto *self = from(context); if (self->api_.invoke_submit == nullptr) return NA_STATUS_NOT_SUPPORTED;
+        na_submit_frame_t frame{}; frame.struct_size = sizeof(frame); frame.method_id = method; frame.request = reinterpret_cast<std::uint64_t>(wire); frame.request_bytes = wire_bytes; frame.resources = reinterpret_cast<std::uint64_t>(resources); frame.resource_count = resource_count; frame.operation_budget = operation_budget;
+        return self->api_.invoke_submit(self->api_.context, target, &frame, invocation);
+    }
+    static na_status_t send_oneway(void *context, na_handle_t target, std::uint64_t method, const std::uint8_t *wire, std::uint64_t wire_bytes, const na_resource_disposition_t *resources, std::uint64_t resource_count) {
+        auto *self = from(context); if (self->api_.invoke_send_oneway == nullptr) return NA_STATUS_NOT_SUPPORTED;
+        na_submit_frame_t frame{}; frame.struct_size = sizeof(frame); frame.method_id = method; frame.request = reinterpret_cast<std::uint64_t>(wire); frame.request_bytes = wire_bytes; frame.resources = reinterpret_cast<std::uint64_t>(resources); frame.resource_count = resource_count;
+        return self->api_.invoke_send_oneway(self->api_.context, target, &frame);
+    }
+    static na_status_t take_result(void *context, na_handle_t invocation, na_result_frame_t *frame) {
+        auto *self = from(context); return self->api_.invocation_take_result == nullptr ? NA_STATUS_NOT_SUPPORTED : self->api_.invocation_take_result(self->api_.context, invocation, frame);
+    }
+    static na_status_t reply(void *context, na_handle_t responder, const std::uint8_t *wire, std::uint64_t wire_bytes, const na_resource_disposition_t *resources, std::uint64_t resource_count) {
+        auto *self = from(context); if (self->api_.responder_reply == nullptr) return NA_STATUS_NOT_SUPPORTED;
+        na_reply_frame_t frame{}; frame.struct_size = sizeof(frame); frame.bytes = reinterpret_cast<std::uint64_t>(wire); frame.byte_count = wire_bytes; frame.resources = reinterpret_cast<std::uint64_t>(resources); frame.resource_count = resource_count;
+        return self->api_.responder_reply(self->api_.context, responder, &frame);
+    }
+    static na_status_t fail(void *context, na_handle_t responder, na_execution_outcome_t outcome, na_outcome_reason_t reason) {
+        auto *self = from(context); if (self->api_.responder_fail == nullptr) return NA_STATUS_NOT_SUPPORTED;
+        na_fail_frame_t frame{}; frame.struct_size = sizeof(frame); frame.execution_outcome = outcome; frame.outcome_reason = reason;
+        return self->api_.responder_fail(self->api_.context, responder, &frame);
+    }
+    static na_status_t close_endpoint(void *context, na_handle_t endpoint) {
+        auto *self = from(context); return self->api_.handle_close == nullptr ? NA_STATUS_NOT_SUPPORTED : self->api_.handle_close(self->api_.context, endpoint);
+    }
+    static void close_resource(void *context, na_handle_t handle) {
+        auto *self = from(context); if (self->api_.handle_close != nullptr) (void)self->api_.handle_close(self->api_.context, handle);
+    }
+    static bool validate_resource(void *context, na_handle_t handle, std::uint32_t expected_binding, std::uint64_t expected_scope, na_meta_rights_t required_rights) {
+        auto *self = from(context); if (self->api_.handle_get_info == nullptr) return false;
+        na_handle_info_t info{}; info.struct_size = sizeof(info); if (self->api_.handle_get_info(self->api_.context, handle, &info) != NA_STATUS_OK) return false;
+        if (expected_binding != NA_BINDING_NONE && info.binding != expected_binding) return false;
+        if (expected_scope != 0 && info.scope != expected_scope) return false;
+        return (info.meta_rights & required_rights) == required_rights;
+    }
+    native_transport_api api_;
+};
+inline bool checked_add(std::uint64_t a, std::uint64_t b, std::uint64_t &out) { if (b > std::numeric_limits<std::uint64_t>::max() - a) return false; out = a + b; return true; }
+inline bool checked_mul(std::uint64_t a, std::uint64_t b, std::uint64_t &out) { if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a) return false; out = a * b; return true; }
+inline void put_f32(naos::canonical::writer &writer, float value) { std::uint32_t bits = 0; auto *source = reinterpret_cast<const std::uint8_t *>(&value); for (std::uint32_t i = 0; i < 4; ++i) bits |= static_cast<std::uint32_t>(source[i]) << (i * 8); writer.put_u32(bits); }
+inline void put_f64(naos::canonical::writer &writer, double value) { std::uint64_t bits = 0; auto *source = reinterpret_cast<const std::uint8_t *>(&value); for (std::uint32_t i = 0; i < 8; ++i) bits |= static_cast<std::uint64_t>(source[i]) << (i * 8); writer.put_u64(bits); }
+inline float get_f32(naos::canonical::reader &reader) { std::uint32_t bits = reader.get_u32(); float value = 0; auto *destination = reinterpret_cast<std::uint8_t *>(&value); for (std::uint32_t i = 0; i < 4; ++i) destination[i] = static_cast<std::uint8_t>(bits >> (i * 8)); return value; }
+inline double get_f64(naos::canonical::reader &reader) { std::uint64_t bits = reader.get_u64(); double value = 0; auto *destination = reinterpret_cast<std::uint8_t *>(&value); for (std::uint32_t i = 0; i < 8; ++i) destination[i] = static_cast<std::uint8_t>(bits >> (i * 8)); return value; }
+}
+#endif

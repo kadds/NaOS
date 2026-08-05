@@ -14,9 +14,15 @@ bool wait_queue_t::do_wait(condition_func condition, u64 user_data)
     uctx::UninterruptibleContext icu;
     {
         uctx::RawSpinLockContext ctx(lock);
-        list.push_back(current(), condition, user_data);
+        auto waiter = list.push_back(current(), condition, user_data);
         if (condition(user_data))
+        {
+            // The condition may become true after the initial check but
+            // before the waiter is linked into the queue.  Do not leave a
+            // stale entry behind in that case.
+            list.remove(waiter);
             return true;
+        }
     }
 
     for (;;)

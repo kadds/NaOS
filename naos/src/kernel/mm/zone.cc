@@ -1,8 +1,8 @@
 #include "kernel/mm/zone.hpp"
-#include "common.hpp"
 #include "freelibcxx/buddy.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/clock.hpp"
+#include "kernel/common.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/page.hpp"
 #include "kernel/trace.hpp"
@@ -244,12 +244,13 @@ void zone::free(phy_addr_t ptr)
         {
             trace::panic("ref count == 0 at ", trace::hex(ptr.get()));
         }
-    }
-    if (free)
-    {
-        auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
-        [[maybe_unused]] bool ok = impl->free(p - page_array);
-        kassert(ok, "fail ", p - page_array);
+
+        if (free)
+        {
+            auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
+            [[maybe_unused]] bool ok = impl->free(p - page_array);
+            kassert(ok, "fail ", p - page_array);
+        }
     }
 }
 

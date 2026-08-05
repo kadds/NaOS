@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "wait.hpp"
 #include <atomic>
 namespace lock
@@ -15,7 +15,7 @@ struct mutex_t
   public:
     friend bool mutex_func(u64 data);
     mutex_t()
-        : wait_queue(){};
+        : wait_queue() {};
 
     void lock()
     {

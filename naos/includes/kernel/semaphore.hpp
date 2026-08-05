@@ -1,6 +1,6 @@
 #pragma once
 #include "arch/klib.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/kobject.hpp"
 #include "wait.hpp"
 #include <atomic>

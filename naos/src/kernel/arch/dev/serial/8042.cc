@@ -20,19 +20,21 @@ constexpr io_port data_port = 0x60;
 constexpr io_port cmd_port = 0x64;
 constexpr io_port cmd_status_port = 0x64;
 
-
-enum class chip8042_device_clazz {
+enum class chip8042_device_clazz
+{
     unknown,
     mouse,
     keyboard,
 };
 
-struct chip8042_scan_device_info_t {
+struct chip8042_scan_device_info_t
+{
     chip8042_device_clazz clazz = chip8042_device_clazz::unknown;
     u32 id = 0;
 };
 
-struct chip8042_scan_info_t {
+struct chip8042_scan_info_t
+{
     chip8042_scan_device_info_t devices[2];
 };
 
@@ -134,30 +136,35 @@ bool wait_for_read_us(u32 us)
     return io_in8(cmd_status_port) & 0x1;
 }
 
-void write_controller(u8 command_byte) {
+void write_controller(u8 command_byte)
+{
     wait_for_write();
     io_out8(cmd_port, command_byte);
     delay();
 }
 
-void write_controller_data(u8 data_byte) {
+void write_controller_data(u8 data_byte)
+{
     wait_for_write();
     io_out8(data_port, data_byte);
     delay();
 }
 
-u8 read_controller() {
+u8 read_controller()
+{
     wait_for_read();
     return io_in8(data_port);
 }
 
-void write_first_ps2(u8 data_byte) {
+void write_first_ps2(u8 data_byte)
+{
     wait_for_write();
     io_out8(data_port, data_byte);
     delay();
 }
 
-void write_second_ps2(u8 data_byte) {
+void write_second_ps2(u8 data_byte)
+{
     wait_for_write();
     io_out8(cmd_port, 0xD4);
     wait_for_write();
@@ -165,34 +172,40 @@ void write_second_ps2(u8 data_byte) {
     delay();
 }
 
-void write_ps2(int index, u8 data_byte) {
-    if (index == 0) {
+void write_ps2(int index, u8 data_byte)
+{
+    if (index == 0)
+    {
         write_first_ps2(data_byte);
-    } else {
+    }
+    else
+    {
         write_second_ps2(data_byte);
     }
 }
 
-u8 read_ps2() {
+u8 read_ps2()
+{
     wait_for_read();
     return io_in8(data_port);
 }
 
-bool ack() {
+bool ack()
+{
     wait_for_read();
     return io_in8(data_port) == 0xFA;
 }
 
-u8 read_ps2_fast() {
-    return io_in8(data_port);
-}
+u8 read_ps2_fast() { return io_in8(data_port); }
 
-u8 read_ps2_optional() {
+u8 read_ps2_optional()
+{
     wait_for_read_us(100);
     return io_in8(data_port);
 }
 
-bool self_test_8042() {
+bool self_test_8042()
+{
     write_controller(0xAA);
 
     if (read_controller() != 0x55)
@@ -225,15 +238,15 @@ u16 get_device_id(int index)
 
     u16 id = read_ps2();
     u16 id2 = 0;
-    if (wait_for_read_us(100)) 
+    if (wait_for_read_us(100))
     {
         id2 = read_ps2();
         // enable scan
         write_ps2(index, 0xF4);
         read_ps2_optional();
         return (id << 8) | id2;
-    } 
-    else 
+    }
+    else
     {
         // enable scan
         write_ps2(index, 0xF4);
@@ -242,7 +255,8 @@ u16 get_device_id(int index)
     }
 }
 
-bool test_device_8042(int index) {
+bool test_device_8042(int index)
+{
     u8 device = index == 0 ? 0xAB : 0xA9;
 
     write_controller(device);
@@ -254,7 +268,8 @@ bool test_device_8042(int index) {
     return true;
 }
 
-bool config_8042(u8 clear_flags, u8 set_flags) {
+bool config_8042(u8 clear_flags, u8 set_flags)
+{
     // config 8042
     write_controller(0x20);
     u8 old_status = read_controller();
@@ -267,12 +282,17 @@ bool config_8042(u8 clear_flags, u8 set_flags) {
     return has_dual_channel;
 }
 
-void fill_device_type(chip8042_scan_device_info_t &dev) {
-    if (dev.id != 0xFF) {
-        if ((dev.id >> 8) == 0xAB) {
+void fill_device_type(chip8042_scan_device_info_t &dev)
+{
+    if (dev.id != 0xFF)
+    {
+        if ((dev.id >> 8) == 0xAB)
+        {
             dev.clazz = chip8042_device_clazz::keyboard;
             trace::debug("keyboard id ", trace::hex(dev.id));
-        } else {
+        }
+        else
+        {
             dev.clazz = chip8042_device_clazz::mouse;
             trace::debug("mouse id ", trace::hex(dev.id));
         }
@@ -283,7 +303,8 @@ chip8042_scan_info_t try_scan_8042()
 {
     // disable translation
     chip8042_scan_info_t info;
-    if (!ACPI::is_8042_device_exists()) {
+    if (!ACPI::is_8042_device_exists())
+    {
         trace::warning("8042 not exists");
         return info;
     }
@@ -297,21 +318,25 @@ chip8042_scan_info_t try_scan_8042()
 
     flush();
 
-    if (!self_test_8042()) {
+    if (!self_test_8042())
+    {
         return info;
     }
     // 2 channel test
-    if (has_dual_channel) {
+    if (has_dual_channel)
+    {
         // TODO
     }
     // frist device
-    if (test_device_8042(0xAB)) {
+    if (test_device_8042(0xAB))
+    {
         // read id
         info.devices[0].id = get_device_id(0);
         fill_device_type(info.devices[0]);
     }
     // second device
-    if (test_device_8042(0xA9)) {
+    if (test_device_8042(0xA9))
+    {
         info.devices[1].id = get_device_id(1);
         fill_device_type(info.devices[1]);
     }
@@ -330,14 +355,14 @@ chip8042_scan_info_t try_scan_8042()
 freelibcxx::vector<::dev::device *> kb_device_class::try_scan()
 {
     freelibcxx::vector<::dev::device *> devs(memory::KernelCommonAllocatorV);
-    for (int i = 0; i < 2; i++) 
+    for (int i = 0; i < 2; i++)
     {
-        if (system_chip8042.devices[i].clazz == chip8042_device_clazz::keyboard) 
+        if (system_chip8042.devices[i].clazz == chip8042_device_clazz::keyboard)
         {
             devs.push_back(memory::New<kb_device>(memory::KernelCommonAllocatorV, i));
         }
     }
-    if (devs.empty()) 
+    if (devs.empty())
     {
         trace::warning("no keyboard found");
     }
@@ -347,14 +372,14 @@ freelibcxx::vector<::dev::device *> kb_device_class::try_scan()
 freelibcxx::vector<::dev::device *> mouse_device_class::try_scan()
 {
     freelibcxx::vector<::dev::device *> devs(memory::KernelCommonAllocatorV);
-    for (int i = 0; i < 2; i++) 
+    for (int i = 0; i < 2; i++)
     {
-        if (system_chip8042.devices[i].clazz == chip8042_device_clazz::mouse) 
+        if (system_chip8042.devices[i].clazz == chip8042_device_clazz::mouse)
         {
             devs.push_back(memory::New<mouse_device>(memory::KernelCommonAllocatorV, i));
         }
     }
-    if (devs.empty()) 
+    if (devs.empty())
     {
         trace::warning("no mouse found");
     }
@@ -373,7 +398,11 @@ irq::request_result kb_interrupt(const irq::interrupt_info *inter, u64 extra_dat
     u8 data = read_ps2_fast();
     kb_data_t kb_data;
     kb_data.set(timer::get_high_resolution_time(), data);
-    dev->buffer.write(kb_data);
+    {
+        uctx::RawSpinLockUninterruptibleContext ctx(dev->buffer_lock);
+        if (!dev->buffer.write(kb_data))
+            dev->buffer_overflow = true;
+    }
 
     irq::raise_tasklet(&dev->tasklet);
 
@@ -383,27 +412,37 @@ irq::request_result kb_interrupt(const irq::interrupt_info *inter, u64 extra_dat
 void kb_tasklet_func(u64 user_data)
 {
     kb_device *dev = (kb_device *)user_data;
-    if (dev->io_list.size() == 0)
-        return;
+    {
+        uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
+        if (dev->io_list.empty())
+            return;
+    }
     io::keyboard_data kbdata;
     if (get_key(dev, &kbdata))
     {
-        uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
-        for (io::keyboard_request_t *it : dev->io_list)
+        io::keyboard_request_t *request = nullptr;
         {
-            it->result.get = kbdata;
-            it->status.failed_code = 0;
-            it->status.io_is_completion = true;
-            io::completion(it);
+            uctx::RawSpinLockUninterruptibleContext ctx(dev->io_list_lock);
+            if (dev->io_list.empty())
+                return;
+            request = dev->io_list.front();
+            dev->io_list.remove_at(0);
         }
-        dev->io_list.clear();
+
+        // Do not invoke a completion callback while holding io_list_lock:
+        // the callback wakes the input service, which can immediately submit
+        // the next request and contend for this same lock.
+        request->result.get = kbdata;
+        request->status.failed_code = 0;
+        request->status.io_is_completion = true;
+        io::completion(request);
     }
 }
 
 bool set_led(int index, u8 s)
 {
     write_ps2(index, 0xED);
-    if (!ack()) 
+    if (!ack())
     {
         trace::warning("set led (no ACK) failed");
         return false;
@@ -424,7 +463,6 @@ void blink_led(int index)
     set_led(index, 0b111);
 }
 
-
 bool kb_driver::setup(::dev::device *dev)
 {
     kb_device *kb_dev = ((kb_device *)dev);
@@ -436,7 +474,7 @@ bool kb_driver::setup(::dev::device *dev)
     // select scan code set 1
     write_ps2(kb_dev->port_index, 0xF0);
     write_ps2(kb_dev->port_index, 0x1);
-    if (!ack()) 
+    if (!ack())
     {
         trace::warning("set keyboard codeset fail");
     }
@@ -468,10 +506,25 @@ void kb_driver::cleanup(::dev::device *dev)
 
 bool get_key(kb_device *dev, io::keyboard_data *data)
 {
+    uctx::RawSpinLockUninterruptibleContext ctx(dev->buffer_lock);
     kb_data_t kb_data;
     u8 *key = &data->key;
     u64 *timestamp = &data->timestamp;
     bool *release = &data->release;
+
+    if (dev->buffer_overflow)
+    {
+        // Once a raw scan-code byte was dropped, the next queued byte may be
+        // the second half of an E0 sequence.  Do not turn that desynchronized
+        // stream into printable input; discard the burst and start at the
+        // next complete scan code.
+        while (dev->buffer.read(&kb_data))
+        {
+        }
+        dev->last_prefix_count = 0;
+        dev->buffer_overflow = false;
+        return false;
+    }
 
     while (dev->buffer.read(&kb_data))
     {
@@ -514,7 +567,11 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
                 {
                     *release = false;
                 }
-                *key = k + 0x50;
+                // The navigation enum intentionally leaves room between
+                // left and right, while the PS/2 set-1 scan codes are
+                // contiguous.  Map the left arrow explicitly instead of
+                // allowing the generic offset to produce the unused slot.
+                *key = k == 0x4B ? static_cast<u8>(input::key::cur_left) : k + 0x50;
                 *timestamp = kb_data.get_timestamp(timer::get_high_resolution_time());
                 dev->last_prefix_count = 0;
                 return true;
@@ -696,7 +753,7 @@ bool mouse_driver::setup(::dev::device *dev)
         set_mouse_rate(ms_dev->port_index, 80);
         delay();
         u16 id = get_device_id(ms_dev->port_index);
-        if (id == 0x3) 
+        if (id == 0x3)
         {
             info.id = id;
             trace::debug("mouse extension id ", trace::hex(id));
@@ -707,7 +764,7 @@ bool mouse_driver::setup(::dev::device *dev)
             set_mouse_rate(ms_dev->port_index, 80);
             delay();
             id = get_device_id(ms_dev->port_index);
-            if (id == 0x4) 
+            if (id == 0x4)
             {
                 info.id = id;
                 trace::debug("mouse extension id ", trace::hex(id));
@@ -734,7 +791,7 @@ bool mouse_driver::setup(::dev::device *dev)
 
     // enable it
     write_ps2(ms_dev->port_index, 0xF4);
-    if (!ack()) 
+    if (!ack())
     {
         trace::warning("enable mouse report fail(no ACK)");
     }
@@ -795,10 +852,10 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
 
                 data->movement_x = (u16)last_data[1] - ((last_data[0] << 4) & 0x100);
                 data->movement_y = (u16)last_data[2] - ((last_data[0] << 3) & 0x100);
-                if (!dev->extension_buttons) 
+                if (!dev->extension_buttons)
                 {
-                    data->movement_z = (u16) last_data[3];
-                } 
+                    data->movement_z = (u16)last_data[3];
+                }
                 else
                 {
                     data->movement_z = 8 - ((8 - last_data[3]) & 0xF);

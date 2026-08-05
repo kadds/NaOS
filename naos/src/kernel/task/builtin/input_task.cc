@@ -60,15 +60,18 @@ void handle_tty_control_event(dev::tty::control_event event, group_id foreground
             break;
     }
 
-    if (foreground_group != 0)
-    {
-        task::send_signal_to_process_group(foreground_group, signal_number);
+    if (foreground_group == 0)
         return;
-    }
 
+    // The init process is the session supervisor. It must never be selected
+    // as a TTY control-event fallback target: exiting it is a kernel-fatal
+    // condition. Interactive shells establish their own process group before
+    // accepting commands; until then, ignore the control event safely.
     auto *init_process = task::get_init_process();
-    if (init_process != nullptr)
-        init_process->signal_pack.send(init_process, signal_number, 0, 0, 0);
+    if (init_process != nullptr && init_process->process_group_id == foreground_group)
+        return;
+
+    task::send_signal_to_process_group(foreground_group, signal_number);
 }
 
 enum class switchable_key
@@ -94,6 +97,71 @@ bool is_key_down(key k) { return key_down_state.get_bit((u64)k); }
 bool is_ctrl_key_down() { return is_key_down(key::left_control) || is_key_down(key::right_control); }
 bool is_alt_key_down() { return is_key_down(key::left_alt) || is_key_down(key::right_alt); }
 
+struct terminal_key_sequence
+{
+    const char *data;
+    u64 size;
+};
+
+terminal_key_sequence get_terminal_key_sequence(key k)
+{
+    switch (k)
+    {
+        case key::cur_up:
+            return {"\x1b[A", 3};
+        case key::cur_down:
+            return {"\x1b[B", 3};
+        case key::cur_right:
+            return {"\x1b[C", 3};
+        case key::cur_left:
+            return {"\x1b[D", 3};
+        case key::home:
+            return {"\x1b[H", 3};
+        case key::end:
+            return {"\x1b[F", 3};
+        case key::insert:
+            return {"\x1b[2~", 4};
+        case key::delete_key:
+            return {"\x1b[3~", 4};
+        case key::page_up:
+            return {"\x1b[5~", 4};
+        case key::page_down:
+            return {"\x1b[6~", 4};
+        default:
+            return {nullptr, 0};
+    }
+}
+
+bool write_tty_input(dev::tty::tty_pseudo_t *tty, const byte *data, u64 size)
+{
+    u64 offset = 0;
+    while (offset < size)
+    {
+        const i64 result = tty->write_to_buffer(data + offset, size - offset, fs::rw_flags::override);
+        if (result <= 0)
+            return false;
+        offset += static_cast<u64>(result);
+    }
+    return true;
+}
+
+bool write_terminal_key(dev::tty::tty_pseudo_t *tty, key k)
+{
+    const auto sequence = get_terminal_key_sequence(k);
+    if (sequence.data == nullptr)
+        return false;
+    return write_tty_input(tty, reinterpret_cast<const byte *>(sequence.data), sequence.size);
+}
+
+bool write_control_key(dev::tty::tty_pseudo_t *tty, key k)
+{
+    const char character = key_char_table[(u8)k];
+    if (character < 'a' || character > 'z')
+        return false;
+    const byte control = static_cast<byte>(character - 'a' + 1);
+    return write_tty_input(tty, &control, 1);
+}
+
 void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::request_t *req,
                     freelibcxx::span<handle_t<fs::vfs::file>> tty_file_list)
 {
@@ -107,8 +175,19 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
         {
             auto terms = term::get_terms();
             int idx = terms->term_index();
-            // auto &term = terms->get(idx);
+            if (idx < 0 || static_cast<u64>(idx) >= tty_file_list.size() || !tty_file_list[idx])
+            {
+                trace::warning("keyboard event has no target tty, terminal=", idx, " tty_count=", tty_file_list.size());
+                io::finish_io_request(req);
+                return;
+            }
             auto tty = reinterpret_cast<dev::tty::tty_pseudo_t *>(tty_file_list[idx]->get_pseudo());
+            if (tty == nullptr)
+            {
+                trace::warning("keyboard event target is not a tty, terminal=", idx);
+                io::finish_io_request(req);
+                return;
+            }
 
             key k = (key)res.get.key;
             if (k == key::capslock)
@@ -124,32 +203,30 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 set_key_switch_state(switchable_key::numlock, !get_key_switch_state(switchable_key::numlock));
             }
 
-            if (is_ctrl_key_down())
+            if (is_ctrl_key_down() && is_alt_key_down() && (k == key::f1 || k == key::f12))
             {
-                if (k == key::c)
+                const auto to_idx = k == key::f12 ? term::terminal_manager::kernel_console_index
+                                                  : term::terminal_manager::user_terminal_index;
+                if (terms->valid_index(to_idx))
                 {
-                    /// send sigint
-                    auto proc = task::get_init_process();
-                    proc->signal_pack.send(proc, task::signal::sigint, 0, 0, 0);
-                }
-                else if (k == key::d)
-                {
-                    tty->send_EOF();
-                }
-                else if (is_alt_key_down() && (k == key::f1 || k == key::f12))
-                {
-                    const auto to_idx = k == key::f12 ? term::terminal_manager::kernel_console_index
-                                                      : term::terminal_manager::user_terminal_index;
-                    if (terms->valid_index(to_idx))
-                    {
-                        terms->switch_term(to_idx);
-                    }
+                    terms->switch_term(to_idx);
                 }
             }
-            else if (key_char_table[(u8)k] != 0)
+            else if (is_ctrl_key_down())
+            {
+                write_control_key(tty, k);
+            }
+            else if (!write_terminal_key(tty, k) && key_char_table[(u8)k] != 0)
             {
                 byte d;
-                if (is_key_down(key::left_shift) || is_key_down(key::right_shift))
+                // Terminals use DEL for VERASE.  The PS/2 key is not a
+                // printable shifted character, so keep it at 0x7f even
+                // when Shift is held.
+                if (k == key::backspace)
+                {
+                    d = static_cast<byte>(0x7f);
+                }
+                else if (is_key_down(key::left_shift) || is_key_down(key::right_shift))
                 {
                     d = (byte)key_char_table2[(u8)k];
                 }
@@ -170,7 +247,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
                 }
                 if (d != (byte)0)
                 {
-                    tty->write_to_buffer(&d, 1, fs::rw_flags::override);
+                    write_tty_input(tty, &d, 1);
                 }
             }
 
@@ -272,7 +349,7 @@ void listen_keyboard()
         }
         if (!request.status.io_is_completion)
         {
-            input_wait_queue.do_wait([](u64 data) { return request.status.io_is_completion; }, 0);
+            input_wait_queue.do_wait([](u64 data) { return request.status.io_is_completion.load(); }, 0);
         }
         print_keyboard(request.result, request.status, &request, tty_file_list.span());
     };
@@ -315,7 +392,7 @@ void listen_mouse()
 
         if (!mreq.status.io_is_completion)
         {
-            input_wait_queue.do_wait([](u64 data) { return mreq.status.io_is_completion; }, 0);
+            input_wait_queue.do_wait([](u64 data) { return mreq.status.io_is_completion.load(); }, 0);
         }
         print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
     };

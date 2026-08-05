@@ -1,11 +1,11 @@
 #include "kernel/trace.hpp"
-#include "common.hpp"
 #include "freelibcxx/circular_buffer.hpp"
 #include "freelibcxx/string.hpp"
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/common.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -31,7 +31,8 @@ trace_callback tcallback = nullptr;
 void early_init()
 {
     bool enable_serial = cmdline::early_get_bool("kernel_log_serial", false);
-    if (enable_serial) {
+    if (enable_serial)
+    {
         serial_device.init(arch::device::com::get_control_port(0));
         serial_device_enable = true;
     }
@@ -41,24 +42,25 @@ void early_init()
 void init()
 {
     // 32Kib
-    cmdline::space_t space = cmdline::early_get_space("kernel_log_buffer_size", cmdline::space_t(memory::page_size * 8));
+    cmdline::space_t space =
+        cmdline::early_get_space("kernel_log_buffer_size", cmdline::space_t(memory::page_size * 8));
     kernel_log_buffer = memory::New<freelibcxx::circular_buffer<byte>>(memory::KernelCommonAllocatorV,
                                                                        memory::KernelBuddyAllocatorV, space.space);
     // copy early_buffer to kernel_log_buffer
-    kernel_log_buffer->write(reinterpret_cast<const byte*>(early_buffer), early_buffer_offset);
+    kernel_log_buffer->write(reinterpret_cast<const byte *>(early_buffer), early_buffer_offset);
 }
 
-void register_callback(bool trace_all, trace_callback callback) 
+void register_callback(bool trace_all, trace_callback callback)
 {
     tcallback = callback;
-    if (trace_all) 
+    if (trace_all)
     {
         byte buf[128];
-        while (true) 
+        while (true)
         {
             auto len = kernel_log_buffer->read(buf, sizeof(buf));
             tcallback(buf, len);
-            if (len == 0) 
+            if (len == 0)
             {
                 break;
             }
@@ -74,13 +76,13 @@ void print_klog(const char *str)
     print_klog(str, len);
 }
 
-void write_early_buffer(const char *str, u64 len) 
+void write_early_buffer(const char *str, u64 len)
 {
     const char overflow_str[] = "\n...kbuffer overflow.\n";
     u64 rest = sizeof(early_buffer) - early_buffer_offset - sizeof(overflow_str);
 
     bool overflow = false;
-    if (len > rest) 
+    if (len > rest)
     {
         overflow = true;
         len = rest;
@@ -89,11 +91,11 @@ void write_early_buffer(const char *str, u64 len)
     memcpy(early_buffer + early_buffer_offset, str, len);
     early_buffer_offset += len;
 
-    if (overflow) 
+    if (overflow)
     {
-        if (rest >= sizeof(overflow_str)) 
+        if (rest >= sizeof(overflow_str))
         {
-            strcpy(early_buffer + early_buffer_offset, overflow_str); 
+            strcpy(early_buffer + early_buffer_offset, overflow_str);
             early_buffer_offset += sizeof(overflow_str);
         }
     }
@@ -117,7 +119,7 @@ void print_klog(const char *str, u64 len)
     {
         kernel_log_buffer->write((const byte *)str, len);
         term::write_to_klog(freelibcxx::const_string_view(str, len));
-        if (tcallback) [[likely]] 
+        if (tcallback) [[likely]]
         {
             tcallback(reinterpret_cast<const byte *>(str), len);
         }

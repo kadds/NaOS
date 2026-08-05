@@ -1,0 +1,9 @@
+library naos_test;
+
+protocol Echo @uuid("2f8c9e53-8b23-4d9e-9d53-7e3a7e3c0101") @revision(1) @features(0) @experimental {
+    method echo @id(1) @max_bytes(65536) {
+        bytes<65536> payload @id(1);
+    } -> {
+        bytes<65536> payload @id(1);
+    };
+};

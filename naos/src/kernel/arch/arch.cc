@@ -1,5 +1,4 @@
 #include "kernel/arch/arch.hpp"
-#include "common.hpp"
 #include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/apic.hpp"
 #include "kernel/arch/cpu.hpp"
@@ -12,6 +11,7 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/tss.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/common.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/terminal.hpp"

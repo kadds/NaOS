@@ -6,6 +6,7 @@
 
 #include "kernel/fs/vfs/defines.hpp"
 #include "kernel/handle.hpp"
+#include "kernel/ipc/channel.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
@@ -21,6 +22,7 @@
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
+#include "naos/generated/system_uapi.h"
 
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/file.hpp"
@@ -32,6 +34,7 @@
 
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
+#include <limits>
 
 #include "kernel/cpu.hpp"
 #include "kernel/errno.hpp"
@@ -139,6 +142,17 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 
 namespace
 {
+capability::metadata stream_capability_metadata()
+{
+    capability::metadata metadata;
+    metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.scope = NA_SCOPE_STREAM;
+    metadata.revision = 1;
+    metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+    return metadata;
+}
+
 constexpr u64 aux_at_null = 0;
 constexpr u64 aux_at_phdr = 3;
 constexpr u64 aux_at_phent = 4;
@@ -390,19 +404,42 @@ inline process_t *copy_process(process_t *p)
     return process;
 }
 
-inline void delete_process(process_t *p)
+void finalize_process(process_t *p)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    unregister_process_job_control_unlocked(p);
     if (p->mm_info != nullptr)
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
 
     memory::KernelCommonAllocatorV->Delete(reinterpret_cast<thread_id_generator_t *>(p->thread_id_gen));
 
     memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV, (thread_list_t *)p->thread_list);
-    global_process_map->remove(p->pid);
-    // process_id_generator->collect(p->pid);
     memory::Delete<>(process_t_allocator, p);
+}
+
+void maybe_finalize_process(process_t *p)
+{
+    if (p == nullptr || !p->reap_pending.load() || p->capability_refs.load() != 0)
+        return;
+
+    bool expected = false;
+    if (p->storage_released.compare_exchange_strong(expected, true))
+        finalize_process(p);
+}
+
+inline void delete_process(process_t *p)
+{
+    if (p == nullptr)
+        return;
+
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+        if (p->reap_pending.exchange(true))
+            return;
+        p->attributes |= process_attributes::destroy;
+        unregister_process_job_control_unlocked(p);
+        global_process_map->remove(p->pid);
+        // process_id_generator->collect(p->pid);
+    }
+    maybe_finalize_process(p);
 }
 
 inline thread_t *new_thread(process_t *p)
@@ -454,8 +491,37 @@ void delete_thread(thread_t *thd)
 
 process_t::process_t()
     : wait_counter(0)
+    , wait_claimed(false)
+    , child_wait_generation(0)
+    , capability_refs(0)
+    , reap_pending(false)
+    , storage_released(false)
+    , ret_val(0)
 {
 }
+
+process_object::process_object(process_t *process)
+    : kobject(type_e::process)
+    , process_(process)
+{
+    if (process_ != nullptr)
+        process_->capability_refs.fetch_add(1);
+}
+
+process_object::~process_object()
+{
+    if (process_ != nullptr && process_->capability_refs.fetch_sub(1) == 1)
+        maybe_finalize_process(process_);
+}
+
+na_signal_t process_object::capability_signals() const
+{
+    if (process_ == nullptr)
+        return NA_SIGNAL_OBJECT_REVOKED;
+    return (process_->attributes.load() & process_attributes::no_thread) != 0 ? NA_SIGNAL_COMPLETED : 0;
+}
+
+u64 process_object::capability_state() const { return process_ == nullptr ? 0 : static_cast<u64>(process_->ret_val); }
 
 thread_t::thread_t()
     : wait_counter(0)
@@ -480,6 +546,7 @@ void create_devs()
 
     create_tty("/dev/console", term::terminal_manager::kernel_console_index);
     create_tty("/dev/tty0", term::terminal_manager::user_terminal_index);
+    fs::vfs::symbolink("/dev/tty", "/dev/tty0", root, root, 0);
 
     {
         constexpr const char *fb_name = "/dev/fb0";
@@ -518,8 +585,8 @@ void init()
         // init for kernel process
         process = new_kernel_process();
         process->parent_pid = 0;
-        process->resource.set_root(root);
-        process->resource.set_current(root);
+        process->bootstrap_root_directory = handle_t<fs::vfs::native_directory>::make(root, root);
+        process->bootstrap_current_directory = handle_t<fs::vfs::native_directory>::make(root, root);
     }
     else
     {
@@ -550,12 +617,16 @@ void init()
         auto tty0read = fs::vfs::open("/dev/tty0", root, root, fs::mode::read, 0);
         auto tty0write = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
         auto tty0err = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
-        auto &res = current_process()->resource;
         kassert(tty0read, "invalid tty");
-
-        res.set_handle(console_in, tty0read);
-        res.set_handle(console_out, tty0write);
-        res.set_handle(console_err, tty0err);
+        auto *init_process = current_process();
+        const auto metadata = stream_capability_metadata();
+        init_process->console_in_handle = init_process->resource.install_native(tty0read, metadata);
+        init_process->console_out_handle = init_process->resource.install_native(tty0write, metadata);
+        init_process->console_err_handle = init_process->resource.install_native(tty0err, metadata);
+        kassert(init_process->console_in_handle != NA_HANDLE_INVALID &&
+                    init_process->console_out_handle != NA_HANDLE_INVALID &&
+                    init_process->console_err_handle != NA_HANDLE_INVALID,
+                "unable to install bootstrap console capabilities");
         is_init = true;
         term::get_terms()->switch_term(term::terminal_manager::user_terminal_index);
 
@@ -760,52 +831,43 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
 void copy_fd(handle_t<fs::vfs::file> file, process_t *new_proc, process_t *old_proc, flag_t flags)
 {
     kassert(new_proc != old_proc, "2 parameter processes assert failed");
-
-    auto &old_res = old_proc->resource;
-    auto &new_res = new_proc->resource;
-
-    struct shared_t
-    {
-        flag_t flags;
-    };
-    shared_t shared{flags};
-
-    old_res.clone(
-        &new_res,
-        [](file_desc fd, khandle handle, u64 u) -> bool {
-            shared_t *s = reinterpret_cast<shared_t *>(u);
-            bool is_console = fd <= console_err;
-            if (s->flags & create_process_flags::no_shared_files)
-            {
-                if (!is_console)
-                {
-                    return false;
-                }
-            }
-            if (is_console)
-            {
-                if (fd == console_in)
-                    return !(s->flags & create_process_flags::no_shared_stdin);
-                if (fd == console_out)
-                    return !(s->flags & create_process_flags::no_shared_stdout);
-                if (fd == console_err)
-                    return !(s->flags & create_process_flags::no_shared_stderror);
-            }
-            return true;
-        },
-        reinterpret_cast<u64>(&shared));
-
     auto root = fs::vfs::global_root;
 
     if (unlikely(flags & create_process_flags::no_shared_root))
-        new_res.set_root(root);
+        new_proc->bootstrap_root_directory = handle_t<fs::vfs::native_directory>::make(root, root);
     else
-        new_res.set_root(old_res.root());
+        new_proc->bootstrap_root_directory = old_proc->bootstrap_root_directory;
 
     if (unlikely(flags & create_process_flags::no_shared_work_dir))
-        new_res.set_current(file ? file->get_entry()->get_parent() : root);
+    {
+        const auto current_root =
+            new_proc->bootstrap_root_directory ? new_proc->bootstrap_root_directory->root() : root;
+        const auto current = file ? file->get_entry()->get_parent() : current_root;
+        new_proc->bootstrap_current_directory = handle_t<fs::vfs::native_directory>::make(current_root, current);
+    }
     else
-        new_res.set_current(old_res.current());
+        new_proc->bootstrap_current_directory = old_proc->bootstrap_current_directory;
+
+    auto copy_console = [](resource_table_t &source, resource_table_t &destination, na_handle_t source_handle,
+                           na_handle_t &destination_handle) {
+        destination_handle = NA_HANDLE_INVALID;
+        if (source_handle == NA_HANDLE_INVALID)
+            return;
+        capability::entry entry;
+        if (!source.lookup_native(source_handle, entry) || !entry.object)
+            return;
+        destination_handle = destination.install_native(entry.object, entry.meta);
+    };
+
+    const bool share_all = (flags & create_process_flags::no_shared_files) == 0;
+    if (share_all || (flags & create_process_flags::no_shared_stdin) == 0)
+        copy_console(old_proc->resource, new_proc->resource, old_proc->console_in_handle, new_proc->console_in_handle);
+    if (share_all || (flags & create_process_flags::no_shared_stdout) == 0)
+        copy_console(old_proc->resource, new_proc->resource, old_proc->console_out_handle,
+                     new_proc->console_out_handle);
+    if (share_all || (flags & create_process_flags::no_shared_stderror) == 0)
+        copy_console(old_proc->resource, new_proc->resource, old_proc->console_err_handle,
+                     new_proc->console_err_handle);
 }
 
 process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
@@ -840,6 +902,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     {
         memory::KernelCommonAllocatorV->deallocate(header);
         trace::info("Can't load execute file.");
+        abort_unstarted_process(process);
         return nullptr;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
@@ -847,12 +910,20 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     /// create thread
     thread_t *thd = new_thread(process);
     if (!thd)
+    {
+        abort_unstarted_process(process);
         return nullptr;
+    }
     process->main_thread = thd;
     thd->attributes |= thread_attributes::main;
     thd->state = thread_state::ready;
 
     auto process_args = copy_args(path, args, envp);
+    if (process_args == nullptr)
+    {
+        abort_unstarted_process(process);
+        return nullptr;
+    }
     process_args->program_header = exec_info.program_header;
     process_args->program_header_entry_size = exec_info.program_header_entry_size;
     process_args->program_header_count = exec_info.program_header_count;
@@ -868,14 +939,45 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     paging.map_kernel_space();
 
     if (flags & create_process_flags::real_time_rr)
-    {
         thd->attributes |= thread_attributes::real_time;
-        scheduler::add(thd, scheduler::scheduler_class::round_robin);
-    }
-    else
-        scheduler::add(thd, scheduler::scheduler_class::cfs);
+    if ((flags & create_process_flags::deferred_start) == 0)
+        start_process(process);
 
     return process;
+}
+
+void start_process(process_t *process)
+{
+    if (process == nullptr || process->main_thread == nullptr)
+        return;
+    bool expected = false;
+    if (!process->main_thread_started.compare_exchange_strong(expected, true))
+        return;
+
+    auto *thread = process->main_thread;
+    if (thread->attributes & thread_attributes::real_time)
+        scheduler::add(thread, scheduler::scheduler_class::round_robin);
+    else
+        scheduler::add(thread, scheduler::scheduler_class::cfs);
+}
+
+void abort_unstarted_process(process_t *process)
+{
+    if (process == nullptr || process->main_thread_started.load())
+        return;
+
+    process->resource.clear();
+    process->bootstrap_root_directory.reset();
+    process->bootstrap_current_directory.reset();
+    if (process->main_thread != nullptr)
+    {
+        process->main_thread->state = thread_state::destroy;
+        delete_thread(process->main_thread);
+        process->main_thread = nullptr;
+    }
+    process->attributes |= process_attributes::no_thread;
+    process->wait_queue.do_wake_up();
+    delete_process(process);
 }
 
 process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags)
@@ -927,11 +1029,21 @@ void fork_start_func(regs_t *regs)
 int fork()
 {
     auto current_thread = current();
-    auto process = copy_process(current_process());
+    auto *parent = current_process();
+    auto process = copy_process(parent);
     if (!process)
         return -1;
 
-    copy_fd(current_process()->file, process, current_process(), 0);
+    if (process->resource.clone_fork_bindings(parent->resource) != NA_STATUS_OK)
+    {
+        delete_process(process);
+        return -1;
+    }
+    process->bootstrap_root_directory = parent->bootstrap_root_directory;
+    process->bootstrap_current_directory = parent->bootstrap_current_directory;
+    process->console_in_handle = parent->console_in_handle;
+    process->console_out_handle = parent->console_out_handle;
+    process->console_err_handle = parent->console_err_handle;
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &paging = mm_info->paging();
@@ -1055,7 +1167,8 @@ void exit_process_inner(thread_t *thd);
 namespace
 {
 void cleanup_process_job_control(process_t *process);
-}
+void notify_parent_of_exit(process_t *process);
+} // namespace
 
 void exit_process_thread(process_t *process)
 {
@@ -1073,11 +1186,13 @@ void exit_process_thread(process_t *process)
     {
         icu.end();
         process->resource.clear();
+        naos::ipc::collect_orphaned_channels();
         process->attributes |= process_attributes::no_thread;
         if (process == get_init_process())
         {
             trace::panic("init process startup fail");
         }
+        notify_parent_of_exit(process);
         process->wait_queue.do_wake_up();
     }
 }
@@ -1153,22 +1268,186 @@ bool wait_process_exit(u64 user_data)
     return proc->attributes & process_attributes::no_thread;
 }
 
-u64 wait_process(process_t *process, i64 &ret)
+namespace
 {
-    if (process == nullptr)
-        return 1;
-    uctx::UninterruptibleContext icu;
+struct child_wait_context
+{
+    process_t *parent;
+    u64 generation;
+};
 
-    process->wait_counter++;
-    process->wait_queue.do_wait(wait_process_exit, (u64)process);
+bool child_wait_generation_changed(u64 user_data)
+{
+    auto *context = reinterpret_cast<child_wait_context *>(user_data);
+    return context == nullptr || context->parent == nullptr ||
+           context->parent->child_wait_generation.load() != context->generation;
+}
 
-    ret = (i64)process->ret_val;
+struct child_selection
+{
+    process_t *process = nullptr;
+    bool has_child = false;
+};
+
+bool matches_wait_pid(const process_t *parent, const process_t *child, i64 requested_pid)
+{
+    if (requested_pid == -1)
+        return true;
+    if (requested_pid > 0)
+        return child->pid == static_cast<process_id>(requested_pid);
+    if (requested_pid == 0)
+        return child->process_group_id == parent->process_group_id;
+    if (requested_pid == std::numeric_limits<i64>::min())
+        return false;
+    return child->process_group_id == static_cast<group_id>(-requested_pid);
+}
+
+child_selection select_child(process_t *parent, i64 requested_pid)
+{
+    child_selection selection;
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    for (auto item : *global_process_map)
+    {
+        auto *child = item.value;
+        if (child == nullptr || child->parent_pid != parent->pid ||
+            (child->attributes.load() & process_attributes::destroy) || !matches_wait_pid(parent, child, requested_pid))
+            continue;
+
+        selection.has_child = true;
+        if ((child->attributes.load() & process_attributes::no_thread) && !child->wait_claimed.load() &&
+            selection.process == nullptr)
+            selection.process = child;
+    }
+    return selection;
+}
+
+process_t *reserve_child(process_t *parent, i64 requested_pid, bool exited_only)
+{
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    for (auto item : *global_process_map)
+    {
+        auto *child = item.value;
+        if (child == nullptr || child->parent_pid != parent->pid ||
+            (child->attributes.load() & process_attributes::destroy) ||
+            !matches_wait_pid(parent, child, requested_pid) || child->wait_claimed.load() ||
+            (exited_only && !(child->attributes.load() & process_attributes::no_thread)))
+            continue;
+        child->wait_claimed.store(true);
+        child->wait_counter++;
+        return child;
+    }
+    return nullptr;
+}
+
+void notify_parent_of_exit(process_t *process)
+{
+    process_t *parent = nullptr;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+        if (global_process_map != nullptr)
+            parent = global_process_map->get(process->parent_pid).value_or(nullptr);
+        if (parent != nullptr)
+            parent->child_wait_generation.fetch_add(1);
+    }
+    if (parent != nullptr)
+        parent->child_wait_queue.do_wake_up();
+}
+
+u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
+{
+    ret = static_cast<i64>(process->ret_val);
+    waited_pid = process->pid;
     if (--process->wait_counter == 0)
     {
+        notify_parent_of_exit(process);
         process->attributes |= process_attributes::destroy;
         delete_process(process);
     }
     return 0;
+}
+
+} // namespace
+
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid)
+{
+    if (parent == nullptr || target == nullptr || target->parent_pid != parent->pid || target->reap_pending.load())
+        return ECHILD;
+
+    uctx::UninterruptibleContext icu;
+    if (target->attributes.load() & process_attributes::no_thread)
+    {
+        auto *reserved = reserve_child(parent, target->pid, true);
+        return reserved == target ? static_cast<i64>(reap_waited_child(reserved, ret, waited_pid)) : ECHILD;
+    }
+    if (flags & NA_PROCESS_WAIT_FLAG_NOHANG) // WNOHANG
+    {
+        waited_pid = 0;
+        return 0;
+    }
+
+    auto *reserved = reserve_child(parent, target->pid, false);
+    if (reserved == nullptr)
+        return ECHILD;
+    reserved->wait_queue.do_wait(wait_process_exit, reinterpret_cast<u64>(reserved));
+    return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
+}
+
+i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object)
+{
+    object.reset();
+    if (caller == nullptr || global_process_map == nullptr || requested_pid < 0 ||
+        static_cast<u64>(requested_pid) > max_process_id)
+        return ECHILD;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *target =
+        requested_pid == 0 ? caller : global_process_map->get(static_cast<process_id>(requested_pid)).value_or(nullptr);
+    if (target == nullptr || target->reap_pending.load() || (target != caller && target->parent_pid != caller->pid))
+        return ECHILD;
+    object = handle_t<process_object>::make(target);
+    return object ? 0 : EFAILED;
+}
+
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid)
+{
+    if (parent == nullptr || global_process_map == nullptr)
+        return ECHILD;
+
+    uctx::UninterruptibleContext icu;
+
+    const bool wait_any = requested_pid <= 0;
+    for (;;)
+    {
+        child_wait_context context{parent, parent->child_wait_generation.load()};
+        auto selection = select_child(parent, requested_pid);
+        if (selection.process != nullptr)
+        {
+            auto target = reserve_child(parent, requested_pid, true);
+            if (target != nullptr)
+                return reap_waited_child(target, ret, waited_pid);
+            continue;
+        }
+        if (!selection.has_child)
+            return ECHILD;
+        if (flags & NA_PROCESS_WAIT_FLAG_NOHANG) // WNOHANG
+        {
+            waited_pid = 0;
+            return 0;
+        }
+
+        if (wait_any)
+        {
+            parent->child_wait_queue.do_wait(child_wait_generation_changed, reinterpret_cast<u64>(&context));
+        }
+        else
+        {
+            auto target = reserve_child(parent, requested_pid, false);
+            if (target == nullptr)
+                return ECHILD;
+            target->wait_queue.do_wait(wait_process_exit, reinterpret_cast<u64>(target));
+            return reap_waited_child(target, ret, waited_pid);
+        }
+    }
 }
 
 bool wait_exit(u64 user_data) { return ((thread_t *)user_data)->state == thread_state::destroy; }
@@ -1399,6 +1678,19 @@ int setpgid(process_t *caller, process_id pid, group_id pgid)
     return OK;
 }
 
+bool get_job_control_info(const process_t *process, job_control_info &info)
+{
+    if (process == nullptr || global_process_map == nullptr)
+        return false;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    info.session = process->session_id;
+    info.process_group = process->process_group_id;
+    info.foreground_process_group = process->session == nullptr ? 0 : process->session->foreground_process_group;
+    info.has_controlling_tty = process->session != nullptr && process->session->controlling_tty != nullptr;
+    return true;
+}
+
 i64 setsid(process_t *process)
 {
     if (process == nullptr || global_process_map == nullptr)
@@ -1414,30 +1706,6 @@ i64 setsid(process_t *process)
     process->foreground_process_group = 0;
     move_process_session_unlocked(process, process->pid, process->pid);
     return process->session_id;
-}
-
-i64 getpgid(process_t *caller, process_id pid)
-{
-    if (caller == nullptr || global_process_map == nullptr)
-        return EPARAM;
-
-    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    auto *target = pid == 0 ? caller : global_process_map->get(pid).value_or(nullptr);
-    if (!process_is_live(target))
-        return ENOEXIST;
-    return target->process_group_id;
-}
-
-i64 getsid(process_t *caller, process_id pid)
-{
-    if (caller == nullptr || global_process_map == nullptr)
-        return EPARAM;
-
-    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    auto *target = pid == 0 ? caller : global_process_map->get(pid).value_or(nullptr);
-    if (!process_is_live(target))
-        return ENOEXIST;
-    return target->session_id;
 }
 
 int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force)

@@ -1,5 +1,4 @@
 #include "kernel/timer.hpp"
-#include "common.hpp"
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
@@ -13,6 +12,7 @@
 #include "kernel/clock.hpp"
 #include "kernel/clock/clock_source.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/common.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
@@ -43,7 +43,7 @@ struct watcher_t
     watcher_t(u64 expires, watcher_func func, u64 data)
         : expires(expires)
         , function(func)
-        , data(data){};
+        , data(data) {};
 
     bool operator==(const watcher_t &w) { return expires == w.expires && function == w.function && data == w.data; }
     bool operator<(const watcher_t &w) { return expires < w.expires; }

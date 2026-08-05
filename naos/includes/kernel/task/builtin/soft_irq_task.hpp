@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/task.hpp"
 namespace task::builtin::softirq
 {

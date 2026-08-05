@@ -1,7 +1,7 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/terminal.hpp"
 namespace trace

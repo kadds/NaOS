@@ -1,0 +1,20 @@
+library naos.system;
+
+protocol Stream @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1001") @revision(1) @features(0) @scope(1) @uapi_name("STREAM") {
+    method read @id(1) @max_bytes(65536) {
+        u64 size @id(1);
+        u64 flags @id(2);
+    } -> {
+        bytes<65536> data @id(1) @inline;
+    };
+    method write @id(2) @max_bytes(65536) {
+        u64 size @id(1);
+        u64 flags @id(2);
+        bytes<65536> data @id(3) @inline @length_field("size");
+    } -> {
+        u64 count @id(1);
+    };
+    method poll @id(3) -> {
+        u64 events @id(1);
+    };
+};

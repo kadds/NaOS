@@ -1,10 +1,12 @@
 #pragma once
 #include "../lock.hpp"
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/arch/paging.hpp"
+#include "kernel/common.hpp"
+#include "kernel/handle.hpp"
+#include "kernel/kobject.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/types.hpp"
 #include "list_node_cache.hpp"
@@ -14,6 +16,11 @@ namespace fs::vfs
 {
 class file;
 } // namespace fs::vfs
+
+namespace naos::data_plane
+{
+class memory_object;
+} // namespace naos::data_plane
 
 /// virtual memory system
 namespace memory::vm
@@ -52,6 +59,7 @@ enum class page_fault_method
     common,
     common_with_bss,
     file,
+    memory_object,
     physical,
 };
 
@@ -128,6 +136,8 @@ class info_t
     // mmap virtual address
     const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_offset, u64 file_length, u64 mmap_length,
                          flag_t page_ext_attr);
+    const vm_t *map_memory_object(u64 start, khandle backing, naos::data_plane::memory_object *object,
+                                  u64 object_offset, u64 length, flag_t page_ext_attr);
 
     bool umap_file(u64 addr, u64 size);
     void sync_map_file(u64 addr);
@@ -147,6 +157,7 @@ class info_t
     bool expand_vm(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_bss(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_file(u64 alignment_page, u64 access_address, vm_t *item);
+    bool expand_memory_object(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_physical(u64 alignment_page, u64 access_address, vm_t *item);
 
   private:
@@ -162,6 +173,8 @@ class info_t
 struct map_t
 {
     fs::vfs::file *file;
+    naos::data_plane::memory_object *memory_object;
+    khandle backing;
     phy_addr_t physical_address;
     u64 file_offset;
     u64 file_length;
@@ -169,25 +182,40 @@ struct map_t
     info_t *vm_info;
     map_t(fs::vfs::file *f, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
         : file(f)
+        , memory_object(nullptr)
+        , backing()
         , physical_address(nullptr)
         , file_offset(file_offset)
         , file_length(file_length)
         , mmap_length(mmap_length)
-        , vm_info(vmi){};
+        , vm_info(vmi) {};
+    map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 length, info_t *vmi)
+        : file(nullptr)
+        , memory_object(object)
+        , backing(std::move(backing))
+        , physical_address(nullptr)
+        , file_offset(object_offset)
+        , file_length(length)
+        , mmap_length(length)
+        , vm_info(vmi) {};
     map_t(phy_addr_t physical_address, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
         : file(nullptr)
+        , memory_object(nullptr)
+        , backing()
         , physical_address(physical_address)
         , file_offset(file_offset)
         , file_length(file_length)
         , mmap_length(mmap_length)
-        , vm_info(vmi){};
+        , vm_info(vmi) {};
     map_t(const map_t &rhs, info_t *vmi)
         : file(rhs.file)
+        , memory_object(rhs.memory_object)
+        , backing(rhs.backing)
         , physical_address(rhs.physical_address)
         , file_offset(rhs.file_offset)
         , file_length(rhs.file_length)
         , mmap_length(rhs.mmap_length)
-        , vm_info(vmi){};
+        , vm_info(vmi) {};
 };
 
 void sync_map_file(u64 addr);
@@ -209,13 +237,13 @@ struct vm_t
         , end(end)
         , flags(flags)
         , method(method)
-        , user_data(user_data){};
+        , user_data(user_data) {};
     vm_t(u64 start, u64 end, u64 flags)
         : start(start)
         , end(end)
         , flags(flags)
         , method(page_fault_method::none)
-        , user_data(0){};
+        , user_data(0) {};
 };
 
 } // namespace memory::vm

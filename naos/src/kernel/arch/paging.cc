@@ -1,11 +1,11 @@
 #include "kernel/arch/paging.hpp"
-#include "common.hpp"
 #include "freelibcxx/optional.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/smp.hpp"
+#include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
@@ -24,20 +24,21 @@ static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) =
               "sizeof paging struct is not 4KB.");
 
 template <typename T>
-concept page_table = requires(T t)
-{
+concept page_table = requires(T t) {
     t[0];
     t.is_page_table();
 };
 
 template <typename PageTable>
-requires page_table<PageTable> memory::page *page_table2page(PageTable &base)
+    requires page_table<PageTable>
+memory::page *page_table2page(PageTable &base)
 {
     return memory::global_zones->get_page(&base);
 }
 
 template <typename T>
-requires page_table<T> T *new_page_table()
+    requires page_table<T>
+T *new_page_table()
 {
     static_assert(sizeof(T) == 0x1000, "type _T must be a page table");
     auto p = memory::New<T, freelibcxx::Allocator *, 0x1000>(memory::KernelBuddyAllocatorV);
@@ -46,7 +47,7 @@ requires page_table<T> T *new_page_table()
 }
 
 template <typename T>
-requires page_table<T>
+    requires page_table<T>
 void delete_page_table(T *addr)
 {
     static_assert(sizeof(T) == 0x1000, "type _T must be a page table");
@@ -72,7 +73,7 @@ inline int get_bits(u64 addr, u8 start_bit, u8 bit_count) { return (addr >> star
 lock::spinlock_t share_spin;
 
 template <typename PageTable, typename PageEntry>
-requires page_table<PageTable>
+    requires page_table<PageTable>
 bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
 {
     auto readonly_flags = flags & ~flags::writable;
@@ -122,7 +123,7 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
 }
 
 template <typename PageTable>
-requires page_table<PageTable>
+    requires page_table<PageTable>
 int counter(PageTable &base)
 {
     int n = 0;
@@ -752,7 +753,7 @@ void page_table_t::unmap(void *virt_start, size_t pages)
 
 // return need add counter
 template <typename PageTable>
-requires page_table<PageTable>
+    requires page_table<PageTable>
 bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
 {
     auto &entry = base[index];
@@ -801,7 +802,7 @@ void page_table_t::ensure(int pml4e_index, u64 flags, u64 actions)
 
 bool page_table_t::has_flags(void *virt_start, u64 flags)
 {
-    auto p = memory::align_up(reinterpret_cast<u64>(virt_start), memory::page_size);
+    auto p = memory::align_down(reinterpret_cast<u64>(virt_start), memory::page_size);
 
     auto index = from_virt_addr(p);
     auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();

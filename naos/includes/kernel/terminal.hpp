@@ -71,16 +71,19 @@ struct escape_string_state
     char_attribute attr;
     u32 num = 0;
     u32 rgb = 0;
+    char command = 0;
+    u32 command_num = 0;
+    bool private_mode = false;
 
     void reset()
     {
-        if (state != ascii_state::none)
-        {
-            num = 0;
-            rgb = 0;
-            state = ascii_state::none;
-            attr = char_attribute();
-        }
+        num = 0;
+        rgb = 0;
+        command = 0;
+        command_num = 0;
+        private_mode = false;
+        state = ascii_state::none;
+        attr = char_attribute();
     }
 };
 
@@ -156,6 +159,9 @@ template <typename CHILD, typename CHAR> class terminal
         , enable_placeholder_(rhs.enable_placeholder_)
         , placeholder_show_(rhs.placeholder_show_)
         , placeholder_reset_(rhs.placeholder_reset_)
+        , placeholder_row_(rhs.placeholder_row_)
+        , placeholder_col_(rhs.placeholder_col_)
+        , placeholder_valid_(rhs.placeholder_valid_)
         , drop_(rhs.drop_)
     {
     }
@@ -176,6 +182,9 @@ template <typename CHILD, typename CHAR> class terminal
         enable_placeholder_ = rhs.enable_placeholder_;
         placeholder_show_ = rhs.placeholder_show_;
         placeholder_reset_ = rhs.placeholder_reset_;
+        placeholder_row_ = rhs.placeholder_row_;
+        placeholder_col_ = rhs.placeholder_col_;
+        placeholder_valid_ = rhs.placeholder_valid_;
         drop_ = rhs.drop_;
         return *this;
     }
@@ -190,6 +199,7 @@ template <typename CHILD, typename CHAR> class terminal
         rows_ = rows;
         cols_ = cols;
         dirty_ = viewport();
+        placeholder_valid_ = false;
     }
     void reattach_backend()
     {
@@ -202,6 +212,7 @@ template <typename CHILD, typename CHAR> class terminal
         rows_ = rows;
         cols_ = cols;
         dirty_ = viewport();
+        placeholder_valid_ = false;
     }
 
     void detach_backend()
@@ -223,6 +234,7 @@ template <typename CHILD, typename CHAR> class terminal
         {
             uctx::RawSpinLockUninterruptibleContext icu(lock_);
             dirty_ = viewport();
+            placeholder_valid_ = false;
         }
         flush_dirty();
     }
@@ -230,22 +242,33 @@ template <typename CHILD, typename CHAR> class terminal
     void flush_dirty()
     {
         uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        bool update_placeholder = false;
         if (enable_placeholder_)
         {
             auto current = timer::get_high_resolution_time();
-            if (current - placeholder_time_ > placeholder_freq_us || placeholder_reset_)
+            const bool cursor_moved = !placeholder_valid_ || placeholder_row_ != row_ || placeholder_col_ != col_;
+            const bool blink = current - placeholder_time_ > placeholder_freq_us;
+            if (cursor_moved || blink || placeholder_reset_)
             {
                 placeholder_time_ = current;
+                if (placeholder_valid_)
+                {
+                    dirty_ += rectangle(placeholder_col_, placeholder_col_ + 1, placeholder_row_, placeholder_row_ + 1);
+                }
+                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
                 if (placeholder_reset_)
                 {
                     placeholder_show_ = true;
                     placeholder_reset_ = false;
                 }
-                else
+                else if (!cursor_moved)
                 {
                     placeholder_show_ = !placeholder_show_;
                 }
-                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+                placeholder_row_ = row_;
+                placeholder_col_ = col_;
+                placeholder_valid_ = true;
+                update_placeholder = true;
             }
         }
 
@@ -264,6 +287,10 @@ template <typename CHILD, typename CHAR> class terminal
         {
             dirty_.bottom = view.bottom;
         }
+        if (dirty_.left < view.left)
+        {
+            dirty_.left = view.left;
+        }
         if (dirty_.right > view.right)
         {
             dirty_.right = view.right;
@@ -277,9 +304,10 @@ template <typename CHILD, typename CHAR> class terminal
                 backend_->commit(row - view.top, col - view.left, child->to_cell(term_char));
             }
         }
-        if (enable_placeholder_)
+        if (enable_placeholder_ && update_placeholder && placeholder_valid_ && row_ >= view.top && row_ < view.bottom &&
+            col_ >= view.left && col_ < view.right)
         {
-            backend_->commit_placeholder(row_, col_, placeholder_show_);
+            backend_->commit_placeholder(row_ - view.top, col_ - view.left, placeholder_show_);
         }
         dirty_ = rectangle();
     }
@@ -352,13 +380,114 @@ template <typename CHILD, typename CHAR> class terminal
             child->make_state(p, term_char, codepoint, escape_state_.attr);
         }
     }
-    bool pop_char_inner()
+
+    void clear_cells(int first_row, int first_col, int last_row, int last_col)
+    {
+        auto child = static_cast<CHILD *>(this);
+        first_row = freelibcxx::max(first_row, 0);
+        last_row = freelibcxx::min(last_row, child->max_rows());
+        first_col = freelibcxx::max(first_col, 0);
+        last_col = freelibcxx::min(last_col, cols_);
+        for (int row = first_row; row < last_row; row++)
+        {
+            const int col_begin = row == first_row ? first_col : 0;
+            for (int col = col_begin; col < last_col; col++)
+            {
+                auto term_char = child->get_char(row, col);
+                if (term_char != nullptr)
+                    child->free_char(row, col, term_char);
+            }
+        }
+    }
+
+    void apply_escape_command()
+    {
+        auto child = static_cast<CHILD *>(this);
+        const int count = escape_state_.command_num == 0 ? 1 : static_cast<int>(escape_state_.command_num);
+        switch (escape_state_.command)
+        {
+            case 'A':
+                row_ = freelibcxx::max(row_ - count, 0);
+                break;
+            case 'B':
+                row_ = freelibcxx::min(row_ + count, child->max_rows() - 1);
+                break;
+            case 'C':
+                col_ = freelibcxx::min(col_ + count, cols_);
+                break;
+            case 'D':
+                col_ = freelibcxx::max(col_ - count, 0);
+                break;
+            case 'G':
+                col_ = freelibcxx::min(freelibcxx::max(count - 1, 0), cols_);
+                break;
+            case 'H':
+            case 'f':
+                row_ = row_offset_;
+                col_ = 0;
+                break;
+            case 'F':
+                row_ = freelibcxx::max(row_ - count, 0);
+                col_ = 0;
+                break;
+            case 'J':
+                if (escape_state_.command_num == 2)
+                    clear_cells(row_offset_, 0, child->max_rows(), cols_);
+                else if (escape_state_.command_num == 1)
+                    clear_cells(row_offset_, 0, row_, col_ + 1);
+                else
+                    clear_cells(row_, col_, child->max_rows(), cols_);
+                dirty_ = viewport();
+                break;
+            case 'K':
+                if (escape_state_.command_num == 1)
+                    clear_cells(row_, 0, row_ + 1, col_ + 1);
+                else if (escape_state_.command_num == 2)
+                    clear_cells(row_, 0, row_ + 1, cols_);
+                else
+                    clear_cells(row_, col_, row_ + 1, cols_);
+                dirty_ += rectangle(0, cols_, row_, row_ + 1);
+                break;
+            case 'm':
+            case 'h':
+            case 'l':
+            case 'n':
+            case 'r':
+            case 's':
+            case 'u':
+                // SGR is already represented by escape_state_.attr.  The
+                // remaining commands are accepted as terminal controls so
+                // applications do not render their control bytes.
+                break;
+            default:
+                break;
+        }
+    }
+
+    void move_cursor_back_inner()
+    {
+        const int old_row = row_;
+        const int old_col = col_;
+        if (col_ > 0)
+        {
+            col_--;
+        }
+        else if (row_ > row_offset_)
+        {
+            row_--;
+            col_ = freelibcxx::max(cols_ - 1, 0);
+        }
+        dirty_ += rectangle(old_col, old_col + 1, old_row, old_row + 1);
+        dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+    }
+
+    bool pop_char_inner(bool allow_committed = false)
     {
         auto child = static_cast<CHILD *>(this);
         auto [p, row, col] = child->previous_term_char(row_, col_);
         if (p != nullptr)
         {
-            if ((row == lock_row_ && col < lock_col_) || row < lock_row_)
+            if (!allow_committed && ((row == lock_row_ && col < lock_col_) || row < lock_row_))
             {
                 return false;
             }
@@ -431,6 +560,9 @@ template <typename CHILD, typename CHAR> class terminal
     bool enable_placeholder_ = false;
     bool placeholder_show_ = false;
     bool placeholder_reset_ = false;
+    int placeholder_row_ = -1;
+    int placeholder_col_ = -1;
+    bool placeholder_valid_ = false;
     bool drop_ = false;
 };
 
@@ -457,6 +589,7 @@ void terminal<CHILD, CHAR>::push_string_nolock(freelibcxx::const_string_view str
             {
                 str = ret.value();
                 child->pop_escape_string();
+                apply_escape_command();
                 continue;
             }
 
@@ -482,13 +615,24 @@ void terminal<CHILD, CHAR>::push_string_nolock(freelibcxx::const_string_view str
         }
         else if (ch == '\r')
         {
-            // just skip it
+            col_ = 0;
             str = str.substr(1);
             continue;
         }
         else if (ch == '\b')
         {
-            pop_char_inner();
+            // Backspace moves the cursor; it does not erase the cell.  This
+            // matters for line editors, which use '\b' to return to the
+            // insertion point after redrawing a command.
+            move_cursor_back_inner();
+            str = str.substr(1);
+            continue;
+        }
+        else if (ch == '\a')
+        {
+            // BEL is a terminal notification, not printable text.  There is
+            // no audio bell backend yet, but its control glyph must not leak
+            // into the framebuffer (BusyBox uses it for history-limit input).
             str = str.substr(1);
             continue;
         }
@@ -785,5 +929,6 @@ terminal_manager *get_terms();
 void write_to(freelibcxx::const_string_view sv, int index);
 void write_to_klog(freelibcxx::const_string_view sv);
 void commit_changes(int index);
+void flush_active_terminal();
 
 } // namespace term

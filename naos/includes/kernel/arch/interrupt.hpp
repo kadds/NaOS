@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "idt.hpp"
+#include "kernel/common.hpp"
 
 namespace arch::interrupt
 {

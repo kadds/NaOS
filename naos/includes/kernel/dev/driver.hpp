@@ -1,7 +1,7 @@
 #pragma once
 
-#include "common.hpp"
 #include "device.hpp"
+#include "kernel/common.hpp"
 namespace io
 {
 struct request_t;

@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "defines.hpp"
+#include "kernel/common.hpp"
 #include "kernel/kobject.hpp"
 #include "pseudo.hpp"
 namespace fs::vfs
@@ -36,9 +36,13 @@ class file : public kobject
 
     i64 pread(i64 offset, byte *ptr, u64 max_size, flag_t flags);
     i64 pwrite(i64 offset, const byte *ptr, u64 size, flag_t flags);
-    i64 ioctl(ioctl_context &context);
-
     virtual void flush() = 0;
+
+    int native_sync();
+    bool native_truncate(u64 length);
+    bool native_allocate(u64 offset, u64 length);
+    flag_t native_get_flags() const { return mode; }
+    bool native_set_flags(flag_t flags);
 
     virtual void seek(i64 offset);
     virtual void move(i64 where);
@@ -48,7 +52,10 @@ class file : public kobject
     dentry *get_entry() const;
 
     pseudo_t *get_pseudo();
+    const pseudo_t *get_pseudo() const;
     flag_t get_mode() const { return mode; }
+
+    na_signal_t capability_signals() const override;
 
     static type_e type_of() { return type_e::file; }
 

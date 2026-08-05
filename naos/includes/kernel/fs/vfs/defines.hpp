@@ -1,6 +1,6 @@
 #pragma once
 #include "../../types.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 namespace fs
 {
 namespace permission_flags
@@ -123,10 +123,6 @@ struct nameidata;
 class super_block;
 } // namespace vfs
 
-struct dirstream
-{
-    file_desc fd;
-};
 /// file system flags
 namespace fs_flags
 {

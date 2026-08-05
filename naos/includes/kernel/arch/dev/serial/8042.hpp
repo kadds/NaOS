@@ -44,7 +44,10 @@ struct kb_data_t
     }
 };
 
-inline constexpr u64 kb_cache_count = 32;
+// Keep enough raw scan-code bytes to absorb a burst while the input task is
+// rendering a redraw.  The driver still detects overflow and resynchronizes
+// instead of feeding a truncated E0 sequence to the decoder.
+inline constexpr u64 kb_cache_count = 256;
 using kb_buffer_t = freelibcxx::circular_buffer<kb_data_t>;
 
 using keyboard_io_list_t = freelibcxx::vector<io::keyboard_request_t *>;
@@ -62,12 +65,14 @@ class kb_device : public ::dev::device
 
     u8 last_prefix_count;
     u8 last_prefix[2];
+    bool buffer_overflow;
     kb_device(int port_index)
         : device(::dev::type::chr, "8042keyboard")
         , port_index(port_index)
         , buffer(memory::KernelCommonAllocatorV, kb_cache_count)
         , io_list(memory::KernelCommonAllocatorV)
         , last_prefix_count(0)
+        , buffer_overflow(false)
     {
     }
 };

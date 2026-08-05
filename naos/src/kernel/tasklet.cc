@@ -27,13 +27,27 @@ void add_tasklet(tasklet_t *tasklet)
 
 void raise_tasklet(tasklet_t *tasklet)
 {
+    bool queue_tasklet = false;
     {
         uctx::RawSpinLockUninterruptibleContext utx(lock);
-        auto &cpu = cpu::current();
-        tasklet->next_cpu = (tasklet_t *)cpu.get_tasklet_queue();
-        cpu.set_tasklet_queue(tasklet);
+        if (tasklet->state == 0)
+        {
+            auto &cpu = cpu::current();
+            tasklet->state = 1;
+            tasklet->next_cpu = (tasklet_t *)cpu.get_tasklet_queue();
+            cpu.set_tasklet_queue(tasklet);
+            queue_tasklet = true;
+        }
+        else
+        {
+            // A tasklet can receive another interrupt while it is still in
+            // the per-CPU queue or executing. Do not link it twice: keep a
+            // single queued node and request one more pass after this pass.
+            tasklet->state = 2;
+        }
     }
-    raise_soft_irq(soft_vector::task);
+    if (queue_tasklet)
+        raise_soft_irq(soft_vector::task);
 }
 
 void exec_tasklet()
@@ -51,10 +65,27 @@ void exec_tasklet()
         tasklet->next_cpu = nullptr;
         if (tasklet->enable >= 0)
         {
-            tasklet->state = 1;
             tasklet->func(tasklet->user_data);
-            tasklet->state = 0;
         }
+
+        bool rerun = false;
+        {
+            uctx::RawSpinLockUninterruptibleContext ctx(lock);
+            if (tasklet->state == 2 && tasklet->enable >= 0)
+            {
+                auto &current_cpu = cpu::current();
+                tasklet->state = 1;
+                tasklet->next_cpu = (tasklet_t *)current_cpu.get_tasklet_queue();
+                current_cpu.set_tasklet_queue(tasklet);
+                rerun = true;
+            }
+            else
+            {
+                tasklet->state = 0;
+            }
+        }
+        if (rerun)
+            raise_soft_irq(soft_vector::task);
         tasklet = next;
     }
 }

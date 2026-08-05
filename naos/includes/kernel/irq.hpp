@@ -1,7 +1,7 @@
 #pragma once
 #include "arch/idt.hpp"
-#include "common.hpp"
 #include "freelibcxx/optional.hpp"
+#include "kernel/common.hpp"
 #include "types.hpp"
 namespace irq
 {

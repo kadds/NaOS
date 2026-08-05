@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "cpu.hpp"
+#include "kernel/common.hpp"
 namespace SMP
 {
 

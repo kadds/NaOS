@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/time.hpp"
 namespace timeclock
 {
@@ -27,4 +27,4 @@ class clock_event
     void set_source(clock_source *cs) { source = cs; }
 };
 
-} // namespace clock
+} // namespace timeclock

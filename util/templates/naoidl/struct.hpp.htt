@@ -1,0 +1,16 @@
+{% import "type_codec.htt" as codec %}
+
+struct {{ name }} {
+{% for field in fields %}
+    {{ codec.cpp_type(field.type) }} {{ cpp_name(field.name) }}{};
+{% if field.type.kind == "vector" %}
+    std::array<{{ codec.cpp_type(field.type.element) }}, {{ field.type.bound }}> {{ cpp_name(field.name) }}_storage{};
+{% endif %}
+{% endfor %}
+};
+inline void {{ name }}_encode(naos::canonical::writer &writer, const {{ name }} &value) {
+{% for field in fields %}{{ codec.encode(field.type, "value." ~ cpp_name(field.name), "writer", "    ", resource_kinds, cpp_name) }}{% endfor %}
+}
+inline bool {{ name }}_decode(naos::canonical::reader &reader, {{ name }} &value) {
+{% for field in fields %}{{ codec.decode(field.type, "value." ~ cpp_name(field.name), "reader", "    ", resource_kinds, cpp_name) }}{% endfor %}    return reader.good();
+}

@@ -19,9 +19,10 @@ template <typename T> class handle_t
   public:
     template <typename... Args> static handle_t make(Args &&...args)
     {
-        auto control =
-            new (memory::KernelCommonAllocatorV->allocate(sizeof(handle_control) + sizeof(T), alignof(handle_control)))
-                handle_control();
+        auto *storage = memory::KernelCommonAllocatorV->allocate(sizeof(handle_control) + sizeof(T), alignof(T));
+        if (storage == nullptr)
+            return {};
+        auto control = new (storage) handle_control();
         new (control->t) T(std::forward<Args>(args)...);
         return handle_t(control);
     }
@@ -38,7 +39,11 @@ template <typename T> class handle_t
     handle_t(const handle_t &rhs) { copy(rhs.get_control()); }
 
     template <typename U>
-    requires std::is_base_of_v<T, U> handle_t(const handle_t<U> &rhs) { copy(rhs.get_control()); }
+        requires std::is_base_of_v<T, U>
+    handle_t(const handle_t<U> &rhs)
+    {
+        copy(rhs.get_control());
+    }
 
     handle_t(handle_t &&rhs)
     {
@@ -47,7 +52,8 @@ template <typename T> class handle_t
     }
 
     template <typename U>
-    requires std::is_base_of_v<T, U> handle_t(handle_t<U> &&rhs)
+        requires std::is_base_of_v<T, U>
+    handle_t(handle_t<U> &&rhs)
     {
         this->control = rhs.get_control();
         rhs.clear_control();
@@ -66,7 +72,8 @@ template <typename T> class handle_t
     }
 
     template <typename U>
-    requires std::is_base_of_v<T, U> handle_t &operator=(const handle_t<U> &rhs)
+        requires std::is_base_of_v<T, U>
+    handle_t &operator=(const handle_t<U> &rhs)
     {
         auto c = rhs.get_control();
         if (unlikely(this->control == c))
@@ -92,7 +99,8 @@ template <typename T> class handle_t
     }
 
     template <typename U>
-    requires std::is_base_of_v<T, U> handle_t &operator=(handle_t<U> &&rhs)
+        requires std::is_base_of_v<T, U>
+    handle_t &operator=(handle_t<U> &&rhs)
     {
         if (unlikely(this->control == rhs.get_control()))
         {

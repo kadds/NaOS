@@ -1,7 +1,7 @@
 #pragma once
 #include "../kernel.hpp"
-#include "common.hpp"
 #include "freelibcxx/allocator.hpp"
+#include "kernel/common.hpp"
 #include "mm.hpp"
 #include "zone.hpp"
 #include <cstdint>
@@ -34,7 +34,7 @@ template <typename T = void *> inline T pa2va(phy_addr_t phy_addr)
 
 template <typename T> inline Unpaged_Text_Section phy_addr_t unpaged_va2pa(T virt_addr)
 {
-    return reinterpret_cast<T>(reinterpret_cast<byte*>(virt_addr) - linear_addr_offset);
+    return reinterpret_cast<T>(reinterpret_cast<byte *>(virt_addr) - linear_addr_offset);
 }
 
 template <typename T> inline Unpaged_Text_Section T unpaged_pa2va(phy_addr_t phy_addr)

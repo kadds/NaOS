@@ -81,81 +81,122 @@ i64 pty_endpoint::write(const byte *data, u64 size, flag_t flags)
     return pair_->core().write_output(data, size, flags);
 }
 
-i64 pty_endpoint::ioctl(fs::vfs::ioctl_context &context)
+bool pty_endpoint::native_tty_get_attributes(termios_t &attributes)
+{
+    if (!can_operate())
+        return false;
+    attributes = pair_->core().get_termios();
+    return true;
+}
+
+bool pty_endpoint::native_tty_set_attributes(const termios_t &attributes)
+{
+    if (!can_operate())
+        return false;
+    pair_->core().set_termios(attributes);
+    return true;
+}
+
+bool pty_endpoint::native_tty_get_winsize(winsize_t &size)
+{
+    if (!can_operate())
+        return false;
+    size = pair_->core().get_winsize();
+    return true;
+}
+
+bool pty_endpoint::native_tty_set_winsize(const winsize_t &size)
+{
+    if (!can_operate())
+        return false;
+    pair_->core().set_winsize(size);
+    return true;
+}
+
+i64 pty_endpoint::native_tty_flush(i32 queue)
 {
     if (!can_operate())
         return EIO;
+    if (queue == tty_flush::input || queue == tty_flush::both)
+        pair_->core().flush_input();
+    if (queue == tty_flush::output || queue == tty_flush::both)
+        pair_->core().flush_output();
+    return queue >= tty_flush::input && queue <= tty_flush::both ? 0 : EINVAL;
+}
 
-    switch (context.request())
+i64 pty_endpoint::native_tty_attach(bool force)
+{
+    if (!can_operate() || role_ != pty_endpoint_role::slave)
+        return ENOTTY;
+    auto *process = task::current_process();
+    const auto result = task::attach_controlling_tty(process, &pair_->core(), force);
+    if (result == 0 && process != nullptr)
     {
-        case tty_ioctl::tiocgptn:
-            if (role_ != pty_endpoint_role::master)
-                return ENOTTY;
-            {
-                const u32 index = pair_->index();
-                return context.write_user(index);
-            }
-        case tty_ioctl::tiocsptlck:
-            if (role_ != pty_endpoint_role::master)
-                return ENOTTY;
-            {
-                u32 locked;
-                const auto result = context.read_user(locked);
-                if (result != OK)
-                    return result;
-                pair_->set_slave_locked(locked != 0);
-            }
-            return 0;
-        case tty_ioctl::tiocgptlck:
-            if (role_ != pty_endpoint_role::master)
-                return ENOTTY;
-            {
-                const u32 locked = pair_->slave_locked() ? 1 : 0;
-                return context.write_user(locked);
-            }
-        case tty_ioctl::tiocsctty: {
-            if (role_ != pty_endpoint_role::slave)
-                return ENOTTY;
-            auto *process = task::current_process();
-            const auto result = task::attach_controlling_tty(process, &pair_->core(), context.value() != 0);
-            if (result == 0 && process != nullptr)
-            {
-                pair_->core().set_session_id(process->session_id);
-                pair_->core().set_foreground_process_group(process->process_group_id);
-            }
-            return result;
-        }
-        case tty_ioctl::tiocnotty: {
-            if (role_ != pty_endpoint_role::slave)
-                return ENOTTY;
-            auto *process = task::current_process();
-            task::detach_controlling_tty(process);
-            if (process != nullptr && process->pid == process->session_id && process->controlling_tty == nullptr)
-            {
-                pair_->core().set_foreground_process_group(0);
-                pair_->core().set_session_id(0);
-            }
-            return 0;
-        }
-        case tty_ioctl::tiocgpgrp: {
-            const u32 group = static_cast<u32>(pair_->core().foreground_process_group());
-            return context.write_user(group);
-        }
-        case tty_ioctl::tiocspgrp: {
-            u32 pgid;
-            const auto result = context.read_user(pgid);
-            if (result != OK)
-                return result;
-            return task::set_foreground_process_group(task::current_process(), &pair_->core(),
-                                                      static_cast<group_id>(pgid));
-        }
-        case tty_ioctl::tiocgsid: {
-            const u32 session = static_cast<u32>(pair_->core().session_id());
-            return context.write_user(session);
-        }
-        default:
-            return pair_->core().ioctl(context);
+        pair_->core().set_session_id(process->session_id);
+        pair_->core().set_foreground_process_group(process->process_group_id);
     }
+    return result;
+}
+
+i64 pty_endpoint::native_tty_get_pgrp(u32 &group)
+{
+    if (!can_operate())
+        return EIO;
+    group = static_cast<u32>(pair_->core().foreground_process_group());
+    return 0;
+}
+
+i64 pty_endpoint::native_tty_set_pgrp(u32 group)
+{
+    if (!can_operate())
+        return EIO;
+    return task::set_foreground_process_group(task::current_process(), &pair_->core(), static_cast<group_id>(group));
+}
+
+i64 pty_endpoint::native_tty_get_sid(u32 &session)
+{
+    if (!can_operate())
+        return EIO;
+    session = static_cast<u32>(pair_->core().session_id());
+    return 0;
+}
+
+i64 pty_endpoint::native_tty_detach()
+{
+    if (!can_operate() || role_ != pty_endpoint_role::slave)
+        return ENOTTY;
+    auto *process = task::current_process();
+    task::detach_controlling_tty(process);
+    if (process != nullptr && process->pid == process->session_id && process->controlling_tty == nullptr)
+    {
+        pair_->core().set_foreground_process_group(0);
+        pair_->core().set_session_id(0);
+    }
+    return 0;
+}
+
+i64 pty_endpoint::native_tty_get_input(u64 &count)
+{
+    if (!can_operate())
+        return EIO;
+    count = pair_->core().input_readable() ? 1 : 0;
+    return 0;
+}
+
+bool pty_endpoint::native_pty_get_number(u32 &number)
+{
+    if (!can_operate() || role_ != pty_endpoint_role::master)
+        return false;
+    number = pair_->index();
+    return true;
+}
+
+bool pty_endpoint::native_pty_set_locked(bool locked)
+{
+    if (!can_operate() || role_ != pty_endpoint_role::master)
+        return false;
+    pair_->set_slave_locked(locked);
+    return true;
 }
 
 void pty_endpoint::close()

@@ -1,6 +1,6 @@
 #pragma once
 #include "../kernel.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 
 /// \brief Architecture specific space.
 ///

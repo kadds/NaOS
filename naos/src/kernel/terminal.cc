@@ -1,5 +1,4 @@
 #include "kernel/terminal.hpp"
-#include "common.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/string.hpp"
 #include "kernel/arch/mm.hpp"
@@ -7,6 +6,7 @@
 #include "kernel/arch/video/vga/vga.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/common.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
@@ -145,6 +145,12 @@ freelibcxx::optional<freelibcxx::const_string_view> stream_parse_escape_state(es
 {
     freelibcxx::const_string_view sv = str;
 
+    // A completed CSI sequence may be immediately followed by another ESC
+    // sequence (BusyBox commonly emits ESC[H ESC[J).  Keep the current SGR
+    // attributes, but restart the parser for the new sequence.
+    if (state.state == ascii_state::end && sv.size() > 0 && sv[0] == '\033')
+        state.state = ascii_state::none;
+
     while (sv.size() > 0)
     {
         bool invalid = false;
@@ -182,6 +188,10 @@ freelibcxx::optional<freelibcxx::const_string_view> stream_parse_escape_state(es
             {
                 state.num = state.num * 10 + ch - '0';
             }
+            else if (ch == '?' && state.num == 0)
+            {
+                state.private_mode = true;
+            }
             else
             {
                 invalid = true;
@@ -193,7 +203,10 @@ freelibcxx::optional<freelibcxx::const_string_view> stream_parse_escape_state(es
             {
                 if (!parse_csi(state))
                 {
-                    invalid = true;
+                    // The parameter may belong to a non-SGR command such
+                    // as ESC[999;999H.  Defer rejecting it until the final
+                    // command byte is known.
+                    state.state = ascii_state::csi_number;
                 }
                 else
                 {
@@ -211,6 +224,16 @@ freelibcxx::optional<freelibcxx::const_string_view> stream_parse_escape_state(es
                     state.state = ascii_state::end;
                     return sv.substr(1);
                 }
+            }
+            else if (ch == 'A' || ch == 'B' || ch == 'C' || ch == 'D' || ch == 'F' || ch == 'G' || ch == 'H' ||
+                     ch == 'J' || ch == 'K' || ch == 'f' || ch == 'h' || ch == 'l' || ch == 'n' || ch == 'r' ||
+                     ch == 's' || ch == 'u')
+            {
+                state.command = ch;
+                state.command_num = state.num;
+                state.num = 0;
+                state.state = ascii_state::end;
+                return sv.substr(1);
             }
             else
             {
@@ -508,8 +531,12 @@ terminal_manager *get_terms() { return manager; }
 void early_init(kernel_start_args *args)
 {
     fb::framebuffer_t fb{
-        reinterpret_cast<void *>(args->fb_addr), phy_addr_t::from(args->fb_addr), args->fb_pitch, args->fb_width,
-        args->fb_height, args->fb_bbp,
+        reinterpret_cast<void *>(args->fb_addr),
+        phy_addr_t::from(args->fb_addr),
+        args->fb_pitch,
+        args->fb_width,
+        args->fb_height,
+        args->fb_bbp,
     };
     early_terminal = arch::device::vga::early_init(fb);
 }
@@ -534,7 +561,7 @@ void reset_early_paging()
 
     /// print video card memory info
     trace::info("Vram address ", trace::hex(pa()), " to ", trace::hex(virt), " pages ", pages, " bytes ", bytes,
-                 " bbp ", fb.bbp);
+                " bbp ", fb.bbp);
 
     memory::kernel_vm_info->paging().big_page_map_to(
         virt, pages, pa,
@@ -577,6 +604,12 @@ void commit_changes(int index)
     {
         manager->commit_changes(index);
     }
+}
+
+void flush_active_terminal()
+{
+    if (use_stand_terminal && manager != nullptr)
+        manager->flush_active_terminal();
 }
 
 } // namespace term

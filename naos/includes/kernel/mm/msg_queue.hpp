@@ -3,9 +3,9 @@
 #include "../types.hpp"
 #include "../util/id_generator.hpp"
 #include "../wait.hpp"
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/linked_list.hpp"
+#include "kernel/common.hpp"
 #include "new.hpp"
 #include <atomic>
 
@@ -56,7 +56,7 @@ struct message_queue_t
     message_queue_t()
         : msg_count(0)
         , msg_packs(memory::KernelCommonAllocatorV)
-        , close(false){};
+        , close(false) {};
 };
 
 namespace msg_flags

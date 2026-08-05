@@ -78,8 +78,13 @@ void finish_io_request(request_t *request)
     if (chain_opt.has_value())
     {
         if (request->inner.io_stack != nullptr)
+        {
             memory::DeleteArray<io_stack_t>(memory::KernelCommonAllocatorV, request->inner.io_stack,
                                             request->inner.stack_size);
+            request->inner.io_stack = nullptr;
+            request->inner.stack_size = 0;
+            request->inner.cur_stack_index = 0;
+        }
     }
 }
 

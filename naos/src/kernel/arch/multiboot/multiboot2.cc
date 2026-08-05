@@ -1,7 +1,7 @@
 #include "kernel/arch/multiboot/multiboot2.hpp"
-#include "common.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
+#include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
 Unpaged_Bss_Section u32 data_offset;
 Unpaged_Bss_Section void *max_boot_tag_ptr;
@@ -199,7 +199,7 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
         }
         offset = (u64)_bss_end;
     }
-    else if ((u32)(u64)start_ptr < start) 
+    else if ((u32)(u64)start_ptr < start)
     {
         offset = (u64)end;
     }
@@ -207,7 +207,7 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
     {
         offset = (u64)max_boot_tag_ptr;
     }
-    
+
     // align 4Kib
     offset = (offset + 0x1000 - 1) & ~(0x1000 - 1);
     data_offset = offset;

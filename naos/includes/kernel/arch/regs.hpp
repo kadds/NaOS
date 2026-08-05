@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 
 ///
 /// \brief interrupt/syscall registers

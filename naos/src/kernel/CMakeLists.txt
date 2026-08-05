@@ -17,6 +17,11 @@ set_source_files_properties(${DIR_SRCS} PROPERTIES COMPILE_FLAGS
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system)
 add_definitions(-DOS_KERNEL)
 add_executable(kernel ${DIR_ALL})
+target_include_directories(kernel PRIVATE
+    ${PROJECT_SOURCE_DIR}/naos/includes
+    ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR}
+    ${PROJECT_SOURCE_DIR}/naos/include
+)
 target_link_libraries(kernel freelibcxx)
 target_link_libraries(kernel acpica)
 

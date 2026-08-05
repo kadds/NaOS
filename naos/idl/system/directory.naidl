@@ -1,0 +1,88 @@
+library naos.system;
+
+struct Stat {
+    u64 device @id(1);
+    u64 inode @id(2);
+    u64 links @id(3);
+    u32 mode @id(4);
+    u32 uid @id(5);
+    u32 gid @id(6);
+    u32 padding @id(7);
+    u64 device_id @id(8);
+    i64 size @id(9);
+    i64 block_size @id(10);
+    i64 blocks @id(11);
+    i64 access_seconds @id(12);
+    i64 access_nanoseconds @id(13);
+    i64 modify_seconds @id(14);
+    i64 modify_nanoseconds @id(15);
+    i64 change_seconds @id(16);
+    i64 change_nanoseconds @id(17);
+    i64 unused0 @id(18);
+    i64 unused1 @id(19);
+    i64 unused2 @id(20);
+};
+
+protocol Directory @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1003") @revision(1) @features(0) @scope(3) @uapi_name("DIRECTORY") {
+    method open @id(32) @max_bytes(65536) {
+        u64 mode @id(1);
+        u64 flags @id(2);
+        bytes<4096> path @id(3) @inline;
+    } -> {
+        handle<resource, transfer, move> object @id(1);
+    };
+    method list @id(33) @max_bytes(65536) {
+        u64 offset @id(1);
+        u64 requested_bytes @id(2);
+    } -> {
+        u64 next @id(1);
+        u64 count @id(2);
+        bytes<65536> records @id(3) @inline;
+    };
+    method stat @id(34) -> {
+        Stat value @id(1);
+    };
+    method create @id(35) {
+        u64 mode @id(1);
+        u64 flags @id(2);
+        bytes<4096> path @id(3) @inline;
+    } ->;
+    method remove @id(36) {
+        u64 mode @id(1);
+        u64 flags @id(2);
+        bytes<4096> path @id(3) @inline;
+    } ->;
+    method path @id(37) -> {
+        bytes<4096> path @id(1) @inline;
+    };
+    method access @id(38) {
+        u64 mode @id(1);
+        bytes<4096> path @id(2) @inline;
+    } ->;
+    method rename @id(39) {
+        u64 first_size @id(1);
+        u64 second_size @id(2);
+        bytes<4095> first @id(3) @inline @length_field("first_size");
+        bytes<4095> second @id(4) @inline @length_field("second_size");
+    } ->;
+    method link @id(40) {
+        u64 first_size @id(1);
+        u64 second_size @id(2);
+        bytes<4095> first @id(3) @inline @length_field("first_size");
+        bytes<4095> second @id(4) @inline @length_field("second_size");
+    } ->;
+    method symlink @id(41) {
+        u64 first_size @id(1);
+        u64 second_size @id(2);
+        bytes<4095> first @id(3) @inline @length_field("first_size");
+        bytes<4095> second @id(4) @inline @length_field("second_size");
+    } ->;
+    method readlink @id(42) {
+        u64 size @id(1);
+        bytes<4095> path @id(2) @inline @length_field("size");
+    } -> {
+        bytes<4096> target @id(1) @inline;
+    };
+    method set_current @id(43) ->;
+    method set_root @id(44) ->;
+};

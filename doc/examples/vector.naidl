@@ -1,0 +1,9 @@
+library naos_test;
+
+protocol Vector @uuid("f1de5f8d-0f4b-48a6-aed4-33a1d6c4a701") @revision(1) @features(0) @experimental {
+    method values @id(1) {
+        vector<u32, 8> items @id(1);
+    } -> {
+        vector<u32, 8> items @id(1);
+    };
+};

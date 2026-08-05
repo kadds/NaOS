@@ -1,5 +1,6 @@
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/arch/idt.hpp"
+#include "kernel/dev/tty/tty.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/scheduler.hpp"
@@ -29,7 +30,20 @@ void main(void *arg)
         if (!file)
             trace::panic("Can't open init program");
 
-        set_init_process(task::create_process(file, "/bin/init", init::main, 0, 0, 0));
+        auto *init_process = task::create_process(file, "/bin/init", init::main, 0, 0, 0);
+        if (init_process == nullptr)
+            trace::panic("Can't create init process");
+
+        if (task::setsid(init_process) < 0)
+            trace::warning("Unable to create init session");
+
+        auto tty_file =
+            fs::vfs::open("/dev/tty0", fs::vfs::global_root, fs::vfs::global_root, fs::mode::read | fs::mode::write, 0);
+        auto *tty = tty_file ? reinterpret_cast<dev::tty::tty_pseudo_t *>(tty_file->get_pseudo()) : nullptr;
+        if (tty == nullptr || task::attach_controlling_tty(init_process, &tty->core()) != 0)
+            trace::warning("Unable to attach init to /dev/tty0");
+
+        set_init_process(init_process);
     }
     else
     {

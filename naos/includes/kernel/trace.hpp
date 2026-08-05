@@ -2,9 +2,9 @@
 #include "./arch/com.hpp"
 #include "./arch/regs.hpp"
 #include "./kernel.hpp"
-#include "common.hpp"
 #include "freelibcxx/circular_buffer.hpp"
 #include "freelibcxx/formatter.hpp"
+#include "kernel/common.hpp"
 #include "lock.hpp"
 #include "ucontext.hpp"
 #include <initializer_list>
@@ -25,7 +25,7 @@ extern bool output_debug;
 
 void init();
 void early_init();
-typedef void(*trace_callback)(const byte*, u64);
+typedef void (*trace_callback)(const byte *, u64);
 void register_callback(bool trace_all, trace_callback callback);
 
 template <typename T> using span = freelibcxx::span<T>;
@@ -581,7 +581,7 @@ template <typename... Args> Trace_Section void print_fmt(PrintAttribute<Args...>
 /// \tparam Args
 /// \param args strings to print
 ///
-template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_Section void print(Args &&... args)
+template <typename TPrintAttribute = PrintAttribute<>, typename... Args> Trace_Section void print(Args &&...args)
 {
     print_fmt<>(TPrintAttribute());
     auto i = std::initializer_list<int>{(dispatch(args), 0)...};
@@ -594,7 +594,7 @@ inline static Trace_Section void print_reset() { print<PrintAttribute<TextAttrib
 void keep_panic(const regs_t *regs = 0);
 
 ///\brief stop all cpu and report an error.
-template <typename... Args> NoReturn Trace_Section void panic(Args &&... args)
+template <typename... Args> NoReturn Trace_Section void panic(Args &&...args)
 {
     uctx::UninterruptibleContext icu0;
     term::reset_panic_term();
@@ -625,7 +625,7 @@ template <typename... Args> Trace_Section void panic_stack(const regs_t *regs, A
     keep_panic(regs);
 }
 
-template <typename... Args> Trace_Section void warning(Args &&... args)
+template <typename... Args> Trace_Section void warning(Args &&...args)
 {
     uctx::RawSpinLockUninterruptibleContext icu(spinlock);
     print<PrintAttribute<Color::Foreground::LightCyan>>("[warning] ");
@@ -665,7 +665,7 @@ template <typename T> prefix_hex_formatter<u32> hex8(T t)
 }
 
 template <typename... Args>
-Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&... args)
+Trace_Section void assert_runtime(const char *exp, const char *file, int line, Args &&...args)
 {
     {
         uctx::RawSpinLockUninterruptibleContext icu(spinlock);

@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "defines.hpp"
+#include "kernel/common.hpp"
 #include <atomic>
 namespace fs::vfs
 {
@@ -68,6 +68,7 @@ class inode
     inode_type_t get_type() const { return (inode_type_t)(info & 0xF); }
 
     u64 get_size() const { return file_size; }
+    void set_size(u64 size) { file_size = size; }
 
     void set_super_block(super_block *block) { su_block = block; }
     super_block *get_super_block() const { return su_block; }

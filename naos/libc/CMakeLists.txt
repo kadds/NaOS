@@ -6,6 +6,7 @@ set_target_properties(mlibc PROPERTIES IMPORTED_LOCATION ${MLIBC}/build/libc.a)
 
 target_include_directories(mlibc SYSTEM INTERFACE 
   ${MLIBC}/build
+  ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR}
   ${MLIBC}/sysdeps/naos/include 
   ${MLIBC}/options/posix/include 
   ${MLIBC}/options/bsd/include 

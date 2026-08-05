@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 namespace task::builtin::idle
 {
 void main(void *arg);

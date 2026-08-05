@@ -1,13 +1,12 @@
 #pragma once
 
-#include "common.hpp"
 #include "freelibcxx/allocator.hpp"
 #include "freelibcxx/circular_buffer.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
 #include "kernel/dev/tty/termios.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/vfs/defines.hpp"
-#include "kernel/fs/vfs/ioctl.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/wait.hpp"
 #include <atomic>
@@ -63,10 +62,10 @@ class tty_core final
     void hangup_master();
     void hangup_slave();
 
-    i64 ioctl(fs::vfs::ioctl_context &context);
-
     termios_t get_termios() const;
+    void set_termios(const termios_t &termios);
     winsize_t get_winsize() const;
+    void set_winsize(const winsize_t &winsize);
     void set_control_event_handler(control_event_handler handler, u64 user_data = 0);
     void set_foreground_process_group(group_id process_group);
     group_id foreground_process_group() const;

@@ -2,8 +2,8 @@
 #include "../lock.hpp"
 #include "../mm/new.hpp"
 #include "../ucontext.hpp"
-#include "common.hpp"
 #include "freelibcxx/bit_set.hpp"
+#include "kernel/common.hpp"
 #include "kernel/trace.hpp"
 #include <atomic>
 namespace util

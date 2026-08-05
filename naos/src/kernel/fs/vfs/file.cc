@@ -1,11 +1,12 @@
 #include "kernel/fs/vfs/file.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include <limits>
 
 namespace fs::vfs
 {
@@ -86,6 +87,43 @@ void file::move(i64 where) { this->offset = where; }
 
 i64 file::current_offset() { return offset; }
 
+int file::native_sync()
+{
+    flush();
+    return 0;
+}
+
+bool file::native_truncate(u64 length)
+{
+    if (entry == nullptr || entry->get_inode() == nullptr || (mode & fs::mode::write) == 0)
+        return false;
+    entry->get_inode()->set_size(length);
+    if (offset > static_cast<i64>(length))
+        offset = static_cast<i64>(length);
+    return true;
+}
+
+bool file::native_allocate(u64 allocation_offset, u64 length)
+{
+    if (allocation_offset > std::numeric_limits<u64>::max() - length)
+        return false;
+    if (entry == nullptr || entry->get_inode() == nullptr || (mode & fs::mode::write) == 0)
+        return false;
+    const u64 end = allocation_offset + length;
+    if (entry->get_inode()->get_size() < end)
+        entry->get_inode()->set_size(end);
+    return true;
+}
+
+bool file::native_set_flags(flag_t flags)
+{
+    constexpr flag_t mutable_flags = fs::mode::append | fs::mode::no_block;
+    if ((flags & ~mutable_flags) != 0)
+        return false;
+    mode = (mode & ~mutable_flags) | (flags & mutable_flags);
+    return true;
+}
+
 u64 file::size() const { return entry->get_inode()->get_size(); }
 
 dentry *file::get_entry() const { return entry; }
@@ -109,6 +147,8 @@ i64 file::read(byte *ptr, u64 max_size, flag_t flags)
 
 i64 file::write(const byte *ptr, u64 size, flag_t flags)
 {
+    if ((mode & fs::mode::append) != 0)
+        offset = static_cast<i64>(this->size());
     auto type = entry->get_inode()->get_type();
     if (type == fs::inode_type_t::file || type == fs::inode_type_t::directory || type == fs::inode_type_t::symbolink)
     {
@@ -172,14 +212,45 @@ pseudo_t *file::get_pseudo()
     return entry->get_inode()->get_pseudo_data();
 }
 
-i64 file::ioctl(ioctl_context &context)
+const pseudo_t *file::get_pseudo() const
 {
-    auto pd = get_pseudo();
-    if (pd == nullptr)
+    if (entry == nullptr || entry->get_inode() == nullptr)
+        return nullptr;
+    return entry->get_inode()->get_pseudo_data();
+}
+
+na_signal_t file::capability_signals() const
+{
+    if (entry == nullptr || entry->get_inode() == nullptr)
+        return NA_SIGNAL_PEER_CLOSED;
+
+    // pseudo_t poll values intentionally use the traditional poll bit
+    // layout. Translate them to the stable Object-call signal vocabulary.
+    constexpr u32 poll_readable = 0x001;
+    constexpr u32 poll_writable = 0x004;
+    constexpr u32 poll_error = 0x008;
+    constexpr u32 poll_hangup = 0x010;
+
+    const auto *pseudo = get_pseudo();
+    if (pseudo != nullptr)
     {
-        return -1;
+        const u32 events = pseudo->poll_events();
+        na_signal_t signals = 0;
+        if ((events & poll_readable) != 0)
+            signals |= NA_SIGNAL_READABLE;
+        if ((events & poll_writable) != 0)
+            signals |= NA_SIGNAL_WRITABLE;
+        if ((events & (poll_error | poll_hangup)) != 0)
+            signals |= NA_SIGNAL_PEER_CLOSED;
+        return signals;
     }
-    return pd->ioctl(context);
+
+    // Regular files and directories do not block in poll: reads at EOF and
+    // directory iteration completion are both immediately observable.
+    na_signal_t signals = NA_SIGNAL_READABLE;
+    if ((mode & fs::mode::write) != 0)
+        signals |= NA_SIGNAL_WRITABLE;
+    return signals;
 }
 
 } // namespace fs::vfs

@@ -1,8 +1,14 @@
 #pragma once
 #include "../../wait.hpp"
-#include "common.hpp"
 #include "freelibcxx/circular_buffer.hpp"
-#include "kernel/fs/vfs/ioctl.hpp"
+#include "kernel/common.hpp"
+#include "kernel/errno.hpp"
+namespace dev::tty
+{
+struct termios_t;
+struct winsize_t;
+} // namespace dev::tty
+
 namespace fs::vfs
 {
 /// pseudo device interface
@@ -27,10 +33,66 @@ class pseudo_t
         (void)offset;
         return read(data, max_size, flags);
     }
-    virtual i64 ioctl(ioctl_context &context)
+    virtual bool native_tty_get_attributes(dev::tty::termios_t &attributes)
     {
-        (void)context;
+        (void)attributes;
+        return false;
+    }
+    virtual bool native_tty_set_attributes(const dev::tty::termios_t &attributes)
+    {
+        (void)attributes;
+        return false;
+    }
+    virtual bool native_tty_get_winsize(dev::tty::winsize_t &size)
+    {
+        (void)size;
+        return false;
+    }
+    virtual bool native_tty_set_winsize(const dev::tty::winsize_t &size)
+    {
+        (void)size;
+        return false;
+    }
+    virtual i64 native_tty_flush(i32 queue)
+    {
+        (void)queue;
         return -1;
+    }
+    virtual bool native_pty_get_number(u32 &number)
+    {
+        (void)number;
+        return false;
+    }
+    virtual bool native_pty_set_locked(bool locked)
+    {
+        (void)locked;
+        return false;
+    }
+    virtual i64 native_tty_attach(bool force)
+    {
+        (void)force;
+        return ENOTTY;
+    }
+    virtual i64 native_tty_get_pgrp(u32 &group)
+    {
+        (void)group;
+        return ENOTTY;
+    }
+    virtual i64 native_tty_set_pgrp(u32 group)
+    {
+        (void)group;
+        return ENOTTY;
+    }
+    virtual i64 native_tty_get_sid(u32 &session)
+    {
+        (void)session;
+        return ENOTTY;
+    }
+    virtual i64 native_tty_detach() { return ENOTTY; }
+    virtual i64 native_tty_get_input(u64 &count)
+    {
+        (void)count;
+        return ENOTTY;
     }
     virtual u32 poll_events() const { return 0; }
     virtual bool owned_by_inode() const { return true; }

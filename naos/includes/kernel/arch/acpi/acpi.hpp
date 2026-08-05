@@ -1,9 +1,9 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
 #include "kernel/types.hpp"
 namespace arch::ACPI
 {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include <cstddef>
 
 namespace dev::tty
@@ -88,27 +88,6 @@ inline constexpr u32 noflsh = 0000200;
 inline constexpr u32 tostop = 0000400;
 inline constexpr u32 ixten = 0100000;
 } // namespace termios_lflag
-
-namespace tty_ioctl
-{
-// Linux-compatible values used by the NaOS mlibc ABI.
-inline constexpr u64 tcgets = 0x5401;
-inline constexpr u64 tcsets = 0x5402;
-inline constexpr u64 tcsetsw = 0x5403;
-inline constexpr u64 tcsetsf = 0x5404;
-inline constexpr u64 tcflsh = 0x540B;
-inline constexpr u64 tiocsctty = 0x540E;
-inline constexpr u64 tiocgpgrp = 0x540F;
-inline constexpr u64 tiocspgrp = 0x5410;
-inline constexpr u64 tiocoutq = 0x5411;
-inline constexpr u64 tiocgwinsz = 0x5413;
-inline constexpr u64 tiocswinsz = 0x5414;
-inline constexpr u64 tiocnotty = 0x5422;
-inline constexpr u64 tiocgsid = 0x5429;
-inline constexpr u64 tiocgptn = 0x80045430;
-inline constexpr u64 tiocsptlck = 0x40045431;
-inline constexpr u64 tiocgptlck = 0x80045439;
-} // namespace tty_ioctl
 
 namespace tty_flush
 {

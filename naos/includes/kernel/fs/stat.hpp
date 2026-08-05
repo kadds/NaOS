@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.hpp"
+#include "kernel/common.hpp"
 
 // This is the x86-64 layout used by mlibc's struct stat. Keep this ABI
 // independent from the libc headers so the kernel does not depend on mlibc.

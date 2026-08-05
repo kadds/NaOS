@@ -13,10 +13,20 @@ class tty_pseudo_t final : public fs::vfs::pseudo_t
   public:
     i64 write(const byte *data, u64 size, flag_t flags) override;
     i64 read(byte *data, u64 max_size, flag_t flags) override;
-    i64 ioctl(fs::vfs::ioctl_context &context) override;
+    bool native_tty_get_attributes(termios_t &attributes) override;
+    bool native_tty_set_attributes(const termios_t &attributes) override;
+    bool native_tty_get_winsize(winsize_t &size) override;
+    bool native_tty_set_winsize(const winsize_t &size) override;
+    i64 native_tty_flush(i32 queue) override;
+    i64 native_tty_attach(bool force) override;
+    i64 native_tty_get_pgrp(u32 &group) override;
+    i64 native_tty_set_pgrp(u32 group) override;
+    i64 native_tty_get_sid(u32 &session) override;
+    i64 native_tty_detach() override;
+    i64 native_tty_get_input(u64 &count) override;
     u32 poll_events() const override { return core_.input_poll_events() | core_.output_poll_events(); }
 
-    u64 write_to_buffer(const byte *data, u64 size, flag_t flags);
+    i64 write_to_buffer(const byte *data, u64 size, flag_t flags);
     void send_EOF();
     void close() override;
 

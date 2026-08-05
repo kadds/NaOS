@@ -1,7 +1,7 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/span.hpp"
+#include "kernel/common.hpp"
 
 #ifdef OS_KERNEL
 namespace irq
@@ -30,15 +30,8 @@ using thread_id = u64;
 using process_id = u64;
 using session_id = u64;
 using group_id = u64;
-using file_desc = i32;
 using user_id = u64;
 using dev_t = u64;
-
-constexpr file_desc console_in = 0;
-constexpr file_desc console_out = 1;
-constexpr file_desc console_err = 2;
-
-inline constexpr file_desc invalid_file_desc = -1;
 
 struct dirent
 {

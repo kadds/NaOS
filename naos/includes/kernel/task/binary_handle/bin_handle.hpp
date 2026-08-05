@@ -1,6 +1,6 @@
 #pragma once
 #include "../../types.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 namespace fs::vfs
 {
 class file;

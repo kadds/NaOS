@@ -1,5 +1,6 @@
 #include "kernel/dev/tty/tty_core.hpp"
 
+#include "kernel/ipc/channel.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/task.hpp"
 #include "kernel/ucontext.hpp"
@@ -326,10 +327,14 @@ i64 tty_core::receive_input(const byte *data, u64 size, flag_t flags)
         if (handled)
         {
             if (wake_input)
+            {
                 input_wait_queue_.do_wake_up();
+                naos::ipc::notify_channel_waiters();
+            }
             continue;
         }
         input_wait_queue_.do_wake_up();
+        naos::ipc::notify_channel_waiters();
     }
     return static_cast<i64>(consumed);
 }
@@ -361,6 +366,7 @@ i64 tty_core::read_input(byte *data, u64 max_size, flag_t flags)
         input_free_.fetch_add(read);
     }
     input_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
     return static_cast<i64>(read);
 }
 
@@ -387,6 +393,7 @@ i64 tty_core::write_output(const byte *data, u64 size, flag_t flags)
         written++;
     }
     output_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
     return static_cast<i64>(written);
 }
 
@@ -420,6 +427,7 @@ i64 tty_core::read_output(byte *data, u64 max_size, flag_t flags, tty_output_sou
         output_free_.fetch_add(read);
     }
     output_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
     return static_cast<i64>(read);
 }
 
@@ -427,6 +435,7 @@ void tty_core::send_eof()
 {
     eof_count_.fetch_add(1);
     input_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
 }
 
 void tty_core::hangup_master()
@@ -434,6 +443,7 @@ void tty_core::hangup_master()
     master_hung_up_.store(true);
     input_wait_queue_.do_wake_up();
     output_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
 }
 
 void tty_core::hangup_slave()
@@ -441,83 +451,7 @@ void tty_core::hangup_slave()
     slave_hung_up_.store(true);
     input_wait_queue_.do_wake_up();
     output_wait_queue_.do_wake_up();
-}
-
-i64 tty_core::ioctl(fs::vfs::ioctl_context &context)
-{
-    switch (context.request())
-    {
-        case tty_ioctl::tcgets: {
-            const auto value = get_termios();
-            return context.write_user(value);
-        }
-        case tty_ioctl::tcsets:
-        case tty_ioctl::tcsetsw:
-        case tty_ioctl::tcsetsf: {
-            termios_t value;
-            const auto result = context.read_user(value);
-            if (result != OK)
-                return result;
-            {
-                uctx::RawSpinLockUninterruptibleContext guard(config_lock_);
-                termios_ = value;
-            }
-            if (context.request() == tty_ioctl::tcsetsf)
-                flush_input();
-            return 0;
-        }
-        case tty_ioctl::tcflsh:
-            switch (static_cast<i32>(context.value()))
-            {
-                case tty_flush::input:
-                    flush_input();
-                    return 0;
-                case tty_flush::output:
-                    flush_output();
-                    return 0;
-                case tty_flush::both:
-                    flush_input();
-                    flush_output();
-                    return 0;
-                default:
-                    return EINVAL;
-            }
-        case tty_ioctl::tiocgwinsz: {
-            const auto value = get_winsize();
-            return context.write_user(value);
-        }
-        case tty_ioctl::tiocswinsz: {
-            winsize_t value;
-            const auto result = context.read_user(value);
-            if (result != OK)
-                return result;
-            {
-                uctx::RawSpinLockUninterruptibleContext guard(config_lock_);
-                winsize_ = value;
-            }
-            if (const auto foreground_group = foreground_process_group(); foreground_group != 0)
-                task::send_signal_to_process_group(foreground_group, task::signal::sigwinch);
-            return 0;
-        }
-        case tty_ioctl::tiocgpgrp: {
-            const u32 group = static_cast<u32>(foreground_process_group());
-            return context.write_user(group);
-        }
-        case tty_ioctl::tiocspgrp: {
-            u32 group;
-            const auto result = context.read_user(group);
-            if (result != OK)
-                return result;
-            set_foreground_process_group(static_cast<group_id>(group));
-            return 0;
-        }
-        case tty_ioctl::tiocgsid: {
-            const u32 session = static_cast<u32>(session_id());
-            return context.write_user(session);
-        }
-        default:
-            return ENOTTY;
-    }
+    naos::ipc::notify_channel_waiters();
 }
 
 termios_t tty_core::get_termios() const
@@ -528,12 +462,28 @@ termios_t tty_core::get_termios() const
     return value;
 }
 
+void tty_core::set_termios(const termios_t &termios)
+{
+    uctx::RawSpinLockUninterruptibleContext guard(config_lock_);
+    termios_ = termios;
+}
+
 winsize_t tty_core::get_winsize() const
 {
     auto *self = const_cast<tty_core *>(this);
     uctx::RawSpinLockUninterruptibleContext guard(self->config_lock_);
     auto value = self->winsize_;
     return value;
+}
+
+void tty_core::set_winsize(const winsize_t &winsize)
+{
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(config_lock_);
+        winsize_ = winsize;
+    }
+    if (const auto foreground_group = foreground_process_group(); foreground_group != 0)
+        task::send_signal_to_process_group(foreground_group, task::signal::sigwinch);
 }
 
 void tty_core::set_control_event_handler(control_event_handler handler, u64 user_data)
@@ -567,6 +517,7 @@ void tty_core::flush_input()
         canonical_line_.clear();
     }
     input_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
 }
 
 void tty_core::flush_output()
@@ -583,6 +534,7 @@ void tty_core::flush_output()
         output_free_.store(output_buffer_.capacity() - 1);
     }
     output_wait_queue_.do_wake_up();
+    naos::ipc::notify_channel_waiters();
 }
 
 u32 tty_core::input_poll_events() const

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include <utility>
 
 namespace naos::ipc
@@ -45,8 +45,35 @@ template <typename T> class bounded_queue
         return true;
     }
 
+    /// Remove an unclaimed entry while preserving the FIFO order.
+    ///
+    /// Channel cancellation uses this to discard a queued request before it
+    /// becomes visible to the receiver.  A claimed head belongs to a receive
+    /// transaction and must not be removed by a concurrent cancellation;
+    /// unclaimed entries behind it may still be removed safely.
+    bool remove(T value)
+    {
+        if (count_ == 0)
+            return false;
+
+        u64 offset = 0;
+        while (offset < count_ && storage_[(head_ + offset) % capacity_] != value)
+            offset++;
+        if (offset == count_ || (claimed_ && offset == 0))
+            return false;
+
+        for (u64 current = offset; current + 1 < count_; current++)
+            storage_[(head_ + current) % capacity_] = std::move(storage_[(head_ + current + 1) % capacity_]);
+        storage_[(head_ + count_ - 1) % capacity_] = T{};
+        count_--;
+        return true;
+    }
+
     T &front() { return storage_[head_]; }
     const T &front() const { return storage_[head_]; }
+
+    T &at(u64 offset) { return storage_[(head_ + offset) % capacity_]; }
+    const T &at(u64 offset) const { return storage_[(head_ + offset) % capacity_]; }
 
     void cancel_claim() { claimed_ = false; }
 

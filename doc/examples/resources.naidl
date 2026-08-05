@@ -1,0 +1,16 @@
+library naos_test;
+
+struct ResourcePair {
+    handle<stream, transfer+duplicate, duplicate> first @id(1);
+    handle<stream, transfer, move> second @id(2);
+};
+
+protocol Resources @uuid("9e9ad4b4-c6c9-4ca8-92ef-2d45c0e4a701") @revision(1) @features(0) @experimental {
+    method pass @id(1) {
+        vector<handle<stream, transfer, move>, 4> values @id(1);
+        ResourcePair pair @id(2);
+    } -> {
+        vector<handle<stream, transfer, duplicate>, 4> values @id(1);
+        ResourcePair pair @id(2);
+    };
+};

@@ -1,9 +1,10 @@
 #pragma once
 #include "arch/task.hpp"
-#include "common.hpp"
 #include "cpu.hpp"
 #include "freelibcxx/allocator.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
+#include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/time.hpp"
 #include "lock.hpp"
@@ -72,9 +73,30 @@ struct process_t
     process_id parent_pid;     ///< The parent process id
     void *mm_info;             ///< Memory map infomation
     resource_table_t resource; ///< Resource table
+    /// Kernel-owned bootstrap seeds for the native root/cwd capabilities.
+    /// They are object references, not user-visible handle numbers and are
+    /// never used by a legacy path syscall.  The process runtime owns the
+    /// actual capabilities returned by bootstrap.
+    handle_t<fs::vfs::native_directory> bootstrap_root_directory;
+    handle_t<fs::vfs::native_directory> bootstrap_current_directory;
+    /// Explicit bootstrap console capabilities; there is no fd-number keyed
+    /// kernel object table anymore.
+    na_handle_t console_in_handle = NA_HANDLE_INVALID;
+    na_handle_t console_out_handle = NA_HANDLE_INVALID;
+    na_handle_t console_err_handle = NA_HANDLE_INVALID;
+    /// A native child consumes this endpoint exactly once during startup.
+    na_handle_t bootstrap_channel_handle = NA_HANDLE_INVALID;
+    std::atomic_bool bootstrap_consumed{false};
+    std::atomic_bool main_thread_started{false};
     void *thread_id_gen;
     wait_queue_t wait_queue;
+    wait_queue_t child_wait_queue;
     std::atomic_int wait_counter;
+    std::atomic_bool wait_claimed;
+    std::atomic_uint64_t child_wait_generation;
+    std::atomic_uint64_t capability_refs;
+    std::atomic_bool reap_pending;
+    std::atomic_bool storage_released;
 
     thread_t *main_thread;
     u64 ret_val;
@@ -96,6 +118,33 @@ struct process_t
     /// session leader rather than duplicated in every process in the session.
     group_id foreground_process_group = 0;
     process_t();
+};
+
+struct job_control_info
+{
+    session_id session = 0;
+    group_id process_group = 0;
+    group_id foreground_process_group = 0;
+    bool has_controlling_tty = false;
+};
+
+/// A process capability keeps the process state alive after the parent reaps
+/// it.  The user-visible identity is the resource-table handle, never pid.
+class process_object final : public kobject
+{
+  public:
+    explicit process_object(process_t *process);
+    ~process_object() override;
+
+    static type_e type_of() { return type_e::process; }
+
+    process_t *process() { return process_; }
+    const process_t *process() const { return process_; }
+    na_signal_t capability_signals() const override;
+    u64 capability_state() const override;
+
+  private:
+    process_t *process_;
 };
 
 enum class thread_state : u8
@@ -191,6 +240,12 @@ struct thread_t
     wait_queue_t *do_wait_queue_now = nullptr;
     void *tcb = 0;
 
+    // A fault-safe usercopy temporarily arms the page-fault dispatcher with
+    // a recovery continuation.  These fields are per-thread because a
+    // process may have concurrent syscalls touching different user buffers.
+    volatile bool usercopy_active = false;
+    volatile u64 usercopy_resume = 0;
+
     thread_t();
 };
 
@@ -219,6 +274,7 @@ enum create_process_flags : flag_t
     noreturn = 1UL,
     binary_file = 1UL << 1,
     real_time_rr = 1UL << 2,
+    deferred_start = 1UL << 3,
 
     no_shared_root = 1UL << 20,
     no_shared_work_dir = 1UL << 21,
@@ -276,6 +332,12 @@ process_args_t *copy_args(const char *path, const char *argv[], const char *env[
 process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
                           const char *const args[], const char *const envp[], flag_t flags);
 
+/// Publish a process created with create_process_flags::deferred_start.
+void start_process(process_t *process);
+
+/// Tear down a process that has a prepared but never scheduled main thread.
+void abort_unstarted_process(process_t *process);
+
 process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags);
 
 int fork();
@@ -287,7 +349,9 @@ void do_sleep(const timeclock::time &time);
 
 NoReturn void do_exit(i64 value);
 
-u64 wait_process(process_t *process, i64 &ret);
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid);
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid);
+i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object);
 
 NoReturn void do_exit_thread(i64 ret);
 u64 detach_thread(thread_t *thd);
@@ -313,13 +377,12 @@ thread_t *find_tid(process_t *process, thread_id tid);
 /// leader. Returns a negative kernel errno on failure, or the new session id.
 i64 setsid(process_t *process);
 
-/// Return the process group/session id for pid. pid == 0 means the caller.
-i64 getpgid(process_t *caller, process_id pid);
-i64 getsid(process_t *caller, process_id pid);
-
 /// Move a process into an existing process group, or create the group's leader
 /// group when pgid == target pid. pid == 0 means the caller.
 int setpgid(process_t *caller, process_id pid, group_id pgid);
+
+/// Snapshot the job-control state associated with a process capability.
+bool get_job_control_info(const process_t *process, job_control_info &info);
 
 /// Attach/detach the controlling tty associated with a session.
 int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force = false);

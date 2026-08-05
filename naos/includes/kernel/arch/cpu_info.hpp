@@ -1,10 +1,10 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
+#include "freelibcxx/string.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
 #include "kernel/mm/new.hpp"
-#include "freelibcxx/string.hpp"
 
 namespace arch::cpu_info
 {

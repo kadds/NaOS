@@ -1,7 +1,7 @@
 #include "kernel/arch/video/vga/vga.hpp"
-#include "common.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
+#include "kernel/common.hpp"
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"

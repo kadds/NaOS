@@ -1,7 +1,7 @@
-#include "common.hpp"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <spawn.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -10,24 +10,20 @@
 
 extern "C" void main(int argc, char **argv)
 {
+    (void)argc;
+    (void)argv;
+    extern char **environ;
     while (1)
     {
-        printf("fork sh...\n");
-        int pid = fork();
-        if (pid == 0)
-        {
-            // child process
-            // run shell
-            int ret = execl("/bin/sh", "sh", nullptr);
-            printf("execute process %d return %d\n", pid, ret);
-            sleep(5);
-            exit(ret);
-        }
-        else if (pid > 0)
+        printf("spawn sh...\n");
+        char *child_argv[] = {const_cast<char *>("sh"), nullptr};
+        int pid = -1;
+        const int spawn_error = posix_spawn(&pid, "/bin/sh", nullptr, nullptr, child_argv, environ);
+        if (spawn_error == 0)
         {
             int status = 0;
             int ret = waitpid(pid, &status, 0);
-            if (ret != 0) 
+            if (ret != pid)
             {
                 printf("wait pid %d fail, error %d\n", pid, ret);
             }
@@ -39,7 +35,8 @@ extern "C" void main(int argc, char **argv)
         }
         else
         {
-            printf("fork process fail %d\n", pid);
+            printf("spawn process fail %d\n", spawn_error);
+            sleep(5);
         }
     }
 }

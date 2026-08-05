@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "defines.hpp"
+#include "kernel/common.hpp"
 namespace fs::vfs
 {
 class super_block;
@@ -13,9 +13,9 @@ class file_system
 
   public:
     file_system(const char *name)
-        : name(name){};
+        : name(name) {};
 
-    virtual ~file_system(){};
+    virtual ~file_system() {};
 
     const char *get_name() { return name; }
     virtual super_block *load(const char *device_name, const byte *data, u64 size) = 0;

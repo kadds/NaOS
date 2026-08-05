@@ -1,10 +1,10 @@
 #pragma once
 #include "../lock.hpp"
-#include "common.hpp"
 #include "freelibcxx/bit_set.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/string.hpp"
+#include "kernel/common.hpp"
 #include "list_node_cache.hpp"
 
 #define NewSlabGroup(domain, struct, align, flags)                                                                     \
@@ -33,7 +33,7 @@ struct slab
         : rest(element_count)
         , color_offset(color)
         , prev(nullptr)
-        , next(nullptr){};
+        , next(nullptr) {};
 };
 
 /// A same slab list set
@@ -97,7 +97,7 @@ struct SlabObjectAllocator : freelibcxx::Allocator
 
   public:
     SlabObjectAllocator(slab_group *obj)
-        : slab_obj(obj){};
+        : slab_obj(obj) {};
 
     void *allocate(u64 size, u64 align) noexcept override;
     void deallocate(void *ptr) noexcept override;

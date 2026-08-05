@@ -1,6 +1,6 @@
 #pragma once
 #include "clock.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/types.hpp"
 namespace timer
 {

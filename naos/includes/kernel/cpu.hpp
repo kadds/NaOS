@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "lock.hpp"
 #include "wait.hpp"
 
@@ -64,7 +64,7 @@ class cpu_data_t
   public:
     friend void init();
     cpu_data_t()
-        : schedule_microtask_queue(memory::KernelCommonAllocatorV){};
+        : schedule_microtask_queue(memory::KernelCommonAllocatorV) {};
     cpu_data_t(const cpu_data_t &) = delete;
     cpu_data_t &operator=(const cpu_data_t &) = delete;
 

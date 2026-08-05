@@ -1,5 +1,4 @@
 #include "kernel/arch/acpi/acpi.hpp"
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
@@ -7,6 +6,7 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -26,7 +26,8 @@ ExportC
 #undef BOOLEAN
 #endif
 }
-namespace efi{
+namespace efi
+{
 #include "efi/efi.h"
 }
 
@@ -266,11 +267,11 @@ bool is_8042_device_exists()
     // auto fadt = load_table<ACPI_TABLE_FADT>(ACPI_SIG_FADT, false);
     // if (fadt != nullptr)
     // {
-    //     if (acpi_version == 1) 
+    //     if (acpi_version == 1)
     //     {
     //         return true;
     //     }
-    //     if (fadt->BootFlags & ACPI_FADT_8042) 
+    //     if (fadt->BootFlags & ACPI_FADT_8042)
     //     {
     //         return true;
     //     }

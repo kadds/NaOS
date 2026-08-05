@@ -4,8 +4,8 @@
 #include "../vfs/file_system.hpp"
 #include "../vfs/inode.hpp"
 #include "../vfs/super_block.hpp"
-#include "common.hpp"
 #include "freelibcxx/hash_map.hpp"
+#include "kernel/common.hpp"
 
 namespace fs::ramfs
 {
@@ -35,7 +35,7 @@ class inode : public vfs::inode
 class file : public vfs::file
 {
   public:
-    void flush() override{};
+    void flush() override {};
 
   protected:
     i64 iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags) override;

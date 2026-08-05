@@ -1,10 +1,10 @@
 #include "kernel/arch/cpu.hpp"
-#include "common.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
+#include "kernel/common.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/vm.hpp"
@@ -143,13 +143,17 @@ u64 count() { return last_cpuid; }
 
 cpuid_t id() { return current().get_id(); }
 
-void map(u64 &base, u64 pg, bool is_bsp = false) {
+void map(u64 &base, u64 pg, bool is_bsp = false)
+{
     u64 size = pg * memory::page_size;
     base += memory::page_size;
     phy_addr_t ks;
-    if (is_bsp) {
+    if (is_bsp)
+    {
         ks = phy_addr_t::from(0x90000 - size);
-    } else {
+    }
+    else
+    {
         ks = memory::va2pa(memory::KernelBuddyAllocatorV->allocate(size, 0));
     }
     auto &paging = memory::kernel_vm_info->paging();
@@ -180,14 +184,16 @@ void allocate_bsp_stack()
     map(allocate_base, memory::exception_nmi_stack_page_count);
 }
 
-phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id) {
+phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id)
+{
     void *vir = get_kernel_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
     kassert(addr.has_value(), id, " at ", vir);
     return addr.value();
 }
 
-phy_addr_t get_exception_stack_bottom_phy(cpuid_t id) {
+phy_addr_t get_exception_stack_bottom_phy(cpuid_t id)
+{
     void *vir = get_exception_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
     kassert(addr.has_value(), id, " at ", vir);
@@ -202,7 +208,8 @@ phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id)
     return addr.value();
 }
 
-phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id) {
+phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id)
+{
     void *vir = get_exception_nmi_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
     kassert(addr.has_value(), id, " at ", vir);

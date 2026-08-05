@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 namespace naos::syscall
 {
 ExportC void *system_call_table[];

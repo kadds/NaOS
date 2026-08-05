@@ -19,7 +19,7 @@ if(NOT BUSYBOX_MAKE_PROGRAM OR NOT BUSYBOX_HOSTCC)
     message(FATAL_ERROR "BusyBox requires a host make and C compiler")
 endif()
 
-set(BUSYBOX_CFLAGS "-mcmodel=large -m64 -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-plt -fno-builtin -fno-asynchronous-unwind-tables -fno-common -U__linux__ -U_LINUX -I${NAOS_MLIBC_DIR}/build -I${NAOS_MLIBC_DIR}/sysdeps/naos/include -I${NAOS_MLIBC_DIR}/options/posix/include -I${NAOS_MLIBC_DIR}/options/bsd/include -I${NAOS_MLIBC_DIR}/options/ansi/include -I${NAOS_MLIBC_DIR}/options/internal/include -I${NAOS_MLIBC_DIR}/options/linux/include -I${NAOS_MLIBC_DIR}/options/glibc/include -I${NAOS_MLIBC_DIR}/subprojects/frigg/include -idirafter ${NAOS_MLIBC_DIR}/subprojects/freestnd-c-hdrs/x86_64/include -include ${BUSYBOX_COMPAT_HEADER}")
+set(BUSYBOX_CFLAGS "-mcmodel=large -m64 -std=gnu99 -ffreestanding -fno-stack-protector -fno-pic -fno-plt -fno-builtin -fno-asynchronous-unwind-tables -fno-common -U__linux__ -U_LINUX -I${NAOS_SYSTEM_GENERATED_INCLUDE_DIR} -I${PROJECT_SOURCE_DIR}/naos/include -I${NAOS_MLIBC_DIR}/build -I${NAOS_MLIBC_DIR}/sysdeps/naos/include -I${NAOS_MLIBC_DIR}/options/posix/include -I${NAOS_MLIBC_DIR}/options/bsd/include -I${NAOS_MLIBC_DIR}/options/ansi/include -I${NAOS_MLIBC_DIR}/options/internal/include -I${NAOS_MLIBC_DIR}/options/linux/include -I${NAOS_MLIBC_DIR}/options/glibc/include -I${NAOS_MLIBC_DIR}/subprojects/frigg/include -idirafter ${NAOS_MLIBC_DIR}/subprojects/freestnd-c-hdrs/x86_64/include -include ${BUSYBOX_COMPAT_HEADER}")
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     execute_process(

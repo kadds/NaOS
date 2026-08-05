@@ -1,59 +1,57 @@
 #pragma once
+#include "capability.hpp"
 #include "freelibcxx/hash.hpp"
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
-#include "fs/vfs/defines.hpp"
 #include "handle.hpp"
-#include "kernel/fs/vfs/dentry.hpp"
 #include "kernel/kobject.hpp"
 #include "lock.hpp"
 #include "mm/new.hpp"
 #include "types.hpp"
-#include "util/id_generator.hpp"
 #include <atomic>
 namespace task
 {
-
-using handle_map_t = freelibcxx::hash_map<file_desc, khandle>;
-
-class list_dir_functor
-{
-  public:
-  private:
-    freelibcxx::vector<handle_t<fs::vfs::dentry>> dirs;
-};
-
 class resource_table_t
 {
   private:
-    handle_map_t handle_map;
-    lock::rw_lock_t map_lock;
+    using native_handle_map_t = freelibcxx::hash_map<na_handle_t, capability::entry>;
+    native_handle_map_t native_handle_map;
+    lock::rw_lock_t native_map_lock;
+    na_handle_t next_native_handle;
+    u64 native_entry_count;
 
-    util::id_level_generator<3> id_gen;
-    fs::vfs::dentry *process_root, *process_current;
+    na_handle_t allocate_native_handle_locked();
+    void clear_native_locked();
 
   public:
     resource_table_t();
     ~resource_table_t();
-    using filter_func = bool(file_desc desc, khandle handle, u64 userdata);
+    na_handle_t install_native(khandle object, capability::metadata meta = {});
 
-    void clone(resource_table_t *to, filter_func filter, u64 userdata);
+    na_status_t reserve_native(freelibcxx::vector<na_handle_t> &handles, u64 count);
+    na_status_t activate_native(na_handle_t handle, capability::transferred_resource &&resource);
+    void rollback_native(const freelibcxx::vector<na_handle_t> &handles);
 
-    file_desc new_kobject(khandle obj);
+    bool lookup_native(na_handle_t handle, capability::entry &entry);
+    na_signal_t native_signals(na_handle_t handle);
+    na_status_t close_native(na_handle_t handle);
+    na_status_t duplicate_native(na_handle_t source, na_meta_rights_t requested_rights, na_handle_t &result);
+    // Restrict is a prepare step: source becomes internally pending and the
+    // returned slot stays RESERVED until commit_restrict publishes it.
+    na_status_t restrict_native(na_handle_t source, const na_handle_restriction_t &restriction, na_handle_t &result,
+                                capability::entry &source_backup);
+    na_status_t commit_restrict(na_handle_t source, na_handle_t restricted);
+    na_status_t rollback_restrict(na_handle_t source, na_handle_t restricted, capability::entry &source_backup);
+    // Fork compatibility copies only explicitly duplicable KernelView
+    // bindings under their existing opaque values. Unique or non-duplicable
+    // capabilities are intentionally omitted.
+    na_status_t clone_fork_bindings(const resource_table_t &source);
 
-    void delete_kobject(file_desc fd);
-
-    khandle get_kobject(file_desc fd);
-
-    bool set_handle(file_desc fd, khandle obj, bool force = false);
+    na_status_t take_native_batch(const na_resource_disposition_t *dispositions, u64 count, na_handle_t target,
+                                  capability::transfer_record_list &records);
+    na_status_t restore_native_batch(capability::transfer_record_list &records);
 
     void clear();
-
-    fs::vfs::dentry *root() const { return process_root; }
-    fs::vfs::dentry *current() const { return process_current; }
-
-    void set_root(fs::vfs::dentry *root) { process_root = root; }
-    void set_current(fs::vfs::dentry *current) { process_current = current; }
 };
 } // namespace task

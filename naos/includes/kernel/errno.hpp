@@ -22,6 +22,11 @@
 #endif
 #define ENOENT -2
 
+#ifdef ECHILD
+#undef ECHILD
+#endif
+#define ECHILD -10
+
 #ifdef EINTR
 #undef EINTR
 #endif
@@ -51,6 +56,11 @@
 #undef EACCES
 #endif
 #define EACCES -13
+
+#ifdef EBADF
+#undef EBADF
+#endif
+#define EBADF -9
 
 #ifdef EFAULT
 #undef EFAULT

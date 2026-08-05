@@ -1,4 +1,4 @@
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/trace.hpp"
 #include <cstdint>
 #include <sys/types.h>

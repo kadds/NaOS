@@ -1,7 +1,9 @@
 #include "kernel/dev/tty/tty.hpp"
 
 #include "freelibcxx/string.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/vfs/defines.hpp"
+#include "kernel/task.hpp"
 #include "kernel/terminal.hpp"
 
 namespace dev::tty
@@ -23,11 +25,11 @@ i64 tty_pseudo_t::write(const byte *data, u64 size, flag_t flags)
 
 i64 tty_pseudo_t::read(byte *data, u64 max_size, flag_t flags) { return core_.read_input(data, max_size, flags); }
 
-u64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
+i64 tty_pseudo_t::write_to_buffer(const byte *data, u64 size, flag_t flags)
 {
     const auto result = master_.write(data, size, flags);
     render_master_output();
-    return result < 0 ? 0 : static_cast<u64>(result);
+    return result;
 }
 
 void tty_pseudo_t::send_EOF()
@@ -36,7 +38,85 @@ void tty_pseudo_t::send_EOF()
     render_master_output();
 }
 
-i64 tty_pseudo_t::ioctl(fs::vfs::ioctl_context &context) { return core_.ioctl(context); }
+bool tty_pseudo_t::native_tty_get_attributes(termios_t &attributes)
+{
+    attributes = core_.get_termios();
+    return true;
+}
+
+bool tty_pseudo_t::native_tty_set_attributes(const termios_t &attributes)
+{
+    core_.set_termios(attributes);
+    return true;
+}
+
+bool tty_pseudo_t::native_tty_get_winsize(winsize_t &size)
+{
+    size = core_.get_winsize();
+    return true;
+}
+
+bool tty_pseudo_t::native_tty_set_winsize(const winsize_t &size)
+{
+    core_.set_winsize(size);
+    return true;
+}
+
+i64 tty_pseudo_t::native_tty_flush(i32 queue)
+{
+    if (queue == tty_flush::input || queue == tty_flush::both)
+        core_.flush_input();
+    if (queue == tty_flush::output || queue == tty_flush::both)
+        core_.flush_output();
+    return queue >= tty_flush::input && queue <= tty_flush::both ? 0 : EINVAL;
+}
+
+i64 tty_pseudo_t::native_tty_attach(bool force)
+{
+    auto *process = task::current_process();
+    const auto result = task::attach_controlling_tty(process, &core_, force);
+    if (result == 0 && process != nullptr)
+    {
+        core_.set_session_id(process->session_id);
+        core_.set_foreground_process_group(process->process_group_id);
+    }
+    return result;
+}
+
+i64 tty_pseudo_t::native_tty_get_pgrp(u32 &group)
+{
+    group = static_cast<u32>(core_.foreground_process_group());
+    return 0;
+}
+
+i64 tty_pseudo_t::native_tty_set_pgrp(u32 group)
+{
+    return task::set_foreground_process_group(task::current_process(), &core_, static_cast<group_id>(group));
+}
+
+i64 tty_pseudo_t::native_tty_get_sid(u32 &session)
+{
+    session = static_cast<u32>(core_.session_id());
+    return 0;
+}
+
+i64 tty_pseudo_t::native_tty_detach()
+{
+    auto *process = task::current_process();
+    task::detach_controlling_tty(process);
+    if (process != nullptr && process->pid == process->session_id && process->controlling_tty == nullptr)
+    {
+        core_.set_foreground_process_group(0);
+        core_.set_session_id(0);
+    }
+    return 0;
+}
+
+i64 tty_pseudo_t::native_tty_get_input(u64 &count)
+{
+    count = readable() ? 1 : 0;
+    return 0;
+}
 
 void tty_pseudo_t::render_master_output()
 {
@@ -72,6 +152,12 @@ void tty_pseudo_t::render_master_output()
             offset = end;
         }
     }
+
+    // Console output must become visible before the syscall returns. The
+    // periodic terminal flush remains useful for kernel-side changes, but it
+    // is not a reliable completion boundary while the scheduler is busy
+    // during process startup.
+    term::flush_active_terminal();
 }
 
 // The framebuffer console is a persistent device node. Closing the temporary

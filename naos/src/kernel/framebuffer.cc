@@ -1,7 +1,7 @@
 #include "kernel/framebuffer.hpp"
-#include "common.hpp"
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/unicode.hpp"
+#include "kernel/common.hpp"
 #include "kernel/common/font/font.hpp"
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/trace.hpp"

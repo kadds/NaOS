@@ -1,5 +1,5 @@
 #pragma once
-#include "common.hpp"
+#include "kernel/common.hpp"
 
 namespace timeclock
 {
@@ -36,4 +36,4 @@ class clock_source
     const char *name_;
 };
 void init();
-} // namespace clock
+} // namespace timeclock

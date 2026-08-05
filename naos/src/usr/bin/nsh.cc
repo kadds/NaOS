@@ -264,7 +264,16 @@ int process(vector<string> &args, FILE *stdout, FILE *stderr)
 
     if (program == "cd")
     {
-        chdir(args[1].data());
+        if (args.size() < 2)
+        {
+            fprintf(fout, "cd: missing operand\n");
+            return EINVAL;
+        }
+        if (chdir(args[1].data()) != 0)
+        {
+            fprintf(fout, "cd: %s: %s\n", args[1].data(), strerror(errno));
+            return errno;
+        }
         return 0;
     }
     if (program == "exit")

@@ -2,7 +2,7 @@
 #include "../clock/clock_event.hpp"
 #include "../clock/clock_source.hpp"
 #include "../types.hpp"
-#include "common.hpp"
+#include "kernel/common.hpp"
 #include "kernel/lock.hpp"
 #include <atomic>
 namespace arch::device::ACPI

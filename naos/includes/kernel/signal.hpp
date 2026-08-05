@@ -1,9 +1,9 @@
 #pragma once
 #include "arch/task.hpp"
-#include "common.hpp"
 #include "freelibcxx/bit_set.hpp"
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/common.hpp"
 #include "kernel/trace.hpp"
 #include "types.hpp"
 #include "wait.hpp"

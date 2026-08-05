@@ -15,7 +15,7 @@ u64 none()
 void *system_call_table[256];
 
 BEGIN_SYSCALL
-SYSCALL(0, none)
+SYSCALL(NA_SYSCALL_NONE, none)
 END_SYSCALL
 
-} // namespace syscall
+} // namespace naos::syscall

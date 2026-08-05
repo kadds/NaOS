@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/allocator.hpp"
+#include "kernel/common.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/page.hpp"
 #include "kernel/types.hpp"

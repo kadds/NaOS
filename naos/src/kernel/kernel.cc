@@ -1,9 +1,9 @@
 #include "kernel/kernel.hpp"
-#include "common.hpp"
 #include "kernel/arch/arch.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/common.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/dev/device.hpp"
 #include "kernel/fs/pipefs/pipefs.hpp"
@@ -59,21 +59,18 @@ ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args)
 
 u64 build_version_timestamp = BUILD_VERSION_TS;
 
-handle_t<fs::vfs::file>* dmesg_file;
+handle_t<fs::vfs::file> *dmesg_file;
 
-void trace_callback(const byte *data, u64 len) 
-{
-    (*dmesg_file)->write(data, len, 0);
-}
+void trace_callback(const byte *data, u64 len) { (*dmesg_file)->write(data, len, 0); }
 
-void fs_init() 
+void fs_init()
 {
     // create /var/log/dmesg
     fs::vfs::mkdir("/var", fs::vfs::global_root, fs::vfs::global_root, 0);
     fs::vfs::mkdir("/var/log", fs::vfs::global_root, fs::vfs::global_root, 0);
-    auto file = fs::vfs::open("/var/log/dmesg", fs::vfs::global_root, fs::vfs::global_root,
-        fs::mode::write, fs::path_walk_flags::auto_create_file | fs::path_walk_flags::file);
-    if (!file) 
+    auto file = fs::vfs::open("/var/log/dmesg", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write,
+                              fs::path_walk_flags::auto_create_file | fs::path_walk_flags::file);
+    if (!file)
     {
         trace::panic("create dmesg fail failed");
     }
@@ -107,7 +104,7 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     // -----spec routine for bsp----
     fs::vfs::init();
     fs::ramfs::init();
-    fs::rootfs::init(memory::pa2va<byte*>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
+    fs::rootfs::init(memory::pa2va<byte *>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
     fs::pipefs::init();
     ksybs::init();
 

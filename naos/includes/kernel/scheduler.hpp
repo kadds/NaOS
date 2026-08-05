@@ -1,6 +1,6 @@
 #pragma once
-#include "common.hpp"
 #include "freelibcxx/linked_list.hpp"
+#include "kernel/common.hpp"
 #include "task.hpp"
 
 namespace task::scheduler
@@ -93,7 +93,7 @@ class scheduler
     scheduler() = default;
     scheduler(const scheduler &) = delete;
     scheduler &operator=(const scheduler &) = delete;
-    virtual ~scheduler(){};
+    virtual ~scheduler() {};
 };
 
 void init();
