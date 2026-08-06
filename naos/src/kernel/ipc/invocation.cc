@@ -1157,8 +1157,8 @@ na_status_t publish_service_directory_call(invocation_state &state, service::dir
             decoded.service.value >= resources.size())
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
 
-        const auto result = directory.register_service(reinterpret_cast<const char *>(decoded.name.data),
-                                                       decoded.name.size, resources[decoded.service.value]);
+        const auto result = directory.register_service(reinterpret_cast<const char *>(decoded.uri.data),
+                                                       decoded.uri.size, resources[decoded.service.value]);
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
@@ -1169,8 +1169,8 @@ na_status_t publish_service_directory_call(invocation_state &state, service::dir
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
 
         capability::transferred_resource resource;
-        const auto result = directory.resolve_service(reinterpret_cast<const char *>(decoded.name.data),
-                                                       decoded.name.size, resource);
+        const auto result = directory.resolve_service(reinterpret_cast<const char *>(decoded.uri.data),
+                                                       decoded.uri.size, resource);
         if (result != 0)
             return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
 
@@ -1190,8 +1190,8 @@ na_status_t publish_service_directory_call(invocation_state &state, service::dir
         naos::system::ServiceDirectory::unregister_request decoded{};
         if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_unregister_request))
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        const auto result = directory.unregister_service(reinterpret_cast<const char *>(decoded.name.data),
-                                                         decoded.name.size);
+        const auto result = directory.unregister_service(reinterpret_cast<const char *>(decoded.uri.data),
+                                                         decoded.uri.size);
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 

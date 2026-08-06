@@ -3,15 +3,15 @@ library naos.system;
 protocol ServiceDirectory @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a100a") @revision(1) @features(0) @scope(10) @uapi_name("SERVICE_DIRECTORY") @scope_name("SERVICE_DIRECTORY") {
     method register @id(1) @max_bytes(65536) {
         handle<resource, transfer, move> service @id(1);
-        bytes<256> name @id(2) @inline;
+        bytes<256> uri @id(2) @inline;
     } ->;
     method resolve @id(2) @max_bytes(65536) {
-        bytes<256> name @id(1) @inline;
+        bytes<256> uri @id(1) @inline;
     } -> {
         handle<resource, transfer, move> service @id(1);
     };
     method unregister @id(3) @max_bytes(65536) {
-        bytes<256> name @id(1) @inline;
+        bytes<256> uri @id(1) @inline;
     } ->;
     method list @id(4) @max_bytes(65536) {
         u64 offset @id(1);
