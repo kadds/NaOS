@@ -1,5 +1,12 @@
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+add_executable(cfs_vtime_order_test cfs_vtime_order_test.cc)
+target_include_directories(cfs_vtime_order_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
+)
+set_target_properties(cfs_vtime_order_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME cfs_vtime_order_test COMMAND cfs_vtime_order_test)
+
 add_executable(phase1_channel_queue_test phase1_channel_queue_test.cc)
 target_include_directories(phase1_channel_queue_test PRIVATE
     ${PROJECT_SOURCE_DIR}/naos/includes

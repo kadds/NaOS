@@ -23,12 +23,15 @@ struct less_cmp
 struct cfs_thread_t
 {
     thread_t *thread;
-    bool operator<(const cfs_thread_t &thd)
+    bool operator<(const cfs_thread_t &thd) const
     {
-        return ((thread_time_cf_t *)(thread->schedule_data))->vtime <
-               ((thread_time_cf_t *)(thd.thread->schedule_data))->vtime;
+        const auto lhs_vtime = ((thread_time_cf_t *)(thread->schedule_data))->vtime;
+        const auto rhs_vtime = ((thread_time_cf_t *)(thd.thread->schedule_data))->vtime;
+        if (lhs_vtime != rhs_vtime)
+            return lhs_vtime < rhs_vtime;
+        return thread->tid < thd.thread->tid;
     }
-    bool operator==(const cfs_thread_t &thd) { return thd.thread == thread; }
+    bool operator==(const cfs_thread_t &thd) const { return thd.thread == thread; }
     explicit cfs_thread_t(thread_t *thread)
         : thread(thread)
     {

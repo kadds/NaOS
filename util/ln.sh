@@ -4,7 +4,7 @@ set -e
 r=${1}/bin
 mkdir -p "${r}"
 
-for applet in sh ls cat echo pwd true false mkdir rmdir touch rm env; do
+for applet in sh ls cat echo pwd true false mkdir rmdir touch rm env cp mv grep sed find xargs test sleep; do
     ln -sf /bin/busybox "${r}/${applet}"
 done
 
