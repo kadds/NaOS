@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstdint>
+#include <type_traits>
 
+#include <naos/service_directory.hpp>
 #include <naos/generated/system/ServiceDirectory.hpp>
 #include <naos/generated/system_uapi.h>
 
@@ -14,6 +16,9 @@ int main()
     assert(method_resolve == 2);
     assert(method_unregister == 3);
     assert(method_list == 4);
+
+    using register_handle_function = int (*)(const char *, na_handle_t);
+    static_assert(std::is_same_v<decltype(&naos_service_register_handle), register_handle_function>);
 
     register_request register_value{};
     const std::uint8_t name[] = {'c', 'o', 'n', 's', 'o', 'l', 'e'};
