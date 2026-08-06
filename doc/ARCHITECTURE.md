@@ -50,13 +50,19 @@ generated request/response codecs. The schemas therefore define the native
 method ordinals and payload layouts shared by applications and the kernel.
 
 Root/cwd are process path context, not entries in the capability table.
-Bootstrap exposes native Directory and Stream capabilities; mlibc maps these
+Bootstrap exposes native Directory, ServiceDirectory, and Stream capabilities; mlibc maps these
 to its private POSIX fd table (where only the numeric indices 0/1/2,
 `O_NONBLOCK`, `O_APPEND`, and `FD_CLOEXEC` exist). TTY and PTY control calls
 are KernelView protocol methods, while terminal byte flow remains Stream data.
 MemoryObject and shared-ring operations are typed KernelView object calls with
 bounded limits and protocol-right checks; virtual-memory mapping remains a
 separate address-space syscall.
+
+ServiceDirectory is currently a kernel-backed typed registry carried through
+bootstrap. `register` moves a resource capability into the registry,
+`resolve` transfers it back to the caller, and `unregister` releases it;
+non-unique objects may be resolved repeatedly. The userland service manager
+and namespace policy remain the next layer above this primitive.
 
 Native process creation is a two-stage transaction: the kernel creates a
 deferred child with an empty resource table, transfers the executable and one

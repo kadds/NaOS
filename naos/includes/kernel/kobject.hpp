@@ -33,6 +33,7 @@ class kobject
         memory_object,
         shared_ring,
         process,
+        service_directory,
     };
 
   public:

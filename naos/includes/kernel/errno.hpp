@@ -72,6 +72,16 @@
 #endif
 #define EBUSY -16
 
+#ifdef EEXIST
+#undef EEXIST
+#endif
+#define EEXIST -17
+
+#ifdef ENOMEM
+#undef ENOMEM
+#endif
+#define ENOMEM -12
+
 #ifdef EINVAL
 #undef EINVAL
 #endif

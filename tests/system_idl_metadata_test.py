@@ -9,6 +9,7 @@ EXPECTED_SCOPES = {
     "File": 2,
     "MemoryObject": 7,
     "Process": 9,
+    "ServiceDirectory": 10,
     "SharedRing": 8,
     "Stream": 1,
     "TtyControl": 4,

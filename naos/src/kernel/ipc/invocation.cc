@@ -5,6 +5,7 @@
 #include "kernel/dev/tty/pty.hpp"
 #include "kernel/dev/tty/pty_manager.hpp"
 #include "kernel/dev/tty/tty.hpp"
+#include "kernel/errno.hpp"
 #include "kernel/fs/stat.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/inode.hpp"
@@ -13,6 +14,7 @@
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/service_directory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
@@ -23,6 +25,7 @@
 #include "naos/generated/system/MemoryObject.hpp"
 #include "naos/generated/system/Process.hpp"
 #include "naos/generated/system/SharedRing.hpp"
+#include "naos/generated/system/ServiceDirectory.hpp"
 #include "naos/generated/system/Stream.hpp"
 #include "naos/generated/system/TtyControl.hpp"
 #include "naos/generated/system_uapi.h"
@@ -1142,6 +1145,83 @@ na_status_t publish_directory_call(invocation_state &state, fs::vfs::native_dire
     return NA_STATUS_NOT_SUPPORTED;
 }
 
+na_status_t publish_service_directory_call(invocation_state &state, service::directory &directory, u64 method_id,
+                                            const freelibcxx::vector<byte> &request,
+                                            capability::transfer_record_list &resources)
+{
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_REGISTER)
+    {
+        naos::system::ServiceDirectory::register_request decoded{};
+        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_register_request) ||
+            !naos::system::ServiceDirectory::validate_register_request_resources(decoded, resources.size()) ||
+            decoded.service.value >= resources.size())
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+        const auto result = directory.register_service(reinterpret_cast<const char *>(decoded.name.data),
+                                                       decoded.name.size, resources[decoded.service.value]);
+        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_RESOLVE)
+    {
+        naos::system::ServiceDirectory::resolve_request decoded{};
+        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_resolve_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+        capability::transferred_resource resource;
+        const auto result = directory.resolve_service(reinterpret_cast<const char *>(decoded.name.data),
+                                                       decoded.name.size, resource);
+        if (result != 0)
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+        naos::system::ServiceDirectory::resolve_response response{};
+        response.service.value = 0;
+        freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+        if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_resolve_response))
+            return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
+        response_resources.push_back(capability::transfer_record(NA_HANDLE_INVALID, true, std::move(resource)));
+        return state.complete_reply(std::move(encoded_response), std::move(response_resources)) ? NA_STATUS_OK
+                                                                                                  : NA_STATUS_PEER_CLOSED;
+    }
+
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_UNREGISTER)
+    {
+        naos::system::ServiceDirectory::unregister_request decoded{};
+        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_unregister_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        const auto result = directory.unregister_service(reinterpret_cast<const char *>(decoded.name.data),
+                                                         decoded.name.size);
+        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_LIST)
+    {
+        naos::system::ServiceDirectory::list_request decoded{};
+        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_list_request) ||
+            decoded.requested_bytes > max_kernel_payload)
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+        freelibcxx::vector<byte> records(memory::MemoryAllocatorV);
+        u64 next = 0;
+        u64 count = 0;
+        const auto result = directory.list_services(decoded.offset, decoded.requested_bytes, records, next, count);
+        if (result != 0)
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+        naos::system::ServiceDirectory::list_response response{};
+        response.next = next;
+        response.count = count;
+        response.records = {reinterpret_cast<const u8 *>(records.data()), static_cast<u32>(records.size())};
+        freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+        if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_list_response))
+            return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+
+    return NA_STATUS_NOT_SUPPORTED;
+}
+
 na_status_t publish_process_call(invocation_state &state, task::process_object &process, u64 method_id,
                                  const freelibcxx::vector<byte> &request)
 {
@@ -1439,7 +1519,8 @@ na_status_t publish_shared_ring_call(invocation_state &state, data_plane::shared
 }
 
 na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &state, u64 method_id,
-                                 const freelibcxx::vector<byte> &request)
+                                 const freelibcxx::vector<byte> &request,
+                                 capability::transfer_record_list &resources)
 {
     state.mark_dispatched();
     if (auto *file = target.object->get<fs::vfs::file>())
@@ -1509,6 +1590,12 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
         if (method_id == NA_METHOD_SHARED_RING_POP && (target.meta.protocol_rights & NA_RING_RIGHT_POP) == 0)
             return NA_STATUS_ACCESS_DENIED;
         return publish_shared_ring_call(state, *ring, method_id, request);
+    }
+    if (auto *directory = target.object->get<service::directory>())
+    {
+        if (target.meta.scope != NA_SCOPE_SERVICE_DIRECTORY)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_service_directory_call(state, *directory, method_id, request, resources);
     }
     return NA_STATUS_WRONG_BINDING;
 }
@@ -2662,7 +2749,7 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
         return status;
     }
 
-    status = dispatch_kernel_view(target, *state, values.method_id, bytes);
+    status = dispatch_kernel_view(target, *state, values.method_id, bytes, records);
     resources.restore_native_batch(records);
     if (status == NA_STATUS_NOT_SUPPORTED)
     {

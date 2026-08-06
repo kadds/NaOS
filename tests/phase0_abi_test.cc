@@ -12,7 +12,7 @@ namespace
 {
 constexpr bool syscall_numbers_are_dense()
 {
-    constexpr std::array<std::uint32_t, 40> numbers = {
+    constexpr std::array<std::uint32_t, 41> numbers = {
         NA_SYSCALL_LOG,
         NA_SYSCALL_CLOCK_GET,
         NA_SYSCALL_FUTEX,
@@ -53,6 +53,7 @@ constexpr bool syscall_numbers_are_dense()
         NA_SYSCALL_PROCESS_EXEC,
         NA_SYSCALL_PROCESS_HANDLE_OPEN,
         NA_SYSCALL_PROCESS_SPAWN,
+        NA_SYSCALL_PIPE_CREATE,
     };
     for (std::uint32_t index = 0; index < numbers.size(); index++)
     {
@@ -80,7 +81,7 @@ void test_layouts()
     static_assert(NA_CHANNEL_MAX_RESOURCES == 64);
     static_assert(NA_HANDLE_INVALID == 0);
     static_assert(NA_SYSCALL_NONE == 0);
-    static_assert(NA_SYSCALL_COUNT == 40);
+    static_assert(NA_SYSCALL_COUNT == 42);
     static_assert(NA_SYSCALL_MEMORY_MAP == 36);
     static_assert(NA_SYSCALL_PROCESS_SPAWN == 40);
     static_assert(syscall_numbers_are_dense());

@@ -6,6 +6,7 @@
 #include "kernel/ipc/invocation.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/syscall.hpp"
+#include "kernel/service_directory.hpp"
 #include "kernel/task.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/bootstrap.hpp"
@@ -59,6 +60,13 @@ bool valid_bootstrap_stream(task::resource_table_t &resources, na_handle_t handl
     return resources.lookup_native(handle, entry) && entry.object && entry.meta.binding == NA_BINDING_KERNEL_VIEW &&
            (entry.meta.scope == NA_SCOPE_STREAM || entry.meta.scope == NA_SCOPE_FILE) &&
            entry.object->get<fs::vfs::file>() != nullptr;
+}
+
+bool valid_bootstrap_service_directory(task::resource_table_t &resources, na_handle_t handle)
+{
+    capability::entry entry;
+    return resources.lookup_native(handle, entry) && entry.object && entry.meta.binding == NA_BINDING_KERNEL_VIEW &&
+           entry.meta.scope == NA_SCOPE_SERVICE_DIRECTORY && entry.object->get<service::directory>() != nullptr;
 }
 } // namespace
 
@@ -357,7 +365,8 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         const auto stderr_handle = received[message.stderr_stream];
         if (!valid_bootstrap_directory(resources, root_handle) ||
             !valid_bootstrap_directory(resources, current_handle) ||
-            !valid_bootstrap_directory(resources, service_handle) || !valid_bootstrap_stream(resources, stdin_handle) ||
+            !valid_bootstrap_service_directory(resources, service_handle) ||
+            !valid_bootstrap_stream(resources, stdin_handle) ||
             !valid_bootstrap_stream(resources, stdout_handle) || !valid_bootstrap_stream(resources, stderr_handle))
         {
             close_received_handles(resources, received);
@@ -404,7 +413,6 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     const auto process_root = process->bootstrap_root_directory ? process->bootstrap_root_directory->root() : root;
     const auto process_current =
         process->bootstrap_current_directory ? process->bootstrap_current_directory->current() : process_root;
-    const auto service = fs::vfs::path_walk("/dev", process_root, process_current, fs::path_walk_flags::directory);
 
     auto root_object = process->bootstrap_root_directory
                            ? process->bootstrap_root_directory
@@ -412,8 +420,7 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     auto current_object = process->bootstrap_current_directory
                               ? process->bootstrap_current_directory
                               : handle_t<fs::vfs::native_directory>::make(process_root, process_current);
-    auto service_object =
-        handle_t<fs::vfs::native_directory>::make(process_root, service == nullptr ? process_root : service);
+    auto service_object = handle_t<service::directory>::make();
     capability::entry stdin_entry;
     capability::entry stdout_entry;
     capability::entry stderr_entry;
@@ -432,10 +439,16 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     directory_meta.revision = 1;
     directory_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     directory_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+    capability::metadata service_meta;
+    service_meta.binding = NA_BINDING_KERNEL_VIEW;
+    service_meta.scope = NA_SCOPE_SERVICE_DIRECTORY;
+    service_meta.revision = 1;
+    service_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    service_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
     auto stdin_meta = stream_metadata();
     const na_handle_t root_handle = resources.install_native(std::move(root_object), directory_meta);
     const na_handle_t current_handle = resources.install_native(std::move(current_object), directory_meta);
-    const na_handle_t service_handle = resources.install_native(std::move(service_object), directory_meta);
+    const na_handle_t service_handle = resources.install_native(std::move(service_object), service_meta);
     const na_handle_t stdin_handle = resources.install_native(std::move(stdin_object), stdin_meta);
     const na_handle_t stdout_handle = resources.install_native(std::move(stdout_object), stdin_meta);
     const na_handle_t stderr_handle = resources.install_native(std::move(stderr_object), stdin_meta);

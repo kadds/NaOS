@@ -1182,7 +1182,11 @@ Framebuffer、network packet、audio frame、大文件页和 DMA buffer不得放
 
 ### 18.1 Service directory
 
-Kernel不维护全局字符串 registry。Service manager通过 Directory protocol提供：
+目标架构中 Kernel 不维护全局字符串 registry，Service manager通过 Directory
+protocol提供。当前迁移阶段先提供一个 kernel-backed `ServiceDirectory`
+KernelView primitive：它只保存显式 MOVE 进来的 capability，并通过
+`register`/`resolve`/`unregister` 管理生命周期；namespace policy 和实例选择
+仍由后续 userland service manager负责。目标架构为：
 
 ```text
 process namespace

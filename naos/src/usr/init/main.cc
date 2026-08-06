@@ -1,7 +1,8 @@
+#include <naos/service_directory.hpp>
+#include <spawn.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <spawn.h>
 #include <stdlib.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -13,6 +14,21 @@ extern "C" void main(int argc, char **argv)
     (void)argc;
     (void)argv;
     extern char **environ;
+
+    int service_status = naos_service_register_fd("console", STDOUT_FILENO);
+    printf("service directory register console: %d\n", service_status);
+    if (service_status == 0)
+    {
+        na_handle_t resolved = NA_HANDLE_INVALID;
+        service_status = naos_service_resolve("console", &resolved);
+        printf("service directory resolve console: %d\n", service_status);
+        if (resolved != NA_HANDLE_INVALID)
+            (void)naos_handle_close(resolved);
+
+        service_status = naos_service_unregister("console");
+        printf("service directory unregister console: %d\n", service_status);
+    }
+
     while (1)
     {
         printf("spawn sh...\n");
