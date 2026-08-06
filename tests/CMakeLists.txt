@@ -79,6 +79,15 @@ set_target_properties(system_binding_contract_test PROPERTIES CXX_STANDARD 20 CX
 add_dependencies(system_binding_contract_test naos_system_idl)
 add_test(NAME system_binding_contract_test COMMAND system_binding_contract_test)
 
+add_executable(service_directory_contract_test service_directory_contract_test.cc)
+target_include_directories(service_directory_contract_test PRIVATE
+    ${CMAKE_BINARY_DIR}/naos
+    ${PROJECT_SOURCE_DIR}/naos/include
+)
+set_target_properties(service_directory_contract_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_dependencies(service_directory_contract_test naos_system_idl)
+add_test(NAME service_directory_contract_test COMMAND service_directory_contract_test)
+
 add_executable(signal_policy_test signal_policy_test.cc)
 target_include_directories(signal_policy_test PRIVATE
     ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
