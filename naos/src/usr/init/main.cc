@@ -15,18 +15,18 @@ extern "C" void main(int argc, char **argv)
     (void)argv;
     extern char **environ;
 
-    int service_status = naos_service_register_fd("console", STDOUT_FILENO);
-    printf("service directory register console: %d\n", service_status);
+    int service_status = naos_service_register_fd("naos://system/console", STDOUT_FILENO);
+    printf("service directory register naos://system/console: %d\n", service_status);
     if (service_status == 0)
     {
         na_handle_t resolved = NA_HANDLE_INVALID;
-        service_status = naos_service_resolve("console", &resolved);
-        printf("service directory resolve console: %d\n", service_status);
+        service_status = naos_service_resolve("naos://system/console", &resolved);
+        printf("service directory resolve naos://system/console: %d\n", service_status);
         if (resolved != NA_HANDLE_INVALID)
             (void)naos_handle_close(resolved);
 
-        service_status = naos_service_unregister("console");
-        printf("service directory unregister console: %d\n", service_status);
+        service_status = naos_service_unregister("naos://system/console");
+        printf("service directory unregister naos://system/console: %d\n", service_status);
     }
 
     while (1)

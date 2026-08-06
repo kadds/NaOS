@@ -21,28 +21,28 @@ class directory final : public kobject
     bool capability_is_unique() const override { return false; }
     na_signal_t capability_signals() const override { return NA_SIGNAL_WRITABLE; }
 
-    i64 register_service(const char *name, u64 name_size, capability::transfer_record &record);
-    i64 resolve_service(const char *name, u64 name_size, capability::transferred_resource &resource);
-    i64 unregister_service(const char *name, u64 name_size);
+    i64 register_service(const char *uri, u64 uri_size, capability::transfer_record &record);
+    i64 resolve_service(const char *uri, u64 uri_size, capability::transferred_resource &resource);
+    i64 unregister_service(const char *uri, u64 uri_size);
     i64 list_services(u64 offset, u64 requested_bytes, freelibcxx::vector<byte> &records, u64 &next, u64 &count) const;
 
   private:
     struct entry
     {
-        freelibcxx::string name;
+        freelibcxx::string uri;
         khandle object;
         capability::metadata metadata;
 
-        entry(freelibcxx::string &&name, khandle &&object, capability::metadata metadata)
-            : name(std::move(name))
+        entry(freelibcxx::string &&uri, khandle &&object, capability::metadata metadata)
+            : uri(std::move(uri))
             , object(std::move(object))
             , metadata(metadata)
         {
         }
     };
 
-    static bool valid_name(const char *name, u64 name_size);
-    i64 find_locked(const char *name, u64 name_size) const;
+    static bool valid_uri(const char *uri, u64 uri_size);
+    i64 find_locked(const char *uri, u64 uri_size) const;
     void release_entry(entry &value);
 
     mutable lock::spinlock_t lock_;

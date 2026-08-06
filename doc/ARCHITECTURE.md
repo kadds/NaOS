@@ -61,8 +61,10 @@ separate address-space syscall.
 ServiceDirectory is currently a kernel-backed typed registry carried through
 bootstrap. `register` moves a resource capability into the registry,
 `resolve` transfers it back to the caller, and `unregister` releases it;
-non-unique objects may be resolved repeatedly. The userland service manager
-and namespace policy remain the next layer above this primitive.
+non-unique objects may be resolved repeatedly. Locator keys are canonical
+local URIs such as `naos://system/console`; the protocol UUID identifies the
+wire contract and is not a service locator. The userland service manager and
+namespace policy remain the next layer above this primitive.
 
 Native process creation is a two-stage transaction: the kernel creates a
 deferred child with an empty resource table, transfers the executable and one

@@ -21,26 +21,46 @@ directory::~directory()
     entries_.clear();
 }
 
-bool directory::valid_name(const char *name, u64 name_size)
+bool directory::valid_uri(const char *uri, u64 uri_size)
 {
-    if (name == nullptr || name_size == 0 || name_size > 255)
+    constexpr char prefix[] = "naos://";
+    constexpr u64 prefix_size = sizeof(prefix) - 1;
+    if (uri == nullptr || uri_size <= prefix_size || uri_size > 255 ||
+        memcmp(uri, prefix, static_cast<size_t>(prefix_size)) != 0)
         return false;
-    for (u64 i = 0; i < name_size; i++)
+    bool segment_has_value = false;
+    bool segment_is_dot = true;
+    u64 segment_size = 0;
+    for (u64 i = prefix_size; i < uri_size; i++)
     {
-        const auto value = static_cast<unsigned char>(name[i]);
-        if (value == 0 || value == '/' || value < 0x20 || value == 0x7f)
+        const auto value = static_cast<unsigned char>(uri[i]);
+        if (value == '/')
+        {
+            if (!segment_has_value || segment_is_dot || segment_size == 2)
+                return false;
+            segment_has_value = false;
+            segment_is_dot = true;
+            segment_size = 0;
+            continue;
+        }
+        const bool alpha = (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+        const bool digit = value >= '0' && value <= '9';
+        if (!alpha && !digit && value != '-' && value != '_' && value != '.' && value != '~')
             return false;
+        segment_has_value = true;
+        segment_size++;
+        if (segment_size > 2 || value != '.')
+            segment_is_dot = false;
     }
-    return true;
+    return segment_has_value && !segment_is_dot && segment_size != 2;
 }
 
-i64 directory::find_locked(const char *name, u64 name_size) const
+i64 directory::find_locked(const char *uri, u64 uri_size) const
 {
     const auto entries = entries_.cspan();
     for (u64 i = 0; i < entries_.size(); i++)
     {
-        if (entries[i].name.size() == name_size &&
-            memcmp(entries[i].name.data(), name, static_cast<size_t>(name_size)) == 0)
+        if (entries[i].uri.size() == uri_size && memcmp(entries[i].uri.data(), uri, static_cast<size_t>(uri_size)) == 0)
             return static_cast<i64>(i);
     }
     return -1;
@@ -53,32 +73,32 @@ void directory::release_entry(entry &value)
     value.object.reset();
 }
 
-i64 directory::register_service(const char *name, u64 name_size, capability::transfer_record &record)
+i64 directory::register_service(const char *uri, u64 uri_size, capability::transfer_record &record)
 {
-    if (!valid_name(name, name_size) || !record.moved || !record.resource.valid())
+    if (!valid_uri(uri, uri_size) || !record.moved || !record.resource.valid())
         return EINVAL;
 
     uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (find_locked(name, name_size) >= 0)
+    if (find_locked(uri, uri_size) >= 0)
         return EEXIST;
 
-    freelibcxx::string stored_name(memory::KernelCommonAllocatorV, name, static_cast<int>(name_size));
-    if (stored_name.size() != name_size)
+    freelibcxx::string stored_uri(memory::KernelCommonAllocatorV, uri, static_cast<int>(uri_size));
+    if (stored_uri.size() != uri_size)
         return ENOMEM;
     auto object = record.resource.take_object_to_table();
     if (!object)
         return EINVAL;
-    entries_.push_back(std::move(stored_name), std::move(object), record.resource.meta());
+    entries_.push_back(std::move(stored_uri), std::move(object), record.resource.meta());
     return 0;
 }
 
-i64 directory::resolve_service(const char *name, u64 name_size, capability::transferred_resource &resource)
+i64 directory::resolve_service(const char *uri, u64 uri_size, capability::transferred_resource &resource)
 {
-    if (!valid_name(name, name_size))
+    if (!valid_uri(uri, uri_size))
         return EINVAL;
 
     uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    const auto index = find_locked(name, name_size);
+    const auto index = find_locked(uri, uri_size);
     if (index < 0)
         return ENOENT;
 
@@ -94,13 +114,13 @@ i64 directory::resolve_service(const char *name, u64 name_size, capability::tran
     return 0;
 }
 
-i64 directory::unregister_service(const char *name, u64 name_size)
+i64 directory::unregister_service(const char *uri, u64 uri_size)
 {
-    if (!valid_name(name, name_size))
+    if (!valid_uri(uri, uri_size))
         return EINVAL;
 
     uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    const auto index = find_locked(name, name_size);
+    const auto index = find_locked(uri, uri_size);
     if (index < 0)
         return ENOENT;
     auto &value = entries_[static_cast<u64>(index)];
@@ -122,11 +142,11 @@ i64 directory::list_services(u64 offset, u64 requested_bytes, freelibcxx::vector
     const auto entries = entries_.cspan();
     for (u64 i = offset; i < entries_.size(); i++)
     {
-        const auto &name = entries[i].name;
-        if (name.size() + 1 > requested_bytes - records.size())
+        const auto &uri = entries[i].uri;
+        if (uri.size() + 1 > requested_bytes - records.size())
             break;
-        for (u64 j = 0; j < name.size(); j++)
-            records.push_back(static_cast<byte>(name.data()[j]));
+        for (u64 j = 0; j < uri.size(); j++)
+            records.push_back(static_cast<byte>(uri.data()[j]));
         records.push_back(static_cast<byte>(0));
         next = i + 1;
         count++;

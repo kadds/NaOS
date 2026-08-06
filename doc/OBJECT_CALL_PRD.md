@@ -1186,7 +1186,9 @@ Framebuffer、network packet、audio frame、大文件页和 DMA buffer不得放
 protocol提供。当前迁移阶段先提供一个 kernel-backed `ServiceDirectory`
 KernelView primitive：它只保存显式 MOVE 进来的 capability，并通过
 `register`/`resolve`/`unregister` 管理生命周期；namespace policy 和实例选择
-仍由后续 userland service manager负责。目标架构为：
+仍由后续 userland service manager负责。locator 使用规范化的本地 URI（例如
+`naos://system/console`）；protocol UUID 只标识 wire contract，不作为 locator。
+目标架构为：
 
 ```text
 process namespace
