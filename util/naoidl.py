@@ -848,6 +848,7 @@ def disposition_scope(scope: str | None) -> str | None:
         "stream": "NA_SCOPE_STREAM", "file": "NA_SCOPE_FILE", "directory": "NA_SCOPE_DIRECTORY",
         "tty_control": "NA_SCOPE_TTY_CONTROL", "pty_admin": "NA_SCOPE_PTY_ADMIN", "test_echo": "NA_SCOPE_TEST_ECHO",
         "memory_object": "NA_SCOPE_MEMORY_OBJECT", "shared_ring": "NA_SCOPE_SHARED_RING",
+        "service_directory": "NA_SCOPE_SERVICE_DIRECTORY",
     }.get(scope)
 
 

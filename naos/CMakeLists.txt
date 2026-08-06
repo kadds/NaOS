@@ -14,6 +14,7 @@ set(NAOS_SYSTEM_IDL_SOURCES
     ${NAOS_SYSTEM_IDL_DIR}/memory_object.naidl
     ${NAOS_SYSTEM_IDL_DIR}/process.naidl
     ${NAOS_SYSTEM_IDL_DIR}/shared_ring.naidl
+    ${NAOS_SYSTEM_IDL_DIR}/service_directory.naidl
     ${NAOS_SYSTEM_IDL_DIR}/stream.naidl
     ${NAOS_SYSTEM_IDL_DIR}/tty_control.naidl
 )
