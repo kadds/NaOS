@@ -1121,7 +1121,7 @@ na_status_t publish_directory_call(invocation_state &state, fs::vfs::native_dire
         if (file->get_entry() != nullptr && file->get_entry()->get_inode() != nullptr &&
             file->get_entry()->get_inode()->get_type() == fs::inode_type_t::directory)
         {
-            metadata = kernel_view_metadata(NA_SCOPE_DIRECTORY, {},
+            metadata = kernel_view_metadata(NA_SCOPE_DIRECTORY, naos::system::Directory::protocol_uuid,
                                             NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
                                             NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
             const auto opened_root =
@@ -1131,7 +1131,7 @@ na_status_t publish_directory_call(invocation_state &state, fs::vfs::native_dire
         }
         else
         {
-            metadata = kernel_view_metadata(NA_SCOPE_FILE, {},
+            metadata = kernel_view_metadata(NA_SCOPE_FILE, naos::system::File::protocol_uuid,
                                             NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
                                             NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
             object = khandle(file);

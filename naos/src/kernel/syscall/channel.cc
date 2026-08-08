@@ -11,6 +11,10 @@
 #include "kernel/time.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/bootstrap.hpp"
+#include "naos/generated/system/Directory.hpp"
+#include "naos/generated/system/ServiceDirectory.hpp"
+#include "naos/generated/system/Stream.hpp"
+#include "naos/generated/system/TtyControl.hpp"
 #include "naos/generated/system_uapi.h"
 #include <limits>
 
@@ -32,6 +36,7 @@ capability::metadata stream_metadata()
 {
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
     metadata.scope = NA_SCOPE_STREAM;
     metadata.revision = 1;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
@@ -449,12 +454,14 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
 
     capability::metadata directory_meta;
     directory_meta.binding = NA_BINDING_KERNEL_VIEW;
+    directory_meta.protocol_uuid = naos::system::Directory::protocol_uuid;
     directory_meta.scope = NA_SCOPE_DIRECTORY;
     directory_meta.revision = 1;
     directory_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     directory_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
     capability::metadata service_meta;
     service_meta.binding = NA_BINDING_KERNEL_VIEW;
+    service_meta.protocol_uuid = naos::system::ServiceDirectory::protocol_uuid;
     service_meta.scope = NA_SCOPE_SERVICE_DIRECTORY;
     service_meta.revision = 1;
     service_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
@@ -512,6 +519,7 @@ u64 tty_control_acquire(na_handle_t stream, na_handle_t *output)
     if (file == nullptr || file->get_pseudo() == nullptr)
         return NA_STATUS_WRONG_BINDING;
     capability::metadata metadata = source.meta;
+    metadata.protocol_uuid = naos::system::TtyControl::protocol_uuid;
     metadata.scope = NA_SCOPE_TTY_CONTROL;
     metadata.meta_rights = capability::derive_tty_control_rights(source.meta.meta_rights);
     const auto handle = resources.install_native(source.object, metadata);

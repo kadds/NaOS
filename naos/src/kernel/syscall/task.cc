@@ -11,6 +11,8 @@
 #include "kernel/usercopy.hpp"
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
+#include "naos/generated/system/Process.hpp"
+#include "naos/generated/system/Stream.hpp"
 #include "naos/generated/system_uapi.h"
 #include <atomic>
 #include <limits>
@@ -177,6 +179,7 @@ i64 process_handle_open(i64 pid, na_handle_t *output)
 
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.protocol_uuid = naos::system::Process::protocol_uuid;
     metadata.scope = NA_SCOPE_PROCESS;
     metadata.revision = 1;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
@@ -198,6 +201,7 @@ capability::metadata process_capability_metadata()
 {
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.protocol_uuid = naos::system::Process::protocol_uuid;
     metadata.scope = NA_SCOPE_PROCESS;
     metadata.revision = 1;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
@@ -586,7 +590,8 @@ int64_t pipe_create(na_pipe_create_frame_t *frame)
 
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
-    metadata.scope = NA_SCOPE_FILE;
+    metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
+    metadata.scope = NA_SCOPE_STREAM;
     metadata.revision = 1;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;

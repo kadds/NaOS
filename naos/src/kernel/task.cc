@@ -44,6 +44,7 @@
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "kernel/wait.hpp"
+#include "naos/generated/system/Stream.hpp"
 
 #include "kernel/dev/framebuffer.hpp"
 #include "kernel/dev/tty/pty_manager.hpp"
@@ -146,6 +147,7 @@ capability::metadata stream_capability_metadata()
 {
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
     metadata.scope = NA_SCOPE_STREAM;
     metadata.revision = 1;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
