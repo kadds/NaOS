@@ -1,11 +1,13 @@
-# NaOS Capability Handle 与异步 Invocation IPC PRD
+# ADR-0001：NaOS Capability Handle 与异步 Invocation IPC
 
-- 状态：Draft
-- 目标版本：待定
+- 状态：Accepted（实施中）
+- 日期：2026-08-08
+- 决策者：NaOS kernel 与 userland 维护者
 - 适用范围：NaOS x86-64 kernel、系统调用 ABI、NaOS userland SDK、mlibc、系统服务与后续远程 broker
 - 替代文档：旧版“原生对象协议调用接口”草案
+- 相关文档：[总体架构](ARCHITECTURE.md)
 
-## 1. 概述
+## 1. 决策摘要
 
 NaOS 将以 process-local capability handle、bounded channel 和 async-first invocation 作为新的资源访问与消息通信基础。
 该模型替代当前以 `file_desc`、`read/write/ioctl` 和弱类型资源表为中心的 native ABI，并为后续将 VFS、TTY、Display、
@@ -46,32 +48,18 @@ invoke_submit(target, method, request, resources, operation_budget)
 用户态 service receive request 时获得一个不可复制、至多使用一次的 `Responder<M>` capability。Responder 取代公开
 transaction ID，确保 reply authority、生命周期和最多一次回复都由 capability 模型表达。
 
-本 PRD 只统一 capability、message ownership、invocation lifecycle 和 canonical protocol wire。它不承诺本地与远程调用具有
+本 ADR 只统一 capability、message ownership、invocation lifecycle 和 canonical protocol wire。它不承诺本地与远程调用具有
 相同延迟或故障模型，也不在 kernel 中实现网络、全局服务注册、透明重连或分布式 exactly-once。
 
-## 2. 背景与现状
+## 2. 背景与问题
 
-当前实现已经存在一个不完整的通用对象表，但其语义仍被 fd/VFS 模型主导：
+现有 native ABI 以数字 fd、VFS 对象表和同步 syscall 为中心，无法同时表达 process-local authority、protocol scope、资源原子转移
+和异步调用结果所有权。消息队列与进程继承语义也没有为 endpoint lifecycle、capability transfer 和 fault-safe snapshot 提供统一边界。
 
-1. `resource_table_t` 将 `file_desc` 映射到通用 `kobject`，却不保存 rights、protocol scope、generation 或 entry state，
-   [resource.hpp](../naos/includes/kernel/resource.hpp)。
-2. `resource_table_t` 同时保存 process root 和 cwd，使通用资源管理依赖内核 VFS。
-3. `handle_t<T>` 是内核引用计数智能指针，却与未来用户可见 capability handle 同名，
-   [handle.hpp](../naos/includes/kernel/handle.hpp)。
-4. `file_desc` 固定为 `i32`，`0/1/2` 被内核定义为 console，并由 `dup2`、fork 和 process clone 保留数字身份，
-   [types.hpp](../naos/includes/kernel/types.hpp)、[task.cc](../naos/src/kernel/task.cc)。
-5. `open/read/write/ioctl` 等 syscall 先查通用对象表，再将对象强制解释为 VFS file，
-   [file.cc](../naos/src/kernel/syscall/file.cc)。
-6. 用户地址仍可深入 file/pseudo/driver 路径，范围检查不能替代 fault-safe usercopy 与 immutable snapshot。
-7. 现有 message queue 使用全局 key 和独立 syscall，不支持 capability transfer、peer lifecycle、protocol scope 或原子 resource
-   delivery，[msg_queue.hpp](../naos/includes/kernel/mm/msg_queue.hpp)。
-8. fork/clone 默认复制资源表；这会使未来的 admin capability、channel endpoint 和 outstanding invocation 被隐式继承。
-9. POSIX fd、native object reference、IPC endpoint 和远程引用尚未形成明确分层。
+因此需要一次明确的架构选择：native resource 采用 capability handle，通信采用 bounded channel，request/reply 采用
+async-first invocation，并由 NaoIDL 固化 protocol 与 wire 事实源。
 
-旧版 PRD 试图通过同步 `object_call(handle, call_frame)` 替代 `ioctl`，但公开 call ID、隐藏 result record、同步优先和每条
-message 携带 protocol ID 的模型不适合新的 async-first capability 架构。本 PRD 不兼容该未实现草案。
-
-## 3. 设计决策摘要
+## 3. 决策
 
 | 主题 | 决策 |
 | --- | --- |
@@ -97,11 +85,41 @@ message 携带 protocol ID 的模型不适合新的 async-first capability 架�
 | Data plane | 控制消息有界 snapshot copy；大数据使用 MemoryObject、shared ring、stream 或 pager。 |
 | Kernel 边界 | Kernel 长期只保留调度、VM、IPC、capability、interrupt/DMA 等机制；系统策略迁往用户态。 |
 | ABI 发布 | Stable protocol 必须由 NaoIDL codegen、manifest 和 compatibility checker 生成并验证。 |
-| Migration | 终态删除 native fd/ioctl；实施过程保留有删除期限的 legacy shim，并保持每阶段可启动。 |
+| Compatibility boundary | Native ABI 不暴露通用 fd/ioctl；POSIX fd 及其 policy 由 mlibc compatibility layer 提供。 |
 
-## 4. 产品目标与非目标
+## 4. 备选方案
 
-### 4.1 目标
+| 方案 | 结论 | 放弃或采用原因 |
+| --- | --- | --- |
+| 继续以 native `file_desc`、`read/write/ioctl` 作为统一对象 ABI | 放弃 | 数字 fd 身份、VFS 耦合和弱类型对象表无法表达 capability scope、rights、异步生命周期和原子 resource transfer。 |
+| 采用同步 `object_call(handle, call_frame)` | 放弃 | 隐藏 result ownership，难以表达排队/已执行/未知结果，也会把 protocol、transaction ID 和 transport 语义重新塞回通用 frame。 |
+| 在 kernel 中实现透明的远程 object/capability | 放弃 | 网络身份、认证、lease、重连和远端故障模型属于用户态 broker；放入 kernel 会扩大可信计算基并污染本地 IPC 语义。 |
+| 使用 process-local capability、bounded channel、async Invocation/Responder 和 NaoIDL | 采用 | 在本地 ABI、同机服务和后续 remote broker 之间建立清晰边界，同时保留权限削减、资源原子转移和结果所有权语义。 |
+
+## 5. 后果
+
+### 5.1 正面后果
+
+- Native resource identity、authority、protocol scope 和 binding class 具有明确边界，POSIX 兼容性被隔离在 mlibc。
+- Async invocation、one-shot responder 和 result ownership 能表达取消、超时、close、重试以及 `NOT_DELIVERED`/`OUTCOME_UNKNOWN` 等不同结果。
+- Channel 的 bytes/resource 原子提交、NaoIDL canonical wire 和生成式 binding 为 kernel view、同机 service 和 remote broker 提供共同事实源。
+- Kernel 可以长期收敛到调度、VM、IPC 和 capability 等机制，namespace、VFS、TTY、设备和网络策略逐步迁移到用户态。
+
+### 5.2 代价与约束
+
+- 调用方必须处理异步生命周期、分层错误和明确的 retry/idempotency policy，API 与测试复杂度上升。
+- Canonical encode/decode、capability lookup、userland fd table 和 service broker 会带来额外开销，必须通过 hard limits、生成代码和测量优化。
+- 不能依赖通用递归撤销或透明远程语义；敏感授权需使用最小 rights、lease、proxy 或 gate。
+- Native ABI 与 legacy compatibility shim 必须保持边界清晰；shim 不得成为新 native SDK 或 protocol 的依赖。
+
+### 5.3 接受的风险
+
+Invocation/Responder 数量、unique endpoint 约束、canonical wire 成本、无 priority donation 和 remote MOVE 歧义等风险由后文的
+hard limits、binding 可辨识性、compatibility boundary 和专门的风险缓解表承担；这些风险不改变本 ADR 的核心 ownership 与 capability 决策。
+
+## 6. 决策边界
+
+### 6.1 纳入决策的目标
 
 - 建立统一、类型安全、可削减权限的 process-local capability table。
 - 让 channel、memory、process、thread、interrupt、protocol endpoint 和 invocation 都以 handle 管理。
@@ -115,7 +133,7 @@ message 携带 protocol ID 的模型不适合新的 async-first capability 架�
 - 为 fuzz、trace、ABI compatibility test 和生成 bindings 提供单一 protocol 事实源。
 - 保持 freestanding kernel：不依赖异常、RTTI、host standard library 或 IDL runtime。
 
-### 4.2 非目标
+### 6.2 非目标
 
 第一版不要求：
 
@@ -131,7 +149,7 @@ message 携带 protocol ID 的模型不适合新的 async-first capability 架�
 - 让 raw local handle number 出现在 canonical payload 或网络 wire；
 - 为调用方提供可递归撤销所有 capability 后代的通用机制。
 
-## 5. 术语
+## 7. 术语
 
 | 术语 | 含义 |
 | --- | --- |
@@ -158,9 +176,9 @@ message 携带 protocol ID 的模型不适合新的 async-first capability 架�
 | broker | 用户态受信任服务，将本地 protocol endpoint 映射到远程 session/proxy。 |
 | canonical wire | 与 CPU ABI 和 transport 无关的固定 endian、固定宽度 value encoding。 |
 
-## 6. 总体架构
+## 8. 总体架构
 
-### 6.1 分层
+### 8.1 分层
 
 ```text
 Application typed API
@@ -192,7 +210,7 @@ invoke_submit(target, method, snapshot, resources, operation_budget)
 - Service/driver 接收强类型 request，不接触用户地址、wire padding 或 process-local handle number。
 - Broker 处理网络 framing、认证、lease 与 proxy mapping，不重新解释业务 payload。
 
-### 6.2 长期 kernel 边界
+### 8.2 长期 kernel 边界
 
 永久 kernel mechanism 建议包括：
 
@@ -212,9 +230,9 @@ invoke_submit(target, method, snapshot, resources, operation_budget)
 - network stack、socket service；
 - service discovery、namespace policy 和 remote broker。
 
-迁移期间允许 kernel adapter 实现相同 NaoIDL protocol，但 adapter 不得成为永久业务 ABI 依赖。
+Kernel adapter 可以实现相同 NaoIDL protocol，但 adapter 不得成为绕过 typed protocol 的业务 ABI 依赖。
 
-### 6.3 Binding 可辨识性
+### 8.3 Binding 可辨识性
 
 统一 `invoke_submit()` 不代表隐藏 transport：
 
@@ -225,9 +243,9 @@ invoke_submit(target, method, snapshot, resources, operation_budget)
 - Client error type始终保留 transport outcome。
 - Remote proxy 仍然只是一个指向本地 broker 的 ClientEnd，不是网络 handle。
 
-## 7. Capability Handle 模型
+## 9. Capability Handle 模型
 
-### 7.1 UAPI 表示
+### 9.1 UAPI 表示
 
 ```cpp
 using na_handle_t = uint64_t;
@@ -244,7 +262,7 @@ stale-handle ABA 的编码。
 - 应用自行构造目标 handle；
 - 在 canonical payload 内保存 `na_handle_t`。
 
-### 7.2 Capability table entry
+### 9.2 Capability table entry
 
 建议内部模型：
 
@@ -273,7 +291,7 @@ struct capability_entry
 - OBJECT_REVOKED 是 backing object 状态，不等价于 entry 不存在。
 - Dispatcher 运行时不得持有 capability-table lock。
 
-### 7.3 Protocol scope
+### 9.3 Protocol scope
 
 一个 handle 默认绑定一个 protocol major。对象实现多个 protocol 时，应签发多个 scoped handles。
 
@@ -295,7 +313,7 @@ ordinal space。
 - Protocol rights -> 子集；
 - 不允许通过 derive 发现或扩大对象的其他 protocol。
 
-### 7.4 Rights
+### 9.4 Rights
 
 Meta rights 第一版至少包括：
 
@@ -320,7 +338,7 @@ Authorization 顺序：
 Possession is authority。路径权限、UID 或 service authentication 只决定 capability acquisition；后续 invocation 不重新走路径
 ACL。用户态 service 可以在 connection establishment 时认证 caller，然后将身份策略转换为 scoped rights。
 
-### 7.5 Handle 操作
+### 9.5 Handle 操作
 
 Native handle layer至少提供：
 
@@ -335,7 +353,7 @@ Native handle layer至少提供：
 Channel endpoint、Invocation 和 Responder 默认没有 DUPLICATE right。它们可以按各自规则通过 MOVE 转移。
 Duplicate/restrict失败时source保持不变；`handle_restrict`只有在新entry可原子发布时才消费旧entry。
 
-### 7.6 Close 与并发 lookup
+### 9.6 Close 与并发 lookup
 
 `invoke_submit(h)` 和 `handle_close(h)` 以 capability-table transaction 的线性化点决定结果：
 
@@ -346,7 +364,7 @@ Duplicate/restrict失败时source保持不变；`handle_restrict`只有在新ent
 
 Duplicate、restrict、MOVE、close、result activation 和 receive activation 必须共用可证明原子的 table transaction API。
 
-### 7.7 普通 delegation 与撤销
+### 9.7 普通 delegation 与撤销
 
 普通 capability 成功转移后，原授权者不能递归撤销 receiver 及其后代：
 
@@ -358,7 +376,7 @@ Duplicate、restrict、MOVE、close、result activation 和 receive activation �
 需要撤销的授权必须显式通过 lease/proxy/gate object。销毁 backing object、device hot-unplug 或 lease 到期可以使全部引用观察到
 OBJECT_REVOKED，但这属于 object lifecycle，不是普通 delegation rollback。
 
-### 7.8 Object revocation
+### 9.8 Object revocation
 
 必须区分：
 
@@ -372,9 +390,9 @@ OBJECT_REVOKED，但这属于 object lifecycle，不是普通 delegation rollbac
 Revoked object 必须唤醒 waiters。Service restart 不会让旧 endpoint 自动连接到新实例；client 必须重新从 service directory 获取
 capability。需要透明恢复时，由显式 stable proxy service 实现。
 
-## 8. Process Bootstrap、Namespace 与 POSIX 边界
+## 10. Process Bootstrap、Namespace 与 POSIX 边界
 
-### 8.1 Native spawn
+### 10.1 Native spawn
 
 Native process creation 采用 spawn + bootstrap：
 
@@ -386,7 +404,7 @@ Native process creation 采用 spawn + bootstrap：
 
 Native ABI 不承诺复制父进程 table，也不承诺内存中任意 handle value 在 fork 后有效。
 
-### 8.2 Bootstrap 内容
+### 10.2 Bootstrap 内容
 
 Bootstrap protocol 至少能够传递：
 
@@ -400,7 +418,7 @@ Bootstrap protocol 至少能够传递：
 
 Kernel 不保存 process root、cwd 或全局 `/dev`。这些属于 user runtime 与 service namespace。
 
-### 8.3 用户态 namespace
+### 10.3 用户态 namespace
 
 `open("/a/b")` 的 native实现路径：
 
@@ -414,7 +432,7 @@ mlibc/VFS client
 Service manager 负责 namespace policy、mount、service restart 和 remote directory proxy。Kernel 只保证 channel、handle、memory、
 process 和 pager mechanism。
 
-### 8.4 mlibc fd table
+### 10.4 mlibc fd table
 
 POSIX compatibility layer维护：
 
@@ -437,9 +455,9 @@ struct posix_fd_entry
 - POSIX fork compatibility path必须由 runtime 为 fd-backed bindings显式建立child-side endpoints和必要runtime capability。
 - Exec 只重建明确保留的 fd entries；其他 native capability 默认不继承。
 
-迁移期间 legacy kernel fd syscall可以存在，但不得作为新 native SDK 使用，也不得新增依赖。
+Legacy kernel fd syscall若存在，只能作为 compatibility implementation；不得作为新 native SDK 使用，也不得新增依赖。
 
-### 8.5 POSIX dup/fork 与 unique endpoint 的兼容桥
+### 10.5 POSIX dup/fork 与 unique endpoint 的兼容桥
 
 POSIX descriptor sharing 不得破坏 endpoint unique ownership：
 
@@ -450,14 +468,14 @@ POSIX descriptor sharing 不得破坏 endpoint unique ownership：
 - File offset、status flags、pipe/socket state 等共享语义存在于 service-side open-description object，而不是 endpoint table entry。
 - Fork runtime 在 child resume 前为全部可继承 fd 建立新 binding；任一步失败都关闭已创建 bindings，并使 fork 整体失败。
 - 不支持 fork clone contract 的 native capability 默认不继承，也不能仅因其 handle value 可见而进入 child。
-- 多线程 fork 所需 stop-the-world、in-flight wrapper 协调和 snapshot 细节按第 26 节延后，但不能改变上述 ownership 语义。
+- 多线程 fork 所需 stop-the-world、in-flight wrapper 协调和 snapshot 细节属于后续实现工作，但不能改变上述 ownership 语义。
 
 因此 parent/child 可以共享 POSIX open description，却始终各自持有不同的 process-local endpoint；queue、waiter 和 close race 不会
 因为跨进程别名同一 endpoint 而失去线性化点。
 
-## 9. Channel 模型
+## 11. Channel 模型
 
-### 9.1 基本语义
+### 11.1 基本语义
 
 Channel 由两个 endpoint组成。每端有独立、bounded FIFO receive queue。
 
@@ -469,7 +487,7 @@ Channel 是 message/datagram transport：
 - endpoint 提供 READABLE、WRITABLE 和 PEER_CLOSED signals；
 - raw channel与 protocol-scoped endpoint共享 queue mechanism，但 capability scope不同。
 
-### 9.2 唯一 ownership
+### 11.2 唯一 ownership
 
 Endpoint：
 
@@ -484,7 +502,7 @@ Transferred endpoint可能嵌套在其他channel message中。Kernel必须把pro
 
 Server扩展并发应创建 per-client endpoint，并由用户态 dispatcher/worker pool调度；不得通过跨进程 duplicate同一 endpoint实现。
 
-### 9.3 Send commit point
+### 11.3 Send commit point
 
 Send/invoke admission成功只表示：
 
@@ -505,7 +523,7 @@ Queue满时：
 - 不产生 server-visible state；
 - caller等待 WRITABLE后重试，且必须容忍竞争导致再次 WOULD_BLOCK。
 
-### 9.4 Receive
+### 11.4 Receive
 
 Receive只处理 queue头部一整条 message：
 
@@ -526,7 +544,7 @@ Capacity/fault/process-exit路径必须回滚reserved slots并释放claim。并�
 Receiver可以显式 discard queue头部；discard销毁 message及其 resources。拒绝处理又不 discard会阻塞该 endpoint，这是
 endpoint owner自己的 backpressure。
 
-### 9.5 Signals 与等待
+### 11.5 Signals 与等待
 
 Signals采用 level-triggered语义：
 
@@ -543,7 +561,7 @@ Signals采用 level-triggered语义：
 
 Native handle没有 blocking/non-blocking mode。需要等待的 wrapper使用显式 deadline；mlibc自行实现 POSIX `O_NONBLOCK`。
 
-### 9.6 Protocol endpoint roles
+### 11.6 Protocol endpoint roles
 
 Raw channel可以双向，但 NaoIDL endpoint分角色：
 
@@ -554,7 +572,7 @@ Raw channel可以双向，但 NaoIDL endpoint分角色：
 - Subscription返回独立 event-stream endpoint。
 - 普通 request/reply connection上不得隐式反向 RPC。
 
-### 9.7 Endpoint 创建与不可变绑定
+### 11.7 Endpoint 创建与不可变绑定
 
 Raw channel 与 protocol endpoint 必须通过不同的创建路径：
 
@@ -572,12 +590,12 @@ Raw channel 与 protocol endpoint 必须通过不同的创建路径：
 Protocol UUID 证明 wire contract identity，不证明 provider identity。调用方对 provider 的信任来自获得 endpoint 的 capability
 路径，例如受信任的 ServiceDirectory；任何进程都可以实现公开 protocol，但不能借此连接到另一个 service 的 backing object。
 
-Phase 2 可以为 experimental Test protocol 使用 kernel 内置 descriptor；Phase 3 起 stable endpoint 必须引用 NaoIDL 生成的
-descriptor。Descriptor 注册、共享和内部 compact scope index 的具体 ABI 在冻结 stable protocol 前确定。
+Experimental Test protocol 可以使用 kernel 内置 descriptor；stable endpoint 必须引用 NaoIDL 生成的 descriptor。Descriptor
+注册、共享和内部 compact scope index 的具体 ABI 在冻结 stable protocol 前确定。
 
-## 10. Message 与 Resource Transfer
+## 12. Message 与 Resource Transfer
 
-### 10.1 Transport metadata
+### 12.1 Transport metadata
 
 Protocol request transport metadata至少包含：
 
@@ -595,7 +613,7 @@ Protocol request transport metadata至少包含：
 Network broker可以在自己的 framing中使用 connection-local transaction ID，但该值不进入 NaoIDL、local channel ABI或
 application payload。
 
-### 10.2 Snapshot ownership
+### 12.2 Snapshot ownership
 
 Submit时：
 
@@ -608,7 +626,7 @@ Submit时：
 
 禁止异步调用借用用户 buffer或 raw handle。
 
-### 10.3 Resource disposition
+### 12.3 Resource disposition
 
 Resource参数只允许：
 
@@ -632,7 +650,7 @@ Payload中的 handle字段是从零开始的 resource index。禁止：
 同一source handle在一条disposition array中最多出现一次；需要多个view时caller必须预先derive。Operation target endpoint不能同时
 作为MOVE source，任何target/source alias冲突都在snapshot阶段以INVALID_ARGUMENT失败且没有side effect。
 
-### 10.4 Receive-side validation
+### 12.4 Receive-side validation
 
 Kernel channel只验证通用 transfer安全和可信 metadata。Generated binding在把 handles交给业务实现前验证：
 
@@ -643,7 +661,7 @@ Kernel channel只验证通用 transfer安全和可信 metadata。Generated bindi
 
 Validation失败时 binding关闭收到的 capabilities并按第 15 节处理 protocol violation。
 
-### 10.5 Export class
+### 12.5 Export class
 
 每种 capability scope必须声明 export class：
 
@@ -656,9 +674,9 @@ Validation失败时 binding关闭收到的 capabilities并按第 15 节处理 pr
 
 MemoryObject默认不能提供透明 remote MAP。远程数据必须使用 snapshot、page/blob protocol或显式网络数据面。
 
-## 11. Async Invocation 与 Responder
+## 13. Async Invocation 与 Responder
 
-### 11.1 提交流程
+### 13.1 提交流程
 
 ```text
 Client
@@ -675,7 +693,7 @@ KernelView调用使用相同 client-side invocation生命周期，但 request交
 
 `invoke_submit` 永不等待 method完成。Kernel method可以在 syscall返回前完成 invocation，但 client仍通过 invocation统一取得结果。
 
-### 11.2 Responder
+### 13.2 Responder
 
 Responder规则：
 
@@ -706,7 +724,7 @@ One-way admission成功后没有后续delivery outcome；peer随后关闭、queu
 sender。其MOVE
 resources已经转移，generated client不得因没有确认而自动重发。
 
-### 11.3 Invocation ownership
+### 13.3 Invocation ownership
 
 Invocation：
 
@@ -721,7 +739,7 @@ Invocation：
 
 需要广播完成状态时使用 event/subscription，不复制 invocation。
 
-### 11.4 状态机
+### 13.4 状态机
 
 内部状态：
 
@@ -749,7 +767,7 @@ External API不必暴露 QUEUED与DISPATCHED的实时差异；它至少暴露 PE
 一旦 admission commit，MOVE resources 已属于 queued message。Cancel、discard、peer close 或 pre-dispatch budget expiry 可以销毁
 这些 resources，但绝不能在 caller table 中重建原 handle。
 
-### 11.5 Endpoint 与 outstanding invocation
+### 13.5 Endpoint 与 outstanding invocation
 
 Endpoint close只影响新调用和未分发 request：
 
@@ -760,7 +778,7 @@ Endpoint close只影响新调用和未分发 request：
 - ClientEnd关闭：禁止新 submit；已持有 invocation仍可完成。
 - Invocation最终状态由 responder/result决定，而不是由原 endpoint handle是否仍打开决定。
 
-### 11.6 Result take
+### 13.6 Result take
 
 Invocation READY后持有：
 
@@ -785,7 +803,7 @@ Invocation state lock或capability-table lock。
 
 该模型不需要公开 call ID、RETRY_RESULT或 process-global hidden result record。
 
-### 11.7 Cancellation
+### 13.7 Cancellation
 
 - Wait timeout不触发 cancel。
 - Invocation close只放弃结果；可以发送 best-effort cancellation signal，但不保证实现端停止。
@@ -797,7 +815,7 @@ Invocation state lock或capability-table lock。
 - `@cancellable` method的 generated handler接收 cancellation token。
 - 需要回滚的业务使用领域级 BEGIN/COMMIT/ABORT，不依赖 transport cancel。
 
-### 11.8 Deadline
+### 13.8 Deadline
 
 两种时间约束：
 
@@ -816,7 +834,7 @@ Operation budget从admission commit开始按kernel monotonic clock计时。它�
 - reply先线性化：保留definitive reply，deadline不再改写结果；
 - deadline先线性化：late reply返回PEER_CLOSED并消费responder，不能覆盖已发布outcome。
 
-### 11.9 Retry 与 idempotency
+### 13.9 Retry 与 idempotency
 
 - Generated client默认不自动retry。
 - NOT_DELIVERED只是允许retry的必要条件；还必须由client policy认可reason，且request/resources可重建。
@@ -828,9 +846,9 @@ Operation budget从admission commit开始按kernel monotonic clock计时。它�
 - Transport invocation identity、broker attempt ID和业务 operation ID必须分离。
 - Kernel不承诺 exactly-once across service restart或network partition。
 
-## 12. Native Syscall ABI
+## 14. Native Syscall ABI
 
-### 12.1 返回约定
+### 14.1 返回约定
 
 新 native syscall禁止混用有效值与负错误码。x86-64建议：
 
@@ -845,7 +863,7 @@ Failure时 value registers清零。固定少量top-level handles优先通过valu
 
 Protocol response不通过 syscall正整数返回，而由 Invocation取得。
 
-### 12.2 第一组语义接口
+### 14.2 第一组语义接口
 
 以下名称表达语义；当前 v1 syscall number 由 `naos/abi.h` 统一定义，并按实现顺序连续分配为 1..44：
 
@@ -877,7 +895,7 @@ Raw channel send不创建 Invocation/Responder；protocol two-way call必须使�
 `invoke_send_oneway`。调用形式与method annotation不匹配时返回INVALID_ARGUMENT，且不产生message。
 `channel_receive` 接受 `RawChannelEnd` 或 `ServerEnd<P>`；后者还会原子发布对应的 one-shot Responder。
 
-### 12.3 Submit frame 语义
+### 14.3 Submit frame 语义
 
 Versioned submit frame至少表达：
 
@@ -900,7 +918,7 @@ Versioned submit frame至少表达：
 
 当前 v1 不保留旧版112-byte frame，也不预留历史 syscall number。ABI tests 必须持续保证 syscall number 唯一且连续。
 
-### 12.4 Receive/result frame 语义
+### 14.4 Receive/result frame 语义
 
 Receive与take frame至少表达：
 
@@ -913,7 +931,7 @@ Receive与take frame至少表达：
 
 Capacity不足或 usercopy fault时 message/result保留。所有 returned handles只能在全部输出成功后激活。
 
-### 12.5 Usercopy
+### 14.5 Usercopy
 
 必须提供真正 fault-safe的 `copy_from_user` 与 `copy_to_user`：
 
@@ -926,9 +944,9 @@ Capacity不足或 usercopy fault时 message/result保留。所有 returned handl
 - usercopy期间不得持有禁止 fault/sleep的 lock；
 - fuzz和fault injection必须覆盖跨页、只读、unmapped和并发 unmap。
 
-## 13. Error 模型
+## 15. Error 模型
 
-### 13.1 Submission/syscall status
+### 15.1 Submission/syscall status
 
 表示 invocation未建立或当前 meta operation失败：
 
@@ -949,9 +967,9 @@ Capacity不足或 usercopy fault时 message/result保留。所有 returned handl
 - ALREADY_CONSUMED
 - NOT_SUPPORTED
 
-Draft阶段不冻结数值；Phase 0由公开 UAPI header与tests冻结。
+Status 数值由公开 UAPI header 定义，并由 ABI tests 锁定；新增或变更数值必须通过 ABI revision 管理。
 
-### 13.2 Invocation outcome
+### 15.2 Invocation outcome
 
 Transport call error使用至少两个维度：
 
@@ -974,7 +992,7 @@ reason:
 例如“operation deadline在dispatch后到期且server没有reply”是 `OUTCOME_UNKNOWN + OPERATION_DEADLINE`，而不是一个无法判断
 execution状态的扁平 ETIMEDOUT。
 
-### 13.3 Protocol result
+### 15.3 Protocol result
 
 Server明确回复的 domain error必须由 NaoIDL error set声明。成功或 domain error都属于 definitive reply，不属于 transport
 failure。
@@ -987,9 +1005,9 @@ result<Response, ProtocolError, CallError>
 
 mlibc最后把这些状态有损映射为 errno/POSIX返回值。Native ABI不得把 errno作为 protocol事实源。
 
-## 14. 并发、顺序与调度
+## 16. 并发、顺序与调度
 
-### 14.1 Transport 顺序
+### 16.1 Transport 顺序
 
 - 每 endpoint queue保持 FIFO。
 - 并发 send按 kernel线性化顺序入队。
@@ -997,7 +1015,7 @@ mlibc最后把这些状态有损映射为 errno/POSIX返回值。Native ABI不�
 - Receive只消费 queue头。
 - Responder reply按 invocation identity匹配，不依赖 reply顺序。
 
-### 14.2 Method 执行
+### 16.2 Method 执行
 
 Generated server runtime默认按 endpoint串行执行 method。只有 `@concurrent` method允许并发和乱序完成。
 
@@ -1007,7 +1025,7 @@ Generated server runtime默认按 endpoint串行执行 method。只有 `@concurr
 - 需要跨 endpoint原子语义时定义单个 transaction method，或显式 object-level serialization group。
 - Server不得持有全局锁进行不受控下游 RPC。
 
-### 14.3 Priority
+### 16.3 Priority
 
 v1不实现 priority donation。要求：
 
@@ -1018,7 +1036,7 @@ v1不实现 priority donation。要求：
 - 后续 donation只作用于同机有界 invocation chain，必须有最大深度和明确撤销点。
 - Remote只允许 broker控制的 QoS class，不传播本机 scheduler priority。
 
-## 15. Protocol Violation 与连接处理
+## 17. Protocol Violation 与连接处理
 
 必须区分业务错误和 wire攻击：
 
@@ -1035,9 +1053,9 @@ v1不实现 priority donation。要求：
 
 Kernel raw channel不强制用户协议，但 system service generated binding必须执行上述策略。
 
-## 16. NaoIDL 与 Canonical Wire
+## 18. NaoIDL 与 Canonical Wire
 
-### 16.1 Protocol identity
+### 18.1 Protocol identity
 
 每个 incompatible protocol major拥有一个稳定128-bit UUID：
 
@@ -1050,7 +1068,7 @@ Kernel raw channel不强制用户协议，但 system service generated binding�
 
 Compatible revision和features在 connect/acquisition时协商，normal invocation不发送 UUID或version。
 
-### 16.2 Canonical value rules
+### 18.2 Canonical value rules
 
 所有 transport共享同一 canonical encoding：
 
@@ -1067,9 +1085,9 @@ Compatible revision和features在 connect/acquisition时协商，normal invocati
 - decoder验证 overflow、范围、alignment、count、overlap、padding与所有 bounds；
 - kernel/local transport不得用未验证的 `reinterpret_cast` 代替 decoder。
 
-### 16.3 Schema 构造
+### 18.3 Schema 构造
 
-NaoIDL第一阶段需要支持：
+NaoIDL v1 需要支持：
 
 - library；
 - protocol UUID、revision和features；
@@ -1089,7 +1107,7 @@ Handle类型必须表达：
 - MOVE或DUPLICATE ownership；
 - export class。
 
-### 16.4 Method annotations
+### 18.4 Method annotations
 
 至少包括：
 
@@ -1108,7 +1126,7 @@ Handle类型必须表达：
 
 默认 method是 two-way、non-idempotent、serialized、non-cancellable和 strict。
 
-### 16.5 Generated artifacts
+### 18.5 Generated artifacts
 
 每个 stable protocol至少生成：
 
@@ -1127,7 +1145,7 @@ protocol.naidl
 
 Generated kernel code必须 freestanding、bounded、无异常、无 RTTI、无 host runtime，并且不访问用户地址。
 
-### 16.6 Compatibility checker
+### 18.6 Compatibility checker
 
 Stable manifest必须拒绝：
 
@@ -1150,7 +1168,7 @@ Stable manifest必须拒绝：
 - Flexible enum/bits增加值；
 - Experimental schema在 stable前调整。
 
-### 16.7 发布纪律
+### 18.7 发布纪律
 
 - Handwritten Test/Echo protocol只用于 experimental mechanism验证。
 - NaoIDL compiler、deterministic codegen和compatibility checker完成前，不发布 stable protocol。
@@ -1159,7 +1177,7 @@ Stable manifest必须拒绝：
 - Same schema/compiler version必须产生 byte-identical output。
 - Build必须检测 stale generated files。
 
-## 17. 数据面边界
+## 19. 数据面边界
 
 Native ABI不提供任意 `read(handle)` 或 `write(handle)`。操作属于明确 object/protocol：
 
@@ -1180,15 +1198,15 @@ shared-buffer capability。
 Framebuffer、network packet、audio frame、大文件页和 DMA buffer不得放入普通 control message。Remote MemoryObject不能
 透明 map，必须提供 snapshot/page/blob语义。
 
-## 18. Service Discovery 与 Remote Broker
+## 20. Service Discovery 与 Remote Broker
 
-### 18.1 Service directory
+### 20.1 Service directory
 
 目标架构中 Kernel 不维护全局字符串 registry，Service manager通过 Directory
-protocol提供。当前迁移阶段先提供一个 kernel-backed `ServiceDirectory`
+protocol提供。当前实现先提供一个 kernel-backed `ServiceDirectory`
 KernelView primitive：它只保存显式 MOVE 进来的 capability，并通过
 `register`/`resolve`/`unregister` 管理生命周期；namespace policy 和实例选择
-仍由后续 userland service manager负责。locator 使用规范化的本地 URI（例如
+仍由 userland service manager负责。locator 使用规范化的本地 URI（例如
 `naos://system/console`）；protocol UUID 只标识 wire contract，不作为 locator。
 目标架构为：
 
@@ -1211,7 +1229,7 @@ connect(name, protocol_uuid, revision_range, features, requested_rights)
 
 Service manager同时把对应 ServerEnd交给 service instance。Name选择实例；UUID验证接口 identity；capability rights表达授权。
 
-### 18.2 Remote broker
+### 20.2 Remote broker
 
 Remote transport完全属于用户态：
 
@@ -1228,40 +1246,30 @@ Remote transport完全属于用户态：
 
 跨机器普通 capability MOVE只表示将真实 capability交给本地 broker；远端得到 proxy，并不获得底层硬件/object的物理所有权。
 
-## 19. Legacy fd/ioctl 与子系统迁移
+## 21. Compatibility boundaries
 
-### 19.1 原则
+### 21.1 兼容性原则
 
-- 最终删除 native `open/read/write/dup2/fcntl/ioctl` fd ABI。
-- 迁移期间 legacy syscall shim有明确删除期限，不属于 stable native ABI。
-- 新 native代码禁止新增 fd/ioctl依赖。
-- 每个阶段必须 build、boot并通过对应 serial/QEMU验证。
-- 不同时重写所有 subsystem；以可验证 vertical slice推进。
+- Native ABI 不提供通用 `open/read/write/dup2/fcntl/ioctl` fd 接口。
+- POSIX fd、fd flags 和 POSIX naming 只由 mlibc compatibility layer 实现。
+- 新 native 代码只能依赖 opaque handles、typed protocols 和明确的数据面能力。
+- Compatibility shim 不得改变 capability ownership、scope、rights 或 invocation lifecycle 语义。
 
-### 19.2 TTY/PTY
+### 21.2 TTY/PTY
 
-TTY是第一个真实 protocol用户，但不是第一个 IPC机制测试：
+TTY control 与 PTY administration 使用 `TtyControl` 的 scoped typed methods；终端字节使用 Stream/data-plane，不进入
+control message。现有 [PTY_ADR.md](PTY_ADR.md) 定义 mlibc compatibility mapping，native side 必须映射到本 ADR 的
+opaque handle、Stream、signals 和 protocol model。
 
-- 先完成 capability/channel/invocation/responder Test protocol。
-- NaoIDL生成链路稳定后定义 experimental TtyControl与PtyAdmin。
-- 现有 kernel TTY实现可通过 KernelView adapter暴露同一 schema。
-- mlibc termios/PTY API转为 typed clients。
-- 数据流使用 Stream/data-plane，不把终端字节塞入 control message。
-- 用户态 TTY service成熟后，client切换到 ClientEnd binding。
-- 最后删除 TTY ioctl switch。
-
-现有 [PTY_PRD.md](PTY_PRD.md) 中的 fd/ioctl/O_NONBLOCK表述属于 legacy compatibility目标；实现时必须映射到本 PRD 的
-native handle、Stream、signals和 protocol model。
-
-### 19.3 Display 与 Console
+### 21.3 Display 与 Console
 
 - Display mode、buffer acquisition和hotplug使用 typed protocol。
 - Pixel data使用 MemoryObject。
 - Console manager是独立 service，不把 active terminal policy塞进 framebuffer driver。
-- Kernel adapter只作为迁移实现。
+- Kernel adapter必须遵守同一 typed protocol schema。
 - Buffer acquisition返回 scoped MemoryObject capability，MAP rights由 schema明确。
 
-### 19.4 File/VFS
+### 21.4 File/VFS
 
 - Directory/File metadata使用 service protocol。
 - Root/cwd由 user runtime handles表示。
@@ -1270,7 +1278,7 @@ native handle、Stream、signals和 protocol model。
 - File-backed mmap只在 Pager和page ownership语义完成后上线。
 - Remote file不得通过 kernel object invoke透明转发。
 
-### 19.5 Process 与 stdio
+### 21.5 Process 与 stdio
 
 - Native spawn只安装 bootstrap endpoint。
 - Process identity使用 process-local `Process` KernelView capability；PID只作为 POSIX compatibility lookup，不是 native object identity。
@@ -1283,7 +1291,7 @@ native handle、Stream、signals和 protocol model。
 - Exec按 mlibc fd flags重建继承集合。
 - Invocation、admin capability和临时 memory默认不继承。
 
-## 20. Hard Limits 与 Backpressure
+## 22. Hard Limits 与 Backpressure
 
 v1暂不实现 ResourceDomain/Job，但以下资源必须有固定 hard limits：
 
@@ -1298,7 +1306,7 @@ v1暂不实现 ResourceDomain/Job，但以下资源必须有固定 hard limits�
 - 全局 IPC object和memory上限；
 - 单 protocol通过 schema声明的更小上限。
 
-初始建议保留64 KiB single-message hard maximum和不高于64个 resources；最终常量必须在 Phase 0/1测量后确定并进入公开 limits
+初始建议保留64 KiB single-message hard maximum和不高于64个 resources；最终常量必须通过实现测量后确定，并进入公开 limits
 query与tests。Queue defaults不是 stable ABI，可由 kernel配置和service policy收紧。
 
 任何 allocation必须在业务/dispatch side effect前完成 admission。达到限制时返回 RESOURCE_EXHAUSTED或 WOULD_BLOCK，不允许
@@ -1307,7 +1315,7 @@ partial commit。
 内部 accounting API不得硬编码为永远按 PID计费；v1可以由 process sponsor，后续可替换为层级 ResourceDomain而不改变公开
 message/capability ABI。
 
-## 21. 可观测性
+## 23. 可观测性
 
 Trace至少记录：
 
@@ -1333,276 +1341,17 @@ Kernel应提供：
 - protocol violation与resource exhaustion counters；
 - stale-handle/generation failure counters。
 
-## 22. 测试要求
+## 24. 验证原则
 
-### 22.1 Capability table
+本 ADR 不维护交付测试计划或逐用例清单。实现和 CI 应围绕本 ADR 的决策边界验证：
 
-- Invalid、stale generation和closed handle；
-- Slot reuse不能产生ABA；
-- 以缩小generation宽度的test configuration强制wrap，验证slot retire/epoch策略不会复活旧token；
-- Duplicate/restrict只能削减scope/rights；
-- Unique object拒绝duplicate；
-- Raw channel不能relabel为protocol endpoint，endpoint binding创建后不可改变；
-- Submit/close、MOVE/close、duplicate/close并发线性化；
-- RESERVED slot不可被其他线程lookup；
-- Activate/rollback在fault与process exit下不泄漏；
-- Object revoked与invalid handle错误区分。
+- public UAPI 的 layout、status、method ID 和生成式 NaoIDL 输出保持稳定、唯一、可复现；
+- capability、channel、invocation/responder 的 ownership、并发、fault 和 resource transaction 语义保持一致；
+- canonical wire、scope/rights 校验和 protocol violation 行为在 kernel、mlibc 与 generated binding 之间一致；
+- usercopy、边界值、恶意 payload、资源压力和 broker framing 具备负向测试与 fuzz 覆盖；
+- mlibc POSIX compatibility、kernel build、QEMU boot 和 serial diagnostics 持续验证 native boundary 未被绕过。
 
-### 22.2 Channel
-
-- FIFO与并发send线性顺序；
-- Queue byte/message/resource边界；
-- Queue满时WOULD_BLOCK且source handles不消费；
-- Bytes/resources整体commit或rollback；
-- Endpoint MOVE不重排message；
-- Receive buffer少1字节、少1 resource slot和zero capacity；
-- Usercopy fault保留message；
-- 并发receive/discard与fault只能有一个queue-head claim owner；
-- Explicit discard关闭resources；
-- Target endpoint作为MOVE source和重复source disposition被原子拒绝；
-- 多channel互相携带endpoint形成的无root in-transit component可回收，close cascade不耗尽kernel stack；
-- Peer close前后send/receive race；
-- READABLE/WRITABLE/PEER_CLOSED level-triggered signals；
-- Slow client不能突破per-endpoint hard limits。
-
-### 22.3 Invocation/Responder
-
-- Submit成功始终返回唯一 invocation；
-- Responder不能duplicate且只能reply/fail一次；
-- Responder reply/fail/deadline race只有一个终态；late reply不能覆盖outcome；
-- Reply admission fault保留Responder/MOVE sources；late PEER_CLOSED消费Responder但保留MOVE sources；
-- Responder MOVE给worker后仍可reply；
-- ServerEnd关闭时queued call -> NOT_DELIVERED；
-- Dispatched responder不受endpoint close影响；
-- Responder close without reply -> OUTCOME_UNKNOWN；
-- Cancel before dispatch -> `NOT_DELIVERED + CANCEL_REQUESTED`；
-- Cancel after dispatch不伪报未执行；
-- Wait timeout不改变invocation；
-- Operation budget在dispatch前后行为；
-- Take buffer不足/fault后可重试且method不重执行；
-- 并发take与fault只能有一个result claim owner；
-- Successful take只激活一次response handles；
-- Invocation MOVE后由新owner take；
-- Process exit清理未持有结果。
-- Invocation close释放已缓存response resources并撤销reply sink。
-
-### 22.4 Protocol/Wire
-
-- UUID/revision/feature negotiation；
-- Method/field explicit ordinal；
-- Canonical size/alignment/offset golden tests；
-- Integer/offset/count overflow；
-- Variable region越界和非法overlap；
-- Reserved/padding非零；
-- Resource index缺失、重复和越界；
-- Wrong scope/type/rights；
-- Strict/flexible unknown behavior；
-- Structural violation关闭endpoint；
-- Domain validation error保持connection；
-- Same schema在不同transport产生相同canonical payload；
-- Compiler deterministic output与stale generated file检测；
-- ABI manifest拒绝所有不兼容diff。
-
-### 22.5 Security/Fuzz
-
-- Frame、payload、dispositions、result slots的null/unmapped/read-only/cross-page buffers；
-- Concurrent unmap/usercopy fault injection；
-- Random canonical payload不得panic、越界或泄漏kernel data；
-- Malicious resource count和queue pressure；
-- Rights提升、scope扩大和forged responder；
-- Remote broker framing与session capability ID fuzz；
-- Driver/service不接触user pointer；
-- Output padding与失败路径全部清零；
-- Repeated protocol violation不会造成unbounded log/memory use。
-
-### 22.6 POSIX 与系统验证
-
-- mlibc fd 0/1/2 bootstrap；
-- dup/dup2与shared open state；
-- dup不duplicate native endpoint；fork为fd创建fresh endpoint并共享service-side open description；
-- FD_CLOEXEC与exec；
-- POSIX fork compatibility binding重建；
-- TTY/PTY、shell和BusyBox基本交互；
-- poll/select映射到native signals；
-- Debug与Release完整build；
-- QEMU BIOS/UEFI至少一个目标boot；
-- Serial log无capability leak、protocol violation或usercopy panic；
-- Legacy syscall逐阶段删除后仓库扫描无新增裸ioctl/native fd依赖。
-
-## 23. 实施阶段
-
-### Phase 0：内部语义与 ABI 基础
-
-- 将内核 `handle_t<T>` 重命名为 `object_ref<T>` 或等价名称。
-- 建立opaque u64 handle UAPI与status/value多寄存器返回约定。
-- 将 `resource_table_t` 重构为generation、ACTIVE/RESERVED、scope和rights aware capability table。
-- 实现fault-safe usercopy、range/overflow helper和fault injection。
-- 将root/cwd从capability table设计中剥离，但legacy路径可暂时适配。
-- 保留旧fd syscall shim，禁止新native代码使用。
-- 冻结第一组handle ABI layout和status数值前先完成layout tests。
-
-Exit gate：
-
-- Kernel build/boot；
-- stale handle、并发close和reserved slot tests通过；
-- 旧shell/TTY路径仍可运行；
-- 无行为变化的legacy shim可回归。
-
-### Phase 1：Raw Channel 与 Resource Transfer
-
-- 实现unique channel pair、bounded FIFO和signals。
-- 实现raw send/receive/discard。
-- 实现queue-head claim、迭代式close cascade和无root in-transit endpoint graph回收。
-- 实现MOVE/DUPLICATE disposition与rights attenuation。
-- 实现receive reserve-copy-activate transaction。
-- 加入per-process/per-endpoint/global hard limits。
-- 暂不实现protocol invocation。
-
-Exit gate：
-
-- Channel完整负向测试与fuzz；
-- Queue pressure不泄漏memory/handles；
-- Peer close与transfer race通过；
-- Nested endpoint transfer/cycle测试无永久object leak或kernel stack递归；
-- QEMU boot无回归。
-
-### Phase 2：Async Invocation/Responder 闭环
-
-- 实现 `invoke_submit`、Invocation与one-shot Responder。
-- 实现immutable ProtocolDescriptor binding和typed endpoint pair创建；RawChannelEnd不可升级。
-- 实现ServerEnd receive、reply、cancel、operation budget和result take。
-- 使用手写experimental Test/Echo protocol。
-- 实现KernelView和ClientEnd两种binding class。
-- 实现分层call outcome。
-
-Exit gate：
-
-- Test protocol覆盖queued/dispatched/replied/unknown/consumed全状态机；
-- Output fault不重复执行method；
-- Responder reply-at-most-once；
-- Endpoint close不错误取消dispatched call；
-- p50/p99、allocation count和10,000次循环无泄漏报告。
-
-### Phase 3：NaoIDL Bootstrap 与 Safety
-
-- Parser、typed semantic IR、UUID/revision、explicit IDs和fixed types。
-- 生成Test protocol client/server并替换手写binding。
-- 增加resource ownership、rights、bounded vector/string与canonical decoder。
-- 生成ABI manifest、compatibility checker、metadata和negative tests。
-- 保持全部protocol experimental。
-
-Exit gate：
-
-- Generated Test protocol通过Phase 2同一测试集；
-- Generated ProtocolDescriptor替换Phase 2内置experimental descriptor；
-- Deterministic output与manifest diff测试；
-- Kernel不链接compiler/runtime；
-- Fuzz generated decoder无panic/leak。
-
-### Phase 4：Experimental TTY Kernel Adapter
-
-- 定义experimental TtyControl、PtyAdmin和Stream相关schema。
-- 现有kernel TTY通过KernelView adapter实现typed methods。
-- mlibc termios/PTY wrapper迁移，legacy ioctl保留fallback。
-- Control message与stream data plane分离。
-- 验证signals/poll映射。
-
-Exit gate：
-
-- Shell、TTY、PTY与BusyBox基本场景通过；
-- Native wrapper不使用裸method ID；
-- TTY output fault/cancel/hangup tests通过；
-- 尚不发布stable TTY ABI。
-
-### Phase 5：Bootstrap、Service Directory 与用户态 fd Table
-
-- 实现 native spawn bootstrap channel：child 以空 capability table 创建，只接收 bootstrap endpoint；parent
-  通过 MOVE executable/endpoint、DUPLICATE root/cwd/service/stdio capabilities 完成启动事务。
-- 用户态service manager提供namespace和protocol connect。
-- mlibc建立fd table、stdio bootstrap和typed I/O binding；无 file-actions/attributes 的 `posix_spawn` 已走 native
-  spawn，兼容 fork/exec 路径保留给 POSIX 特性较完整的调用。
-- POSIX fork/exec compatibility path显式管理handles。
-- Root/cwd迁出kernel resource table。
-- 以测试service验证ClientEnd binding。
-
-Exit gate：
-
-- Native child只靠bootstrap启动；
-- fd 0/1/2、dup2、FD_CLOEXEC、O_NONBLOCK行为通过；
-- Namespace capability隔离；
-- Service crash/re-resolve语义通过。
-
-### Phase 6：用户态 System Services 与数据面
-
-- 迁移TTY/Console/Display中的可下放策略。
-- 实现MemoryObject、shared ring和必要Pager机制。
-- 以只读File/Directory service开始VFS迁移。
-- Driver逐步使用IRQ/MMIO/DMA capabilities。
-- 对kernel adapter与user service运行同一protocol测试集。
-
-Exit gate：
-
-- Kernel与user binding行为一致；
-- 大数据不经过control message；
-- Service restart不重绑旧endpoint；
-- 性能达到各子系统预算。
-
-### Phase 7：Legacy 删除
-
-- mlibc、BusyBox和NaOS userland不再直接依赖旧native fd/ioctl syscall。
-- 删除kernel `file_desc -> kobject`通用路径、ioctl_context和pseudo ioctl switch。
-- 删除native open/read/write/dup2/fcntl/ioctl legacy ABI。
-- 更新ARCHITECTURE、PTY和migration文档。
-- 仓库扫描阻止新增legacy调用。
-
-### Phase 8：Remote Broker（后续）
-
-- 用户态authenticated session与proxy capability table。
-- UUID/revision negotiation、lease、remote rights attenuation。
-- Network framing、attempt correlation和finite operation budget。
-- 只开放显式PROXYABLE/SNAPSHOT_COPY scopes。
-- 注入partition、reconnect、late reply和broker crash测试。
-- 不将remote broker作为本地IPC或fd迁移的前置条件。
-
-## 24. 验收标准
-
-| 编号 | 条件 |
-| --- | --- |
-| CAP-001 | `na_handle_t` 是process-local opaque u64，UAPI不编码type/locality/rights。 |
-| CAP-002 | Capability table具有generation、ACTIVE/RESERVED、scope和两层rights。 |
-| CAP-003 | Stale/wrapped handle不能命中新object；并发close不会破坏已接纳invocation。 |
-| CAP-004 | 普通capability只能削减rights/scope，不提供隐式递归撤销。 |
-| CAP-005 | Endpoint、Invocation和Responder不可duplicate。 |
-| CAP-006 | Native spawn不隐式clone capability table。 |
-| CAP-007 | Root、cwd和service namespace通过bootstrap handles建立。 |
-| CAP-008 | POSIX fd数字身份与O_NONBLOCK只存在于mlibc。 |
-| IPC-001 | Channel send对bytes/resources整体commit或完全失败。 |
-| IPC-002 | Queue有硬上限，满时fail-fast且不消费MOVE resources。 |
-| IPC-003 | Receive不足/fault保留完整message；explicit discard才丢弃。 |
-| IPC-004 | Endpoint MOVE与并发send/receive有明确线性化语义。 |
-| IPC-005 | Raw channel不可重新标记为typed endpoint；endpoint scope/role/revision绑定不可变。 |
-| IPC-006 | Receive/result claim防止并发重复发布；无root in-transit endpoint graph可回收。 |
-| INV-001 | Protocol call async-first，submit成功返回唯一Invocation。 |
-| INV-002 | Server reply只通过one-shot Responder，公开ABI无transaction ID。 |
-| INV-003 | Wait timeout、operation deadline、cancel与close语义彼此分离。 |
-| INV-004 | Result由Invocation持有，take fault不会重复执行method。 |
-| INV-005 | Endpoint close不取消已dispatch且仍有Responder的invocation。 |
-| INV-006 | NOT_DELIVERED与OUTCOME_UNKNOWN可被native caller区分。 |
-| INV-007 | 默认不自动retry；idempotency与业务operation ID语义明确。 |
-| INV-008 | One-way notification不创建Invocation/Responder，且只能用于schema显式允许的best-effort method。 |
-| IDL-001 | Protocol major使用UUID并在capability acquisition时协商revision/features。 |
-| IDL-002 | Invocation payload不含protocol UUID、version、handle number或public txid。 |
-| IDL-003 | 所有transport共享同一canonical value wire。 |
-| IDL-004 | Handle ownership、scope和rights由schema声明。 |
-| IDL-005 | Stable protocol必须由codegen与compatibility checker验证。 |
-| SEC-001 | Driver/service implementation不接触user pointer或wire padding。 |
-| SEC-002 | Structural protocol violation关闭对应endpoint。 |
-| SEC-003 | Capability acquisition后authorization以scope/rights为准。 |
-| SEC-004 | Remote broker完全在用户态，kernel不解释网络identity。 |
-| DATA-001 | Native ABI不存在任意handle通用read/write。 |
-| DATA-002 | 大块/高频数据使用MemoryObject、ring、Stream或Pager。 |
-| MIG-001 | 每个migration phase可独立build、boot和验证。 |
-| MIG-002 | 终态删除native fd/ioctl legacy syscalls与kernel VFS coupling。 |
+具体测试用例属于 `tests/`、构建配置和 CI，不在 ADR 中重复维护。
 
 ## 25. 风险与缓解
 
@@ -1622,32 +1371,10 @@ Exit gate：
 | In-transit endpoint形成ownership cycle | 无进程可达但kernel object永久滞留 | Rooted graph accounting、迭代reaper、cycle regression test；稳定transfer前必须解决。 |
 | Service restart使旧handles失效 | Client恢复逻辑增加 | Service directory re-resolve；需要时显式stable proxy。 |
 | Remote MOVE存在分布式歧义 | Authority丢失或重复 | 只把真实capability MOVE给本地broker；远端只得到proxy。 |
-| Big-bang迁移导致系统不可启动 | 难以定位回归 | Legacy shim分阶段删除，每阶段boot gate。 |
-| TTY/PTY文档仍以fd/ioctl描述 | 实现边界混乱 | 把其视为POSIX兼容需求，并按本PRD映射到native primitives。 |
+| Compatibility boundary 漂移导致系统不可启动 | 难以定位回归 | 保持 shim 与 native ABI 隔离，并在 kernel build/boot 与 serial diagnostics 中验证边界。 |
+| TTY/PTY文档仍以fd/ioctl描述 | 实现边界混乱 | 把它视为POSIX兼容需求，并按本 ADR 映射到native primitives。 |
 
-## 26. 延后决定
-
-以下事项不阻塞Phase 0–2，但必须在对应ABI稳定前确定：
-
-1. 第一版handle table slot/generation内部编码与最大entry数。
-2. v1 之后新增 native syscall 的版本化分配策略，以及后续 frame size/offset。
-3. Single-message、per-endpoint和per-process hard limit具体数值。
-4. `handle_get_info` 可公开的object diagnostics边界。
-5. ProtocolDescriptor注册、共享、compact scope index和kernel缓存的具体ABI。
-6. Composite protocol method ordinal分配细则。
-7. Raw channel event与subscription的最终envelope flags。
-8. Responder close后更细的reason taxonomy。
-9. Operation budget在同机多跳调用中的传播API。
-10. ResourceDomain/Job的层级配额和统一销毁语义。
-11. 同机priority donation的最大深度与scheduler coupling。
-12. MemoryObject/Pager page ownership、writeback和service crash策略。
-13. Remote broker认证协议、lease默认值和session恢复策略。
-14. Stable protocol UUID registry的review流程。
-15. mlibc POSIX fork在多线程进程中的stop-the-world与handle snapshot实现。
-16. Legacy syscall删除的确切release gate。
-17. In-transit endpoint orphan graph的增量reaper、commit-time cycle prevention或混合实现选择。
-
-## 27. 参考设计
+## 26. 参考设计
 
 - [Zircon handles：process-local handle、rights与kernel object lifecycle](https://fuchsia.dev/fuchsia-src/concepts/kernel/handles)
 - [Zircon channel：bounded message、atomic handle transfer、unique endpoint ownership](https://fuchsia.dev/fuchsia-src/reference/kernel_objects/channel)

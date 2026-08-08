@@ -29,7 +29,7 @@ Keep hardware- and CPU-specific code in `naos/src/kernel/arch`, reusable kernel 
 
 ## Native Object/Capability Boundary
 
-The native ABI is defined by [`OBJECT_CALL_PRD.md`](OBJECT_CALL_PRD.md) and
+The native ABI is defined by [`OBJECT_CALL_ADR.md`](OBJECT_CALL_ADR.md) and
 [`naos/abi.h`](../naos/include/naos/abi.h). A user-visible
 handle is an opaque process-local `u64`; the kernel capability table stores the
 binding, protocol scope, revision/features, meta rights, protocol rights, and

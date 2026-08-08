@@ -1,4 +1,10 @@
-# NaOS TTY/PTY Native Mapping
+# ADR-0002：NaOS TTY/PTY Native Mapping
+
+- 状态：Accepted（实施中）
+- 日期：2026-08-08
+- 决策者：NaOS kernel 与 userland 维护者
+- 适用范围：NaOS TTY/PTY kernel mechanism、native capability ABI 和 mlibc POSIX compatibility layer
+- 相关 ADR：[Capability Handle 与异步 Invocation IPC](OBJECT_CALL_ADR.md)
 
 TTY and PTY are capability-backed protocols. The kernel owns the terminal
 mechanism and stream state, but callers access control operations through
@@ -50,6 +56,5 @@ handle's blocking mode.
 - Process session/process-group identity and mutation use the scoped `Process` KernelView job-control methods; TTY control retains only terminal ownership and foreground-group operations.
 - PTY endpoint ownership follows the normal MOVE-only capability rules.
 
-The old kernel `ioctl_context`, pseudo `ioctl` switch, and raw native ioctl
-syscall are removed. This document describes the compatibility API exposed by
-mlibc, not a second native ABI.
+This document describes the POSIX compatibility API exposed by mlibc, not a
+second native ABI.
