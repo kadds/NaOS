@@ -96,3 +96,11 @@ target_include_directories(signal_policy_test PRIVATE
 )
 set_target_properties(signal_policy_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 add_test(NAME signal_policy_test COMMAND signal_policy_test)
+
+add_executable(wait_deadline_test wait_deadline_test.cc)
+target_include_directories(wait_deadline_test PRIVATE
+    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
+    ${PROJECT_SOURCE_DIR}/naos/includes
+)
+set_target_properties(wait_deadline_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_test(NAME wait_deadline_test COMMAND wait_deadline_test)
