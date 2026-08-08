@@ -53,7 +53,7 @@ add_test(NAME system_idl_metadata_test
 
 add_test(NAME idl_output_location_test
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/idl_output_location_test.py
-            ${PROJECT_SOURCE_DIR}/naos/idl/system ${CMAKE_BINARY_DIR}/naos/naos/generated/system)
+            ${PROJECT_SOURCE_DIR}/idl/system ${CMAKE_BINARY_DIR}/naos/naos/generated/system)
 
 add_test(NAME naoidl_template_test
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/naoidl_template_test.py

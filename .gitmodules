@@ -10,3 +10,6 @@
 [submodule "naos/src/usr/busybox"]
 	path = naos/src/usr/busybox
 	url = https://git.busybox.net/busybox.git
+[submodule "idl"]
+	path = idl
+	url = https://github.com/kadds/naos_idl.git

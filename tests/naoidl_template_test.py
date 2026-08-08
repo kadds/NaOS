@@ -24,7 +24,7 @@ REQUIRED_TEMPLATES = {
 
 
 def check_generated_whitespace(root: Path) -> None:
-    source = root / "naos" / "idl" / "system" / "directory.naidl"
+    source = root / "idl" / "system" / "directory.naidl"
     with tempfile.TemporaryDirectory() as temporary_directory:
         output = Path(temporary_directory)
         subprocess.run(
@@ -43,7 +43,7 @@ def check_generated_whitespace(root: Path) -> None:
 
 
 def check_generated_system_index(root: Path) -> None:
-    source = root / "naos" / "idl" / "system"
+    source = root / "idl" / "system"
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary = Path(temporary_directory)
         generated = temporary / "system"
@@ -74,6 +74,14 @@ def check_generated_system_index(root: Path) -> None:
             for line_number, line in enumerate(lines, 1):
                 if line.count("#define") > 1:
                     raise AssertionError(f"{path.name}:{line_number}: multiple defines were joined")
+
+
+def check_idl_source_location(root: Path) -> None:
+    source = root / "idl" / "system"
+    if not source.is_dir():
+        raise AssertionError("system IDL must be provided by root/idl submodule")
+    if (root / "naos" / "idl").exists():
+        raise AssertionError("system IDL must not remain under naos/idl")
 
 
 def main() -> int:
@@ -118,6 +126,7 @@ def main() -> int:
         if not rendered_directly and not rendered_as_include:
             print(f"naoidl.py does not render {template_name}", file=sys.stderr)
             return 1
+    check_idl_source_location(root)
     check_generated_whitespace(root)
     check_generated_system_index(root)
     return 0

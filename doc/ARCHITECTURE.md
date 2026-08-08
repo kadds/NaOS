@@ -41,11 +41,11 @@ and committed transactionally, with MOVE/DUPLICATE attenuation and iterative
 orphan-channel collection. Async protocol endpoints use immutable descriptors,
 Invocation/Responder one-shot lifetimes, explicit cancellation/deadline
 outcomes, and result take transactions. The system protocols are specified in
-`naos/idl/system/`; `util/naoidl.py` generates their public UAPI, canonical wire
+`idl/system/`; `util/naoidl.py` generates their public UAPI, canonical wire
 codecs, and typed bindings under each build directory's generated include root
 (for example `build/naos/naos/generated/system`). The source tree contains only
 `.naidl` schemas; ABI JSON manifests and generated headers never belong under
-`naos/idl/system`. Both the mlibc compatibility edge and the kernel invocation dispatcher consume those
+`idl/system`. Both the mlibc compatibility edge and the kernel invocation dispatcher consume those
 generated request/response codecs. The schemas therefore define the native
 method ordinals and payload layouts shared by applications and the kernel.
 
@@ -88,7 +88,7 @@ The include dependency direction is intentionally one-way:
 userland / mlibc / generated protocol bindings
         │
         ├── naos/include/naos   (public ABI and canonical wire)
-        ├── naos/idl/system     (only `.naidl` protocol source)
+        ├── idl/system          (only `.naidl` protocol source, from root/idl submodule)
         └── build/naos/naos/generated (ABI JSON and public generated bindings)
 
 kernel implementation
