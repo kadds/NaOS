@@ -38,13 +38,14 @@ TEMPLATE_ENVIRONMENT = Environment(
     undefined=StrictUndefined,
     autoescape=False,
     keep_trailing_newline=True,
-    trim_blocks=False,
-    lstrip_blocks=False,
+    trim_blocks=True,
+    lstrip_blocks=True,
 )
 
 
 def render_template(template_name: str, **context: Any) -> str:
-    return TEMPLATE_ENVIRONMENT.get_template(template_name).render(**context)
+    rendered = TEMPLATE_ENVIRONMENT.get_template(template_name).render(**context)
+    return re.sub(r"\n{3,}", "\n\n", rendered)
 
 
 class IdlError(Exception):
