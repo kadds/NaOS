@@ -362,14 +362,15 @@ na_status_t snapshot_request(const na_submit_frame_t &frame, freelibcxx::vector<
     return NA_STATUS_OK;
 }
 
-na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 method_id,
+na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 scope, u64 method_id,
                               const freelibcxx::vector<byte> &request)
 {
     auto *allocator = memory::MemoryAllocatorV;
     freelibcxx::vector<byte> response(allocator);
     auto *pseudo = file.get_pseudo();
 
-    if (method_id >= NA_METHOD_TTY_GET_ATTRIBUTES && method_id <= NA_METHOD_TTY_GET_INPUT)
+    if (scope == NA_SCOPE_TTY_CONTROL && method_id >= NA_METHOD_TTY_GET_ATTRIBUTES &&
+        method_id <= NA_METHOD_TTY_GET_INPUT)
     {
         if (pseudo == nullptr)
             return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
@@ -503,7 +504,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_PTY_GET_NUMBER || method_id == NA_METHOD_PTY_UNLOCK)
+    if (scope == NA_SCOPE_TTY_CONTROL && (method_id == NA_METHOD_PTY_GET_NUMBER || method_id == NA_METHOD_PTY_UNLOCK))
     {
         if (pseudo == nullptr)
             return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
@@ -534,12 +535,13 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_STREAM_READ || method_id == NA_METHOD_FILE_PREAD)
+    if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_READ) ||
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PREAD))
     {
         u64 size = 0;
         u64 flags = 0;
         i64 offset = 0;
-        if (method_id == NA_METHOD_STREAM_READ)
+        if (scope == NA_SCOPE_STREAM)
         {
             naos::system::Stream::read_request decoded{};
             if (!decode_message(request, decoded, naos::system::Stream::decode_read_request))
@@ -561,8 +563,8 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         if (size > max_kernel_payload)
             return NA_STATUS_INVALID_MESSAGE;
         response.resize(size, byte{});
-        const i64 result = method_id == NA_METHOD_STREAM_READ ? file.read(response.data(), size, flags)
-                                                              : file.pread(offset, response.data(), size, flags);
+        const i64 result = scope == NA_SCOPE_STREAM ? file.read(response.data(), size, flags)
+                                                    : file.pread(offset, response.data(), size, flags);
         if (result < 0)
         {
             response.clear();
@@ -572,7 +574,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         }
         const naoidl::bounded_bytes data{reinterpret_cast<const u8 *>(response.data()), static_cast<u32>(result)};
         auto encoded_response = freelibcxx::vector<byte>(allocator);
-        if (method_id == NA_METHOD_STREAM_READ)
+        if (scope == NA_SCOPE_STREAM)
         {
             naos::system::Stream::read_response encoded{data};
             if (!encode_message(encoded_response, encoded, naos::system::Stream::encode_read_response))
@@ -588,13 +590,14 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
                                                                                     : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_STREAM_WRITE || method_id == NA_METHOD_FILE_PWRITE)
+    if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_WRITE) ||
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PWRITE))
     {
         const byte *data = nullptr;
         u64 size = 0;
         i64 offset = 0;
         u64 flags = 0;
-        if (method_id == NA_METHOD_STREAM_WRITE)
+        if (scope == NA_SCOPE_STREAM)
         {
             naos::system::Stream::write_request decoded{};
             if (!decode_message(request, decoded, naos::system::Stream::decode_write_request))
@@ -613,9 +616,9 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
             flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
             data = reinterpret_cast<const byte *>(decoded.data.data);
         }
-        const i64 result = method_id == NA_METHOD_STREAM_WRITE ? file.write(data, size, flags)
-                                                               : file.pwrite(offset, data, size, flags);
-        if (method_id == NA_METHOD_STREAM_WRITE)
+        const i64 result = scope == NA_SCOPE_STREAM ? file.write(data, size, flags)
+                                                    : file.pwrite(offset, data, size, flags);
+        if (scope == NA_SCOPE_STREAM)
         {
             naos::system::Stream::write_response encoded{};
             encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
@@ -634,7 +637,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
                    : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_STREAM_POLL)
+    if (scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_POLL)
     {
         naos::system::Stream::poll_request decoded{};
         if (!decode_message(request, decoded, naos::system::Stream::decode_poll_request))
@@ -646,7 +649,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_SEEK)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SEEK)
     {
         naos::system::File::seek_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_seek_request))
@@ -668,7 +671,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_SYNC)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SYNC)
     {
         naos::system::File::sync_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_sync_request))
@@ -677,7 +680,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_TRUNCATE)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_TRUNCATE)
     {
         naos::system::File::truncate_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_truncate_request))
@@ -686,7 +689,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_ALLOCATE)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_ALLOCATE)
     {
         naos::system::File::allocate_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_allocate_request))
@@ -695,7 +698,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_GET_FLAGS)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_GET_FLAGS)
     {
         naos::system::File::get_flags_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_get_flags_request))
@@ -710,7 +713,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_SET_FLAGS)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SET_FLAGS)
     {
         naos::system::File::set_flags_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_set_flags_request))
@@ -725,7 +728,7 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
-    if (method_id == NA_METHOD_FILE_STAT)
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_STAT)
     {
         naos::system::File::stat_request decoded{};
         if (!decode_message(request, decoded, naos::system::File::decode_stat_request))
@@ -1528,13 +1531,7 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
         if (target.meta.scope != NA_SCOPE_FILE && target.meta.scope != NA_SCOPE_STREAM &&
             target.meta.scope != NA_SCOPE_TTY_CONTROL)
             return NA_STATUS_WRONG_SCOPE;
-        if ((method_id >= NA_METHOD_TTY_GET_ATTRIBUTES && method_id <= NA_METHOD_TTY_GET_INPUT) &&
-            target.meta.scope != NA_SCOPE_TTY_CONTROL)
-            return NA_STATUS_WRONG_SCOPE;
-        if ((method_id == NA_METHOD_PTY_GET_NUMBER || method_id == NA_METHOD_PTY_UNLOCK) &&
-            target.meta.scope != NA_SCOPE_TTY_CONTROL)
-            return NA_STATUS_WRONG_SCOPE;
-        return publish_file_call(state, *file, method_id, request);
+        return publish_file_call(state, *file, target.meta.scope, method_id, request);
     }
     if (auto *directory = target.object->get<fs::vfs::native_directory>())
     {
