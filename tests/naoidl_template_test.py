@@ -2,7 +2,9 @@
 """Check that NaoIDL boilerplate is stored in independently editable templates."""
 
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 
 
 REQUIRED_TEMPLATES = {
@@ -19,6 +21,25 @@ REQUIRED_TEMPLATES = {
     "resource_validator.hpp.htt",
     "disposition_validator.hpp.htt",
 }
+
+
+def check_generated_whitespace(root: Path) -> None:
+    source = root / "naos" / "idl" / "system" / "directory.naidl"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        output = Path(temporary_directory)
+        subprocess.run(
+            [sys.executable, str(root / "util" / "naoidl.py"), "generate", str(source), str(output)],
+            check=True,
+        )
+        for path in output.glob("*.hpp"):
+            blank_lines = 0
+            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+                if line.strip():
+                    blank_lines = 0
+                    continue
+                blank_lines += 1
+                if blank_lines > 1:
+                    raise AssertionError(f"{path.name}:{line_number}: excessive consecutive blank lines")
 
 
 def main() -> int:
@@ -63,6 +84,7 @@ def main() -> int:
         if not rendered_directly and not rendered_as_include:
             print(f"naoidl.py does not render {template_name}", file=sys.stderr)
             return 1
+    check_generated_whitespace(root)
     return 0
 
 
