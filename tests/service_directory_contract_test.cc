@@ -21,9 +21,9 @@ int main()
     static_assert(std::is_same_v<decltype(&naos_service_register_handle), register_handle_function>);
 
     register_request register_value{};
-    const std::uint8_t uri[] = {'n', 'a', 'o', 's', ':', '/', '/', 's', 'y', 's', 't',
-                                'e', 'm', '/', 'c', 'o', 'n', 's', 'o', 'l', 'e'};
-    register_value.uri = {uri, sizeof(uri)};
+    const char uri[] = "naos://system/console";
+    static_assert(std::is_same_v<decltype(register_value.uri), naoidl::bounded_string>);
+    register_value.uri = {uri, sizeof(uri) - 1};
     register_value.service.value = 0;
 
     std::uint8_t buffer[512]{};
@@ -32,7 +32,7 @@ int main()
 
     register_request decoded{};
     assert(decode_register_request(buffer, written, decoded));
-    assert(decoded.uri.size == sizeof(uri));
+    assert(decoded.uri.size == sizeof(uri) - 1);
     assert(decoded.uri.data[0] == 'n');
     assert(decoded.service.value == 0);
 
