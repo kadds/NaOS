@@ -1,6 +1,8 @@
 #include <cassert>
 #include <cstdint>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 #include <naos/generated/system/ServiceDirectory.hpp>
 #include <naos/generated/system_uapi.h>
@@ -35,6 +37,18 @@ int main()
     assert(decoded.uri.size == sizeof(uri) - 1);
     assert(decoded.uri.data[0] == 'n');
     assert(decoded.service.value == 0);
+
+    constexpr std::size_t max_uri_bytes = 65536;
+    constexpr std::size_t prefix_bytes = sizeof("naos://") - 1;
+    std::string max_uri = "naos://" + std::string(max_uri_bytes - prefix_bytes, 'a');
+    resolve_request max_request{};
+    max_request.uri = {max_uri.data(), static_cast<std::uint32_t>(max_uri.size())};
+    std::vector<std::uint8_t> max_buffer(max_uri.size());
+    assert(encode_resolve_request(max_buffer.data(), max_buffer.size(), max_request, written));
+    assert(written == max_uri.size());
+    resolve_request max_decoded{};
+    assert(decode_resolve_request(max_buffer.data(), written, max_decoded));
+    assert(max_decoded.uri.size == max_uri.size());
 
     na_resource_disposition_t disposition{};
     disposition.operation = NA_RESOURCE_MOVE;
