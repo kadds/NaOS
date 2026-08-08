@@ -8,6 +8,7 @@
 #include "kernel/syscall.hpp"
 #include "kernel/service_directory.hpp"
 #include "kernel/task.hpp"
+#include "kernel/time.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/bootstrap.hpp"
 #include "naos/generated/system_uapi.h"
@@ -214,9 +215,22 @@ u64 channel_discard(na_handle_t endpoint)
     return ipc::discard_raw_channel(task::current_process()->resource, endpoint);
 }
 
-u64 handle_wait_many(na_wait_item_t *items, u64 count, u64 deadline)
+u64 handle_wait_many(na_wait_item_t *items, u64 count, const timeclock::time *deadline)
 {
-    return ipc::wait_many(task::current_process()->resource, items, count, deadline);
+    if (deadline == nullptr)
+        return ipc::wait_many(task::current_process()->resource, items, count,
+                              std::numeric_limits<timeclock::microsecond_t>::max());
+    if (!is_user_space_range(deadline, sizeof(*deadline)))
+        return NA_STATUS_FAULT;
+
+    timeclock::time value(0, 0);
+    if (naos::usercopy::copy_from(&value, reinterpret_cast<u64>(deadline), sizeof(value)) != NA_STATUS_OK)
+        return NA_STATUS_FAULT;
+
+    timeclock::microsecond_t deadline_us = 0;
+    if (!timeclock::try_to_microseconds(value, deadline_us))
+        return NA_STATUS_INVALID_ARGUMENT;
+    return ipc::wait_many(task::current_process()->resource, items, count, deadline_us);
 }
 
 u64 handle_get_info(na_handle_t handle, na_handle_info_t *output)

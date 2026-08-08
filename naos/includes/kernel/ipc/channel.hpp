@@ -6,6 +6,7 @@
 #include "kernel/lock.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/resource.hpp"
+#include "kernel/time.hpp"
 #include "kernel/wait.hpp"
 #include <atomic>
 
@@ -146,8 +147,10 @@ na_status_t receive_raw_channel_kernel(task::resource_table_t &resources, na_han
                                         u64 byte_capacity, u64 &actual_bytes,
                                         freelibcxx::vector<na_handle_t> &handles);
 na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t endpoint);
-na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count, u64 deadline);
-na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals, u64 deadline);
+na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count,
+                      timeclock::microsecond_t deadline);
+na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
+                            timeclock::microsecond_t deadline);
 
 void collect_orphaned_channels();
 void notify_channel_waiters();

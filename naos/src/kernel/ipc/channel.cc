@@ -905,7 +905,8 @@ na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t e
     return NA_STATUS_OK;
 }
 
-na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count, u64 deadline)
+na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count,
+                      timeclock::microsecond_t deadline)
 {
     if (count == 0 || count > NA_CAPABILITY_MAX_PER_PROCESS || items == nullptr ||
         !is_user_space_range(items, count * sizeof(na_wait_item_t)))
@@ -955,7 +956,8 @@ na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, 
     return NA_STATUS_OK;
 }
 
-na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals, u64 deadline)
+na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
+                            timeclock::microsecond_t deadline)
 {
     if (handle == NA_HANDLE_INVALID || signals == 0)
         return NA_STATUS_INVALID_ARGUMENT;

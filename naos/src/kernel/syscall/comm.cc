@@ -6,9 +6,16 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/time.hpp"
+#include "kernel/timer.hpp"
 #include "kernel/usercopy.hpp"
 namespace naos::syscall
 {
+namespace
+{
+constexpr int clock_realtime = 0;
+constexpr int clock_monotonic = 1;
+}
+
 void log(const char *message)
 {
 #ifdef _DEBUG
@@ -47,10 +54,13 @@ int clock_get(int clock_index, timeclock::time *time)
     {
         return EPARAM;
     }
+    if (clock_index != clock_realtime && clock_index != clock_monotonic)
+        return EINVAL;
 
     timeclock::time value(0, 0);
-    auto us = timeclock::get_current_clock();
-    value.tv_nsec = us / 1000 % 1000;
+    const auto us = clock_index == clock_monotonic ? timer::get_high_resolution_time()
+                                                  : timeclock::get_current_clock();
+    value.tv_nsec = static_cast<int64_t>(us % 1'000'000) * 1000;
     value.tv_sec = us / 1000000;
     return naos::usercopy::copy_to(reinterpret_cast<u64>(time), &value, sizeof(value)) == NA_STATUS_OK ? 0 : EFAULT;
 }

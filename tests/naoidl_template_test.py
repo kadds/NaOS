@@ -42,6 +42,40 @@ def check_generated_whitespace(root: Path) -> None:
                     raise AssertionError(f"{path.name}:{line_number}: excessive consecutive blank lines")
 
 
+def check_generated_system_index(root: Path) -> None:
+    source = root / "naos" / "idl" / "system"
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary = Path(temporary_directory)
+        generated = temporary / "system"
+        index = temporary / "system_uapi.h"
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "util" / "naoidl.py"),
+                "generate-system",
+                str(source),
+                str(generated),
+                str(index),
+            ],
+            check=True,
+        )
+        lines = index.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[-1] != "#endif":
+            raise AssertionError("system_uapi.h must end with a standalone #endif")
+        for line_number, line in enumerate(lines, 1):
+            if "#include" in line and "#define" in line:
+                raise AssertionError(f"system_uapi.h:{line_number}: include and define were joined")
+            if line.count("#define") > 1:
+                raise AssertionError(f"system_uapi.h:{line_number}: multiple defines were joined")
+        for path in generated.glob("*_uapi.h"):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if not lines or lines[-1] != "#endif":
+                raise AssertionError(f"{path.name} must end with a standalone #endif")
+            for line_number, line in enumerate(lines, 1):
+                if line.count("#define") > 1:
+                    raise AssertionError(f"{path.name}:{line_number}: multiple defines were joined")
+
+
 def main() -> int:
     root = Path(sys.argv[1])
     template_dir = root / "util" / "templates" / "naoidl"
@@ -85,6 +119,7 @@ def main() -> int:
             print(f"naoidl.py does not render {template_name}", file=sys.stderr)
             return 1
     check_generated_whitespace(root)
+    check_generated_system_index(root)
     return 0
 
 

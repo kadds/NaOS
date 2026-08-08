@@ -4,7 +4,7 @@
 #define NAOIDL_{{ scope_macro }}_SCOPE {{ scope }}ULL
 #define NAOIDL_{{ protocol_macro }}_REVISION {{ revision }}ULL
 #define NAOIDL_{{ protocol_macro }}_METHOD_COUNT {{ method_count }}ULL
-{%- for method in methods %}
+{% for method in methods %}
 #define NAOIDL_{{ method.uapi_macro }}_METHOD_{{ method.name }} {{ method.id }}ULL
-{%- endfor %}
+{% endfor %}
 #endif

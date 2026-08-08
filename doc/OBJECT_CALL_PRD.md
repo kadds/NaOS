@@ -330,7 +330,7 @@ Native handle layer至少提供：
 | `handle_duplicate` | 要求 DUPLICATE；创建独立 entry，scope/rights 只能削减。 |
 | `handle_restrict` | 消费原 handle 并返回更窄 scope/rights 的新 handle；不产生额外 authority。 |
 | `handle_get_info` | 要求 INSPECT；返回可信 scope、rights、signals 和 object state。 |
-| `handle_wait_many` | 对多个 waitable handles 做 level-triggered wait。 |
+| `handle_wait_many` | 对多个 waitable handles 做 level-triggered wait；deadline为绝对 monotonic `timespec`，传 `nullptr` 表示无限等待。 |
 
 Channel endpoint、Invocation 和 Responder 默认没有 DUPLICATE right。它们可以按各自规则通过 MOVE 转移。
 Duplicate/restrict失败时source保持不变；`handle_restrict`只有在新entry可原子发布时才消费旧entry。
@@ -854,7 +854,7 @@ handle_close(handle)
 handle_duplicate(handle, restriction)
 handle_restrict(handle, restriction)
 handle_get_info(handle, buffer)
-handle_wait_many(items, deadline)
+handle_wait_many(items, deadline_timespec_or_null)
 
 channel_create(options) -> raw_endpoint0, raw_endpoint1
 protocol_endpoint_create(protocol_descriptor_handle, negotiation, client_rights) -> client_end, server_end
@@ -870,6 +870,8 @@ invocation_take_result(invocation, result_frame)
 responder_reply(responder, reply_frame)
 responder_fail(responder, execution_outcome, reason)
 ```
+
+`deadline_timespec_or_null` 是用户地址上的绝对 `CLOCK_MONOTONIC` `timespec`；`nullptr` 表示无限等待，`{0, 0}` 表示只检查当前状态。内核只复制一次 deadline，并将纳秒转换为 timer 使用的微秒精度；非法 `tv_nsec` 或转换溢出返回 `INVALID_ARGUMENT`。
 
 Raw channel send不创建 Invocation/Responder；protocol two-way call必须使用 `invoke_submit`，one-way notification必须使用
 `invoke_send_oneway`。调用形式与method annotation不匹配时返回INVALID_ARGUMENT，且不产生message。
