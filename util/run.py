@@ -5,6 +5,7 @@ import argparse
 import shutil
 import subprocess
 import traceback
+from pathlib import Path
 from disk import mount_point
 from mod import set_self_dir, run_shell, run_shell_input
 
@@ -13,21 +14,73 @@ How to build VMbox image?
 VBoxManage internalcommands createrawvmdk -filename run/image/disk.vmdk -rawdisk run/image/disk.img
 '''
 
-# set ovmf_path if boot from UEFI 
+# set ovmf_path if boot from UEFI
 ovmf_path = '/usr/share/ovmf/x64/OVMF_CODE.fd'
 
-qemu_bin = 'qemu-system-x86_64 -serial file:../run/kernel_out.log -cpu Haswell-v4,pdpe1gb '
+qemu_graphic_args = ["-display", "gtk"]
+qemu_headless_args = ["-nographic"]
+qemu_uefi_args = ["-drive", f"file={ovmf_path},format=raw,readonly=on,if=pflash"]
 
-qemu_uefi_numa = 'qemu-system-x86_64 -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash -s -smp 8,sockets=2,cores=2, -object memory-backend-ram,id=mem0,size=64M -object memory-backend-ram,id=mem1,size=64M -numa node,memdev=mem0,cpus=0-3,nodeid=0 -numa node,memdev=mem1,cpus=4-7,nodeid=1 -cpu Haswell-v4,pdpe1gb -serial file:../run/kernel_out.log '
-qemu_graphic_str = ' -display gtk'
-qemu_headless_str = ' -nographic'
-qemu_uefi = ' -drive file=' + ovmf_path + ',format=raw,readonly=on,if=pflash '
+bochs = "bochs -f ../run/cfg/bochs/bochsrc.txt"
+vbox = "VBoxManage startvm boot"
 
-ios_file = ' -cdrom ../run/image/naos.iso '
-image_file = ' -drive file=../run/image/disk.img,format=raw,index=1 '
 
-bochs = 'bochs -f ../run/cfg/bochs/bochsrc.txt'
-vbox = 'VBoxManage startvm boot'
+def _gdb_port(value):
+    if value is None:
+        return 1234
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"invalid GDB port: {value}") from error
+    if not 1 <= port <= 65535:
+        raise ValueError(f"GDB port must be between 1 and 65535: {port}")
+    return port
+
+
+def build_qemu_argv(args):
+    """Build one QEMU argv for ISO, disk, and UEFI runs."""
+    cores = int(args.cores)
+    if cores < 1:
+        raise ValueError("CPU core count must be positive")
+
+    argv = [
+        "qemu-system-x86_64",
+        "-serial",
+        "file:../run/kernel_out.log",
+        "-cpu",
+        "Haswell-v4,pdpe1gb",
+        "-smp",
+        f"{cores},sockets=1,cores={cores}",
+        "-m",
+        str(args.memory),
+    ]
+
+    port = _gdb_port(args.gdb_port)
+    if args.gdb_port is None:
+        argv.append("-s")
+    else:
+        argv.extend(["-gdb", f"tcp::{port}"])
+    if args.wait_gdb:
+        argv.append("-S")
+
+    if args.uefi:
+        argv.extend(qemu_uefi_args)
+    argv.extend(qemu_headless_args if args.nographic else qemu_graphic_args)
+    if args.iso:
+        argv.extend(["-cdrom", "../run/image/naos.iso"])
+    else:
+        argv.extend(["-drive", "file=../run/image/disk.img,format=raw,index=1"])
+
+    if args.qemu_debug:
+        argv.extend(["-d", "int,guest_errors,unimp,cpu_reset", "-D", "../run/qemu.log"])
+    if args.monitor is not None:
+        monitor_path = Path(args.monitor)
+        if monitor_path.exists():
+            raise FileExistsError(f"QEMU monitor path already exists: {monitor_path}")
+        argv.extend(["-monitor", f"unix:{monitor_path},server=on,wait=off"])
+    if args.no_reboot:
+        argv.extend(["-no-reboot", "-no-shutdown"])
+    return argv
 
 
 def prepare_iso():
@@ -51,23 +104,34 @@ def prepare_iso():
         check=True,
     )
 
+
 if __name__ == "__main__":
     set_self_dir()
 
     parser = argparse.ArgumentParser(
         description='run tools: run kernel')
     parser.add_argument(
-        "-n", "--nographic",  action='store_true', help="try don't show GUI")
+        "-n", "--nographic", action='store_true', help="try don't show GUI")
     parser.add_argument(
-        "-u", "--uefi",  action='store_true', help="open qemu with uefi firmware")
+        "-u", "--uefi", action='store_true', help="open qemu with uefi firmware")
     parser.add_argument(
-        "--iso",  action='store_true', help="iso")
+        "--iso", action='store_true', help="iso")
     parser.add_argument("emulator_name", type=str,
-                        choices=["q", "b", "v"],  help="q: run qemu\nb: run bochs\nv: run virtual box")
+                        choices=["q", "b", "v"], help="q: run qemu\nb: run bochs\nv: run virtual box")
     parser.add_argument(
-        "-m", "--memory",  help="memory max(M)", default='128')
+        "-m", "--memory", help="memory max(M)", default='128')
     parser.add_argument(
-        "-c", "--cores",  help="cpu cores", default='2')
+        "-c", "--cores", help="cpu cores", default='2')
+    parser.add_argument(
+        "--wait-gdb", action='store_true', help="pause QEMU until GDB connects")
+    parser.add_argument(
+        "--gdb-port", help="GDB TCP port; replaces the default -s/1234 listener")
+    parser.add_argument(
+        "--qemu-debug", action='store_true', help="write QEMU internal debug output")
+    parser.add_argument(
+        "--monitor", help="QEMU monitor Unix socket path")
+    parser.add_argument(
+        "--no-reboot", action='store_true', help="keep QEMU stopped after guest shutdown or reset")
 
     args = parser.parse_args()
 
@@ -80,7 +144,7 @@ if __name__ == "__main__":
             else:
                 base_mnt = mount_point("../run/image/disk.img", 1)
 
-            if base_mnt == "" or base_mnt == None:
+            if base_mnt == "" or base_mnt is None:
                 print("Mount disk before run.\n    try 'python disk.py mount'")
                 exit(-1)
 
@@ -90,28 +154,7 @@ if __name__ == "__main__":
 
         tp = args.emulator_name
         if tp == 'q':
-            cores = int(args.cores)
-            mem = ' -m ' + args.memory + ' ' 
-            cores = ' -s -smp ' + str(cores) + ',sockets=1,cores=' + str(cores)
-
-            command = qemu_bin
-            command += cores
-            command += mem
-
-            if args.uefi:
-                command += qemu_uefi
-
-            if args.nographic:
-                command += qemu_headless_str
-            else:
-                command += qemu_graphic_str
-
-            if args.iso:
-                command += ios_file
-            else:
-                command += image_file
-            
-            run_shell(command)
+            subprocess.run(build_qemu_argv(args), check=True)
 
         elif tp == 'b':
             print('run bochs')

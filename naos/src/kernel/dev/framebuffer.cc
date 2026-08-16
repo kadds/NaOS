@@ -1,12 +1,14 @@
 #include "kernel/dev/framebuffer.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/vfs/defines.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/terminal.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 
+KLOG_MODULE(dev);
 namespace dev::framebuffer
 {
 namespace
@@ -84,7 +86,7 @@ void framebuffer_pseudo_t::force_offline()
         (process->attributes.load(std::memory_order_acquire) & task::process_attributes::no_thread) != 0)
         return;
 
-    trace::warning("forcing framebuffer owner offline pid=", process->pid);
+    KLOG_WARN("forcing framebuffer owner offline pid={}", process->pid);
     // Do not edit a foreign address space from this CPU: this kernel has no
     // TLB shootdown primitive yet. Process teardown unmaps the framebuffer
     // and releases the writer lease on the owning process's CPU.

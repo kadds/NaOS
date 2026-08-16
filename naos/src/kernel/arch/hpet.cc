@@ -4,10 +4,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+KLOG_MODULE(arch);
 namespace arch::device::HPET
 {
 irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
@@ -46,11 +47,11 @@ void clock_event::init(u64 hz)
     bool leg_rt_cap = capabilities & 0x8000; // bit 15
     if (!leg_rt_cap)
     {
-        trace::panic("LegacyReplacement Route Capable: false");
+        KLOG_PANIC("LegacyReplacement Route Capable: false");
     }
     if (!bit64mode)
     {
-        trace::panic("Bit 64 mode: false");
+        KLOG_PANIC("Bit 64 mode: false");
     }
 
     u8 rev_id = capabilities & 0xF;
@@ -80,8 +81,8 @@ void clock_event::init(u64 hz)
     // set counter
     counter_ = freq / hz;
 
-    trace::debug("HPET timers ", timers, " rev id ", rev_id, " id ", id, " bit64 ", bit64mode, " freq ",
-                 freq / 1000'000UL, "MHZ ", "periodic ", mode_periodic_, " set counter ", counter_);
+    KLOG_DEBUG("HPET timers {} rev id {} id {} bit64 {} freq {}MHZ periodic {} set counter {}", timers, rev_id, id,
+               bit64mode, freq / 1000'000UL, mode_periodic_, counter_);
 
     this->freq_ = freq;
     hz_ = hz;

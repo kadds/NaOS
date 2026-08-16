@@ -9,16 +9,17 @@
 #include "kernel/kernel.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/semaphore.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include <cstdarg>
 
+KLOG_MODULE(acpi);
 ExportC
 {
 #include "acoutput.h"
@@ -57,12 +58,12 @@ ExportC
 {
     ACPI_STATUS AcpiOsInitialize()
     {
-        trace::debug("ACPI impl init");
+        KLOG_DEBUG("ACPI impl init");
         return 0;
     }
     ACPI_STATUS AcpiOsTerminate()
     {
-        trace::debug("ACPI impl uninit");
+        KLOG_DEBUG("ACPI impl uninit");
         return 0;
     }
 
@@ -228,7 +229,7 @@ ExportC
     ACPI_STATUS
     AcpiOsInstallInterruptHandler(UINT32 InterruptNumber, ACPI_OSD_HANDLER ServiceRoutine, void *Context)
     {
-        trace::debug("ACPI install gsi ", InterruptNumber);
+        KLOG_DEBUG("ACPI install gsi {}", InterruptNumber);
         auto info = memory::KernelCommonAllocatorV->New<ACPIInterInfo>();
         info->handler = ServiceRoutine;
         info->context = Context;
@@ -297,9 +298,9 @@ ExportC
     ACPI_STATUS
     AcpiOsExecute(ACPI_EXECUTE_TYPE Type, ACPI_OSD_EXEC_CALLBACK Function, void *Context) { return -1; }
 
-    void AcpiOsWaitEventsComplete(void) { trace::info("wait events"); }
-    void AcpiOsSleep(UINT64 Milliseconds) { trace::info("sleep ", Milliseconds); }
-    void AcpiOsStall(UINT32 Microseconds) { trace::info("stall", Microseconds); }
+    void AcpiOsWaitEventsComplete(void) { KLOG_INFO("wait events"); }
+    void AcpiOsSleep(UINT64 Milliseconds) { KLOG_INFO("sleep {}", Milliseconds); }
+    void AcpiOsStall(UINT32 Microseconds) { KLOG_INFO("stall {}", Microseconds); }
 
     // platform interface
 
@@ -323,7 +324,7 @@ ExportC
         }
         else
         {
-            trace::panic("invalid Width ", Width);
+            KLOG_PANIC("invalid Width {}", Width);
         }
         return 0;
     }
@@ -345,7 +346,7 @@ ExportC
         }
         else
         {
-            trace::panic("invalid Width ", Width);
+            KLOG_PANIC("invalid Width {}", Width);
         }
         return 0;
     }
@@ -388,11 +389,11 @@ ExportC
     {
         char *buf = (char *)memory::kmalloc(4096, 1);
         vsnprintf(buf, 4095, Format, Args);
-        trace::print(buf);
+        KLOG_RAW("{}", buf);
         memory::kfree(buf);
     }
 
-    void AcpiOsRedirectOutput(void *Destination) { trace::info("redirect to ", trace::hex(Destination)); }
+    void AcpiOsRedirectOutput(void *Destination) { KLOG_INFO("redirect to {}", log::hex(Destination)); }
 
     ACPI_STATUS
     AcpiOsGetTableByName(char *Signature, UINT32 Instance, ACPI_TABLE_HEADER **Table, ACPI_PHYSICAL_ADDRESS *Address)

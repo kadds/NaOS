@@ -3,11 +3,12 @@
 #include "kernel/arch/mm.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/common.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/page.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(mm);
 namespace memory
 {
 
@@ -147,14 +148,14 @@ void *zones::allocate(size_t size, size_t align) noexcept
             return ptr;
         }
     }
-    trace::panic("Kernel OOM allocate pages ", pages);
+    KLOG_PANIC("Kernel OOM allocate pages {}", pages);
 }
 
 void zones::deallocate(void *ptr) noexcept
 {
     phy_addr_t p = va2pa(ptr);
     zone *z = which(p);
-    kassert(z != nullptr, "Not found this zone at ", trace::hex(p()));
+    kassert(z != nullptr, "Not found this zone at {}", log::hex(p()));
     z->free(p);
 }
 
@@ -162,7 +163,7 @@ void zones::page_add_reference(void *ptr)
 {
     phy_addr_t p = va2pa(ptr);
     zone *z = which(p);
-    kassert(z != nullptr, "Not found this zone at ", trace::hex(p()));
+    kassert(z != nullptr, "Not found this zone at {}", log::hex(p()));
     z->page_add_reference(p);
 }
 
@@ -204,7 +205,7 @@ phy_addr_t zone::malloc(u64 pages)
         page *p = page_array + index.value();
         if (p->get_ref_count() != 0)
         {
-            trace::panic("ref count == 0 malloc ", pages);
+            KLOG_PANIC("ref count == 0 malloc {}", pages);
         }
         p->add_ref_count();
         return page_to_address(p);
@@ -222,7 +223,7 @@ void zone::page_add_reference(phy_addr_t ptr)
     }
     else
     {
-        trace::panic("ref count == 0 at ", trace::hex(ptr.get()));
+        KLOG_PANIC("ref count == 0 at {}", log::hex(ptr.get()));
     }
 }
 
@@ -242,14 +243,14 @@ void zone::free(phy_addr_t ptr)
         }
         else
         {
-            trace::panic("ref count == 0 at ", trace::hex(ptr.get()));
+            KLOG_PANIC("ref count == 0 at {}", log::hex(ptr.get()));
         }
 
         if (free)
         {
             auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
             [[maybe_unused]] bool ok = impl->free(p - page_array);
-            kassert(ok, "fail ", p - page_array);
+            kassert(ok, "fail {}", p - page_array);
         }
     }
 }
@@ -301,8 +302,8 @@ zone::zone(phy_addr_t start, phy_addr_t end, phy_addr_t danger_beg, phy_addr_t d
 
     if (page_addr >= danger_beg && page_addr < danger_end)
     {
-        trace::panic("Zone page/buddy allocate failed at ", trace::hex(start()), "-", trace::hex(end()), ", required ",
-                     page_bytes, '.');
+        KLOG_PANIC("Zone page/buddy allocate failed at {}-{}, required {}{}", log::hex(start()), log::hex(end()),
+                   page_bytes, '.');
     }
 
     impl = new (impl_ptr_) buddy_t(page_count, buddy_operator(page_array));

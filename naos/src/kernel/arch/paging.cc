@@ -8,15 +8,16 @@
 #include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include <termios.h>
 #include <type_traits>
+KLOG_MODULE(arch);
 namespace arch::paging
 {
 
@@ -93,7 +94,7 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
     using NextPageTable = std::remove_reference_t<decltype(entry.next())>;
 
     int old_counter = page_table2page(next)->page_table_counter();
-    kassert(counter(next) == old_counter, "counter not match ", counter(next), "!=", old_counter);
+    kassert(counter(next) == old_counter, "counter not match {} != {}", counter(next), old_counter);
 
     auto p = new_page_table<NextPageTable>();
 
@@ -111,7 +112,7 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
             new_counter++;
         }
     }
-    kassert(new_counter == old_counter, new_counter, "!=", old_counter);
+    kassert(new_counter == old_counter, "{} != {}", new_counter, old_counter);
 
     delete_page_table(&next);
 
@@ -289,8 +290,9 @@ void init()
 
     u64 max_maped_memory = memory::get_max_maped_memory();
     if (max_maped_memory > memory::max_memory_support)
-        trace::panic("Not support such a large memory. Current maximum memory map detected ", max_maped_memory,
-                     ". Maximum memory supported ", memory::max_memory_support, ".");
+        KLOG_PANIC(
+            "Not support such a large memory. Current maximum memory map detected {}. Maximum memory supported {}.",
+            max_maped_memory, memory::max_memory_support);
     // map all phy address
     auto virt_start = reinterpret_cast<void *>(memory::minimum_kernel_addr);
 
@@ -299,29 +301,29 @@ void init()
         max_maped_memory = memory::align_up(max_maped_memory, frame_size::size_1gb);
         auto pages = max_maped_memory / memory::page_size;
         kernel_paging.huge_page_map_to(virt_start, pages, phy_addr_t::from(0), arch::paging::flags::writable, 0);
-        trace::debug("Paging at 1GB granularity");
+        KLOG_DEBUG("Paging at 1GB granularity");
     }
     else
     {
         max_maped_memory = memory::align_up(max_maped_memory, frame_size::size_2mb);
         auto pages = max_maped_memory / memory::page_size;
         kernel_paging.big_page_map_to(virt_start, pages, phy_addr_t::from(0), arch::paging::flags::writable, 0);
-        trace::debug("Paging at 2MB granularity");
+        KLOG_DEBUG("Paging at 2MB granularity");
     }
-    trace::debug("Map address ", trace::hex(0), "-", trace::hex(max_maped_memory), "->", virt_start, "-",
-                 trace::hex(memory::minimum_kernel_addr + max_maped_memory));
+    KLOG_DEBUG("Map address {}-{} -> {}-{}", log::hex(0), log::hex(max_maped_memory), virt_start,
+               log::hex(memory::minimum_kernel_addr + max_maped_memory));
 }
 
 NoReturn void error_map()
 {
-    trace::panic("Unsupported operation at virtual address map. A virtual address has been mapped, out of range or "
-                 "not aligned.");
+    KLOG_PANIC("Unsupported operation at virtual address map. A virtual address has been mapped, out of range or "
+               "not aligned.");
 }
 
 NoReturn void error_unmap()
 {
-    trace::panic("Unsupported operation at virtual address unmap. A virtual address hasn't been mapped, out of range "
-                 "or not aligned.");
+    KLOG_PANIC("Unsupported operation at virtual address unmap. A virtual address hasn't been mapped, out of range "
+               "or not aligned.");
 }
 
 pml4t *current()
@@ -676,12 +678,13 @@ void page_table_t::unmap(void *virt_start, size_t pages)
                 need_check = true;
 
                 auto addr = to_virt_addr(index_t::from_pack(pml4e_index, pdpe_index, pde_index, pte_index));
-                kassert(memory::global_zones->get_page_reference(pml4e->get_addr()) == 1, "pml4e ", pml4e_index,
-                        " check status fail ", trace::hex(addr));
-                kassert(memory::global_zones->get_page_reference(pdpe->get_addr()) == 1, "pml4e ", pml4e_index,
-                        " pdpe ", pdpe_index, " check status fail ", trace::hex(addr));
-                kassert(memory::global_zones->get_page_reference(pde->get_addr()) == 1, "pml4e ", pml4e_index, " pdpe ",
-                        pdpe_index, " pde ", pde_index, " check status fail ", trace::hex(addr));
+                kassert(memory::global_zones->get_page_reference(pml4e->get_addr()) == 1,
+                        "pml4e {} check status fail {}", pml4e_index, log::hex(addr));
+                kassert(memory::global_zones->get_page_reference(pdpe->get_addr()) == 1,
+                        "pml4e {} pdpe {} check status fail {}", pml4e_index, pdpe_index, log::hex(addr));
+                kassert(memory::global_zones->get_page_reference(pde->get_addr()) == 1,
+                        "pml4e {} pdpe {} pde {} check status fail {}", pml4e_index, pdpe_index, pde_index,
+                        log::hex(addr));
 
                 const phy_addr_t leaf_physical = memory::va2pa(pte->get_addr());
                 if (memory::global_zones->which(leaf_physical) != nullptr)
@@ -776,8 +779,8 @@ bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
         entry.set_next(p);
         entry.set_flags(flags);
 
-        kassert(counter(base) == page_table2page(base)->page_table_counter(), "counter not match ", counter(base),
-                "!=", page_table2page(base)->page_table_counter());
+        kassert(counter(base) == page_table2page(base)->page_table_counter(), "counter not match {} != {}",
+                counter(base), page_table2page(base)->page_table_counter());
     }
 
     return true;

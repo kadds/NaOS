@@ -1,11 +1,13 @@
 #include "kernel/input_event_source.hpp"
 
 #include "kernel/ipc/channel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 #include "naos/canonical.hpp"
 #include "naos/generated/system/InputEventSource.hpp"
 
+KLOG_MODULE(dev);
 namespace dev::input
 {
 namespace
@@ -57,7 +59,7 @@ bool input_event_source::subscribe(khandle &receiver, u64 max_events)
     receiver.reset();
     if (max_events == 0 || max_events > 64)
     {
-        trace::debug("input: subscribe rejected invalid max_events=", max_events);
+        KLOG_DEBUG("input: subscribe rejected invalid max_events={}", max_events);
         return false;
     }
     subscriber *slot = nullptr;
@@ -94,7 +96,7 @@ bool input_event_source::subscribe(khandle &receiver, u64 max_events)
     stale_receiver.reset();
     if (slot == nullptr)
     {
-        trace::debug("input: subscribe rejected active receiver still owns input");
+        KLOG_DEBUG("input: subscribe rejected active receiver still owns input");
         return false;
     }
 
@@ -113,7 +115,7 @@ bool input_event_source::subscribe(khandle &receiver, u64 max_events)
             uctx::RawSpinLockUninterruptibleContext guard(lock_);
             slot->reserved = false;
         }
-        trace::debug("input: subscribe failed to create channel status=", static_cast<u64>(channel_status));
+        KLOG_DEBUG("input: subscribe failed to create channel status={}", static_cast<u64>(channel_status));
         return false;
     }
 

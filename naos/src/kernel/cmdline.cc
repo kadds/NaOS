@@ -4,10 +4,11 @@
 #include "freelibcxx/string.hpp"
 #include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(kernel);
 namespace cmdline
 {
 freelibcxx::hash_map<freelibcxx::string, freelibcxx::string> *cmdmap;
@@ -36,6 +37,25 @@ bool early_get(const char *key, char *&out_buf, u64 &len)
         idx = pos - p;
     };
     len = 0;
+    return false;
+}
+
+bool early_has_flag(const char *key)
+{
+    char *command_line = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));
+    const u64 key_length = strlen(key);
+    char *cursor = command_line;
+    while (*cursor != 0)
+    {
+        while (*cursor == ' ')
+            cursor++;
+        char *end = cursor;
+        while (*end != 0 && *end != ' ')
+            end++;
+        if (static_cast<u64>(end - cursor) == key_length && memcmp(cursor, key, key_length) == 0)
+            return true;
+        cursor = end;
+    }
     return false;
 }
 
@@ -138,7 +158,7 @@ void init()
     char *cmdline = (char *)memory::pa2va(phy_addr_t::from(kernel_args->command_line));
     cmdmap = memory::New<freelibcxx::hash_map<freelibcxx::string, freelibcxx::string>>(memory::KernelCommonAllocatorV,
                                                                                        memory::KernelCommonAllocatorV);
-    trace::debug("cmdline address ", trace::hex(cmdline), ". ", cmdline);
+    KLOG_DEBUG("cmdline address {}. {}", log::hex(cmdline), cmdline);
 
     const freelibcxx::string ss(memory::KernelCommonAllocatorV, cmdline);
     freelibcxx::const_string_view sv = ss.view();

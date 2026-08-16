@@ -4,8 +4,9 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/file_system.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(fs);
 namespace fs::rootfs
 {
 file_system *global_root_file_system;
@@ -14,10 +15,10 @@ void tar_loader(byte *start_root_image, u64 size);
 
 void init(byte *start_root_image, u64 size)
 {
-    trace::debug("Root file system init");
+    KLOG_INFO("Root file system init");
     if (start_root_image == nullptr || size == 0)
     {
-        trace::panic("Can't find root image.");
+        KLOG_PANIC("Can't find root image.");
     }
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
@@ -113,7 +114,7 @@ int parse_single(byte *offset)
         // normal file
         auto file = fs::vfs::open(filename, fs::vfs::global_root, fs::vfs::global_root, fs::mode::write,
                                   fs::path_walk_flags::auto_create_file);
-        kassert(file, "create file ", filename, " fail");
+        kassert(file, "create file {} fail", filename);
         file->write(offset + 512, file_size, 0);
         fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
     }

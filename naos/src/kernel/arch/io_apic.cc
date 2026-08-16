@@ -6,10 +6,11 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/common.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(arch);
 namespace arch::APIC
 {
 
@@ -143,7 +144,7 @@ u32 sci_gsi = 9;
 
 void io_init()
 {
-    trace::debug("IO APIC init");
+    KLOG_DEBUG("IO APIC init");
     bool acpi = cmdline::get_bool("acpi", false);
     io_map_vec = memory::MemoryAllocatorV->New<freelibcxx::vector<io_map_t>>(memory::MemoryAllocatorV);
 
@@ -180,11 +181,11 @@ void io_init()
         u8 version = (io_map.io_read_register_32(0x1)) & 0xFF;
         rte++;
 
-        trace::debug("IO APIC ", i, " base ", trace::hex(io_map.base_address()()), " id ", id, " version ", version,
-                     " RTE count ", rte);
+        KLOG_DEBUG("IO APIC {} base {} id {} version {} RTE count {}", i, log::hex(io_map.base_address()()), id,
+                   version, rte);
         if (rte == 1)
         {
-            trace::warning("RTE count maybe invalid");
+            KLOG_WARN("RTE count maybe invalid");
         }
         io_map.update_info(rte, id, version);
     }
@@ -197,8 +198,8 @@ void io_init()
     {
         for (auto &override_irq : ACPI::get_override_irq_list())
         {
-            trace::debug("IRQ override from ", override_irq.irq_source, " to ", override_irq.gsi, " bus ",
-                         override_irq.bus, " flags ", override_irq.flags);
+            KLOG_DEBUG("IRQ override from {} to {} bus {} flags {}", override_irq.irq_source, override_irq.gsi,
+                       override_irq.bus, override_irq.flags);
             io_entry *entry = nullptr;
             if (override_irq.irq_source == 0)
             {
@@ -249,7 +250,7 @@ u32 query_gsi(gsi_vector vec)
         case gsi_vector::hpet:
             return hpet_gsi;
         default:
-            trace::panic("invalid gsi ", (int)vec);
+            KLOG_PANIC("invalid gsi {}", (int)vec);
     }
     return 0;
 }
@@ -289,28 +290,28 @@ io_map_t *which(u8 index)
 void io_enable(u8 index)
 {
     auto io = which(index);
-    kassert(io, "io index not found ", index);
+    kassert(io, "io index not found {}", index);
     return io->enable(index - io->irq_base());
 }
 
 void io_disable(u8 index)
 {
     auto io = which(index);
-    kassert(io, "io index not found ", index);
+    kassert(io, "io index not found {}", index);
     return io->disable(index - io->irq_base());
 }
 
 u8 io_irq_setup(u8 index, io_entry *entry)
 {
     auto io = which(index);
-    kassert(io, "io index not found ", index);
+    kassert(io, "io index not found {}", index);
     return io->irq_setup(index - io->irq_base(), entry);
 }
 
 void io_EOI(u8 index)
 {
     auto io = which(index);
-    kassert(io, "io index not found ", index);
+    kassert(io, "io index not found {}", index);
     return io->eoi(index - io->irq_base());
 }
 } // namespace arch::APIC

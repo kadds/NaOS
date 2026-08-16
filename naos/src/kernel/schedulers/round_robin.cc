@@ -2,7 +2,9 @@
 #include "kernel/cpu.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/timer.hpp"
+#include "kernel/ucontext.hpp"
 
+KLOG_MODULE(sched);
 namespace task::scheduler
 {
 struct thread_data_rr_t
@@ -58,7 +60,7 @@ void round_robin_scheduler::remove(thread_t *thread)
         }
         else
         {
-            trace::panic("Can't find task ", thread->tid, " pid: ", thread->process->pid);
+            KLOG_PANIC("Can't find task {} pid: {}", thread->tid, thread->process->pid);
         }
     }
     memory::Delete<>(memory::KernelCommonAllocatorV, (thread_data_rr_t *)thread->schedule_data);
@@ -111,7 +113,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
         }
         else if (thread->state == thread_state::ready)
         {
-            trace::debug("task ready to ready pid ", thread->process->pid, " tid ", thread->tid);
+            KLOG_DEBUG("task ready to ready pid {} tid {}", thread->process->pid, thread->tid);
             // ready to ready is safe
             return;
         }
@@ -137,7 +139,7 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
     {
         return;
     }
-    trace::panic("Unreachable control flow.", " RR thread state:", (int)thread->state, ", to state: ", (int)state);
+    KLOG_PANIC("Unreachable control flow. RR thread state: {}, to state: {}", (int)thread->state, (int)state);
 }
 
 i64 calc_span(thread_t *thread) { return ((u64)thread->static_priority + 1000) / 100; }
@@ -157,7 +159,7 @@ void round_robin_scheduler::on_migrate(thread_t *thread)
     else if (thread->state == thread_state::stop)
         l->block_threads.push_back(thread);
     else
-        trace::panic("Unknown thread state when migrate(RR). state: ", (u64)thread->state);
+        KLOG_PANIC("Unknown thread state when migrate(RR). state: {}", (u64)thread->state);
 }
 
 bool round_robin_scheduler::schedule()
@@ -243,7 +245,7 @@ thread_t *round_robin_scheduler::get_migratable_task(u32 cpuid)
     uctx::UninterruptibleContext icu;
     for (auto thd : l->runable_list)
     {
-        if (thd->cpumask.mask & (1ul << cpuid))
+        if (thd != current() && thd->state == thread_state::ready && (thd->cpumask.mask & (1ul << cpuid)))
             return thd;
     }
     return nullptr;

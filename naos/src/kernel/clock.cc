@@ -3,12 +3,13 @@
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/time.hpp"
 #include "kernel/arch/rtc.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(kernel);
 namespace timeclock
 {
 
@@ -27,7 +28,7 @@ void time_tick(microsecond_t expires) noexcept
         freelibcxx::string str(memory::KernelCommonAllocatorV);
         str.resize(20);
         val.value().format(str.span());
-        // trace::info("current time ", str.data());
+        // KLOG_INFO("current time {}", str.data());
     }
 }
 
@@ -47,10 +48,10 @@ void init()
     }
     else
     {
-        trace::panic("rtc get clock fail ", start_time_microseconds);
+        KLOG_PANIC("rtc get clock fail {}", start_time_microseconds);
     }
 
-    trace::info("RTC: ", str.data());
+    KLOG_INFO("RTC: {}", str.data());
 }
 
 void start_tick()

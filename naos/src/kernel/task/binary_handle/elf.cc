@@ -5,14 +5,15 @@
 #include "kernel/arch/task.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/fs/vfs/file.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include <cstdint>
 #include <type_traits>
 
+KLOG_MODULE(task);
 namespace bin_handle
 {
 
@@ -264,8 +265,8 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
         {
             const u64 program_file_end = program->offset + program->file_size;
             const u64 program_header_end = elf->phoff + program_header_size;
-            if (info->program_header == nullptr && program_header_end >= elf->phoff &&
-                elf->phoff >= program->offset && program_header_end <= program_file_end)
+            if (info->program_header == nullptr && program_header_end >= elf->phoff && elf->phoff >= program->offset &&
+                program_header_end <= program_file_end)
             {
                 info->program_header = reinterpret_cast<void *>(program->vaddr + (elf->phoff - program->offset));
             }
@@ -289,8 +290,7 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 
             if (program->offset < align_offset)
             {
-                trace::warning("program offset ", trace::hex(program->offset), " align offset ",
-                               trace::hex(align_offset));
+                KLOG_WARN("program offset {} align offset {}", log::hex(program->offset), log::hex(align_offset));
                 return false;
             }
 
@@ -298,7 +298,7 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 
             if (start >= memory::user_mmap_top_address || offset >= memory::user_mmap_top_address)
             {
-                trace::warning("map ", trace::hex(start), " fail");
+                KLOG_WARN("map {} fail", log::hex(start));
                 return false;
             }
 
@@ -326,17 +326,17 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
             i64 oversize = cur.end - next.start;
             if (cur.start > next.start)
             {
-                trace::warning("map address ", trace::hex(cur.start), ">", trace::hex(next.start));
+                KLOG_WARN("map address {}>{}", log::hex(cur.start), log::hex(next.start));
                 return false;
             }
             if (cur.end > next.end)
             {
-                trace::warning("map address ", trace::hex(cur.end), ">", trace::hex(next.end));
+                KLOG_WARN("map address {}>{}", log::hex(cur.end), log::hex(next.end));
                 return false;
             }
             if ((i64)cur.start - (i64)cur.file_offset != (i64)next.start - (i64)next.file_offset)
             {
-                trace::warning("map address can't merge", trace::hex(cur.start), " ", trace::hex(next.start));
+                KLOG_WARN("map address can't merge {} {}", log::hex(cur.start), log::hex(next.start));
                 return false;
             }
             if (cur.flags & ~next.flags)
@@ -401,28 +401,28 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
         }
         *flag_ptr = 0;
 
-        // trace::debug("map ", trace::hex(item.start), "-", trace::hex(item.end), " mm size ",
-        //              trace::hex(item.end - item.start), " off ", trace::hex(item.file_offset), " file_size ",
-        //              trace::hex(item.file_length), " flags ", flag_str);
+        // KLOG_DEBUG("map {}-{} mm size {}", log::hex(item.start), log::hex(item.end),
+        //              log::hex(item.end - item.start), " off ", log::hex(item.file_offset), " file_size ",
+        //              log::hex(item.file_length), " flags ", flag_str);
         auto vm = new_mm_info->map_file(item.start, file, item.file_offset, item.file_length, item.end - item.start,
                                         item.flags);
         if (vm == nullptr)
         {
-            trace::warning("map file ", trace::hex(item.start), "-", trace::hex(item.end), " fail");
+            KLOG_WARN("map file {}-{} fail", log::hex(item.start), log::hex(item.end));
             return false;
         }
     }
 
     if (loaded_max_address == 0)
     {
-        trace::warning("loaded max address is zero");
+        KLOG_WARN("loaded max address is zero");
         return false;
     }
     u64 brk_beg = ((loaded_max_address + memory::page_size - 1) & ~(memory::page_size - 1));
 
     if (!new_mm_info->init_brk(brk_beg))
     {
-        trace::warning("alloc brk fail");
+        KLOG_WARN("alloc brk fail");
         return false;
     }
 
@@ -432,15 +432,15 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
                                      memory::vm::page_fault_method::common, 0);
 
-    // trace::debug("map stack ", trace::hex(stack_vm->start), "-", trace::hex(stack_vm->end));
+    // KLOG_DEBUG("map stack {}-{}", log::hex(stack_vm->start), log::hex(stack_vm->end));
 
     if (stack_vm == nullptr)
     {
-        trace::warning("empty start_vm");
+        KLOG_WARN("empty start_vm");
         return false;
     }
-    // trace::info("max load ", trace::hex(loaded_max_address), " brk ", trace::hex(brk_beg), " stack ",
-    //             trace::hex(stack_vm->end), "-", trace::hex(stack_vm->start));
+    // KLOG_INFO("max load {} brk {} stack {}", log::hex(loaded_max_address), log::hex(brk_beg),
+    //             log::hex(stack_vm->end), "-", log::hex(stack_vm->start));
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;

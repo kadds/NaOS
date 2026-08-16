@@ -1,9 +1,10 @@
 #include "kernel/cpu.hpp"
 #include "kernel/arch/cpu.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+KLOG_MODULE(kernel);
 namespace cpu
 {
 bool cpu_data_t::is_bsp() { return arch::cpu::get(smp_id).is_bsp(); }
@@ -58,9 +59,8 @@ void init()
     cpu->soft_irq_wait_queue = memory::New<task::wait_queue_t>(memory::KernelCommonAllocatorV);
 
     auto &c = arch::cpu::current();
-    trace::debug("[CPU", c.get_id(), "] exception:", trace::hex(c.get_exception_rsp()),
-                 " interrupt:", trace::hex(c.get_interrupt_rsp()), " kernel:", trace::hex(c.get_kernel_rsp()),
-                 " data: ", trace::hex(cpu));
+    KLOG_DEBUG("[CPU{}] exception:{} interrupt:{} kernel:{} data: {}", c.get_id(), log::hex(c.get_exception_rsp()),
+               log::hex(c.get_interrupt_rsp()), log::hex(c.get_kernel_rsp()), log::hex(cpu));
 }
 
 u64 count() { return arch::cpu::count(); }

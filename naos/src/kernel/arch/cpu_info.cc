@@ -6,12 +6,14 @@
 #include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/cmdline.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 
+KLOG_MODULE(arch);
 #define CPUID_VENDOR_AMD "AuthenticAMD"
 #define CPUID_VENDOR_INTEL "GenuineIntel"
 
-void cpu_id(u32 fn, u32 p, u32 &eax, u32 &ebx, u32 &ecx, u32 &edx) {
+void cpu_id(u32 fn, u32 p, u32 &eax, u32 &ebx, u32 &ecx, u32 &edx)
+{
     eax = fn;
     ecx = p;
     _cpu_id(&eax, &ebx, &ecx, &edx);
@@ -22,10 +24,10 @@ void cpu_id(u32 fn, u32 p, u32 &eax, u32 &ebx, u32 &ecx, u32 &edx) {
     {                                                                                                                  \
         if ((number > max_basic_number && number < 0x80000000) || number > max_extend_number)                          \
         {                                                                                                              \
-            trace::info("cpu feature not found number: ", number);                                                     \
+            KLOG_INFO("cpu feature not found number: {}", number);                                                     \
             return false;                                                                                              \
         }                                                                                                              \
-        cpu_id(number, 0, eax, ebx, ecx, edx);                                                                                \
+        cpu_id(number, 0, eax, ebx, ecx, edx);                                                                         \
         return (reg & 1ul << bit);                                                                                     \
     } while (0)
 
@@ -86,7 +88,7 @@ void init()
     {
         if (!has_feature(feat))
         {
-            trace::panic("Unsupported feature ", (int)feat);
+            KLOG_PANIC("Unsupported feature {}", (int)feat);
         }
     }
     intel_cpu = strstr(family_name, CPUID_VENDOR_INTEL) != nullptr;
@@ -94,17 +96,17 @@ void init()
 
 void trace_debug_info()
 {
-    trace::debug("Cpu family: ", family_name, ". Cpu name: ", brand_name,
-                 ".\n    Maximum basic functional number: ", (void *)(u64)max_basic_number,
-                 ". Maximum extend functional number: ", (void *)(u64)max_extend_number,
-                 ".\n    Maximum virtual address bits ", get_feature(feature::max_virt_addr),
-                 ". Maximum physical address bits ", get_feature(feature::max_phy_addr));
+    KLOG_DEBUG("Cpu family: {}. Cpu name: {}.\n    Maximum basic functional number: {}. Maximum extend functional "
+               "number: {}.\n"
+               "    Maximum virtual address bits {}. Maximum physical address bits {}",
+               family_name, brand_name, log::hex(max_basic_number), log::hex(max_extend_number),
+               log::hex(get_feature(feature::max_virt_addr)), log::hex(get_feature(feature::max_phy_addr)));
 
     if (max_basic_number >= 0x16)
     {
-        trace::debug("cpu base frequency ", get_feature(feature::cpu_base_frequency), "MHZ", " max frequency ",
-                     get_feature(feature::cpu_max_frequency), "MHZ", " bus frequency ",
-                     get_feature(feature::bus_frequency), "MHZ");
+        KLOG_DEBUG("cpu base frequency {}MHZ max frequency {}MHZ bus frequency {}MHZ",
+                   get_feature(feature::cpu_base_frequency), get_feature(feature::cpu_max_frequency),
+                   get_feature(feature::bus_frequency));
     }
 }
 
@@ -156,7 +158,7 @@ bool has_feature(feature f)
         case feature::avx:
             ret_cpu_feature(0x1, ecx, 28);
         default:
-            trace::panic("Unknown feature");
+            KLOG_PANIC("Unknown feature");
     }
 }
 
@@ -191,7 +193,7 @@ u64 get_feature(feature f)
             cpu_id(0x16, 0, eax, ebx, ecx, edx);
             return ecx & 0xFFFF; // mhz
         default:
-            trace::panic("Unknown feature");
+            KLOG_PANIC("Unknown feature");
     }
 }
 
@@ -306,7 +308,7 @@ void load_cpu_mesh(cpu_mesh &mesh)
     int config_cpu_count = cmdline::get_int("cpu_num", 0);
     auto [core_bits, logic_bits] = get_apic_bits();
     int chip_bits = core_bits + logic_bits;
-    trace::debug("cpu core bits ", core_bits, " logic bits ", logic_bits);
+    KLOG_DEBUG("cpu core bits {} logic bits {}", core_bits, logic_bits);
 
     if (ACPI::has_init())
     {
@@ -316,7 +318,7 @@ void load_cpu_mesh(cpu_mesh &mesh)
         {
             if (!lapic_info.enabled)
             {
-                trace::info("cpu ", lapic_info.apic_id, " disabled");
+                KLOG_INFO("cpu {} disabled", lapic_info.apic_id);
             }
             auto numa_info = numa_map.get(lapic_info.apic_id);
             logic_core_id id;

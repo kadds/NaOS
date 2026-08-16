@@ -1,12 +1,13 @@
 #include "kernel/mm/slab.hpp"
 #include "freelibcxx/string.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/page.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(mm);
 namespace memory
 {
 
@@ -21,7 +22,8 @@ slab *slab_group::new_memory_node()
     s->data_ptr = (char *)(((u64)s->data_ptr + align - 1) & ~(align - 1));
     s->bitmap.reset_all();
     page *p = memory::global_zones->get_page(s);
-    for(u32 i = 0; i < page_pre_slab; i++, p++) {
+    for (u32 i = 0; i < page_pre_slab; i++, p++)
+    {
         p->set_ref_slab(this);
     }
 
@@ -31,7 +33,7 @@ slab *slab_group::new_memory_node()
 
 void slab_group::delete_memory_node(slab *s)
 {
-    kassert(s->rest == node_pre_slab, "slab error rest:", s->rest, " target:", node_pre_slab);
+    kassert(s->rest == node_pre_slab, "slab error rest:{} target:{}", s->rest, node_pre_slab);
     all_obj_count -= node_pre_slab;
     s->~slab();
     // page *p = memory::global_zones->get_page(s);
@@ -104,7 +106,7 @@ void *slab_group::alloc()
     u64 i = bitmap.scan_zero();
     kassert(i < bitmap.count() && i < node_pre_slab, "Memory corruption in slab");
     bitmap.set_bit(i);
-    kassert(bitmap.get_bit(i), "Can't allocate an address. index: ", i);
+    kassert(bitmap.get_bit(i), "Can't allocate an address. index: {}", i);
 
     slab->rest--;
     all_obj_used++;
@@ -136,11 +138,11 @@ void slab_group::free(void *ptr)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
 
-    byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size * page_pre_slab - 1));
+    byte *page_addr = reinterpret_cast<byte *>(reinterpret_cast<u64>(ptr) & ~(memory::page_size * page_pre_slab - 1));
     slab *s = reinterpret_cast<slab *>(page_addr);
     u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
-    kassert(index < s->bitmap.count(), "s->data_ptr=", trace::hex(s->data_ptr));
-    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free. ", trace::hex(ptr));
+    kassert(index < s->bitmap.count(), "s->data_ptr={}", log::hex(s->data_ptr));
+    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free. {}", log::hex(ptr));
     s->bitmap.reset_bit(index);
     s->rest++;
     all_obj_used--;
@@ -169,10 +171,12 @@ void slab_group::free(void *ptr)
     }
 }
 
-slab_group *slab_group::get_group_from(void *ptr) {
-    byte *page_addr = reinterpret_cast<byte*>(reinterpret_cast<u64>(ptr) & ~(memory::page_size - 1));
+slab_group *slab_group::get_group_from(void *ptr)
+{
+    byte *page_addr = reinterpret_cast<byte *>(reinterpret_cast<u64>(ptr) & ~(memory::page_size - 1));
     page *p = memory::global_zones->get_page(page_addr);
-    if (likely(p != nullptr)) {
+    if (likely(p != nullptr))
+    {
         // kassert(p->has_flags(page::buddy_used), "invalid buddy state, maybe double free");
         return p->get_ref_slab();
     }
@@ -207,7 +211,7 @@ slab_cache_pool::slab_cache_pool()
 void *SlabObjectAllocator::allocate(u64 size, u64 align) noexcept
 {
     if (unlikely(size > slab_obj->get_size()))
-        trace::panic("slab allocator can not alloc a larger size");
+        KLOG_PANIC("slab allocator can not alloc a larger size");
 
     auto ptr = slab_obj->alloc();
     // #ifdef _DEBUG

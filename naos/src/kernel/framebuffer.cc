@@ -4,8 +4,9 @@
 #include "kernel/common.hpp"
 #include "kernel/common/font/font.hpp"
 #include "kernel/common/font/font_16X8.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 
+KLOG_MODULE(kernel);
 namespace fb
 {
 void framebuffer_backend::commit(u32 row, u32 col, cell_t cell)
@@ -17,7 +18,7 @@ void framebuffer_backend::commit(u32 row, u32 col, cell_t cell)
 
     if (unlikely((row + 1) * font_height_ > fb_.height) || (col + 1) * font_width_ > fb_.width)
     {
-        trace::panic("row check fail");
+        KLOG_PANIC("row check fail");
         return;
     }
 
@@ -60,7 +61,7 @@ void framebuffer_backend::commit_placeholder(u32 row, u32 col, bool show)
 
     if (unlikely((row + 1) * font_height_ > fb_.height) || (col + 1) * font_width_ > fb_.width)
     {
-        trace::panic("row check fail");
+        KLOG_PANIC("row check fail");
         return;
     }
 

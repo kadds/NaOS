@@ -20,6 +20,7 @@
 #include <atomic>
 #include <limits>
 
+KLOG_MODULE(tty);
 namespace term
 {
 minimal_terminal *early_terminal = nullptr;
@@ -670,8 +671,7 @@ void reset_early_paging()
         reinterpret_cast<void *>(memory::alloc_io_mmap_address(pages * memory::page_size, arch::paging::big_pages));
 
     /// print video card memory info
-    trace::info("Vram address ", trace::hex(pa()), " to ", trace::hex(virt), " pages ", pages, " bytes ", bytes,
-                " bbp ", fb.bbp);
+    KLOG_INFO("Vram address {} to {} pages {} bytes {} bbp {}", log::hex(pa()), log::hex(virt), pages, bytes, fb.bbp);
 
     memory::kernel_vm_info->paging().big_page_map_to(
         virt, pages, pa,
@@ -682,6 +682,7 @@ void reset_early_paging()
 void reset_panic_term()
 {
     early_terminal->reattach_backend();
+    early_terminal->flush_all();
     use_stand_terminal = false;
     framebuffer_user_enabled_state.store(false, std::memory_order_release);
     framebuffer_user_writer.store(false, std::memory_order_release);

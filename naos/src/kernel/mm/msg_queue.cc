@@ -3,6 +3,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"
+#include "kernel/ucontext.hpp"
 
 namespace memory
 {

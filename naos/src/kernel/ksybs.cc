@@ -2,8 +2,9 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(kernel);
 namespace ksybs
 {
 struct item
@@ -27,12 +28,12 @@ header *file_header = nullptr;
 
 void init()
 {
-    trace::debug("Kernel symbols init");
+    KLOG_DEBUG("Kernel symbols init");
     handle_t<fs::vfs::file> file = fs::vfs::open("/data/ksybs", fs::vfs::global_root, fs::vfs::global_root,
                                                  fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
     if (!file)
     {
-        trace::warning("Loading kernel symbols file failed.");
+        KLOG_WARN("Loading kernel symbols file failed.");
         return;
     }
     u64 size = fs::vfs::size(file);
@@ -42,15 +43,15 @@ void init()
     if (unlikely(file->pread(0, reinterpret_cast<byte *>(file_header), size, 0) != (i64)size))
     {
         memory::KernelVirtualAllocatorV->deallocate(file_header);
-        trace::info("Reading kernel symbols file failed.");
+        KLOG_INFO("Reading kernel symbols file failed.");
         file_header = nullptr;
         return;
     }
 
     if (unlikely(!file_header->is_valid()))
     {
-        trace::info("Reading kernel symbols file failed.", " magic: ", file_header->magic,
-                    ". version: ", file_header->version);
+        KLOG_INFO("Reading kernel symbols file failed. magic: {}. version: {}", file_header->magic,
+                  file_header->version);
         memory::KernelVirtualAllocatorV->deallocate(file_header);
         file_header = nullptr;
         return;

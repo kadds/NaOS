@@ -1,3 +1,5 @@
+#include "key_input.hpp"
+#include "render_batch.hpp"
 #include "vga_font.hpp"
 
 #include <abi-bits/ioctls.h>
@@ -464,116 +466,7 @@ int subscribe_input(na_handle_t &receiver)
     return 0;
 }
 
-enum class console_key : std::uint64_t
-{
-    escape = 0x1,
-    n1,
-    n2,
-    n3,
-    n4,
-    n5,
-    n6,
-    n7,
-    n8,
-    n9,
-    n0,
-    minus,
-    equal,
-    backspace,
-    tab,
-    q,
-    w,
-    e,
-    r,
-    t,
-    y,
-    u,
-    i,
-    o,
-    p,
-    left_brackets,
-    right_brackets,
-    enter,
-    left_control,
-    a,
-    s,
-    d,
-    f,
-    g,
-    h,
-    j,
-    k,
-    l,
-    semicolon,
-    quote,
-    back_tick,
-    left_shift,
-    backslash,
-    z,
-    x,
-    c,
-    v,
-    b,
-    n,
-    m,
-    comma,
-    period,
-    slash,
-    right_shift,
-    pad_mul,
-    left_alt,
-    space,
-    capslock,
-    f1,
-    f2,
-    f3,
-    f4,
-    f5,
-    f6,
-    f7,
-    f8,
-    f9,
-    f10,
-    numlock,
-    scrolllock,
-    pad_7,
-    pad_8,
-    pad_9,
-    pad_minus,
-    pad_4,
-    pad_5,
-    pad_6,
-    pad_plus,
-    pad_1,
-    pad_2,
-    pad_3,
-    pad_0,
-    pad_comma,
-    f11 = 0x57,
-    f12 = 0x58,
-    pad_enter = 0x6c,
-    right_control,
-    mute = 0x70,
-    calc,
-    play,
-    stop = 0x74,
-    volume_down = 0x7e,
-    volume_up = 0x80,
-    pad_slash = 0x85,
-    right_alt = 0x88,
-    home = 0x97,
-    cur_up,
-    page_up,
-    cur_left,
-    cur_right = 0x9d,
-    end = 0x9f,
-    cur_down,
-    page_down,
-    insert,
-    delete_key,
-    print = 0xfd,
-    pause = 0xfe,
-};
+using consoled::console_key;
 
 const char console_key_char_table[256] = {
     0,   0,   '1', '2', '3', '4', '5',  '6', '7', '8', '9', '0', '-', '=', '\b', '\t', 'q', 'w', 'e',  'r', 't',  'y',
@@ -631,57 +524,7 @@ VTermModifier key_modifiers(const naos::system::InputEventSource::KeyEvent &even
     return modifiers;
 }
 
-bool key_to_vterm(console_key key, VTermKey &result)
-{
-    switch (key)
-    {
-        case console_key::enter:
-        case console_key::pad_enter:
-            result = VTERM_KEY_ENTER;
-            return true;
-        case console_key::tab:
-            result = VTERM_KEY_TAB;
-            return true;
-        case console_key::backspace:
-            result = VTERM_KEY_BACKSPACE;
-            return true;
-        case console_key::escape:
-            result = VTERM_KEY_ESCAPE;
-            return true;
-        case console_key::cur_up:
-            result = VTERM_KEY_UP;
-            return true;
-        case console_key::cur_down:
-            result = VTERM_KEY_DOWN;
-            return true;
-        case console_key::cur_left:
-            result = VTERM_KEY_LEFT;
-            return true;
-        case console_key::cur_right:
-            result = VTERM_KEY_RIGHT;
-            return true;
-        case console_key::home:
-            result = VTERM_KEY_HOME;
-            return true;
-        case console_key::end:
-            result = VTERM_KEY_END;
-            return true;
-        case console_key::insert:
-            result = VTERM_KEY_INS;
-            return true;
-        case console_key::delete_key:
-            result = VTERM_KEY_DEL;
-            return true;
-        case console_key::page_up:
-            result = VTERM_KEY_PAGEUP;
-            return true;
-        case console_key::page_down:
-            result = VTERM_KEY_PAGEDOWN;
-            return true;
-        default:
-            return false;
-    }
-}
+using consoled::key_to_vterm;
 
 void emit_key_event(VTerm *vt, const naos::system::InputEventSource::KeyEvent &event)
 {
@@ -1043,6 +886,7 @@ int main(int argc, char **argv)
     scrollback_store scrollback;
     renderer render_state{rows, cols, pitch_pixels, backbuffer, false, {}, false, {}, &scrollback};
     bool framebuffer_enabled = true;
+    consoled::render_batch terminal_render_batch;
 
     VTerm *vt = vterm_new(rows, cols);
     if (vt == nullptr)
@@ -1064,6 +908,17 @@ int main(int argc, char **argv)
     vterm_set_utf8(vt, 1);
     add_damage(render_state, {0, rows, 0, cols});
     render_damage(screen, render_state, scanout);
+
+    const auto request_terminal_render = [&]() {
+        if (framebuffer_enabled)
+            terminal_render_batch.request(monotonic_millis());
+    };
+    const auto render_terminal_if_due = [&]() {
+        if (!framebuffer_enabled || !terminal_render_batch.ready(monotonic_millis()))
+            return;
+        render_damage(screen, render_state, scanout);
+        terminal_render_batch.consume();
+    };
 
     na_handle_t master = NA_HANDLE_INVALID;
     if (master_fd < 0)
@@ -1378,6 +1233,7 @@ int main(int argc, char **argv)
         }
 
         constexpr std::uint64_t invalid_wait_index = static_cast<std::uint64_t>(-1);
+        render_terminal_if_due();
         na_wait_item_t wait_items[4]{};
         uint64_t wait_count = 0;
         const uint64_t master_read_wait_index =
@@ -1424,6 +1280,16 @@ int main(int argc, char **argv)
         }
         else
             deadline.tv_sec += 2;
+        if (terminal_render_batch.pending)
+        {
+            const auto now_ms = monotonic_millis();
+            const auto deadline_ms = static_cast<std::uint64_t>(deadline.tv_sec) * 1000 + deadline.tv_nsec / 1'000'000;
+            if (terminal_render_batch.due_ms > now_ms && terminal_render_batch.due_ms < deadline_ms)
+            {
+                deadline.tv_sec = static_cast<time_t>(terminal_render_batch.due_ms / 1000);
+                deadline.tv_nsec = static_cast<long>((terminal_render_batch.due_ms % 1000) * 1'000'000);
+            }
+        }
         const auto wait_status = loop.wait(wait_items, wait_count, &deadline);
         if (wait_status == NA_STATUS_WAIT_TIMED_OUT)
             continue;
@@ -1471,8 +1337,7 @@ int main(int argc, char **argv)
             {
                 vterm_input_write(vt, reinterpret_cast<const char *>(buffer), read_size);
                 vterm_screen_flush_damage(screen);
-                if (framebuffer_enabled)
-                    render_damage(screen, render_state, scanout);
+                request_terminal_render();
             }
             if (kind == master_async_kind::read && read_size == 0 && !hangup)
             {
@@ -1535,8 +1400,7 @@ int main(int argc, char **argv)
                     {
                         vterm_input_write(vt, reinterpret_cast<const char *>(buffer), static_cast<std::size_t>(n));
                         vterm_screen_flush_damage(screen);
-                        if (framebuffer_enabled)
-                            render_damage(screen, render_state, scanout);
+                        request_terminal_render();
                         continue;
                     }
                     if (n < 0 && errno == EAGAIN)

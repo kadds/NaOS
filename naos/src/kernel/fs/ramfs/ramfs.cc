@@ -2,9 +2,10 @@
 #include "kernel/errno.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(fs);
 namespace fs::ramfs
 {
 
@@ -54,7 +55,7 @@ i64 file::iwrite(i64 &offset, const byte *buffer, u64 size, flag_t flags)
         else
         {
             // write fail
-            trace::warning("ramfs memory limit");
+            KLOG_WARN("ramfs memory limit");
             return 0;
         }
     }

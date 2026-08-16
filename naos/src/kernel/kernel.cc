@@ -15,14 +15,15 @@
 #include "kernel/io/io_manager.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/ksybs.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/terminal.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(kernel);
 kernel_start_args *kernel_args;
 
 ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
@@ -61,8 +62,6 @@ u64 build_version_timestamp = BUILD_VERSION_TS;
 
 handle_t<fs::vfs::file> *dmesg_file;
 
-void trace_callback(const byte *data, u64 len) { (*dmesg_file)->write(data, len, 0); }
-
 void fs_init()
 {
     // create /var/log/dmesg
@@ -72,12 +71,11 @@ void fs_init()
                               fs::path_walk_flags::auto_create_file | fs::path_walk_flags::file);
     if (!file)
     {
-        trace::panic("create dmesg fail failed");
+        KLOG_PANIC("create dmesg fail failed");
     }
 
     dmesg_file = memory::KernelCommonAllocatorV->New<handle_t<fs::vfs::file>>(file);
-
-    trace::register_callback(true, trace_callback);
+    log::set_dmesg_file(dmesg_file->operator->());
 }
 
 NoReturn void kstart_bsp(kernel_start_args *args)
@@ -85,10 +83,11 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     memset((void *)((u64)_bss_start), 0, (u64)_bss_end - (u64)_bss_start);
     kernel_args = args;
     static_init();
+    log::early_init();
 
     arch::early_init(args);
 
-    trace::info("Build version ", build_version_timestamp);
+    KLOG_INFO("Build version {}", build_version_timestamp);
     cmdline::init();
 
     arch::init(args);
@@ -116,11 +115,11 @@ NoReturn void kstart_bsp(kernel_start_args *args)
 
     task::init();
     arch::init_drivers();
-    trace::info("Bsp kernel main is running");
+    KLOG_INFO("Bsp kernel main is running");
     arch::post_init();
     //  -----------------------------
     task::start_task_idle();
-    trace::panic("Unreachable control flow in _kstart");
+    KLOG_PANIC("Unreachable control flow in _kstart");
 }
 
 NoReturn void kstart_ap()
@@ -134,7 +133,7 @@ NoReturn void kstart_ap()
     SMP::init();
     task::init();
     task::start_task_idle();
-    trace::panic("Unreachable control flow in _kstart");
+    KLOG_PANIC("Unreachable control flow in _kstart");
 }
 
 ExportC NoReturn void _kstart(kernel_start_args *args)

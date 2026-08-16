@@ -8,17 +8,18 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/usercopy.hpp"
 #include <limits>
 
+KLOG_MODULE(mm);
 namespace memory::vm
 {
 
@@ -33,15 +34,14 @@ irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *in
         {
             if (!inter->kernel_space)
             {
-                trace::warning("process ", thread->process->pid, " using kernel space pointer ",
-                               trace::hex(extra_data));
+                KLOG_WARN("process {} using kernel space pointer {}", thread->process->pid, log::hex(extra_data));
                 auto &pack = thread->process->signal_pack;
                 pack.send(thread->process, ::task::signal::sigstkflt, extra_data, 0, 0);
                 return irq::request_result::ok;
             }
             else
             {
-                trace::panic("kernel space cow");
+                KLOG_PANIC("kernel space cow");
             }
         }
         if (info->copy_at(extra_data))
@@ -60,7 +60,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
     {
         if (extra_data == 0)
         {
-            trace::warning("null pointer access pid ", thread->process->pid, " tid ", thread->tid);
+            KLOG_WARN("null pointer access pid {} tid {}", thread->process->pid, thread->tid);
         }
         auto info = (info_t *)thread->process->mm_info;
 
@@ -68,8 +68,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
         {
             if (!inter->kernel_space)
             {
-                trace::warning("process ", thread->process->pid, " using kernel space pointer ",
-                               trace::hex(extra_data));
+                KLOG_WARN("process {} using kernel space pointer {}", thread->process->pid, log::hex(extra_data));
                 auto &pack = thread->process->signal_pack;
                 pack.send(thread->process, ::task::signal::sigsegv, extra_data, 0, 0);
                 return irq::request_result::ok;
@@ -93,11 +92,11 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
         }
         else
         {
-            trace::info("vm area not found ", trace::hex(extra_data), " at process ", thread->process->pid, " by ",
-                        trace::hex(inter->at));
+            KLOG_INFO("vm area not found {} at process {} by {}", log::hex(extra_data), thread->process->pid,
+                      log::hex(inter->at));
             for (auto item : info->vma().get_list())
             {
-                trace::warning(trace::hex(item.start), "-", trace::hex(item.end), " ", trace::hex(item.flags));
+                KLOG_WARN("{}-{} {}", log::hex(item.start), log::hex(item.end), log::hex(item.flags));
             }
         }
     }
@@ -107,7 +106,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
 irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *inter, u64 extra_data) noexcept
 {
     using flags = arch::paging::page_fault_flags;
-    kassert(!(inter->error_code & flags::reserved_write), inter->error_code);
+    kassert(!(inter->error_code & flags::reserved_write), "{}", inter->error_code);
     if (inter->error_code & flags::user)
     {
     }
@@ -115,12 +114,12 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
     {
         // if (inter->kernel_space)
         // {
-        //     trace::panic("page ", trace::hex(extra_data), " is not writeable. code ", inter->error_code);
+        //     KLOG_PANIC("page {} is not writeable. code {}", log::hex(extra_data), inter->error_code);
         // }
         // is COW page?
         if (inter->error_code & flags::present)
         {
-            // trace::warning("page ", trace::hex(extra_data), " is not writeable");
+            // KLOG_WARN("page {} is not writeable", log::hex(extra_data));
             return page_fault_cow(inter, extra_data);
         }
     }
@@ -132,7 +131,7 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
     {
         if (inter->kernel_space)
         {
-            trace::panic("kernel space execute fail at page ", trace::hex(extra_data));
+            KLOG_PANIC("kernel space execute fail at page {}", log::hex(extra_data));
         }
     }
     if (naos::usercopy::recover_page_fault(static_cast<regs_t *>(inter->regs)))
@@ -270,7 +269,7 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     {
         return &it;
     }
-    // trace::info("not find ", trace::hex(p), " ", trace::hex(it->start), "-", trace::hex(it->end));
+    // KLOG_INFO("not find {} {}-{}", log::hex(p), log::hex(it->start), log::hex(it->end));
     return nullptr;
 }
 void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
@@ -340,7 +339,7 @@ info_t::~info_t()
     auto &list = vma_.get_list();
     for (auto it = list.begin(); it != list.end(); ++it)
     {
-        // trace::info("umap ", trace::hex(it->start), "-", trace::hex(it->end));
+        // KLOG_INFO("umap {}-{}", log::hex(it->start), log::hex(it->end));
         paging_.unmap(reinterpret_cast<void *>(it->start), (it->end - it->start) / page_size);
         if (it->flags & flags::file)
         {
@@ -830,7 +829,7 @@ bool info_t::copy_at(u64 virt_addr)
                 return true;
             }
 
-            // trace::info("cow at ", trace::hex(alignment_page), " at ", task::current_process()->pid);
+            // KLOG_INFO("cow at {} at {}", log::hex(alignment_page), task::current_process()->pid);
             paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags,
                         arch::paging::action_flags::override | arch::paging::action_flags::cow);
             return true;

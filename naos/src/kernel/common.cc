@@ -1,8 +1,9 @@
 #include "kernel/common.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 #include <cstdint>
 #include <sys/types.h>
 
+KLOG_MODULE(kernel);
 extern "C" void *memset(void *dst, int val, u64 size) noexcept
 {
     const char *s = reinterpret_cast<const char *>(&val);
@@ -46,7 +47,7 @@ extern "C" void *memcpy(void *__restrict dst, const void *__restrict src, size_t
     }
     if (dst_address > src_address && dst_address < src_address + size)
     {
-        trace::panic("memcpy check fail");
+        KLOG_PANIC("memcpy check fail");
     }
 #endif
     if (unlikely((src_address & 0x7) == 0 && (dst_address & 0x7) == 0))
@@ -199,7 +200,7 @@ extern "C" int strcmp(const char *str1, const char *str2) noexcept
     return 0;
 }
 
-extern "C" void abort() { trace::panic("abort"); }
+extern "C" void abort() { KLOG_PANIC("abort"); }
 
 extern "C" void __cxa_pure_virtual()
 {
@@ -209,7 +210,7 @@ extern "C" void __cxa_pure_virtual()
 
 void operator delete(void *p, size_t size) // or delete(void *, std::size_t)
 {
-    trace::info("delete ", trace::hex(p), " size ", size);
+    KLOG_INFO("delete {} size {}", log::hex(p), size);
 }
 
-void operator delete(void *p) { trace::info("delete ", trace::hex(p)); }
+void operator delete(void *p) { KLOG_INFO("delete {}", log::hex(p)); }

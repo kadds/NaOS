@@ -2,6 +2,7 @@
 
 #include "kernel/ipc/channel.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/ucontext.hpp"
 
 namespace naos::data_plane
 {

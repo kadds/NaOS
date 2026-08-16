@@ -85,6 +85,16 @@ struct escape_string_state
         state = ascii_state::none;
         attr = char_attribute();
     }
+
+    void reset_parser()
+    {
+        num = 0;
+        rgb = 0;
+        command = 0;
+        command_num = 0;
+        private_mode = false;
+        state = ascii_state::none;
+    }
 };
 
 struct minimal_term_char_t
@@ -260,7 +270,8 @@ template <typename CHILD, typename CHAR> class terminal
                     placeholder_time_ = current;
                     if (placeholder_valid_)
                     {
-                        dirty_ += rectangle(placeholder_col_, placeholder_col_ + 1, placeholder_row_, placeholder_row_ + 1);
+                        dirty_ +=
+                            rectangle(placeholder_col_, placeholder_col_ + 1, placeholder_row_, placeholder_row_ + 1);
                     }
                     dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
                     if (placeholder_reset_)
@@ -689,7 +700,11 @@ void terminal<CHILD, CHAR>::push_string_nolock(freelibcxx::const_string_view str
             }
         }
 
-        escape_state_.reset();
+        // SGR attributes persist across printable characters. Only the CSI
+        // parser state is complete after a character; resetting the full
+        // escape state here would make each colored run color only its first
+        // character.
+        escape_state_.reset_parser();
     }
 }
 
@@ -908,6 +923,8 @@ class stand_terminal final : public terminal<stand_terminal, stand_term_char_t>
     freelibcxx::vector<line_cell> history_;
     freelibcxx::string stack_;
 };
+
+extern minimal_terminal *early_terminal;
 
 class terminal_manager
 {

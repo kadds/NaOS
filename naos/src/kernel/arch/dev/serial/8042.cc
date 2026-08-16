@@ -8,11 +8,13 @@
 #include "kernel/input/key.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
+#include "kernel/ucontext.hpp"
 
+KLOG_MODULE(dev);
 namespace arch::device::chip8042
 {
 
@@ -47,12 +49,12 @@ void init()
     kb_device_class dc;
     if (dev::enum_device(&dc))
     {
-        trace::info("8042 keyboard device is available. Loading driver");
+        KLOG_INFO("8042 keyboard device is available. Loading driver");
         auto driver = memory::New<kb_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
         {
-            trace::warning("Loading 8042 keyboard driver failed");
+            KLOG_WARN("Loading 8042 keyboard driver failed");
             memory::Delete<>(memory::KernelCommonAllocatorV, driver);
         }
         io::attach_request_chain_device(dev, 0, io::chain_number::keyboard);
@@ -61,12 +63,12 @@ void init()
     mouse_device_class ds;
     if (dev::enum_device(&ds) > 0)
     {
-        trace::info("8042 mouse device is available. Loading driver");
+        KLOG_INFO("8042 mouse device is available. Loading driver");
         auto driver = memory::New<mouse_driver>(memory::KernelCommonAllocatorV);
         auto dev = dev::add_driver(driver);
         if (dev == ::dev::null_num)
         {
-            trace::warning("Loading 8042 mouse driver failed");
+            KLOG_WARN("Loading 8042 mouse driver failed");
             memory::Delete<>(memory::KernelCommonAllocatorV, driver);
         }
         io::attach_request_chain_device(dev, 0, io::chain_number::mouse);
@@ -95,7 +97,7 @@ void flush()
     {
         delay();
         auto d = io_in8(data_port);
-        trace::debug("8042 flush: read ", trace::hex((u64)d));
+        KLOG_DEBUG("8042 flush: read {}", log::hex((u64)d));
         i++;
     }
 }
@@ -210,7 +212,7 @@ bool self_test_8042()
 
     if (read_controller() != 0x55)
     {
-        trace::debug("8042 self check failed");
+        KLOG_DEBUG("8042 self check failed");
         return false;
     }
     return true;
@@ -223,7 +225,7 @@ u16 get_device_id(int index)
 
     if (!ack()) // ACK
     {
-        trace::warning("8042 disable scan fail");
+        KLOG_WARN("8042 disable scan fail");
         return 0xFFFF;
     }
 
@@ -232,7 +234,7 @@ u16 get_device_id(int index)
 
     if (!ack()) // ACK
     {
-        trace::warning("get device id failed");
+        KLOG_WARN("get device id failed");
         return 0xFFFF;
     }
 
@@ -262,7 +264,7 @@ bool test_device_8042(int index)
     write_controller(device);
     if (read_controller() != 0x00)
     {
-        trace::debug("8042 device check failed");
+        KLOG_DEBUG("8042 device check failed");
         return false;
     }
     return true;
@@ -289,12 +291,12 @@ void fill_device_type(chip8042_scan_device_info_t &dev)
         if ((dev.id >> 8) == 0xAB)
         {
             dev.clazz = chip8042_device_clazz::keyboard;
-            trace::debug("keyboard id ", trace::hex(dev.id));
+            KLOG_DEBUG("keyboard id {}", log::hex(dev.id));
         }
         else
         {
             dev.clazz = chip8042_device_clazz::mouse;
-            trace::debug("mouse id ", trace::hex(dev.id));
+            KLOG_DEBUG("mouse id {}", log::hex(dev.id));
         }
     }
 }
@@ -305,7 +307,7 @@ chip8042_scan_info_t try_scan_8042()
     chip8042_scan_info_t info;
     if (!ACPI::is_8042_device_exists())
     {
-        trace::warning("8042 not exists");
+        KLOG_WARN("8042 not exists");
         return info;
     }
 
@@ -364,7 +366,7 @@ freelibcxx::vector<::dev::device *> kb_device_class::try_scan()
     }
     if (devs.empty())
     {
-        trace::warning("no keyboard found");
+        KLOG_WARN("no keyboard found");
     }
     return devs;
 }
@@ -381,7 +383,7 @@ freelibcxx::vector<::dev::device *> mouse_device_class::try_scan()
     }
     if (devs.empty())
     {
-        trace::warning("no mouse found");
+        KLOG_WARN("no mouse found");
     }
     return devs;
 }
@@ -438,7 +440,7 @@ bool set_led(int index, u8 s)
     write_ps2(index, 0xED);
     if (!ack())
     {
-        trace::warning("set led (no ACK) failed");
+        KLOG_WARN("set led (no ACK) failed");
         return false;
     }
 
@@ -470,7 +472,7 @@ bool kb_driver::setup(::dev::device *dev)
     write_ps2(kb_dev->port_index, 0x1);
     if (!ack())
     {
-        trace::warning("set keyboard codeset fail");
+        KLOG_WARN("set keyboard codeset fail");
     }
 
     flush();
@@ -546,7 +548,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", trace::hex((u64)k));
+                KLOG_WARN("Unknow scan code {}", log::hex((u64)k));
             }
         }
         else if (dev->last_prefix_count == 1)
@@ -577,7 +579,7 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", trace::hex((u64)dev->last_prefix[0]), ",", trace::hex((u64)k));
+                KLOG_WARN("Unknow scan code {},{}", log::hex((u64)dev->last_prefix[0]), log::hex((u64)k));
             }
         }
         else if (dev->last_prefix_count == 2)
@@ -592,14 +594,14 @@ bool get_key(kb_device *dev, io::keyboard_data *data)
             }
             else
             {
-                trace::warning("Unknow scan code ", trace::hex((u64)dev->last_prefix[0]), ",",
-                               trace::hex((u64)dev->last_prefix[1]), ",", trace::hex((u64)k));
+                KLOG_WARN("Unknow scan code {},{},{}", log::hex((u64)dev->last_prefix[0]),
+                          log::hex((u64)dev->last_prefix[1]), log::hex((u64)k));
                 dev->last_prefix_count = 0;
             }
         }
         else
         {
-            trace::warning("Unknow scan code. Unknow prefix. Prefix num: ", dev->last_prefix_count);
+            KLOG_WARN("Unknow scan code. Unknow prefix. Prefix num: {}", dev->last_prefix_count);
         }
     }
     return false;
@@ -717,13 +719,13 @@ bool set_mouse_rate(int port_index, u8 rate)
     write_ps2(port_index, 0xF3);
     if (!ack())
     {
-        trace::warning("set mouse rate (no ACK) failed");
+        KLOG_WARN("set mouse rate (no ACK) failed");
         return false;
     }
     write_ps2(port_index, rate);
     if (!ack())
     {
-        trace::warning("set mouse rate (no ACK) failed");
+        KLOG_WARN("set mouse rate (no ACK) failed");
         return false;
     }
     return true;
@@ -746,7 +748,7 @@ bool mouse_driver::setup(::dev::device *dev)
         if (id == 0x3)
         {
             info.id = id;
-            trace::debug("mouse extension id ", trace::hex(id));
+            KLOG_DEBUG("mouse extension id {}", log::hex(id));
             ms_dev->extension_z = true;
             // try to enable 5 buttons
             set_mouse_rate(ms_dev->port_index, 200);
@@ -757,7 +759,7 @@ bool mouse_driver::setup(::dev::device *dev)
             if (id == 0x4)
             {
                 info.id = id;
-                trace::debug("mouse extension id ", trace::hex(id));
+                KLOG_DEBUG("mouse extension id {}", log::hex(id));
                 ms_dev->extension_buttons = true;
             }
         }
@@ -783,7 +785,7 @@ bool mouse_driver::setup(::dev::device *dev)
     write_ps2(ms_dev->port_index, 0xF4);
     if (!ack())
     {
-        trace::warning("enable mouse report fail(no ACK)");
+        KLOG_WARN("enable mouse report fail(no ACK)");
     }
 
     flush();
@@ -814,7 +816,7 @@ bool mouse_get(mouse_device *dev, io::mouse_data *data)
                 last_data[last_index++] = dt.data;
                 if (!(dt.data & 0b1000))
                 {
-                    trace::warning("Unknown mouse data. ", trace::hex(dt.data));
+                    KLOG_WARN("Unknown mouse data. {}", log::hex(dt.data));
                     last_index = 0;
                 }
                 break;

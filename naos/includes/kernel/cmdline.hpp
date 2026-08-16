@@ -20,6 +20,7 @@ struct space_t
 };
 
 bool early_get(const char *key, char *&out_buf, u64 &len);
+bool early_has_flag(const char *key);
 
 space_t early_get_space(const char *key, space_t default_value);
 bool early_get_bool(const char *key, bool default_value);

@@ -36,7 +36,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(DEBUG_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/debug)
 
-set(FREE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++20 -Wno-pedantic \
+set(FREE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wunreachable-code -pipe -std=c++23 -Wno-pedantic \
 -fno-rtti -fno-asynchronous-unwind-tables -fno-common \
 -fno-plt -fno-exceptions -fno-pic -no-pie -Wall \
 -ffreestanding -fno-stack-protector -fno-builtin -U__linux__ -U_LINUX")

@@ -17,11 +17,11 @@
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
+#include "kernel/log.hpp"
 #include "kernel/terminal.hpp"
 #include "kernel/terminal_identity.hpp"
 #include "kernel/terminal_views.hpp"
 #include "kernel/time.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
 #include "naos/generated/system/InputEventSource.hpp"
@@ -55,6 +55,7 @@
 #include "kernel/dev/framebuffer.hpp"
 #include "kernel/dev/tty/console_pseudo.hpp"
 
+KLOG_MODULE(kernel);
 using mm_info_t = memory::vm::info_t;
 namespace task
 {
@@ -149,6 +150,27 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 
 namespace
 {
+constexpr u64 process_name_capacity = 12;
+
+void set_process_name(process_t &process, const char *path)
+{
+    const char *name = path;
+    if (name != nullptr)
+    {
+        for (const char *cursor = path; *cursor != '\0'; cursor++)
+        {
+            if (*cursor == '/')
+                name = cursor + 1;
+        }
+    }
+    if (name == nullptr || *name == '\0')
+        name = "process";
+
+    const u64 length = strlen(name) < process_name_capacity ? strlen(name) : process_name_capacity;
+    memcpy(process.name, name, length);
+    process.name[length] = '\0';
+}
+
 capability::metadata stream_capability_metadata()
 {
     capability::metadata metadata;
@@ -359,6 +381,7 @@ inline process_t *new_kernel_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->attributes.store(0);
     process->pid = id;
+    set_process_name(*process, "kernel");
     process->session_id = id;
     process->process_group_id = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
@@ -378,6 +401,7 @@ inline process_t *new_process()
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->attributes = process_attributes::userspace;
     process->pid = id;
+    set_process_name(*process, "process");
     process->session_id = id;
     process->process_group_id = id;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
@@ -398,6 +422,7 @@ inline process_t *copy_process(process_t *p)
     process_t *process = memory::New<process_t>(process_t_allocator);
     process->attributes.store(p->attributes.load() & ~process_attributes::job_control_cleanup_done);
     process->pid = id;
+    memcpy(process->name, p->name, sizeof(process->name));
     process->file = p->file;
     process->parent_pid = p->pid;
     process->session_id = p->session_id;
@@ -623,7 +648,7 @@ void init()
     arch::task::init(thd, thd->register_info);
     cpu::current().set_task(thd);
     cpu::current().set_idle_task(thd);
-    trace::debug("Idle process (pid=", process->pid, ") thread (tid=", thd->tid, ") init");
+    KLOG_DEBUG("Idle process (pid={}) thread (tid={}) init", process->pid, thd->tid);
 
     if (cpu::current().is_bsp())
     {
@@ -946,6 +971,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
     process->file = file;
+    set_process_name(*process, path);
 
     copy_fd(file, process, current_process(), flags);
 
@@ -962,7 +988,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     else if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
         memory::KernelCommonAllocatorV->deallocate(header);
-        trace::info("Can't load execute file.");
+        KLOG_INFO("Can't load execute file.");
         abort_unstarted_process(process);
         return nullptr;
     }
@@ -1147,11 +1173,12 @@ int fork()
 int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func, char *const argv[],
            char *const envp[])
 {
-    // trace::info("exec ", path);
+    // KLOG_INFO("exec {}", path);
     auto thd = current();
     auto process = thd->process;
+    set_process_name(*process, path);
     auto process_args = copy_args(path, argv, envp);
-    // trace::info("process ", process->pid, " execve with ", path);
+    // KLOG_INFO("process {} execve with {}", process->pid, path);
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto new_mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
@@ -1173,7 +1200,7 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
         memory::KernelCommonAllocatorV->deallocate(header);
-        trace::info("Can't load execute file.");
+        KLOG_INFO("Can't load execute file.");
         memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
         memory::Delete(memory::KernelCommonAllocatorV, process_args);
         return ENOEXEC;
@@ -1248,7 +1275,7 @@ void exit_process_thread(process_t *process)
         process->attributes |= process_attributes::no_thread;
         if (process == get_init_process())
         {
-            trace::panic("init process startup fail");
+            KLOG_PANIC("init process startup fail");
         }
         notify_parent_of_child_state_change(process);
         process->wait_queue.do_wake_up();
@@ -1279,7 +1306,7 @@ void exit_process_inner(thread_t *thd)
     }
     else
     {
-        trace::panic((int)thd->state);
+        KLOG_PANIC("{}", (int)thd->state);
     }
 }
 
@@ -1288,7 +1315,7 @@ void exit_process(process_t *process, i64 ret, flag_t flags)
     // TODO: write core_dump from flags
     if (ret != 0)
     {
-        trace::debug("process ", process->pid, " exit with code ", ret);
+        KLOG_DEBUG("process {} exit with code {}", process->pid, ret);
     }
     process->ret_val = ret;
     cleanup_process_job_control(process);
@@ -1300,7 +1327,7 @@ void do_exit(i64 ret)
     process_t *process = current_process();
     exit_process(process, ret, 0);
     thread_yield();
-    trace::panic("Unreachable control flow.");
+    KLOG_PANIC("Unreachable control flow.");
 }
 
 process_t *init_process = nullptr;
@@ -1628,7 +1655,7 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
 
 void exit_thread(thread_t *thd, i64 ret)
 {
-    trace::debug("exit thread ", thd->tid, " pid ", thd->process->pid, " code ", ret);
+    KLOG_DEBUG("exit thread {} pid {} code {}", thd->tid, thd->process->pid, ret);
     struct data_t
     {
         thread_t *thd;
@@ -1661,7 +1688,7 @@ void do_exit_thread(i64 ret)
     auto thd = current();
     exit_thread(thd, ret);
     thread_yield();
-    trace::panic("Unreachable control flow.");
+    KLOG_PANIC("Unreachable control flow.");
 }
 
 u64 detach_thread(thread_t *thd)
@@ -2196,7 +2223,7 @@ ExportC void userland_return() { scheduler::schedule(); }
 void set_tcb(thread_t *t, void *p)
 {
     t->tcb = p;
-    // trace::info("process ", t->process->pid, " thread ", t->tid, " set tcb ", trace::hex(p));
+    // KLOG_INFO("process {} thread {} set tcb {}", t->process->pid, t->tid, log::hex(p));
     arch::task::update_fs(t);
 }
 

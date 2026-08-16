@@ -5,12 +5,14 @@
 #include "kernel/arch/task.hpp"
 #include "kernel/arch/tss.hpp"
 #include "kernel/common.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+
+KLOG_MODULE(arch);
 
 namespace arch::cpu
 {
@@ -188,7 +190,7 @@ phy_addr_t get_kernel_stack_bottom_phy(cpuid_t id)
 {
     void *vir = get_kernel_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
-    kassert(addr.has_value(), id, " at ", vir);
+    kassert(addr.has_value(), "{} at {}", id, vir);
     return addr.value();
 }
 
@@ -196,7 +198,7 @@ phy_addr_t get_exception_stack_bottom_phy(cpuid_t id)
 {
     void *vir = get_exception_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
-    kassert(addr.has_value(), id, " at ", vir);
+    kassert(addr.has_value(), "{} at {}", id, vir);
     return addr.value();
 }
 
@@ -204,7 +206,7 @@ phy_addr_t get_interrupt_stack_bottom_phy(cpuid_t id)
 {
     void *vir = get_interrupt_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
-    kassert(addr.has_value(), id, " at ", vir);
+    kassert(addr.has_value(), "{} at {}", id, vir);
     return addr.value();
 }
 
@@ -212,7 +214,7 @@ phy_addr_t get_exception_nmi_stack_bottom_phy(cpuid_t id)
 {
     void *vir = get_exception_nmi_stack_bottom(id);
     auto addr = memory::kernel_vm_info->paging().get_map(vir);
-    kassert(addr.has_value(), id, " at ", vir);
+    kassert(addr.has_value(), "{} at {}", id, vir);
     return addr.value();
 }
 

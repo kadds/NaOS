@@ -4,7 +4,7 @@
 #include "freelibcxx/linked_list.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/common.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 #include "types.hpp"
 #include "wait.hpp"
 namespace task
@@ -96,7 +96,7 @@ inline constexpr signal sigcont = sigcout;
 inline constexpr signal sigtstp = signone1;
 inline constexpr signal sigttin = signone2;
 inline constexpr signal sigttou = signone3;
-}
+} // namespace signal
 
 struct signal_set_t
 {
@@ -180,10 +180,7 @@ struct signal_mask_t
     bool is_block(signal_num_t num) { return block_bitmap[num]; }
     bool is_valid(signal_num_t num) { return def_bitmap[num]; }
 
-    bool is_ignored_or_blocked(signal_num_t num)
-    {
-        return is_ignore(num) || is_block(num);
-    }
+    bool is_ignored_or_blocked(signal_num_t num) { return is_ignore(num) || is_block(num); }
 };
 
 struct signal_info_t

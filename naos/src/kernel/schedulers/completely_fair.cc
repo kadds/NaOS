@@ -8,6 +8,7 @@
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(sched);
 namespace task::scheduler
 {
 struct thread_time_cf_t
@@ -112,7 +113,7 @@ void completely_fair_scheduler::remove(thread_t *thread)
         }
         else
         {
-            trace::panic("Can't find task ", thread->tid, " pid: ", thread->process->pid);
+            KLOG_PANIC("Can't find task {} pid: {}", thread->tid, thread->process->pid);
         }
     }
 
@@ -154,7 +155,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         }
         else if (thread->state == thread_state::ready)
         {
-            trace::debug("task ready to ready pid ", thread->process->pid, " tid ", thread->tid);
+            KLOG_DEBUG("task ready to ready pid {} tid {}", thread->process->pid, thread->tid);
             // ready to ready is safe
             return;
         }
@@ -206,7 +207,7 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         }
         return;
     }
-    trace::panic("Unreachable control flow.", " CFS thread state:", (int)thread->state, ", to state: ", (int)state);
+    KLOG_PANIC("Unreachable control flow. CFS thread state: {}, to state: {}", (int)thread->state, (int)state);
 }
 
 void completely_fair_scheduler::on_migrate(thread_t *thread)
@@ -222,7 +223,7 @@ void completely_fair_scheduler::on_migrate(thread_t *thread)
     else if (thread->state == thread_state::stop)
         task_list->block_list.push_back(thread);
     else
-        trace::panic("Unknown thread state when migrate(CFS). state: ", (u64)thread->state);
+        KLOG_PANIC("Unknown thread state when migrate(CFS). state: {}", (u64)thread->state);
 }
 
 thread_t *completely_fair_scheduler::pick_available_task()
@@ -314,7 +315,8 @@ thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
     uctx::UninterruptibleContext icu;
     for (auto thd : list->runable_list)
     {
-        if (thd.thread->cpumask.mask & (1ul << cpuid))
+        if (thd.thread != current() && thd.thread->state == thread_state::ready &&
+            (thd.thread->cpumask.mask & (1ul << cpuid)))
             return thd.thread;
     }
     return nullptr;

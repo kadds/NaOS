@@ -7,7 +7,6 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 namespace arch::idt
 {
 

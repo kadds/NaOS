@@ -5,10 +5,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(arch);
 namespace arch::device::PIT
 {
 const io_port channel_0_port = 0x40;
@@ -51,7 +52,7 @@ void clock_event::init(u64 hz)
     suspend();
     divisor_ = freq / hz * 2;
 
-    trace::debug("PIT timer divisor ", divisor_, " ", hz, "hz");
+    KLOG_DEBUG("PIT timer divisor {} {}hz", divisor_, hz);
 }
 
 void clock_event::destroy() { divisor_ = 0; }

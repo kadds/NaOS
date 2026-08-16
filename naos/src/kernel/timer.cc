@@ -16,10 +16,11 @@
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/list_node_cache.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(kernel);
 namespace timer
 {
 
@@ -133,8 +134,7 @@ bool check_source(timeclock::clock_source *cs)
         u64 v = cs->current();
         if (v < last || v > last + 10'000)
         {
-            trace::warning("check clock source ", cs->name(), " current ", v, " last ", last, " jiff ", cs->jiff(),
-                           " at ", i);
+            KLOG_WARN("check clock source {} current {} last {} jiff {} at {}", cs->name(), v, last, cs->jiff(), i);
             if (cs->get_event())
             {
                 cs->get_event()->suspend();
@@ -175,7 +175,7 @@ void init()
             }
             if (global_source && !check_source(global_source))
             {
-                trace::warning("hpet timer is not stable");
+                KLOG_WARN("hpet timer is not stable");
                 global_source = nullptr;
             }
         }
@@ -188,7 +188,7 @@ void init()
             }
             if (global_source && !check_source(global_source))
             {
-                trace::warning("acpi pm timer is not stable");
+                KLOG_WARN("acpi pm timer is not stable");
                 global_source = nullptr;
             }
         }
@@ -201,18 +201,18 @@ void init()
             }
             if (global_source && !check_source(global_source))
             {
-                trace::warning("pit timer is not stable");
+                KLOG_WARN("pit timer is not stable");
                 global_source = nullptr;
             }
         }
 
         if (global_source == nullptr)
         {
-            trace::panic("timer is not available");
+            KLOG_PANIC("timer is not available");
         }
         if (cpu::current().is_bsp())
         {
-            trace::info("Use ", global_source->name(), " as timer");
+            KLOG_INFO("Use {} as timer", global_source->name());
         }
         timeclock::clock_source *tsc, *local_apic;
         {

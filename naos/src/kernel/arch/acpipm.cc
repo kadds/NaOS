@@ -7,14 +7,15 @@
 #include "kernel/common.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include <limits>
 
+KLOG_MODULE(arch);
 namespace arch::device::ACPI
 {
 
@@ -54,7 +55,7 @@ void clock_event::init(u64 hz)
     // load base
     auto info_opt = arch::ACPI::get_acpipm_base();
     auto info = info_opt.value();
-    trace::debug("acpipm base ", trace::hex(info.block_base), " new base ", trace::hex(info.xblock_base));
+    KLOG_DEBUG("acpipm base {} new base {}", log::hex(info.block_base), log::hex(info.xblock_base));
 
     if (info.bit32mode)
     {
@@ -83,7 +84,7 @@ void clock_event::init(u64 hz)
         }
         else
         {
-            trace::panic("acpipm base is 0");
+            KLOG_PANIC("acpipm base is 0");
         }
     }
     else

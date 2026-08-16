@@ -9,14 +9,16 @@
 #include "kernel/irq.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/msg_queue.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 #include <atomic>
 
+KLOG_MODULE(mm);
 namespace memory
 {
 
@@ -105,9 +107,9 @@ freelibcxx::tuple<int, int> detect_zones(const kernel_start_args *args, memory_r
 
     for (u32 i = 0; i < args->mmap_count; i++, mm_item++)
     {
-        trace::info("Memory map ", i, " type:", get_type_str(mm_item->map_type), " from:", trace::hex(mm_item->addr),
-                    "-", trace::hex((char *)mm_item->addr + mm_item->len), " size:", mm_item->len, "bytes -> ",
-                    mm_item->len >> 10, "Kib -> ", mm_item->len >> 20, "Mib");
+        KLOG_INFO("Memory map {} type:{} from:{}-{} size:{}bytes -> {}Kib -> {}Mib", i, get_type_str(mm_item->map_type),
+                  log::hex(mm_item->addr), log::hex((char *)mm_item->addr + mm_item->len), mm_item->len,
+                  mm_item->len >> 10, mm_item->len >> 20);
         if (mm_item->map_type == map_type_t::available)
         {
             phy_addr_t start = align_up(phy_addr_t::from(mm_item->addr), page_size);
@@ -147,12 +149,12 @@ freelibcxx::tuple<int, int> detect_zones(const kernel_start_args *args, memory_r
             max_memory_maped = mm_item->addr + mm_item->len;
         }
     }
-    trace::info("Memory available ", max_memory_available, "bytes -> ", max_memory_available >> 10, "Kib -> ",
-                max_memory_available >> 20, "Mib -> ", max_memory_available >> 30, "Gib");
+    KLOG_INFO("Memory available {}bytes -> {}Kib -> {}Mib -> {}Gib", max_memory_available, max_memory_available >> 10,
+              max_memory_available >> 20, max_memory_available >> 30);
     // 16MB
     if (max_memory_available < 0x1000000)
     {
-        trace::panic("Too few memory to boot");
+        KLOG_PANIC("Too few memory to boot");
     }
     if (high_memory_index == -1)
     {
@@ -167,7 +169,7 @@ memory_range result_range[max_memory_range_support];
 void init(kernel_start_args *args, u64 fix_memory_limit)
 {
     if (args->mmap_count == 0)
-        trace::panic("memory map shouldn't empty");
+        KLOG_PANIC("memory map shouldn't empty");
 
     PhyBootAllocator::init(phy_addr_t::from(args->data_base + args->data_size));
     VirtBootAllocator vb;
@@ -203,7 +205,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     if (start_data < end_kernel)
     {
         start_data = end_kernel;
-        trace::warning("Data space is in kernel code space");
+        KLOG_WARN("Data space is in kernel code space");
         if (end_data < start_data)
         {
             end_data = start_data;
@@ -219,7 +221,7 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         reinterpret_cast<char *>(VirtBootAllocatorV->current_ptr_address()) + memory::page_size * 4;
     end_used_memory_addr = align_up(end_used_memory_addr, memory::page_size);
 
-    trace::debug("Build memory zones ", zone_count, " high memory zones ", zone_count - high_memory_index);
+    KLOG_DEBUG("Build memory zones {} high memory zones {}", zone_count, zone_count - high_memory_index);
 
     for (int zone_id = 0; zone_id < high_memory_index; zone_id++)
     {
@@ -227,8 +229,8 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
-        trace::info("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
-                    " num of page ", z->total_pages());
+        KLOG_INFO("Memory zone index {}, {}-{} num of page {}", zone_id, log::hex(range.beg.get()),
+                  log::hex(range.end.get()), z->total_pages());
     }
     global_zones->tag_alloc(phy_addr_t::from(0x100000), va2pa(end_used_memory_addr));
 
@@ -246,19 +248,18 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         i.group = New<slab_group>(VirtBootAllocatorV, i.size, i.name, 8, 0);
     }
 
-    trace::debug("Kernel(code):", trace::hex(start_kernel()), "-", trace::hex(end_kernel()),
-                 ", size:", (end_kernel - start_kernel), " -> ", (end_kernel - start_kernel) >> 10, "Kib");
+    KLOG_DEBUG("Kernel(code):{}-{}, size:{} -> {}Kib", log::hex(start_kernel()), log::hex(end_kernel()),
+               (end_kernel - start_kernel), (end_kernel - start_kernel) >> 10);
 
-    trace::debug("Kernel(boot data):", trace::hex(start_data()), "-", trace::hex(end_data()),
-                 ", size:", (end_data - start_data), " -> ", (end_data - start_data) >> 10, "Kib");
+    KLOG_DEBUG("Kernel(boot data):{}-{}, size:{} -> {}Kib", log::hex(start_data()), log::hex(end_data()),
+               (end_data - start_data), (end_data - start_data) >> 10);
 
-    trace::debug("Kernel(image data):", trace::hex(image_phy_addr.get()), "-",
-                 trace::hex((image_phy_addr + args->rfsimg_size).get()), ", size:", image_size, " -> ",
-                 (image_size) >> 10, "Kib");
+    KLOG_DEBUG("Kernel(image data):{}-{}, size:{} -> {}Kib", log::hex(image_phy_addr.get()),
+               log::hex((image_phy_addr + args->rfsimg_size).get()), image_size, image_size >> 10);
 
     KernelBuddyAllocatorV = global_zones;
 
-    trace::debug("kmalloc prepared.");
+    KLOG_DEBUG("kmalloc prepared.");
 
     memory::vm::init();
     kernel_vm_info = New<vm::info_t>(VirtBootAllocatorV);
@@ -277,8 +278,8 @@ void init2()
 
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
-        trace::debug("Memory zone index ", zone_id, ", ", trace::hex(range.beg.get()), "-", trace::hex(range.end.get()),
-                     " num of page ", z->total_pages());
+        KLOG_DEBUG("Memory zone index {}, {}-{} num of page {}", zone_id, log::hex(range.beg.get()),
+                   log::hex(range.end.get()), z->total_pages());
     }
     global_zones->set_high_memory_init();
 }
@@ -293,12 +294,12 @@ void *kmalloc(u64 size, u64 align)
 {
     if (unlikely(align > size))
     {
-        trace::panic("align is larger than size");
+        KLOG_PANIC("align is larger than size");
     }
     constexpr int tmp = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]) - 1;
     if (unlikely(size > kmalloc_fixed_slab_size[tmp].size))
     {
-        trace::panic("allocate size is too large");
+        KLOG_PANIC("allocate size is too large");
     }
 
     u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid = 0;
@@ -332,7 +333,7 @@ void kfree(void *addr)
     slab_group *s = slab_group::get_group_from(addr);
     if (s == nullptr)
     {
-        trace::panic("address isn't malloc from kmalloc ", trace::hex(addr));
+        KLOG_PANIC("address isn't malloc from kmalloc {}", log::hex(addr));
         return;
     }
     SlabObjectAllocator allocator(s);
@@ -342,14 +343,15 @@ void kfree(void *addr)
 
 void *vmalloc(u64 size, u64 align)
 {
+    // Keep VMA reservation and page-table installation atomic with respect to
+    // vfree().  Releasing the VMA before unmapping the pages lets another CPU
+    // reserve the same range while the old PTEs are still present.
+    uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
     auto vm = kernel_vm_info->vma().allocate_map(size, align, vm::page_fault_method::none, 0);
     if (vm == nullptr)
-        trace::panic("vmalloc exhausted");
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
-        kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
-                                     arch::paging::flags::writable, 0);
-    }
+        KLOG_PANIC("vmalloc exhausted");
+    kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
+                                 arch::paging::flags::writable, 0);
 
     arch::paging::page_table_t::reload();
     return (void *)vm->start;
@@ -357,16 +359,16 @@ void *vmalloc(u64 size, u64 align)
 
 void vfree(void *addr)
 {
+    // Pair this with vmalloc() so a freed range cannot be reused until its
+    // page-table entries have been removed.
+    uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
     auto vm = kernel_vm_info->vma().get_vm_area((u64)addr);
     if (vm)
     {
         auto start = vm->start;
         auto end = vm->end;
         kernel_vm_info->vma().deallocate_map(vm);
-        {
-            uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
-            kernel_vm_info->paging().unmap(reinterpret_cast<void *>(start), (end - start) / page_size);
-        }
+        kernel_vm_info->paging().unmap(reinterpret_cast<void *>(start), (end - start) / page_size);
     }
 }
 

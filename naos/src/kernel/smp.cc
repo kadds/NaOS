@@ -6,11 +6,12 @@
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(kernel);
 namespace SMP
 {
 
@@ -37,7 +38,7 @@ void init()
 {
     if (cpu::current().is_bsp())
     {
-        trace::debug("SMP init");
+        KLOG_INFO("SMP init");
     }
     arch::SMP::init();
     if (cpu::current().is_bsp())

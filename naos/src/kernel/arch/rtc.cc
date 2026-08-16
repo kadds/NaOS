@@ -2,7 +2,9 @@
 #include "freelibcxx/time.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
+
+KLOG_MODULE(arch);
 
 namespace arch::device::RTC
 {

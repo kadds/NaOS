@@ -112,7 +112,7 @@
 //             next = current;
 //             current = current->prev;
 //         }
-//         // kassert(false, "Can't free list node ", (void *)node);
+//         // kassert(false, "Can't free list node {}", (void *)node);
 //     }
 
 //     void *allocate(u64 size, u64 align) override { return new_node(); }

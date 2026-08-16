@@ -23,6 +23,46 @@ The build has two stages. Meson first cross-compiles static mlibc for the `naos`
 
 For an ISO boot, `python3 util/run.py q --iso -n` copies `kernel` and `rfsimg` into `run/iso` and invokes `grub-mkrescue`. For disk boot, the utility copies the system files into the mounted image’s `/boot` directory before starting the selected emulator. `-n` is the supported CI/development mode: QEMU remains headless and validation uses `run/kernel_out.log`.
 
+## Kernel Logging and QEMU Debugging
+
+The accepted logging architecture is recorded in
+[`ADR_KERNEL_LOG.md`](ADR_KERNEL_LOG.md).
+
+Kernel diagnostics use the fixed-module `KLOG_*` API in
+[`kernel/log.hpp`](../naos/includes/kernel/log.hpp). Each call is retained as
+one record with an internal sequence, level, timestamp, CPU, PID/TID, module,
+source line, and bounded message. The sequence is not printed in the
+human-facing text format. Structured messages escape control characters;
+`KLOG_RAW` is reserved for stack, register, and firmware dumps that may span
+multiple lines. The logger progresses through static early storage, the
+runtime retention ring, and an emergency panic path. Normal serial, console,
+and `/var/log/dmesg` output is handled by independent workers after the
+scheduler starts. Userland `_s_log` records use the current process executable
+basename, truncated to 12 characters, instead of the syscall implementation's
+kernel module name; duplicate `name: ` prefixes in the message are removed.
+Panic output includes the current register, MSR, control-register, and stack
+dump before halting.
+
+The relevant kernel command-line settings are `kernel_log_level`,
+`kernel_log_sinker`, `kernel_log_buffer_size`,
+`kernel_log_early_buffer_size`, `kernel_log_filter`,
+`kernel_log_emergency_serial`, and `quiet`. Runtime storage defaults to 32 KiB
+and accepts 8 KiB–1 MiB; early storage defaults to 8 KiB and accepts
+1–8 KiB. The sinker format is
+`<console|serial|dmesg>:<on|off>:<level>:<color|nocolor>`. Sink colors are
+never stored in records or sent through the emergency serial path.
+
+QEMU keeps the legacy GDB listener with `-s` on the default path. Use
+`--wait-gdb` to add `-S`, `--gdb-port PORT` to select a validated TCP port,
+`--qemu-debug` to write `run/qemu.log`, `--monitor PATH` for a Unix monitor
+socket, and `--no-reboot` to add `-no-reboot -no-shutdown`. These options are
+assembled identically for ISO, disk, and UEFI boots:
+
+```bash
+python3 util/run.py q --iso -n --wait-gdb --gdb-port 12345 --no-reboot
+python3 util/run.py q --iso -n --qemu-debug --monitor /tmp/naos-qemu.monitor
+```
+
 ## Extension Boundaries
 
 Keep hardware- and CPU-specific code in `naos/src/kernel/arch`, reusable kernel facilities in their subsystem directories, and user-facing functionality under `naos/src/usr`. Kernel code must remain freestanding and avoid hosted-library, exception, and RTTI assumptions. Userland code should use mlibc rather than directly depending on host Linux APIs.

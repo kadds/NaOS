@@ -6,9 +6,10 @@
 #include "kernel/arch/pit.hpp"
 #include "kernel/clock/clock_event.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 #include <limits>
+KLOG_MODULE(arch);
 namespace arch::TSC
 {
 void clock_source::init() { begin_tsc_ = _rdtsc(); }
@@ -47,13 +48,13 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
         if (f > 0)
         {
             const u64 base_hz = 10;
-            trace::info("TSC builtin frequency ", f * base_hz, "MHZ");
+            KLOG_INFO("TSC builtin frequency {}MHZ", f * base_hz);
             tsc_tick_second_ = f * base_hz;
             builtin_freq_ = true;
             return;
         }
     }
-    trace::debug("TSC calibrate");
+    KLOG_DEBUG("TSC calibrate");
     u64 tsc_freq[test_times];
     u64 total_freq = 0;
     u64 max_freq = 0;
@@ -79,8 +80,8 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     delta /= test_times;
     const u64 freq = tsc_freq[test_times / 2];
 
-    trace::info("TSC frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ", min_freq / 1000'000UL, "MHZ.",
-                " max ", max_freq / 1000'000UL, "MHZ.");
+    KLOG_INFO("TSC frequency {}MHZ. delta {} min {}MHZ. max {}MHZ.", freq / 1000'000UL, delta, min_freq / 1000'000UL,
+              max_freq / 1000'000UL);
 
     tsc_tick_second_ = freq;
 }
@@ -97,7 +98,7 @@ clock_source *make_clock()
     }
     else
     {
-        trace::debug("no constant tsc");
+        KLOG_DEBUG("no constant tsc");
     }
     return nullptr;
 }

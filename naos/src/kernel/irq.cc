@@ -13,6 +13,7 @@
 #include "kernel/ucontext.hpp"
 #include "kernel/wait.hpp"
 #include <atomic>
+KLOG_MODULE(kernel);
 namespace irq
 {
 struct request_entry
@@ -88,7 +89,7 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
     // {
     //     if ((regs->vector == 128 && info.counter % 200 == 0) || regs->vector != 128)
     //     {
-    //         trace::info("inter vector ", regs->vector, " times ", info.counter.load());
+    //         KLOG_INFO("inter vector {} times {}", regs->vector, info.counter.load());
     //     }
     // }
 

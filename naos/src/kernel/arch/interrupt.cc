@@ -6,12 +6,13 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
+KLOG_MODULE(arch);
 extern volatile char interrupt_code_end[], interrupt_code_start[];
 
 namespace arch::interrupt
@@ -45,7 +46,7 @@ void init()
     {
         build(i, 0);
     }
-    trace::info("Interrupt entry address: ", code_buffer, " size: ", a_code_len);
+    KLOG_INFO("Interrupt entry address: {} size: {}", code_buffer, a_code_len);
 }
 
 ExportC void on_intr_exit(const regs_t *regs) {}

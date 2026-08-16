@@ -12,11 +12,12 @@
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/super_block.hpp"
 #include "kernel/handle.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(fs);
 namespace fs::vfs
 {
 
@@ -42,7 +43,7 @@ data_t *data;
 
 void init()
 {
-    trace::debug("VFS init");
+    KLOG_INFO("VFS init");
     data = memory::New<data_t>(memory::KernelCommonAllocatorV);
 }
 
@@ -532,7 +533,7 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
     {
         if (global_root != nullptr)
         {
-            trace::panic("Mount point \"/\" has been mount.");
+            KLOG_PANIC("Mount point \"/\" has been mount.");
         }
         // mount global root
         auto su_block = fs->load(dev, fs_data, max_len);
@@ -544,14 +545,14 @@ bool mount(file_system *fs, const char *dev, const char *path, dentry *path_root
     {
         if (unlikely(global_root == nullptr))
         {
-            trace::panic("Mount root \"/\" before mount \"", path, "\". File system name: ", fs->get_name());
+            KLOG_PANIC("Mount root \"/\" before mount \"{}\". File system name: {}", path, fs->get_name());
         }
 
         nameidata idata(&data->dir_entry_allocator);
         dentry *dir = path_walk(path, path_root, cur_dir, path_walk_flags::directory, idata);
         if (unlikely(dir == nullptr))
         {
-            trace::warning("Mount point doesn't exist.");
+            KLOG_WARN("Mount point doesn't exist.");
             return false;
         }
         auto su_block = fs->load(dev, fs_data, max_len);
@@ -592,12 +593,12 @@ bool umount(const char *path, dentry *path_root, dentry *cur_dir)
             }
             else
             {
-                trace::panic("Can't umount root.");
+                KLOG_PANIC("Can't umount root.");
             }
             return true;
         }
     }
-    trace::info("File system ", sb->get_file_system()->get_name(), " doesn't mounted.");
+    KLOG_INFO("File system {} doesn't mounted.", sb->get_file_system()->get_name());
     return false;
 }
 

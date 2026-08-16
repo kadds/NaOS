@@ -2,7 +2,7 @@
 #include "freelibcxx/optional.hpp"
 #include "freelibcxx/tuple.hpp"
 #include "kernel/common.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 #include <cstddef>
 #include <type_traits>
 

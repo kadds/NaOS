@@ -4,12 +4,14 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/regs.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 
+KLOG_MODULE(arch);
 namespace arch::task
 {
 
@@ -37,7 +39,7 @@ ExportC void switch_task(register_info_t *prev, register_info_t *next) {}
 
 ExportC void do_exit(u64 exit_code)
 {
-    trace::debug("Thread exit unexpected!");
+    KLOG_DEBUG("Thread exit unexpected!");
     while (1)
         ;
 }
@@ -137,7 +139,7 @@ void update_fs(::task::thread_t *thd)
 {
     u64 tcb = reinterpret_cast<u64>(thd->tcb);
     _wrmsr(0xC0000100, tcb);
-    kassert(_rdmsr(0xC0000100) == tcb, "Unreadable fs base ", trace::hex(tcb), " ", trace::hex(_rdmsr(0xC0000100)));
+    kassert(_rdmsr(0xC0000100) == tcb, "Unreadable fs base {} {}", log::hex(tcb), log::hex(_rdmsr(0xC0000100)));
 }
 
 bool make_signal_context(void *stack, void *func, userland_code_context *context)
@@ -200,7 +202,7 @@ bool make_signal_context(void *stack, void *func, userland_code_context *context
     }
     else
     {
-        trace::panic("Unknown rsp value");
+        KLOG_PANIC("Unknown rsp value");
     }
     return true;
 }
@@ -231,7 +233,7 @@ void return_from_signal_context(userland_code_context *context)
     }
     else
     {
-        trace::panic("Unknown rsp value");
+        KLOG_PANIC("Unknown rsp value");
     }
 }
 

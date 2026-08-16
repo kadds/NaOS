@@ -10,6 +10,7 @@
 #include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/input_event_source.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -17,7 +18,6 @@
 #include "kernel/task.hpp"
 #include "kernel/terminal_views.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/canonical.hpp"
@@ -35,6 +35,7 @@
 #include "naos/generated/system_uapi.h"
 #include <limits>
 
+KLOG_MODULE(ipc);
 namespace naos::ipc
 {
 namespace
@@ -2406,12 +2407,12 @@ void init_kernel_dispatch_worker()
         return;
     kernel_dispatcher = memory::New<kernel_dispatch_queue>(memory::KernelCommonAllocatorV);
     if (kernel_dispatcher == nullptr)
-        trace::panic("Unable to allocate kernel invocation dispatcher");
+        KLOG_PANIC("Unable to allocate kernel invocation dispatcher");
     constexpr u64 worker_count = 4;
     for (u64 worker = 0; worker < worker_count; worker++)
     {
         if (task::create_kernel_process(kernel_dispatch_worker, nullptr, 0) == nullptr)
-            trace::panic("Unable to create kernel invocation dispatcher");
+            KLOG_PANIC("Unable to create kernel invocation dispatcher");
     }
 }
 

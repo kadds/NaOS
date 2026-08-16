@@ -1134,14 +1134,6 @@ void flush_pending_writes(service_state &state)
         const int result = pending.master
                                ? pair->core.receive_input(pending.data + pending.offset, remaining, true, &progressed)
                                : pair->core.write_output(pending.data + pending.offset, remaining, true, &progressed);
-        if (!pending.master)
-        {
-            char message[96]{};
-            snprintf(message, sizeof(message), "ttyd: slave write size=%llu offset=%llu progressed=%llu result=%d\n",
-                     static_cast<unsigned long long>(pending.size), static_cast<unsigned long long>(pending.offset),
-                     static_cast<unsigned long long>(progressed), result);
-            _s_log(message);
-        }
         pending.offset += progressed;
         if (pending.nonblock)
         {
@@ -2175,8 +2167,7 @@ class terminal_manager_handler
             frontend_info.binding != NA_BINDING_KERNEL_VIEW ||
             (frontend_info.meta_rights & (NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT)) !=
                 (NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT) ||
-            (frontend_info.scope != NA_SCOPE_NONE) ||
-            (frontend_info.protocol_rights & NA_DISPLAY_RIGHT_WRITER) == 0)
+            (frontend_info.scope != NA_SCOPE_NONE) || (frontend_info.protocol_rights & NA_DISPLAY_RIGHT_WRITER) == 0)
             return false;
         if (!valid_terminal_mode(request.mode) || state_.endpoint_count >= max_endpoints ||
             state_.binding_count >= max_endpoints)

@@ -4,11 +4,12 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/signal.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(arch);
 namespace arch::exception
 {
 
@@ -53,12 +54,12 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     {
         if (unlikely(!cpu::has_init()))
         {
-            trace::panic_stack(regs, "Startup Oops error ", trace::hex(extra_data));
+            KLOG_PANIC_STACK(regs, "Startup Oops error {}", log::hex(extra_data));
         }
         auto &cpu = cpu::current();
         if (unlikely(cpu.get_user_data() == nullptr))
         {
-            trace::panic_stack(regs, "Startup Oops error ", trace::hex(extra_data));
+            KLOG_PANIC_STACK(regs, "Startup Oops error {}", log::hex(extra_data));
         }
         ::task::thread_t *task = ::task::current();
         if (likely((regs->cs & 0x3) != 0)) // user space : DPL 3
@@ -66,8 +67,8 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
             task->register_info->trap_vector = regs->vector;
             auto &pack = task->process->signal_pack;
             auto p = task->process;
-            trace::info("exception ", regs->vector, " occurred at ", trace::hex(regs->rip), " code ", regs->error_code,
-                        " pid ", task->process->pid);
+            KLOG_INFO("exception {} occurred at {} code {} pid {}", regs->vector, log::hex(regs->rip), regs->error_code,
+                      task->process->pid);
             switch (regs->vector)
             {
                 case 0:
@@ -138,9 +139,9 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
                 task->register_info->trap_vector = regs->vector;
             }
             ::task::thread_t *task = ::task::current();
-            trace::warning("exception ", regs->vector, " occurred at ", trace::hex(regs->rip), " code ",
-                           regs->error_code, " task ", task != nullptr ? task->process->pid : 0);
-            trace::panic_stack(regs, "Kernel Oops ->");
+            KLOG_WARN("exception {} occurred at {} code {} task {}", regs->vector, log::hex(regs->rip),
+                      regs->error_code, task != nullptr ? task->process->pid : 0);
+            KLOG_PANIC_STACK(regs, "Kernel Oops ->");
         }
     }
 
@@ -150,58 +151,58 @@ void _ctx_interrupt_ dispatch_exception(regs_t *regs)
     }
 }
 
-ExportC _ctx_interrupt_ void entry_divide_error(regs_t *regs) { trace::debug("divide error. "); }
+ExportC _ctx_interrupt_ void entry_divide_error(regs_t *regs) { KLOG_DEBUG("divide error. "); }
 
-ExportC _ctx_interrupt_ void entry_debug(regs_t *regs) { trace::debug("debug trap. "); }
+ExportC _ctx_interrupt_ void entry_debug(regs_t *regs) { KLOG_DEBUG("debug trap. "); }
 
-ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs) { trace::debug("nmi interrupt! "); }
+ExportC _ctx_interrupt_ void entry_nmi(regs_t *regs) { KLOG_NMI("nmi interrupt! "); }
 
 ExportC _ctx_interrupt_ void entry_int3(regs_t *regs)
 {
-    trace::debug("int3 trap. ");
+    KLOG_DEBUG("int3 trap. ");
     /// TODO: debugger
 }
 
-ExportC _ctx_interrupt_ void entry_overflow(regs_t *regs) { trace::debug("overflow trap. "); }
+ExportC _ctx_interrupt_ void entry_overflow(regs_t *regs) { KLOG_DEBUG("overflow trap. "); }
 
-ExportC _ctx_interrupt_ void entry_bounds(regs_t *regs) { trace::debug("out of bounds error. "); }
+ExportC _ctx_interrupt_ void entry_bounds(regs_t *regs) { KLOG_DEBUG("out of bounds error. "); }
 
-ExportC _ctx_interrupt_ void entry_undefined_opcode(regs_t *regs) { trace::debug("undefined opcode error. "); }
+ExportC _ctx_interrupt_ void entry_undefined_opcode(regs_t *regs) { KLOG_DEBUG("undefined opcode error. "); }
 
-ExportC _ctx_interrupt_ void entry_dev_not_available(regs_t *regs) { trace::debug("dev not available error. "); }
+ExportC _ctx_interrupt_ void entry_dev_not_available(regs_t *regs) { KLOG_DEBUG("dev not available error. "); }
 
-ExportC _ctx_interrupt_ void entry_double_fault(regs_t *regs) { trace::debug("double abort. "); }
+ExportC _ctx_interrupt_ void entry_double_fault(regs_t *regs) { KLOG_DEBUG("double abort. "); }
 
 ExportC _ctx_interrupt_ void entry_coprocessor_segment_overrun(regs_t *regs)
 {
-    trace::debug("coprocessor segment overrun error. ");
+    KLOG_DEBUG("coprocessor segment overrun error. ");
 }
 
-ExportC _ctx_interrupt_ void entry_invalid_TSS(regs_t *regs) { trace::debug("invalid tss error. "); }
+ExportC _ctx_interrupt_ void entry_invalid_TSS(regs_t *regs) { KLOG_DEBUG("invalid tss error. "); }
 
-ExportC _ctx_interrupt_ void entry_segment_not_present(regs_t *regs) { trace::debug("segment not present error. "); }
+ExportC _ctx_interrupt_ void entry_segment_not_present(regs_t *regs) { KLOG_DEBUG("segment not present error. "); }
 
-ExportC _ctx_interrupt_ void entry_stack_segment_fault(regs_t *regs) { trace::debug("stack segment fault. "); }
+ExportC _ctx_interrupt_ void entry_stack_segment_fault(regs_t *regs) { KLOG_DEBUG("stack segment fault. "); }
 
-ExportC _ctx_interrupt_ void entry_general_protection(regs_t *regs) { trace::debug("general protection error. "); }
+ExportC _ctx_interrupt_ void entry_general_protection(regs_t *regs) { KLOG_DEBUG("general protection error. "); }
 
 ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
 {
     u64 cr2;
     __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : :);
 
-    // trace::debug("page fault at ", (void *)cr2, ". ");
+    // KLOG_DEBUG("page fault at {}. ", (void *)cr2);
 }
 
-ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs) { trace::debug("X87 fpu error. "); }
+ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs) { KLOG_DEBUG("X87 fpu error. "); }
 
-ExportC _ctx_interrupt_ void entry_alignment_check(regs_t *regs) { trace::debug("alignment error. "); }
+ExportC _ctx_interrupt_ void entry_alignment_check(regs_t *regs) { KLOG_DEBUG("alignment error. "); }
 
-ExportC _ctx_interrupt_ void entry_machine_check(regs_t *regs) { trace::debug("machine error. "); }
+ExportC _ctx_interrupt_ void entry_machine_check(regs_t *regs) { KLOG_DEBUG("machine error. "); }
 
-ExportC _ctx_interrupt_ void entry_SIMD_exception(regs_t *regs) { trace::debug("SIMD error. "); }
+ExportC _ctx_interrupt_ void entry_SIMD_exception(regs_t *regs) { KLOG_DEBUG("SIMD error. "); }
 
-ExportC _ctx_interrupt_ void entry_virtualization_exception(regs_t *regs) { trace::debug("virtualization error. "); }
+ExportC _ctx_interrupt_ void entry_virtualization_exception(regs_t *regs) { KLOG_DEBUG("virtualization error. "); }
 typedef void (*entry_func)(regs_t *regs);
 
 entry_func exceptions[] = {

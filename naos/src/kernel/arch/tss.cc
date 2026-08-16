@@ -2,8 +2,11 @@
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/gdt.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
+
+KLOG_MODULE(arch);
+
 namespace arch::tss
 {
 const u8 tss_type = 0b1001;

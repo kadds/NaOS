@@ -4,7 +4,7 @@
 #include "../ucontext.hpp"
 #include "freelibcxx/bit_set.hpp"
 #include "kernel/common.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/log.hpp"
 #include <atomic>
 namespace util
 {

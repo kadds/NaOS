@@ -1,14 +1,15 @@
 #include "kernel/syscall.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/log.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(io);
 namespace naos::syscall
 {
 /// none system call, just print a warning
 u64 none()
 {
-    trace::warning("This system call isn't implement!");
+    KLOG_WARN("This system call isn't implement!");
     return 1;
 }
 

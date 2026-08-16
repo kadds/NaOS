@@ -3,14 +3,15 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/ipc/invocation.hpp"
+#include "kernel/log.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/task/builtin/init_task.hpp"
 #include "kernel/task/builtin/input_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(task);
 namespace task::builtin::idle
 {
 namespace
@@ -49,11 +50,12 @@ bool move_bootstrap_capability(process_t &source, process_t &destination, na_han
 std::atomic_bool is_init = false;
 void main(void *arg)
 {
-    trace::debug("idle task running at cpu ", cpu::current().id());
+    KLOG_DEBUG("idle task running at cpu {}", cpu::current().id());
     if (cpu::current().is_bsp())
     {
+        log::start_workers();
         auto p = task::create_kernel_process(builtin::softirq::main, 0, create_thread_flags::real_time_rr);
-        trace::debug("softirqd created tid=", p->main_thread->tid);
+        KLOG_DEBUG("softirqd created tid={}", p->main_thread->tid);
         kassert(p->pid == 1, "BUG check failed.");
         is_init = true;
         task::create_kernel_process(builtin::input::main, 0, create_thread_flags::real_time_rr);
@@ -62,19 +64,19 @@ void main(void *arg)
         auto file = fs::vfs::open("/bin/init", fs::vfs::global_root, fs::vfs::global_root,
                                   fs::mode::read | fs::mode::bin, fs::path_walk_flags::file);
         if (!file)
-            trace::panic("Can't open init program");
+            KLOG_PANIC("Can't open init program");
 
         auto *init_process =
             task::create_process(file, "/bin/init", init::main, 0, 0, create_process_flags::deferred_start);
         if (init_process == nullptr)
-            trace::panic("Can't create init process");
+            KLOG_PANIC("Can't create init process");
 
         // These are one-shot bootstrap authorities. Move them into the first
         // user process before it can issue its bootstrap syscall; later
         // hand-offs use ordinary capability MOVE dispositions.
         auto *kernel_process = task::current_process();
         if (kernel_process == nullptr)
-            trace::panic("Unable to transfer initial device capabilities");
+            KLOG_PANIC("Unable to transfer initial device capabilities");
         init_process->bootstrap_capability_count = kernel_process->bootstrap_capability_count;
         for (uint32_t i = 0; i < kernel_process->bootstrap_capability_count; i++)
         {
@@ -82,12 +84,12 @@ void main(void *arg)
             if (!move_bootstrap_capability(*kernel_process, *init_process,
                                            kernel_process->bootstrap_capabilities[i].handle,
                                            init_process->bootstrap_capabilities[i].handle))
-                trace::panic("Unable to transfer initial device capabilities");
+                KLOG_PANIC("Unable to transfer initial device capabilities");
         }
         kernel_process->bootstrap_capability_count = 0;
 
         if (task::setsid(init_process) < 0)
-            trace::warning("Unable to create init session");
+            KLOG_WARN("Unable to create init session");
 
         set_init_process(init_process);
         task::start_process(init_process);
@@ -101,7 +103,7 @@ void main(void *arg)
         /// soft irq process
         auto t = task::create_thread(task::find_pid(1), builtin::softirq::main, nullptr, 0,
                                      create_thread_flags::real_time_rr);
-        trace::debug("softirqd created tid=", t->tid);
+        KLOG_DEBUG("softirqd created tid={}", t->tid);
     }
 
     task::thread_yield();

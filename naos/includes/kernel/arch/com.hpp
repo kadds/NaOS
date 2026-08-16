@@ -13,6 +13,7 @@ class serial
 
     void write(byte data);
     void write(const byte *data, u64 len);
+    bool try_write(byte data, u32 budget);
 
     /// read bytes to buffer
     u64 read(byte *data, u64 len);

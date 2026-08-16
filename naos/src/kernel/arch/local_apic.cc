@@ -9,15 +9,16 @@
 #include "kernel/arch/pit.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/irq.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include <atomic>
 #include <cstddef>
 
+KLOG_MODULE(arch);
 const u16 id_register = 2;
 const u16 version_register = 3;
 const u16 task_priority_register = 8;
@@ -186,7 +187,7 @@ void local_init()
         bool acpi = cmdline::get_bool("acpi", false);
         if (cpu_info::has_feature(cpu_info::feature::x2apic))
         {
-            trace::debug("x2APIC is supported");
+            KLOG_DEBUG("x2APIC is supported");
             // read_register = read_register_MSR;
             // write_register = write_register_MSR;
             // read_register64 = read_register_MSR_64;
@@ -206,13 +207,13 @@ void local_init()
             phy_addr_t base = arch::ACPI::get_local_apic_base();
             if (base != local_apic_base_addr)
             {
-                trace::warning("Local APIC base from msr ", trace::hex(local_apic_base_addr()), " from ACPI ",
-                               trace::hex(base()));
+                KLOG_WARN("Local APIC base from msr {} from ACPI {}", log::hex(local_apic_base_addr()),
+                          log::hex(base()));
             }
             local_apic_base_addr = base;
         }
 
-        trace::debug("Local APIC base ", trace::hex(local_apic_base_addr()));
+        KLOG_DEBUG("Local APIC base {}", log::hex(local_apic_base_addr()));
         auto &paging = memory::kernel_vm_info->paging();
         u64 map_base = memory::alloc_io_mmap_address(paging::frame_size::size_2mb, paging::frame_size::size_2mb);
 
@@ -230,7 +231,7 @@ void local_init()
     }
 
     _wrmsr(0x1B, _rdmsr(0x1B) | v);
-    kassert((_rdmsr(0x1B) & v) == v, "Can't enable (IA32_APIC_BASE) APIC value ", (void *)_rdmsr(0x1B));
+    kassert((_rdmsr(0x1B) & v) == v, "Can't enable (IA32_APIC_BASE) APIC value {}", (void *)_rdmsr(0x1B));
 
     u64 version_value = read_register(version_register);
     // timer mask
@@ -245,12 +246,12 @@ void local_init()
     {
         if (version > 0xf)
         {
-            trace::debug("Use Intergrated APIC");
+            KLOG_DEBUG("Use Intergrated APIC");
             builtin_local_apic = true;
         }
         else
         {
-            trace::warning("Use 82489DX");
+            KLOG_WARN("Use 82489DX");
         }
     }
 
@@ -262,7 +263,7 @@ void local_init()
     disable_all_lvt();
     // enable software Local APIC
     write_register(spurious_interrupt_vector_register, read_register(spurious_interrupt_vector_register) | v);
-    kassert((read_register(spurious_interrupt_vector_register) & v) == v, "Can't software enable local-APIC value ",
+    kassert((read_register(spurious_interrupt_vector_register) & v) == v, "Can't software enable local-APIC value {}",
             (void *)(u64)read_register(spurious_interrupt_vector_register));
 }
 
@@ -389,7 +390,7 @@ void clock_event::init(u64 HZ)
     else
     {
         builtin_frequency_ = true;
-        trace::debug("load builtin bus frequency ", bus_frequency_ / 1000'000UL, "MHZ");
+        KLOG_DEBUG("load builtin bus frequency {}MHZ", bus_frequency_ / 1000'000UL);
     }
 
     is_suspend_ = false;
@@ -526,7 +527,7 @@ u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
 
     from_ev->suspend();
     ev->suspend();
-    // trace::info("tsc ", (_rdtsc() - tsc) / 100'000UL, " ", end_count - start_count, " ", cost);
+    // KLOG_INFO("tsc {} {} {}", (_rdtsc() - tsc) / 100'000UL, end_count - start_count, cost);
 
     return (end_count - start_count) * 1'000'000UL / cost;
 }
@@ -565,8 +566,8 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
                 delta += d * d;
             }
             delta /= test_times;
-            trace::info("Local APIC bus test frequency ", freq / 1000'000UL, "MHZ. delta ", delta, " min ",
-                        min_freq / 1000'000UL, "MHZ. max ", max_freq / 1000'000UL, "MHZ. ");
+            KLOG_INFO("Local APIC bus test frequency {}MHZ. delta {} min {}MHZ. max {}MHZ.", freq / 1000'000UL, delta,
+                      min_freq / 1000'000UL, max_freq / 1000'000UL);
 
             lapic_freq = freq;
             ev->bus_frequency_ = freq;
@@ -585,13 +586,13 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     u32 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_)) / ev->hz_;
     if (cpu::current().is_bsp())
     {
-        trace::debug("Local APIC set counter ", lapic_counter);
+        KLOG_DEBUG("Local APIC set counter {}", lapic_counter);
     }
 
     ev->counter_ = lapic_counter;
 
     u64 current_freq = calibrate_apic(cs);
-    trace::debug("Local APIC Timer ", current_freq, "HZ");
+    KLOG_DEBUG("Local APIC Timer {}HZ", current_freq);
 
     ev->hz_ = current_freq;
 }

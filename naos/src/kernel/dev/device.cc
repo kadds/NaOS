@@ -1,6 +1,7 @@
 #include "kernel/dev/device.hpp"
 #include "kernel/dev/driver.hpp"
 #include "kernel/mm/new.hpp"
+KLOG_MODULE(dev);
 namespace dev
 {
 device_id_gen_t *id_gen;
@@ -18,11 +19,12 @@ void init()
 int enum_device(device_class *clazz)
 {
     int n = 0;
-    for (auto &dev : clazz->try_scan()) {
+    for (auto &dev : clazz->try_scan())
+    {
         auto id = id_gen->next();
         if (id == util::null_id)
         {
-            trace::panic("Too many device register to system");
+            KLOG_PANIC("Too many device register to system");
         }
         dev->id = id;
         unbinding_device_map->insert(id, dev);

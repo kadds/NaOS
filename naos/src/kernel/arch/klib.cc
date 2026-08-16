@@ -4,11 +4,12 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/common.hpp"
 #include "kernel/ksybs.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"
 #include "kernel/task.hpp"
-#include "kernel/trace.hpp"
 
+KLOG_MODULE(arch);
 int get_stackframes_by(u64 rbp, u64 rsp, u64 rip, int skip, stack_frame_t *frames, int count)
 {
     if (memory::kernel_vm_info == nullptr)
@@ -58,7 +59,7 @@ int get_stackframes(int skip, stack_frame_t *frames, int count)
 
 const char *stack_frame_t::get_frame_name()
 {
-    const char *func = ksybs::get_symbol_name(trace::hex(rip));
+    const char *func = ksybs::get_symbol_name(log::hex(rip));
     return func;
 }
 
@@ -104,15 +105,15 @@ void *print_stack(const regs_t *regs, int max_depth)
     }
     if (memory::kernel_vm_info && memory::kernel_vm_info->paging().get_map(reinterpret_cast<void *>(rbp)).has_value())
     {
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack data(rbp->rsp):");
+        KLOG_RAW("stack data(rbp->rsp):");
         u64 end_rbp = rbp - sizeof(u64) * 10;
         if (end_rbp < rsp)
         {
             end_rbp = rsp;
         }
-        trace::print<trace::PrintAttribute<trace::CFG::Black>>(" [", trace::hex(rbp), "-", trace::hex(end_rbp), "]");
+        KLOG_RAW(" [{}-{}]", log::hex(rbp), log::hex(end_rbp));
 
-        trace::print_reset();
+        (void)0;
 
         u64 tmp_rbp = rbp;
         int n = 0;
@@ -120,58 +121,56 @@ void *print_stack(const regs_t *regs, int max_depth)
         {
             if ((n++ % 4) == 0)
             {
-                trace::print("\n");
+                KLOG_RAW("\n");
             }
             /// print stack value
             u64 *val0 = reinterpret_cast<u64 *>(tmp_rbp);
-            trace::print(trace::hex16(*val0), "  ");
+            KLOG_RAW("{}  ", log::hex(*val0));
             tmp_rbp -= sizeof(u64);
         }
 
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("\nend of stack data.\n");
+        KLOG_RAW("\nend of stack data.\n");
     }
 
     int n = get_stackframes_by(rbp, rsp, rip, 2, frames, frame_count);
     if (n > 0)
     {
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("stack trace:\n");
-        trace::print<trace::PrintAttribute<trace::CBK::Default>>();
+        KLOG_RAW("stack trace:\n");
+        (void)0;
         for (int i = 0; i < n; i++)
         {
             auto &frame = frames[i];
             const char *fn = frame.get_frame_name();
             if (fn != nullptr)
             {
-                trace::print<trace::PrintAttribute<trace::CFG::LightCyan>>(fn);
-                trace::print<trace::PrintAttribute<trace::CFG::Default>>(" [", trace::hex(frame.rip), "]");
-                trace::print<trace::PrintAttribute<trace::CFG::White>>(" rbp:", trace::hex(frame.rbp), "\n");
+                KLOG_RAW("{}", fn);
+                KLOG_RAW(" [{}]", log::hex(frame.rip));
+                KLOG_RAW(" rbp:{}\n", log::hex(frame.rbp));
             }
             else
             {
-                trace::print<trace::PrintAttribute<trace::CBK::Default, trace::CFG::Default>>(
-                    trace::hex(frame.rip), " rbp:", trace::hex(frame.rbp), "\n");
+                KLOG_RAW("{} rbp:{}\n", log::hex(frame.rip), log::hex(frame.rbp));
             }
         }
 
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of stack trace. \n");
+        KLOG_RAW("end of stack trace. \n");
     }
 
     if (regs != nullptr)
     {
         u64 fs, gs;
         __asm__ __volatile__("movq %%fs, %0 \n\t movq %%gs, %1\n\t" : "=r"(fs), "=r"(gs) : :);
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(with intr regs):");
-        trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-        trace::print("\nrax=", trace::hex(regs->rax), ", rbx=", trace::hex(regs->rbx), ", rcx=", trace::hex(regs->rcx),
-                     ", rdx=", trace::hex(regs->rdx), ", r8=", trace::hex(regs->r8), ", r9=", trace::hex(regs->r9),
-                     ", r10=", trace::hex(regs->r10), ", r11=", trace::hex(regs->r11), ", r12=", trace::hex(regs->r12),
-                     ", r13=", trace::hex(regs->r13), ", r14=", trace::hex(regs->r14), ", r15=", trace::hex(regs->r15),
-                     ", rdi=", trace::hex(regs->rdi), ", rsi=", trace::hex(regs->rsi), ", cs=", trace::hex(regs->cs),
-                     ", ds=", trace::hex(regs->ds), ", es=", trace::hex(regs->es), ", fs=", trace::hex(fs),
-                     ", gs=", trace::hex(gs), ", ss=", trace::hex(regs->ss), ", rip=", trace::hex(regs->rip),
-                     ", rsp=", trace::hex(regs->rsp), ", rbp=", trace::hex(regs->rbp),
-                     ", rflags=", trace::hex(regs->rflags), ", vector=", trace::hex(regs->vector),
-                     ", error_code=", trace::hex(regs->error_code), "\n");
+        KLOG_RAW("registers(with intr regs):");
+        (void)0;
+        KLOG_RAW("\nrax={}, rbx={}, rcx={}, rdx={}, r8={}, r9={}, r10={}, r11={}, r12={}, r13={}, r14={}, r15={}, "
+                 "rdi={}, rsi={}, cs={}, ds={}, es={}, fs={}, gs={}, ss={}, rip={}, rsp={}, rbp={}, rflags={}, "
+                 "vector={}, error_code={}\n",
+                 log::hex(regs->rax), log::hex(regs->rbx), log::hex(regs->rcx), log::hex(regs->rdx), log::hex(regs->r8),
+                 log::hex(regs->r9), log::hex(regs->r10), log::hex(regs->r11), log::hex(regs->r12), log::hex(regs->r13),
+                 log::hex(regs->r14), log::hex(regs->r15), log::hex(regs->rdi), log::hex(regs->rsi), log::hex(regs->cs),
+                 log::hex(regs->ds), log::hex(regs->es), log::hex(fs), log::hex(gs), log::hex(regs->ss),
+                 log::hex(regs->rip), log::hex(regs->rsp), log::hex(regs->rbp), log::hex(regs->rflags),
+                 log::hex(regs->vector), log::hex(regs->error_code));
     }
     else
     {
@@ -187,20 +186,19 @@ void *print_stack(const regs_t *regs, int max_depth)
                              :
                              :);
 
-        trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("registers(without intr regs):");
-        trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
-        trace::print<>("\ncs=", trace::hex(cs), ", ds=", trace::hex(ds), ", es=", trace::hex(es),
-                       ", fs=", trace::hex(fs), ", gs=", trace::hex(gs), ", ss=", trace::hex(ss),
-                       ", rip=", trace::hex(reg_rip), ", rsp=", trace::hex(reg_rsp), ", rbp=", trace::hex(reg_rbp),
-                       ", rflags=", trace::hex(reg_rflags), "\n");
+        KLOG_RAW("registers(without intr regs):");
+        (void)0;
+        KLOG_RAW("\ncs={}, ds={}, es={}, fs={}, gs={}, ss={}, rip={}, rsp={}, rbp={}, rflags={}\n", log::hex(cs),
+                 log::hex(ds), log::hex(es), log::hex(fs), log::hex(gs), log::hex(ss), log::hex(reg_rip),
+                 log::hex(reg_rsp), log::hex(reg_rbp), log::hex(reg_rflags));
     }
     u64 gs_base, k_gs_base, fs_base;
 
     k_gs_base = _rdmsr(0xC0000102);
     gs_base = _rdmsr(0xC0000101);
     fs_base = _rdmsr(0xC0000100);
-    trace::print("msr(now): kernel_gs_base=", trace::hex(k_gs_base), ", gs_base=", trace::hex(gs_base),
-                 ", fs_base=", trace::hex(fs_base), '\n');
+    KLOG_RAW("msr(now): kernel_gs_base={}, gs_base={}, fs_base={}\n", log::hex(k_gs_base), log::hex(gs_base),
+             log::hex(fs_base));
     u64 cr0, cr2, cr3, cr4, cr8;
     __asm__ __volatile__(
         "movq %%cr0, %0 \n\t movq %%cr2, %1\n\t  movq %%cr3, %2\n\t  movq %%cr4,  %3\n\t  movq %%cr8, %4\n\t "
@@ -208,24 +206,25 @@ void *print_stack(const regs_t *regs, int max_depth)
         :
         :);
 
-    trace::print("control registers(now): cr0=", trace::hex(cr0), ", cr2=", trace::hex(cr2), ", cr3=", trace::hex(cr3),
-                 ", cr4=", trace::hex(cr4), ", cr8=", trace::hex(cr8), '\n');
+    KLOG_RAW("control registers(now): cr0={}, cr2={}, cr3={}, cr4={}, cr8={}\n", log::hex(cr0), log::hex(cr2),
+             log::hex(cr3), log::hex(cr4), log::hex(cr8));
 
     if (arch::cpu::has_init())
     {
         auto &cpu = arch::cpu::current();
 
-        trace::print("cpu id=", cpu.get_id(), " apic id = ", cpu.get_apic_id(), " \n");
+        KLOG_RAW("cpu id={} apic id = {} \n", cpu.get_id(), cpu.get_apic_id());
     }
 
-    trace::print<trace::PrintAttribute<trace::CBK::White, trace::CFG::Red>>("end of registers.", '\n');
-    trace::print<trace::PrintAttribute<trace::CBK::Black, trace::CFG::White>>("system info: \n");
+    KLOG_RAW("end of registers.\n");
+    KLOG_RAW("system info: \n");
 
     if (memory::global_zones != nullptr)
     {
-        trace::print("buddy free pages ", memory::global_zones->free_pages(), "/", memory::global_zones->total_pages(),
-                     ". free ", memory::global_zones->free_pages() * memory::page_size / 1024 / 1024, "Mib \n");
+        KLOG_RAW("buddy free pages {}/{}. free {}Mib \n", memory::global_zones->free_pages(),
+                 memory::global_zones->total_pages(),
+                 memory::global_zones->free_pages() * memory::page_size / 1024 / 1024);
     }
-    trace::print_reset();
-    return trace::hex(rbp);
+    (void)0;
+    return log::hex(rbp);
 }

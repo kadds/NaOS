@@ -12,10 +12,11 @@
 #include "kernel/arch/tss.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/common.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/mm.hpp"
 #include "kernel/terminal.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(arch);
 namespace arch
 {
 ExportC Unpaged_Text_Section void temp_init(const kernel_start_args *args)
@@ -33,30 +34,26 @@ void early_init(kernel_start_args *args)
         {
             while (true)
                 ;
-            // trace::warning("fb type not support");
+            // KLOG_WARN("fb type not support");
         }
 
         term::early_init(args);
 
-        trace::early_init();
+        KLOG_INFO("NaOS: Nano Operating System (arch X86_64)");
 
-        trace::print<trace::PrintAttribute<trace::Color::Foreground::Yellow, trace::Color::Background::Black>>(
-            " NaOS: Nano Operating System (arch X86_64)\n");
-        trace::print<trace::PrintAttribute<trace::TextAttribute::Reset>>();
+        KLOG_INFO("{}x{}", (u32)args->fb_width, (u32)args->fb_height);
 
-        trace::info((u32)args->fb_width, "x", (u32)args->fb_height);
-
-        trace::debug("Boot loader is ", (const char *)args->boot_loader_name);
+        KLOG_INFO("Boot loader is {}", (const char *)args->boot_loader_name);
         if (sizeof(kernel_start_args) != args->size_of_struct)
         {
-            trace::panic("Kernel args is invalid");
+            KLOG_PANIC("Kernel args is invalid");
         }
 
-        trace::debug("Arch init");
+        KLOG_INFO("Arch init");
 
         cpu_info::init();
 
-        trace::debug("Memory init");
+        KLOG_INFO("Memory init");
         memory::init(args, 0x0);
     }
 }
@@ -67,21 +64,21 @@ void init(const kernel_start_args *args)
     {
         cpu::init();
 
-        trace::init();
+        log::init();
 
-        trace::debug("Paging init");
+        KLOG_INFO("Paging init");
         paging::init();
 
         cpu::allocate_bsp_stack();
 
-        trace::debug("GDT init");
+        KLOG_INFO("GDT init");
         gdt::init_after_paging();
 
-        trace::debug("TSS init");
+        KLOG_INFO("TSS init");
         tss::init(0, phy_addr_t::from(0x0), memory::pa2va(phy_addr_t::from(0x80000)));
 
         cpu::init_data(0);
-        trace::debug("IDT init");
+        KLOG_INFO("IDT init");
         idt::init_after_paging();
 
         term::reset_early_paging();
@@ -92,15 +89,15 @@ void init(const kernel_start_args *args)
 
         if (cmdline::get_bool("acpi", false))
         {
-            trace::debug("ACPI init");
+            KLOG_INFO("ACPI init");
             ACPI::init();
         }
 
-        trace::debug("APIC init");
+        KLOG_INFO("APIC init");
         APIC::local_init();
         APIC::io_init();
 
-        trace::debug("Arch init done");
+        KLOG_INFO("Arch init done");
         return;
     }
     // ap

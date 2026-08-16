@@ -6,8 +6,9 @@
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
-#include "kernel/input_event_source.hpp"
 #include "kernel/input/key.hpp"
+#include "kernel/input/terminal_shortcut.hpp"
+#include "kernel/input_event_source.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
@@ -15,6 +16,7 @@
 #include "kernel/timer.hpp"
 #include "kernel/wait.hpp"
 
+KLOG_MODULE(task);
 namespace task::builtin::input
 {
 freelibcxx::bit_set_inplace<256> key_down_state;
@@ -27,6 +29,28 @@ bool is_key_down(key k) { return key_down_state.get_bit((u64)k); }
 
 bool is_ctrl_key_down() { return is_key_down(key::left_control) || is_key_down(key::right_control); }
 bool is_alt_key_down() { return is_key_down(key::left_alt) || is_key_down(key::right_alt); }
+
+bool switch_terminal_for_key(key k)
+{
+    const auto target = ::input::terminal_shortcut_target(k, is_ctrl_key_down(), is_alt_key_down());
+    int terminal_index = -1;
+    switch (target)
+    {
+        case ::input::terminal_target::user:
+            terminal_index = term::terminal_manager::user_terminal_index;
+            break;
+        case ::input::terminal_target::kernel:
+            terminal_index = term::terminal_manager::kernel_console_index;
+            break;
+        case ::input::terminal_target::none:
+            return false;
+    }
+
+    auto *terms = term::get_terms();
+    if (terms != nullptr && terms->valid_index(terminal_index))
+        (void)terms->switch_term(terminal_index);
+    return true;
+}
 
 constexpr u64 event_mod_ctrl = 1;
 constexpr u64 event_mod_alt = 2;
@@ -61,16 +85,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
         else
         {
             key k = (key)res.get.key;
-            if (is_ctrl_key_down() && is_alt_key_down() && k == key::f12)
-            {
-                auto terms = term::get_terms();
-                const auto to_idx = term::terminal_manager::kernel_console_index;
-                if (terms->valid_index(to_idx))
-                {
-                    terms->switch_term(to_idx);
-                }
-            }
-            else
+            if (!switch_terminal_for_key(k))
                 publish_key_event(k, true);
             key_down_state.set_bit(res.get.key);
         }
@@ -83,7 +98,7 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
 {
     if (status.io_is_completion)
     {
-        // trace::debug("mouse x:", res.get.movement_x, " y:", res.get.movement_y, " at ", res.get.timestamp);
+        // KLOG_DEBUG("mouse x:{} y:{} at {}", res.get.movement_x, res.get.movement_y, res.get.timestamp);
         auto current_cursor = cursor::get_cursor();
         current_cursor.x += res.get.movement_x;
         current_cursor.y -= res.get.movement_y;
@@ -94,37 +109,37 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
 
         if (res.get.down_x ^ current_mouse_data.down_x)
         {
-            // trace::debug(res.get.down_x ? "left button down" : "left button up");
+            // KLOG_DEBUG("{}", res.get.down_x ? "left button down" : "left button up");
             current_mouse_data.down_x = res.get.down_x;
         }
 
         if (res.get.down_y ^ current_mouse_data.down_y)
         {
-            // trace::debug(res.get.down_y ? "right button down" : "right button up");
+            // KLOG_DEBUG("{}", res.get.down_y ? "right button down" : "right button up");
             current_mouse_data.down_y = res.get.down_y;
         }
 
         if (res.get.down_z ^ current_mouse_data.down_z)
         {
-            // trace::debug(res.get.down_z ? "mid button down" : "mid button up");
+            // KLOG_DEBUG("{}", res.get.down_z ? "mid button down" : "mid button up");
             current_mouse_data.down_z = res.get.down_z;
         }
 
         if (res.get.down_a ^ current_mouse_data.down_a)
         {
-            // trace::debug(res.get.down_a ? "button 4 down" : "button 4 up");
+            // KLOG_DEBUG("{}", res.get.down_a ? "button 4 down" : "button 4 up");
             current_mouse_data.down_a = res.get.down_a;
         }
 
         if (res.get.down_b ^ current_mouse_data.down_b)
         {
-            // trace::debug(res.get.down_b ? "button 5 down" : "button 5 up");
+            // KLOG_DEBUG("{}", res.get.down_b ? "button 5 down" : "button 5 up");
             current_mouse_data.down_b = res.get.down_b;
         }
 
         if (res.get.movement_z)
         {
-            // trace::debug("scroll ", res.get.movement_z);
+            // KLOG_DEBUG("scroll {}", res.get.movement_z);
             current_mouse_data.movement_z = res.get.movement_z;
         }
 
@@ -150,7 +165,7 @@ void listen_keyboard()
             request.status.io_is_completion = false;
             if (!io::send_io_request(&request))
             {
-                trace::warning("error when send io request");
+                KLOG_WARN("error when send io request");
             }
         }
         if (!request.status.io_is_completion)
@@ -192,7 +207,7 @@ void listen_mouse()
             mreq.status.io_is_completion = false;
             if (!io::send_io_request(&mreq))
             {
-                trace::warning("error when send io request");
+                KLOG_WARN("error when send io request");
             }
         }
 

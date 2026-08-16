@@ -1,6 +1,10 @@
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/io.hpp"
-#include "kernel/trace.hpp"
+#include "kernel/arch/klib.hpp"
+#include "kernel/log.hpp"
+
+KLOG_MODULE(arch);
+
 namespace arch::device::com
 {
 const io_port base_control_ports[] = {0x3f8, 0x2f8, 0x3e8, 0x2e8};
@@ -46,6 +50,20 @@ void serial::write(const byte *data, u64 len)
     {
         io_write(port, data[i]);
     }
+}
+
+bool serial::try_write(byte data, u32 budget)
+{
+    while (budget-- != 0)
+    {
+        if ((io_in8(port + 5) & 0x20) != 0)
+        {
+            io_out8(port, (u8)data);
+            return true;
+        }
+        cpu_pause();
+    }
+    return false;
 }
 
 u64 serial::read(byte *data, u64 len)

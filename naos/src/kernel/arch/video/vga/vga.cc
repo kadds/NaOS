@@ -5,13 +5,14 @@
 #include "kernel/common/font/font_16X8.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/terminal.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 
+KLOG_MODULE(arch);
 namespace arch::device::vga
 {
 void test();
@@ -25,7 +26,7 @@ term::minimal_terminal *early_init(fb::framebuffer_t fb)
 {
     if (fb.bbp != 32)
     {
-        trace::panic("Unsupported framebuffer format: only 32bpp is supported");
+        KLOG_PANIC("Unsupported framebuffer format: only 32bpp is supported");
     }
     fb.ptr = memory::pa2va(fb.physical_addr);
     auto early_terminal = new (memory::pa2va(phy_addr_t::from(0x21200))) term::minimal_terminal();
@@ -37,39 +38,22 @@ term::minimal_terminal *early_init(fb::framebuffer_t fb)
 
 void init()
 {
-    using namespace trace;
     u32 bytes = early_backend->frame_bytes();
     auto fb = early_backend->fb();
 
-    print<PrintAttribute<CFG::LightGreen>>("VGA graphics mode. ", fb.width, "X", fb.height, ". ", fb.bbp, "bit",
-                                           ". frame bytes ", bytes >> 10, "KiB.\n");
+    KLOG_INFO("VGA graphics mode. {}X{}. {}bit. frame bytes {}KiB", fb.width, fb.height, fb.bbp, bytes >> 10);
 
     test();
 }
 
 void test()
 {
-    using namespace trace;
-    print<PA<CBK::LightGray, CFG::Black>>("VGA Test Begin");
-    print<PA<TextAttribute::Reset>>();
-    print<PA<CFG::Black>>("\n Black ");
-    print<PA<CFG::Blue>>(" Blue ");
-    print<PA<CFG::Green>>(" Green ");
-    print<PA<CFG::Cyan>>(" Cyan ");
-    print<PA<CFG::Red>>(" Red ");
-    print<PA<CFG::Magenta>>(" Magenta ");
-    print<PA<CFG::Brown>>(" Brown ");
-    print<PA<CFG::LightGray>>(" LightGray ");
-    print<PA<CFG::DarkGray>>(" DarkGray ");
-    print<PA<CFG::LightBlue>>(" LightBlue ");
-    print<PA<CFG::LightGreen>>(" LightGreen ");
-    print<PA<CFG::LightCyan>>(" LightCyan ");
-    print<PA<CFG::LightRed>>(" LightRed ");
-    print<PA<CFG::Pink>>(" Pink ");
-    print<PA<CFG::Yellow>>(" Yellow ");
-    print<PA<CFG::White>>(" White \n");
-    print<PA<CBK::LightGray, CFG::Black>>("VGA Test End\n");
-    print<PA<TextAttribute::Reset>>();
+    KLOG_RAW("\x1b[37;40mVGA Test Begin\x1b[0m\n"
+             "\x1b[30m Black \x1b[34m Blue \x1b[32m Green \x1b[36m Cyan \x1b[31m Red "
+             "\x1b[35m Magenta \x1b[33m Brown \x1b[37m LightGray \x1b[90m DarkGray\x1b[0m\n"
+             "\x1b[94m LightBlue \x1b[92m LightGreen \x1b[96m LightCyan \x1b[91m LightRed "
+             "\x1b[95m Pink \x1b[93m Yellow \x1b[97m White\x1b[0m\n"
+             "\x1b[37;40mVGA Test End\x1b[0m\n");
 }
 
 } // namespace arch::device::vga

@@ -2,6 +2,7 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
+KLOG_MODULE(kernel);
 namespace task
 {
 
@@ -9,26 +10,26 @@ void sig_ignore(process_t *proc, signal_info_t *info) {}
 
 void sig_kill(process_t *proc, signal_info_t *info)
 {
-    trace::info("signal ", info->number, ": kill process ", proc->pid);
+    KLOG_INFO("signal {}: kill process {}", info->number, proc->pid);
     task::exit_process(proc, 0, 0);
 }
 
 void sig_kill_dump(process_t *proc, signal_info_t *info)
 {
-    trace::info("signal ", info->number, ": dump process ", proc->pid);
+    KLOG_INFO("signal {}: dump process {}", info->number, proc->pid);
     task::exit_process(proc, 0, task::exit_control_flags::core_dump);
 }
 
 void sig_stop(process_t *proc, signal_info_t *info)
 {
-    trace::info("signal ", info->number, ": stop process ", proc->pid);
+    KLOG_INFO("signal {}: stop process {}", info->number, proc->pid);
     proc->last_stop_signal = info->number;
     task::stop_process(proc);
 }
 
 void sig_continue(process_t *proc, signal_info_t *info)
 {
-    trace::info("signal ", info->number, ": continue process ", proc->pid);
+    KLOG_INFO("signal {}: continue process {}", info->number, proc->pid);
     proc->wait_stop_reported.store(false);
     proc->last_stop_signal = 0;
     task::continue_process(proc);
@@ -41,13 +42,13 @@ void sig_continue(process_t *proc, signal_info_t *info)
 #define CONT sig_continue,
 
 signal_func_t default_signal_handler[max_signal_count] = {
-    KILL KILL KILL KILL        // 0-3
-        DUMP DUMP DUMP DUMP    // 4-7
-        KILL KILL DUMP KILL    // 8-11
-        KILL KILL KILL KILL    // 12-15
-        KILL                    // 16 SIGSTKFLT
-        IGRE CONT STOP STOP STOP STOP // 17-22
-        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE // 23-30
+    KILL KILL KILL KILL                                             // 0-3
+        DUMP DUMP DUMP DUMP                                         // 4-7
+            KILL KILL DUMP KILL                                     // 8-11
+                KILL KILL KILL KILL                                 // 12-15
+                    KILL                                            // 16 SIGSTKFLT
+                        IGRE CONT STOP STOP STOP STOP               // 17-22
+                            IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE // 23-30
 };
 
 void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status)

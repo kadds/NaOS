@@ -4,10 +4,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/common.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/timer.hpp"
-#include "kernel/trace.hpp"
+KLOG_MODULE(arch);
 /**
  * ap startup memory:
  * 0x70000 ap startup code
@@ -30,7 +31,7 @@ void init()
     if (!cpu::current().is_bsp())
     {
         counter.fetch_sub(1);
-        trace::debug("AP ", cpu::current().get_id(), " is arrived entrypoint");
+        KLOG_INFO("AP {} ready at {}us", cpu::current().get_id(), timer::get_high_resolution_time());
         volatile u64 *stack = (volatile u64 *)memory::pa2va<u64 *>(phy_addr_t::from((u64)_ap_stack));
         *stack = 0;
         while (counter.load() > 0)
@@ -49,29 +50,29 @@ void init()
     *startup_flag = 1;
     _mfence();
 
-    trace::debug("Sending INIT-IPI");
+    KLOG_DEBUG("Sending INIT-IPI");
     APIC::local_post_init_IPI();
 
     timer::busywait(1000 * 10); // 10ms
 
-    trace::debug("Sending StartUP-IPI");
+    KLOG_DEBUG("Sending StartUP-IPI");
     APIC::local_post_start_up((u64)base_ap_phy_addr);
     cpu_info::cpu_mesh mesh;
     cpu_info::load_cpu_mesh(mesh);
 
-    trace::info("detect cpu logic count ", mesh.logic_num, " core count ", mesh.core_num);
+    KLOG_INFO("detect cpu logic count {} core count {}", mesh.logic_num, mesh.core_num);
 
     u32 count = mesh.logic_num;
     u32 idx = 1;
     if (count > cpu::max_cpu_support)
     {
-        trace::warning("max cpu support ", cpu::max_cpu_support, " but current machine cpus ", count);
+        KLOG_WARN("max cpu support {} but current machine cpus {}", cpu::max_cpu_support, count);
         count = cpu::max_cpu_support;
     }
     counter = count;
     int aps = count - 1;
     cpu::allocate_ap_stack(aps);
-    trace::debug("Waiting for APs ", aps, " startup");
+    KLOG_DEBUG("Waiting for APs {} startup", aps);
 
     while (idx < count)
     {
@@ -89,12 +90,12 @@ void init()
         {
             cpu_pause();
         }
-        trace::debug("Ap ", idx - 1, " done");
+        KLOG_DEBUG("Ap {} done", idx - 1);
         idx++;
     }
 
-    trace::debug("Bsp is arrived entrypoint");
-    trace::debug("Waiting for all processors to arrive entrypoint");
+    KLOG_DEBUG("Bsp is arrived entrypoint");
+    KLOG_DEBUG("Waiting for all processors to arrive entrypoint");
     counter.fetch_sub(1);
     while (counter.load() > 0)
     {

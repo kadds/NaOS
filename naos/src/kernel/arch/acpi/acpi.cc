@@ -8,10 +8,11 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
-#include "kernel/trace.hpp"
 #include "kernel/types.hpp"
+KLOG_MODULE(acpi);
 ExportC
 {
 #include "acexcep.h"
@@ -64,14 +65,14 @@ void init()
         }
     }
 
-    trace::debug("rsdp from args ", trace::hex(kernel_args->rsdp), " old ", trace::hex(kernel_args->rsdp_old));
+    KLOG_DEBUG("rsdp from args {} old {}", log::hex(kernel_args->rsdp), log::hex(kernel_args->rsdp_old));
     if (kernel_args->rsdp == 0 && kernel_args->rsdp_old == 0)
     {
-        trace::warning("rsdp empty");
+        KLOG_WARN("rsdp empty");
     }
     ACPI_PHYSICAL_ADDRESS addr = 0;
     AcpiFindRootPointer(&addr);
-    trace::info("find rsdp ", trace::hex(addr), " by acpi table");
+    KLOG_INFO("find rsdp {} by acpi table", log::hex(addr));
     if (addr != kernel_args->rsdp_old && addr != 0)
     {
         kernel_args->rsdp = addr;
@@ -85,14 +86,14 @@ void init()
 
 UINT32 on_power_button(void *context)
 {
-    trace::info("ACPI: power down");
+    KLOG_INFO("ACPI: power down");
     shutdown();
     return ACPI_INTERRUPT_HANDLED;
 }
 
 UINT32 on_sleep_button(void *context)
 {
-    trace::info("ACPI: sleep down");
+    KLOG_INFO("ACPI: sleep down");
     return ACPI_INTERRUPT_HANDLED;
 }
 
@@ -145,7 +146,7 @@ template <typename TABLE> TABLE *load_table(const char *SIG, bool required = tru
     auto status = AcpiGetTable(sig, 0, &table);
     if (ACPI_FAILURE(status) && required)
     {
-        trace::panic("get ", SIG, " table fail status ", status);
+        KLOG_PANIC("get {} table fail status {}", SIG, status);
     }
     return reinterpret_cast<TABLE *>(table);
 }
@@ -291,7 +292,7 @@ phy_addr_t get_local_apic_base()
         if (header->Type == ACPI_MADT_TYPE_LOCAL_APIC_OVERRIDE)
         {
             ACPI_MADT_LOCAL_APIC_OVERRIDE *lapic = reinterpret_cast<ACPI_MADT_LOCAL_APIC_OVERRIDE *>(header);
-            trace::debug("find local apic address override ", trace::hex(lapic->Address));
+            KLOG_DEBUG("find local apic address override {}", log::hex(lapic->Address));
             return phy_addr_t::from(lapic->Address);
         }
 
@@ -346,7 +347,7 @@ freelibcxx::hash_map<u32, numa_info> get_numa_info()
 
 void shutdown()
 {
-    trace::info("shutdown");
+    KLOG_INFO("shutdown");
     idt::disable();
     // qemu
     io_out16(0x604, 0x2000);
@@ -354,15 +355,15 @@ void shutdown()
     // vbox
     io_out16(0x4004, 0x3400);
 
-    trace::panic("shutdown fail");
+    KLOG_PANIC("shutdown fail");
 }
 
 void reboot()
 {
-    trace::info("reboot");
+    KLOG_INFO("reboot");
     idt::disable();
     _reset_power();
-    trace::panic("reboot fail");
+    KLOG_PANIC("reboot fail");
 }
 
 } // namespace arch::ACPI

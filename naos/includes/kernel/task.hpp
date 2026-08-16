@@ -70,6 +70,7 @@ enum attributes : flag_t
 struct process_t
 {
     process_id pid;
+    char name[13]{};
     std::atomic_uint64_t attributes;
     process_id parent_pid;     ///< The parent process id
     void *mm_info;             ///< Memory map infomation

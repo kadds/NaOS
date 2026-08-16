@@ -3,12 +3,15 @@
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/preempt.hpp"
 #include "kernel/schedulers/completely_fair.hpp"
 #include "kernel/schedulers/round_robin.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/types.hpp"
+#include "kernel/ucontext.hpp"
 
+KLOG_MODULE(sched);
 namespace task::scheduler
 {
 
@@ -22,35 +25,45 @@ std::atomic_bool is_init = false;
 task::thread_t *thread_to_reschedule;
 
 std::atomic_bool reschedule_ready;
+lock::spinlock_t reschedule_lock;
 irq::registration *reschedule_registration;
 
 irq::request_result reschedule_func(const irq::interrupt_info *, u64) noexcept
 {
-    task::thread_t *thd = thread_to_reschedule;
-
-    if (!reschedule_ready)
+    reschedule_lock.lock();
+    if (!reschedule_ready.load(std::memory_order_acquire))
     {
-        thd->scheduler->on_migrate(thd);
-        thd->attributes &= ~(thread_attributes::on_migrate);
+        task::thread_t *thd = thread_to_reschedule;
+        thread_to_reschedule = nullptr;
+        reschedule_ready.store(true, std::memory_order_release);
+        if (thd != nullptr)
+        {
+            thd->scheduler->on_migrate(thd);
+            thd->attributes &= ~(thread_attributes::on_migrate);
+        }
     }
-    reschedule_ready = true;
-    thread_to_reschedule = nullptr;
+    reschedule_lock.unlock();
     return irq::request_result::ok;
 }
 
 bool reschedule_task_push(thread_t *task, u32 cpuid)
 {
-    if (reschedule_ready)
-    {
-        if (!reschedule_ready.exchange(false))
-            return false;
-        // trace::debug("reschedule task cpu ", task->cpuid, " to cpu ", cpuid);
+    if (task == nullptr || task == current() || task->state != thread_state::ready)
+        return false;
 
-        thread_to_reschedule = task;
-        task->attributes |= thread_attributes::on_migrate;
-        return true;
+    reschedule_lock.lock();
+    if (!reschedule_ready.load(std::memory_order_acquire))
+    {
+        reschedule_lock.unlock();
+        return false;
     }
-    return false;
+
+    // KLOG_DEBUG("reschedule task cpu {} to cpu {}", task->cpuid, cpuid);
+    thread_to_reschedule = task;
+    task->attributes |= thread_attributes::on_migrate;
+    reschedule_ready.store(false, std::memory_order_release);
+    reschedule_lock.unlock();
+    return true;
 }
 
 void init()
@@ -196,7 +209,7 @@ void schedule()
         return;
     if (current() && !current()->preempt_data.preemptible())
     {
-        trace::panic("schedule no preemptible.");
+        KLOG_PANIC("schedule no preemptible.");
     }
     task::disable_preempt();
 
