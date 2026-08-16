@@ -1,6 +1,6 @@
 #include "freelibcxx/skip_list.hpp"
 
-#include <cassert>
+#include "catch2_compat.hpp"
 #include <cstddef>
 #include <cstdlib>
 
@@ -34,7 +34,7 @@ struct cfs_vtime_key
 };
 } // namespace
 
-int run_cfs_vtime_order_tests()
+TEST_CASE("CFS virtual time ordering", "[cfs][scheduler]")
 {
     test_allocator allocator;
     freelibcxx::skip_list<cfs_vtime_key> runnable(&allocator, 0);
@@ -42,8 +42,7 @@ int run_cfs_vtime_order_tests()
     runnable.insert(0, 2);
     runnable.insert(0, 3);
 
-    assert(runnable.find({0, 1}) != runnable.end());
-    assert(runnable.find({0, 2}) != runnable.end());
-    assert(runnable.find({0, 3}) != runnable.end());
-    return 0;
+    REQUIRE(runnable.find({0, 1}) != runnable.end());
+    REQUIRE(runnable.find({0, 2}) != runnable.end());
+    REQUIRE(runnable.find({0, 3}) != runnable.end());
 }

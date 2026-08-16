@@ -1,7 +1,7 @@
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
 
-#include <cassert>
+#include "catch2_compat.hpp"
 
 namespace
 {
@@ -23,41 +23,41 @@ na_bootstrap_message_t valid_message()
 void test_valid_message()
 {
     const auto message = valid_message();
-    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 
     auto extended = message;
     extended.resource_count++;
-    assert(naos::bootstrap::valid_message(extended, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+    REQUIRE(naos::bootstrap::valid_message(extended, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 }
 
 void test_allows_shared_stdio_binding_and_rejects_bad_resources()
 {
     auto message = valid_message();
     message.stderr_stream = message.stdin_stream;
-    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 
     message.resource_count = NA_BOOTSTRAP_MIN_RESOURCE_COUNT;
     message.stdout_stream = message.stdin_stream;
-    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_MIN_RESOURCE_COUNT));
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_MIN_RESOURCE_COUNT));
 
     message = valid_message();
     message.stderr_stream = NA_BOOTSTRAP_RESOURCE_COUNT;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 
     message = valid_message();
     message.current_directory = message.root_directory;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 }
 
 void test_rejects_unknown_version_and_flags()
 {
     auto message = valid_message();
     message.version++;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 
     message = valid_message();
     message.flags = 1;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 }
 
 void test_optional_capabilities_are_distinct_resources()
@@ -67,18 +67,18 @@ void test_optional_capabilities_are_distinct_resources()
     message.resource_count += message.capability_count;
     message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY, NA_BOOTSTRAP_RESOURCE_COUNT};
     message.capabilities[1] = {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, NA_BOOTSTRAP_RESOURCE_COUNT + 1};
-    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
 
     message.capabilities[1].resource = message.capabilities[0].resource;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 
     message.capabilities[1].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
     message.capabilities[1].kind = message.capabilities[0].kind;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 
     message.capabilities[1].kind = NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND;
     message.capabilities[1].resource = message.stdin_stream;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
 }
 
 void test_optional_capability_index_must_be_in_range()
@@ -87,24 +87,23 @@ void test_optional_capability_index_must_be_in_range()
     message.resource_count++;
     message.capability_count = 1;
     message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE, NA_BOOTSTRAP_RESOURCE_COUNT};
-    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 
     message.capabilities[0].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 
     message = valid_message();
     message.resource_count += 2;
     message.capability_count = NA_BOOTSTRAP_MAX_CAPABILITIES + 1;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
 }
 } // namespace
 
-int run_bootstrap_contract_tests()
+TEST_CASE("bootstrap message contract", "[bootstrap]")
 {
     test_valid_message();
     test_allows_shared_stdio_binding_and_rejects_bad_resources();
     test_rejects_unknown_version_and_flags();
     test_optional_capabilities_are_distinct_resources();
     test_optional_capability_index_must_be_in_range();
-    return 0;
 }

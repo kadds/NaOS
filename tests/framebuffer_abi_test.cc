@@ -1,6 +1,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "catch2_compat.hpp"
+
 #include <linux/fb.h>
 #include <naos/framebuffer.h>
 
@@ -22,4 +24,4 @@ static_assert(sizeof(naos_fb_variable_info) == sizeof(fb_var_screeninfo));
 static_assert(offsetof(naos_fb_fixed_info, line_length) == offsetof(fb_fix_screeninfo, line_length));
 static_assert(offsetof(naos_fb_variable_info, xres) == offsetof(fb_var_screeninfo, xres));
 
-int run_framebuffer_abi_tests() { return 0; }
+TEST_CASE("framebuffer ABI layout", "[framebuffer][abi]") {}

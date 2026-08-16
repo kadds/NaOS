@@ -1,5 +1,6 @@
 #include <type_traits>
 
+#include "catch2_compat.hpp"
 #include <naos/syscall.h>
 
 static_assert(std::is_same_v<decltype(&_s_log), void (*)(const char *)>);
@@ -43,4 +44,4 @@ static_assert(std::is_same_v<decltype(&_na_pipe_create), na_status_t (*)(na_pipe
 static_assert(std::is_same_v<decltype(&_na_memory_map), na_status_t (*)(na_memory_map_frame_t *)>);
 static_assert(std::is_same_v<decltype(&_na_memory_unmap), na_status_t (*)(na_memory_unmap_frame_t *)>);
 
-int run_syscall_header_tests() { return 0; }
+TEST_CASE("syscall header ABI", "[syscall][abi]") {}

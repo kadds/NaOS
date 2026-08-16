@@ -1,6 +1,6 @@
 #include "kernel/time.hpp"
 
-#include <cassert>
+#include "catch2_compat.hpp"
 #include <cstdint>
 #include <limits>
 
@@ -9,37 +9,36 @@ namespace
 void test_converts_valid_timespec()
 {
     timeclock::microsecond_t result = 0;
-    assert(timeclock::try_to_microseconds(timeclock::time(3, 456789), result));
-    assert(result == 3000456);
+    REQUIRE(timeclock::try_to_microseconds(timeclock::time(3, 456789), result));
+    REQUIRE(result == 3000456);
 }
 
 void test_truncates_sub_microsecond_precision()
 {
     timeclock::microsecond_t result = 0;
-    assert(timeclock::try_to_microseconds(timeclock::time(0, 999), result));
-    assert(result == 0);
+    REQUIRE(timeclock::try_to_microseconds(timeclock::time(0, 999), result));
+    REQUIRE(result == 0);
 }
 
 void test_rejects_invalid_timespec()
 {
     timeclock::microsecond_t result = 0;
-    assert(!timeclock::try_to_microseconds(timeclock::time(-1, 0), result));
-    assert(!timeclock::try_to_microseconds(timeclock::time(0, -1), result));
-    assert(!timeclock::try_to_microseconds(timeclock::time(0, 1'000'000'000), result));
+    REQUIRE(!timeclock::try_to_microseconds(timeclock::time(-1, 0), result));
+    REQUIRE(!timeclock::try_to_microseconds(timeclock::time(0, -1), result));
+    REQUIRE(!timeclock::try_to_microseconds(timeclock::time(0, 1'000'000'000), result));
 }
 
 void test_rejects_microsecond_overflow()
 {
     timeclock::microsecond_t result = 0;
-    assert(!timeclock::try_to_microseconds(timeclock::time(std::numeric_limits<std::int64_t>::max(), 0), result));
+    REQUIRE(!timeclock::try_to_microseconds(timeclock::time(std::numeric_limits<std::int64_t>::max(), 0), result));
 }
 } // namespace
 
-int run_wait_deadline_tests()
+TEST_CASE("wait deadline conversion", "[wait][deadline]")
 {
     test_converts_valid_timespec();
     test_truncates_sub_microsecond_precision();
     test_rejects_invalid_timespec();
     test_rejects_microsecond_overflow();
-    return 0;
 }

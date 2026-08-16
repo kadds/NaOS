@@ -1,5 +1,7 @@
 #include <naos/generated/system/Directory_server.hpp>
 
+#include "catch2_compat.hpp"
+
 namespace
 {
 struct probe
@@ -42,7 +44,7 @@ na_status_t channel_receive(void *, na_handle_t, na_channel_receive_frame_t *fra
 }
 } // namespace
 
-int run_system_binding_contract_tests()
+TEST_CASE("system binding contract", "[system-binding]")
 {
     probe state{};
     state.info.struct_size = sizeof(state.info);
@@ -60,32 +62,29 @@ int run_system_binding_contract_tests()
 
     auto client = native.async();
     na_handle_t invocation = NA_HANDLE_INVALID;
-    if (client.submit(client.context, 11, 7, nullptr, 0, nullptr, 0, 99, &invocation) != NA_STATUS_OK ||
-        invocation != 123 || state.submitted.method_id != 7 || state.submitted.operation_budget != 99)
-        return 1;
+    REQUIRE(client.submit(client.context, 11, 7, nullptr, 0, nullptr, 0, 99, &invocation) == NA_STATUS_OK);
+    REQUIRE(invocation == 123);
+    REQUIRE(state.submitted.method_id == 7);
+    REQUIRE(state.submitted.operation_budget == 99);
 
     na_channel_receive_frame_t receive_frame{};
-    if (native.receive(11, receive_frame) != NA_STATUS_OK || receive_frame.method_id != 7 ||
-        receive_frame.responder != 123)
-        return 2;
+    REQUIRE(native.receive(11, receive_frame) == NA_STATUS_OK);
+    REQUIRE(receive_frame.method_id == 7);
+    REQUIRE(receive_frame.responder == 123);
 
     auto server = native.responder();
-    if (!server.validate_resource(server.context, 42, NA_BINDING_NONE, NA_SCOPE_DIRECTORY, NA_RIGHT_TRANSFER))
-        return 3;
+    REQUIRE(server.validate_resource(server.context, 42, NA_BINDING_NONE, NA_SCOPE_DIRECTORY, NA_RIGHT_TRANSFER));
     server.close_resource(server.context, 42);
-    if (state.close_count != 1 || state.closed[0] != 42)
-        return 4;
+    REQUIRE(state.close_count == 1);
+    REQUIRE(state.closed[0] == 42);
 
     naos::system::Directory::open_response response{};
     const na_handle_t handles[] = {42};
-    if (!naos::system::Directory::validate_open_response_resource_metadata(
-            response, handles, 1, server.validate_resource, server.close_resource, server.context))
-        return 5;
+    REQUIRE(naos::system::Directory::validate_open_response_resource_metadata(
+        response, handles, 1, server.validate_resource, server.close_resource, server.context));
     response.object.value = 1;
-    if (naos::system::Directory::validate_open_response_resource_metadata(
-            response, handles, 1, server.validate_resource, server.close_resource, server.context))
-        return 6;
-    if (state.close_count != 2 || state.closed[1] != 42)
-        return 7;
-    return 0;
+    REQUIRE(!naos::system::Directory::validate_open_response_resource_metadata(
+        response, handles, 1, server.validate_resource, server.close_resource, server.context));
+    REQUIRE(state.close_count == 2);
+    REQUIRE(state.closed[1] == 42);
 }

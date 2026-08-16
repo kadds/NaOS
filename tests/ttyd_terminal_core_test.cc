@@ -1,6 +1,6 @@
 #include "ttyd/terminal_core.hpp"
 
-#include <cassert>
+#include "catch2_compat.hpp"
 #include <cerrno>
 #include <cstring>
 
@@ -11,20 +11,20 @@ void test_canonical_echo_and_read()
     ttyd::terminal_core core;
     const std::uint8_t input[] = {'a', 'b', '\n'};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), true, &consumed) == 3);
-    assert(consumed == 3);
-    assert(core.input_available() == 3);
+    REQUIRE(core.receive_input(input, sizeof(input), true, &consumed) == 3);
+    REQUIRE(consumed == 3);
+    REQUIRE(core.input_available() == 3);
 
     std::uint8_t output[16]{};
     std::size_t read = 0;
-    assert(core.read_output(output, sizeof(output), true, &read) > 0);
-    assert(read == 4);
-    assert(std::memcmp(output, "ab\r\n", 4) == 0);
+    REQUIRE(core.read_output(output, sizeof(output), true, &read) > 0);
+    REQUIRE(read == 4);
+    REQUIRE(std::memcmp(output, "ab\r\n", 4) == 0);
 
     std::uint8_t data[16]{};
     read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 3);
-    assert(std::memcmp(data, "ab\n", 3) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 3);
+    REQUIRE(std::memcmp(data, "ab\n", 3) == 0);
 }
 
 void test_erase_kill_and_eof()
@@ -32,17 +32,17 @@ void test_erase_kill_and_eof()
     ttyd::terminal_core core;
     const std::uint8_t erase_input[] = {'a', 0x7f, 'b', '\n'};
     std::size_t consumed = 0;
-    assert(core.receive_input(erase_input, sizeof(erase_input), true, &consumed) == 4);
+    REQUIRE(core.receive_input(erase_input, sizeof(erase_input), true, &consumed) == 4);
     std::uint8_t data[16]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 2);
-    assert(std::memcmp(data, "b\n", 2) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 2);
+    REQUIRE(std::memcmp(data, "b\n", 2) == 0);
 
     ttyd::terminal_core eof_core;
     const std::uint8_t eof = 0x04;
-    assert(eof_core.receive_input(&eof, 1, true, &consumed) == 1);
+    REQUIRE(eof_core.receive_input(&eof, 1, true, &consumed) == 1);
     read = 0;
-    assert(eof_core.read_input(data, sizeof(data), true, &read) == 0);
+    REQUIRE(eof_core.read_input(data, sizeof(data), true, &read) == 0);
 }
 
 void test_canonical_reads_preserve_record_boundaries_and_eof_order()
@@ -50,19 +50,19 @@ void test_canonical_reads_preserve_record_boundaries_and_eof_order()
     ttyd::terminal_core core;
     const std::uint8_t input[] = {'a', '\n', 0x04, 'b', '\n'};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
+    REQUIRE(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
 
     std::uint8_t data[16]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 2);
-    assert(read == 2);
-    assert(std::memcmp(data, "a\n", 2) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 2);
+    REQUIRE(read == 2);
+    REQUIRE(std::memcmp(data, "a\n", 2) == 0);
 
-    assert(core.read_input(data, sizeof(data), true, &read) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 0);
 
-    assert(core.read_input(data, sizeof(data), true, &read) == 2);
-    assert(read == 2);
-    assert(std::memcmp(data, "b\n", 2) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 2);
+    REQUIRE(read == 2);
+    REQUIRE(std::memcmp(data, "b\n", 2) == 0);
 }
 
 void test_raw_nonblocking_and_queue_full()
@@ -74,21 +74,21 @@ void test_raw_nonblocking_and_queue_full()
 
     std::uint8_t data[16]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == -EAGAIN);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == -EAGAIN);
 
     std::uint8_t chunk[ttyd::terminal_core::queue_capacity]{};
     std::memset(chunk, 'x', sizeof(chunk));
     std::size_t consumed = 0;
-    assert(core.receive_input(chunk, sizeof(chunk), true, &consumed) == static_cast<int>(sizeof(chunk)));
+    REQUIRE(core.receive_input(chunk, sizeof(chunk), true, &consumed) == static_cast<int>(sizeof(chunk)));
     const std::uint8_t extra = 'y';
     consumed = 0;
-    assert(core.receive_input(&extra, 1, true, &consumed) == -EAGAIN);
-    assert(core.input_available() == sizeof(chunk));
+    REQUIRE(core.receive_input(&extra, 1, true, &consumed) == -EAGAIN);
+    REQUIRE(core.input_available() == sizeof(chunk));
 
     std::uint8_t output[8]{};
     read = 0;
-    assert(core.read_input(output, sizeof(output), true, &read) == 8);
-    assert(core.input_available() == sizeof(chunk) - 8);
+    REQUIRE(core.read_input(output, sizeof(output), true, &read) == 8);
+    REQUIRE(core.input_available() == sizeof(chunk) - 8);
 }
 
 void test_output_transform_flush_and_hangup()
@@ -96,28 +96,28 @@ void test_output_transform_flush_and_hangup()
     ttyd::terminal_core core;
     const std::uint8_t input[] = {'a', '\n', 'b'};
     std::size_t written = 0;
-    assert(core.write_output(input, sizeof(input), true, &written) == 3);
+    REQUIRE(core.write_output(input, sizeof(input), true, &written) == 3);
     std::uint8_t output[8]{};
     std::size_t read = 0;
-    assert(core.read_output(output, sizeof(output), true, &read) == 4);
-    assert(std::memcmp(output, "a\r\nb", 4) == 0);
+    REQUIRE(core.read_output(output, sizeof(output), true, &read) == 4);
+    REQUIRE(std::memcmp(output, "a\r\nb", 4) == 0);
 
     core.flush(ttyd::tty_flush::both);
-    assert(core.input_available() == 0);
-    assert(core.output_available() == 0);
+    REQUIRE(core.input_available() == 0);
+    REQUIRE(core.output_available() == 0);
 
     const std::uint8_t byte = 'z';
     std::size_t consumed = 0;
-    assert(core.receive_input(&byte, 1, true, &consumed) == 1);
+    REQUIRE(core.receive_input(&byte, 1, true, &consumed) == 1);
     core.hangup_master();
     std::uint8_t data[8]{};
     // A closed master is end-of-file on the slave side, not an I/O error.
-    assert(core.read_input(data, sizeof(data), true, &read) == 0);
-    assert(core.write_output(&byte, 1, true, &written) == -EIO);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 0);
+    REQUIRE(core.write_output(&byte, 1, true, &written) == -EIO);
 
     ttyd::terminal_core output_core;
     output_core.hangup_slave();
-    assert(output_core.read_output(data, sizeof(data), true, &read) == -EIO);
+    REQUIRE(output_core.read_output(data, sizeof(data), true, &read) == -EIO);
 }
 
 void test_hangup_delivers_eof_after_drain()
@@ -129,14 +129,14 @@ void test_hangup_delivers_eof_after_drain()
 
     const std::uint8_t pending[] = {'a', 'b'};
     std::size_t consumed = 0;
-    assert(core.receive_input(pending, sizeof(pending), true, &consumed) == 2);
+    REQUIRE(core.receive_input(pending, sizeof(pending), true, &consumed) == 2);
     core.hangup_master();
 
     std::uint8_t data[4]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 2);
-    assert(std::memcmp(data, pending, sizeof(pending)) == 0);
-    assert(core.read_input(data, sizeof(data), true, &read) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 2);
+    REQUIRE(std::memcmp(data, pending, sizeof(pending)) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 0);
 }
 
 void test_veof_mid_line_is_literal_data()
@@ -144,15 +144,15 @@ void test_veof_mid_line_is_literal_data()
     ttyd::terminal_core core;
     const std::uint8_t input[] = {'a', 0x04, 'b', '\n'};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
+    REQUIRE(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
 
     std::uint8_t data[8]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 4);
-    assert(std::memcmp(data,
-                       "a\x04"
-                       "b\n",
-                       4) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 4);
+    REQUIRE(std::memcmp(data,
+                        "a\x04"
+                        "b\n",
+                        4) == 0);
 }
 
 void test_i_exten_gates_erase_and_kill()
@@ -164,15 +164,15 @@ void test_i_exten_gates_erase_and_kill()
 
     const std::uint8_t input[] = {'a', 0x7f, 0x15, 'b', '\n'};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
+    REQUIRE(core.receive_input(input, sizeof(input), true, &consumed) == static_cast<int>(sizeof(input)));
 
     std::uint8_t data[8]{};
     std::size_t read = 0;
-    assert(core.read_input(data, sizeof(data), true, &read) == 5);
-    assert(std::memcmp(data,
-                       "a\x7f\x15"
-                       "b\n",
-                       5) == 0);
+    REQUIRE(core.read_input(data, sizeof(data), true, &read) == 5);
+    REQUIRE(std::memcmp(data,
+                        "a\x7f\x15"
+                        "b\n",
+                        5) == 0);
 }
 
 void test_termios_rejects_unimplemented_flags()
@@ -183,20 +183,20 @@ void test_termios_rejects_unimplemented_flags()
 
     auto unsupported_iflag = original;
     unsupported_iflag.input_flags |= 010000;
-    assert(core.set_termios(unsupported_iflag) == -EINVAL);
+    REQUIRE(core.set_termios(unsupported_iflag) == -EINVAL);
 
     auto unsupported_lflag = original;
     unsupported_lflag.local_flags |= 0200000;
-    assert(core.set_termios(unsupported_lflag) == -EINVAL);
+    REQUIRE(core.set_termios(unsupported_lflag) == -EINVAL);
 
-    assert(core.get_termios().input_flags == original.input_flags);
-    assert(core.get_termios().local_flags == original.local_flags);
-    assert(core.generation() == generation);
+    REQUIRE(core.get_termios().input_flags == original.input_flags);
+    REQUIRE(core.get_termios().local_flags == original.local_flags);
+    REQUIRE(core.generation() == generation);
 
     ttyd::termios raw{};
-    assert(core.set_termios(raw) == 0);
-    assert(core.get_termios().input_flags == 0);
-    assert(core.get_termios().local_flags == 0);
+    REQUIRE(core.set_termios(raw) == 0);
+    REQUIRE(core.get_termios().input_flags == 0);
+    REQUIRE(core.get_termios().local_flags == 0);
 }
 
 void test_reopening_a_peer_clears_only_its_transient_hangup()
@@ -207,18 +207,18 @@ void test_reopening_a_peer_clears_only_its_transient_hangup()
 
     ttyd::terminal_core master;
     master.hangup_master();
-    assert(master.write_output(&byte, 1, true, &count) == -EIO);
+    REQUIRE(master.write_output(&byte, 1, true, &count) == -EIO);
     master.open_master();
-    assert(master.write_output(&byte, 1, true, &count) == 1);
+    REQUIRE(master.write_output(&byte, 1, true, &count) == 1);
 
     ttyd::terminal_core slave;
     slave.hangup_slave();
-    assert((slave.master_poll_events() & ttyd::tty_poll::hangup) != 0);
+    REQUIRE((slave.master_poll_events() & ttyd::tty_poll::hangup) != 0);
     slave.open_slave();
-    assert((slave.master_poll_events() & ttyd::tty_poll::hangup) == 0);
-    assert(slave.write_output(&byte, 1, true, &count) == 1);
-    assert(slave.read_output(&data, 1, true, &count) == 1);
-    assert(data == byte);
+    REQUIRE((slave.master_poll_events() & ttyd::tty_poll::hangup) == 0);
+    REQUIRE(slave.write_output(&byte, 1, true, &count) == 1);
+    REQUIRE(slave.read_output(&data, 1, true, &count) == 1);
+    REQUIRE(data == byte);
 }
 
 void test_noncanonical_vmin_vtime_modes()
@@ -232,14 +232,14 @@ void test_noncanonical_vmin_vtime_modes()
 
     std::uint8_t data[8]{};
     std::size_t read = 0;
-    assert(immediate.read_input(data, sizeof(data), true, &read) == -EAGAIN);
-    assert(immediate.read_input(data, sizeof(data), true, &read, true) == 0);
+    REQUIRE(immediate.read_input(data, sizeof(data), true, &read) == -EAGAIN);
+    REQUIRE(immediate.read_input(data, sizeof(data), true, &read, true) == 0);
 
     const std::uint8_t byte = 'x';
     std::size_t consumed = 0;
-    assert(immediate.receive_input(&byte, 1, true, &consumed) == 1);
-    assert(immediate.read_input(data, sizeof(data), true, &read) == 1);
-    assert(data[0] == byte);
+    REQUIRE(immediate.receive_input(&byte, 1, true, &consumed) == 1);
+    REQUIRE(immediate.read_input(data, sizeof(data), true, &read) == 1);
+    REQUIRE(data[0] == byte);
 
     ttyd::terminal_core interbyte;
     termios = interbyte.get_termios();
@@ -248,10 +248,10 @@ void test_noncanonical_vmin_vtime_modes()
     termios.control_chars[ttyd::termios_cc::vtime] = 1;
     interbyte.set_termios(termios);
     const std::uint8_t partial[] = {'a', 'b'};
-    assert(interbyte.receive_input(partial, sizeof(partial), true, &consumed) == 2);
-    assert(interbyte.read_input(data, sizeof(data), true, &read) == -EAGAIN);
-    assert(interbyte.read_input(data, sizeof(data), true, &read, true) == 2);
-    assert(std::memcmp(data, partial, sizeof(partial)) == 0);
+    REQUIRE(interbyte.receive_input(partial, sizeof(partial), true, &consumed) == 2);
+    REQUIRE(interbyte.read_input(data, sizeof(data), true, &read) == -EAGAIN);
+    REQUIRE(interbyte.read_input(data, sizeof(data), true, &read, true) == 2);
+    REQUIRE(std::memcmp(data, partial, sizeof(partial)) == 0);
 }
 
 void test_generation_changes()
@@ -261,7 +261,7 @@ void test_generation_changes()
     const std::uint8_t byte = 'a';
     std::size_t consumed = 0;
     (void)core.receive_input(&byte, 1, true, &consumed);
-    assert(core.generation() != initial);
+    REQUIRE(core.generation() != initial);
 }
 
 void test_external_state_changes_generation()
@@ -269,10 +269,10 @@ void test_external_state_changes_generation()
     ttyd::terminal_core core;
     const auto initial = core.generation();
     core.notify_external_change();
-    assert(core.generation() != initial);
+    REQUIRE(core.generation() != initial);
     const auto changed = core.generation();
     core.notify_external_change();
-    assert(core.generation() != changed);
+    REQUIRE(core.generation() != changed);
 }
 
 void test_echo_backpressure_never_drops_input_echo()
@@ -281,21 +281,21 @@ void test_echo_backpressure_never_drops_input_echo()
     std::uint8_t fill[ttyd::terminal_core::queue_capacity]{};
     std::memset(fill, 'x', sizeof(fill));
     std::size_t written = 0;
-    assert(core.write_output(fill, sizeof(fill), true, &written) == static_cast<int>(sizeof(fill)));
+    REQUIRE(core.write_output(fill, sizeof(fill), true, &written) == static_cast<int>(sizeof(fill)));
 
     const std::uint8_t input = 'a';
     std::size_t consumed = 0;
-    assert(core.receive_input(&input, 1, true, &consumed) == -EAGAIN);
-    assert(consumed == 0);
+    REQUIRE(core.receive_input(&input, 1, true, &consumed) == -EAGAIN);
+    REQUIRE(consumed == 0);
 
     std::uint8_t drained{};
     std::size_t read = 0;
-    assert(core.read_output(&drained, 1, true, &read) == 1);
-    assert(core.receive_input(&input, 1, true, &consumed) == 1);
-    assert(consumed == 1);
+    REQUIRE(core.read_output(&drained, 1, true, &read) == 1);
+    REQUIRE(core.receive_input(&input, 1, true, &consumed) == 1);
+    REQUIRE(consumed == 1);
     std::uint8_t echoed{};
-    assert(core.read_output(&echoed, 1, true, &read) == 1);
-    assert(echoed == 'x');
+    REQUIRE(core.read_output(&echoed, 1, true, &read) == 1);
+    REQUIRE(echoed == 'x');
 }
 
 void test_shutdown_input_is_one_way_eof()
@@ -307,23 +307,23 @@ void test_shutdown_input_is_one_way_eof()
 
     const std::uint8_t input[] = {'a', 'b'};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), true, &consumed) == 2);
+    REQUIRE(core.receive_input(input, sizeof(input), true, &consumed) == 2);
     core.shutdown_input();
 
     std::uint8_t read_buffer[4]{};
     std::size_t read = 0;
-    assert(core.read_input(read_buffer, sizeof(read_buffer), true, &read) == 2);
-    assert(std::memcmp(read_buffer, input, sizeof(input)) == 0);
-    assert(core.read_input(read_buffer, sizeof(read_buffer), true, &read) == 0);
+    REQUIRE(core.read_input(read_buffer, sizeof(read_buffer), true, &read) == 2);
+    REQUIRE(std::memcmp(read_buffer, input, sizeof(input)) == 0);
+    REQUIRE(core.read_input(read_buffer, sizeof(read_buffer), true, &read) == 0);
 
     const std::uint8_t output = 'o';
     std::size_t written = 0;
-    assert(core.write_output(&output, 1, true, &written) == 1);
-    assert(core.read_output(read_buffer, sizeof(read_buffer), true, &read) == 1);
-    assert(read_buffer[0] == output);
+    REQUIRE(core.write_output(&output, 1, true, &written) == 1);
+    REQUIRE(core.read_output(read_buffer, sizeof(read_buffer), true, &read) == 1);
+    REQUIRE(read_buffer[0] == output);
 
     consumed = 0;
-    assert(core.receive_input(&output, 1, true, &consumed) == -EPIPE);
+    REQUIRE(core.receive_input(&output, 1, true, &consumed) == -EPIPE);
 }
 
 void test_output_transform_does_not_emit_partial_newline()
@@ -332,19 +332,19 @@ void test_output_transform_does_not_emit_partial_newline()
     std::uint8_t fill[ttyd::terminal_core::queue_capacity - 1]{};
     std::memset(fill, 'x', sizeof(fill));
     std::size_t written = 0;
-    assert(core.write_output(fill, sizeof(fill), true, &written) == static_cast<int>(sizeof(fill)));
+    REQUIRE(core.write_output(fill, sizeof(fill), true, &written) == static_cast<int>(sizeof(fill)));
 
     const std::uint8_t newline = '\n';
     written = 0;
-    assert(core.write_output(&newline, 1, true, &written) == -EAGAIN);
-    assert(written == 0);
-    assert(core.output_available() == sizeof(fill));
+    REQUIRE(core.write_output(&newline, 1, true, &written) == -EAGAIN);
+    REQUIRE(written == 0);
+    REQUIRE(core.output_available() == sizeof(fill));
 
     std::uint8_t byte{};
     std::size_t read = 0;
-    assert(core.read_output(&byte, 1, true, &read) == 1);
-    assert(core.write_output(&newline, 1, true, &written) == 1);
-    assert(core.output_available() == sizeof(fill) + 1);
+    REQUIRE(core.read_output(&byte, 1, true, &read) == 1);
+    REQUIRE(core.write_output(&newline, 1, true, &written) == 1);
+    REQUIRE(core.output_available() == sizeof(fill) + 1);
 }
 
 void test_blocking_write_reports_committed_prefix()
@@ -356,8 +356,8 @@ void test_blocking_write_reports_committed_prefix()
 
     std::uint8_t input[ttyd::terminal_core::queue_capacity + 1]{};
     std::size_t consumed = 0;
-    assert(core.receive_input(input, sizeof(input), false, &consumed) == -EAGAIN);
-    assert(consumed == ttyd::terminal_core::queue_capacity);
+    REQUIRE(core.receive_input(input, sizeof(input), false, &consumed) == -EAGAIN);
+    REQUIRE(consumed == ttyd::terminal_core::queue_capacity);
 }
 
 void test_zero_length_io_validates_without_mutation()
@@ -366,15 +366,15 @@ void test_zero_length_io_validates_without_mutation()
     const auto initial_generation = core.generation();
     std::size_t count = 123;
     std::uint8_t byte = 0;
-    assert(core.receive_input(&byte, 0, true, &count) == 0);
-    assert(count == 0);
-    assert(core.read_input(&byte, 0, true, &count) == 0);
-    assert(count == 0);
-    assert(core.write_output(&byte, 0, true, &count) == 0);
-    assert(count == 0);
-    assert(core.read_output(&byte, 0, true, &count) == 0);
-    assert(count == 0);
-    assert(core.generation() == initial_generation);
+    REQUIRE(core.receive_input(&byte, 0, true, &count) == 0);
+    REQUIRE(count == 0);
+    REQUIRE(core.read_input(&byte, 0, true, &count) == 0);
+    REQUIRE(count == 0);
+    REQUIRE(core.write_output(&byte, 0, true, &count) == 0);
+    REQUIRE(count == 0);
+    REQUIRE(core.read_output(&byte, 0, true, &count) == 0);
+    REQUIRE(count == 0);
+    REQUIRE(core.generation() == initial_generation);
 }
 
 void test_ixon_stop_start_controls_output_readiness()
@@ -383,19 +383,19 @@ void test_ixon_stop_start_controls_output_readiness()
     const std::uint8_t stop = 0x13;
     const std::uint8_t start = 0x11;
     std::size_t consumed = 0;
-    assert(core.receive_input(&stop, 1, true, &consumed) == 1);
-    assert(core.output_paused());
-    assert((core.output_poll_events() & ttyd::tty_poll::writable) == 0);
+    REQUIRE(core.receive_input(&stop, 1, true, &consumed) == 1);
+    REQUIRE(core.output_paused());
+    REQUIRE((core.output_poll_events() & ttyd::tty_poll::writable) == 0);
 
     const std::uint8_t data = 'x';
     std::size_t written = 0;
-    assert(core.write_output(&data, 1, true, &written) == -EAGAIN);
-    assert(written == 0);
+    REQUIRE(core.write_output(&data, 1, true, &written) == -EAGAIN);
+    REQUIRE(written == 0);
 
-    assert(core.receive_input(&start, 1, true, &consumed) == 1);
-    assert(!core.output_paused());
-    assert((core.output_poll_events() & ttyd::tty_poll::writable) != 0);
-    assert(core.write_output(&data, 1, true, &written) == 1);
+    REQUIRE(core.receive_input(&start, 1, true, &consumed) == 1);
+    REQUIRE(!core.output_paused());
+    REQUIRE((core.output_poll_events() & ttyd::tty_poll::writable) != 0);
+    REQUIRE(core.write_output(&data, 1, true, &written) == 1);
 }
 
 void test_isig_flushes_input_and_output_unless_noflsh()
@@ -403,41 +403,41 @@ void test_isig_flushes_input_and_output_unless_noflsh()
     ttyd::terminal_core core;
     const std::uint8_t data = 'x';
     std::size_t consumed = 0;
-    assert(core.receive_input(&data, 1, true, &consumed) == 1);
+    REQUIRE(core.receive_input(&data, 1, true, &consumed) == 1);
     std::size_t written = 0;
-    assert(core.write_output(&data, 1, true, &written) == 1);
+    REQUIRE(core.write_output(&data, 1, true, &written) == 1);
 
     const std::uint8_t interrupt = 3;
-    assert(core.receive_input(&interrupt, 1, true, &consumed) == 1);
-    assert(core.input_available() == 0);
-    assert(core.output_available() == 0);
+    REQUIRE(core.receive_input(&interrupt, 1, true, &consumed) == 1);
+    REQUIRE(core.input_available() == 0);
+    REQUIRE(core.output_available() == 0);
 
     auto attributes = core.get_termios();
     attributes.local_flags |= ttyd::termios_lflag::noflsh;
     core.set_termios(attributes);
-    assert(core.receive_input(&data, 1, true, &consumed) == 1);
-    assert(core.write_output(&data, 1, true, &written) == 1);
-    assert(core.receive_input(&interrupt, 1, true, &consumed) == 1);
-    assert(core.input_available() != 0 || core.output_available() != 0);
+    REQUIRE(core.receive_input(&data, 1, true, &consumed) == 1);
+    REQUIRE(core.write_output(&data, 1, true, &written) == 1);
+    REQUIRE(core.receive_input(&interrupt, 1, true, &consumed) == 1);
+    REQUIRE((core.input_available() != 0 || core.output_available() != 0));
 }
 
 void test_send_break_is_explicitly_unsupported()
 {
     ttyd::terminal_core core;
     const auto initial_generation = core.generation();
-    assert(core.send_break(0) == -ENOTSUP);
-    assert(core.generation() == initial_generation);
+    REQUIRE(core.send_break(0) == -ENOTSUP);
+    REQUIRE(core.generation() == initial_generation);
 }
 
 void test_explicit_flow_controls_share_readiness_state()
 {
     ttyd::terminal_core core;
-    assert(core.set_flow(0) == 0);
-    assert(core.output_paused());
-    assert((core.output_poll_events() & ttyd::tty_poll::writable) == 0);
-    assert(core.set_flow(1) == 0);
-    assert(!core.output_paused());
-    assert(core.set_flow(4) == -EINVAL);
+    REQUIRE(core.set_flow(0) == 0);
+    REQUIRE(core.output_paused());
+    REQUIRE((core.output_poll_events() & ttyd::tty_poll::writable) == 0);
+    REQUIRE(core.set_flow(1) == 0);
+    REQUIRE(!core.output_paused());
+    REQUIRE(core.set_flow(4) == -EINVAL);
 }
 
 void test_directional_readiness_tracks_each_endpoint()
@@ -445,33 +445,33 @@ void test_directional_readiness_tracks_each_endpoint()
     ttyd::terminal_core core;
     auto master = core.master_poll_events();
     auto slave = core.slave_poll_events();
-    assert((master & ttyd::tty_poll::writable) != 0);
-    assert((master & ttyd::tty_poll::readable) == 0);
-    assert((slave & ttyd::tty_poll::writable) != 0);
-    assert((slave & ttyd::tty_poll::readable) == 0);
+    REQUIRE((master & ttyd::tty_poll::writable) != 0);
+    REQUIRE((master & ttyd::tty_poll::readable) == 0);
+    REQUIRE((slave & ttyd::tty_poll::writable) != 0);
+    REQUIRE((slave & ttyd::tty_poll::readable) == 0);
 
     const std::uint8_t line[] = {'x'};
     std::size_t consumed = 0;
-    assert(core.receive_input(line, sizeof(line), true, &consumed) == 1);
-    assert((core.slave_poll_events() & ttyd::tty_poll::readable) == 0);
+    REQUIRE(core.receive_input(line, sizeof(line), true, &consumed) == 1);
+    REQUIRE((core.slave_poll_events() & ttyd::tty_poll::readable) == 0);
     const std::uint8_t newline = '\n';
-    assert(core.receive_input(&newline, 1, true, &consumed) == 1);
-    assert((core.slave_poll_events() & ttyd::tty_poll::readable) != 0);
+    REQUIRE(core.receive_input(&newline, 1, true, &consumed) == 1);
+    REQUIRE((core.slave_poll_events() & ttyd::tty_poll::readable) != 0);
 
     std::uint8_t output = 'o';
     std::size_t written = 0;
-    assert(core.write_output(&output, 1, true, &written) == 1);
-    assert((core.master_poll_events() & ttyd::tty_poll::readable) != 0);
-    assert((core.slave_poll_events() & ttyd::tty_poll::writable) != 0);
+    REQUIRE(core.write_output(&output, 1, true, &written) == 1);
+    REQUIRE((core.master_poll_events() & ttyd::tty_poll::readable) != 0);
+    REQUIRE((core.slave_poll_events() & ttyd::tty_poll::writable) != 0);
 
     core.send_eof();
-    assert((core.slave_poll_events() & ttyd::tty_poll::readable) != 0);
+    REQUIRE((core.slave_poll_events() & ttyd::tty_poll::readable) != 0);
     core.hangup_master();
-    assert((core.slave_poll_events() & ttyd::tty_poll::hangup) != 0);
+    REQUIRE((core.slave_poll_events() & ttyd::tty_poll::hangup) != 0);
 }
 } // namespace
 
-int run_ttyd_terminal_core_tests()
+TEST_CASE("ttyd terminal core", "[ttyd][terminal]")
 {
     test_canonical_echo_and_read();
     test_erase_kill_and_eof();
@@ -496,5 +496,4 @@ int run_ttyd_terminal_core_tests()
     test_send_break_is_explicitly_unsupported();
     test_explicit_flow_controls_share_readiness_state();
     test_directional_readiness_tracks_each_endpoint();
-    return 0;
 }
