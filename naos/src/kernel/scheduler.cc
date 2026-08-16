@@ -47,10 +47,7 @@ bool reschedule_task_push(thread_t *task, u32 cpuid)
         // trace::debug("reschedule task cpu ", task->cpuid, " to cpu ", cpuid);
 
         thread_to_reschedule = task;
-        task->cpuid = cpuid;
         task->attributes |= thread_attributes::on_migrate;
-
-        SMP::reschedule_cpu(cpuid);
         return true;
     }
     return false;
@@ -101,9 +98,12 @@ struct update_state_ipi_param
 {
     thread_t *thread;
     thread_state state;
-    update_state_ipi_param(thread_t *thread, thread_state state)
+    bool wait_for_completion;
+    std::atomic_bool completed{false};
+    update_state_ipi_param(thread_t *thread, thread_state state, bool wait_for_completion)
         : thread(thread)
         , state(state)
+        , wait_for_completion(wait_for_completion)
     {
     }
 };
@@ -112,8 +112,10 @@ void update_state_ipi(u64 data)
 {
     update_state_ipi_param *p = reinterpret_cast<update_state_ipi_param *>(data);
     p->thread->scheduler->update_state(p->thread, p->state);
-
-    memory::Delete<>(memory::KernelCommonAllocatorV, p);
+    if (p->wait_for_completion)
+        p->completed.store(true, std::memory_order_release);
+    else
+        memory::Delete<>(memory::KernelCommonAllocatorV, p);
 }
 
 void update_state(thread_t *thread, thread_state state)
@@ -124,9 +126,24 @@ void update_state(thread_t *thread, thread_state state)
     }
     else
     {
-        SMP::call_cpu(thread->cpuid, update_state_ipi,
-                      (u64)memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state));
-        // send IPI
+        auto *param = memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state, false);
+        SMP::call_cpu(thread->cpuid, update_state_ipi, (u64)param);
+    }
+}
+
+void update_state_sync(thread_t *thread, thread_state state)
+{
+    if (thread->cpuid == cpu::current().id())
+    {
+        thread->scheduler->update_state(thread, state);
+    }
+    else
+    {
+        auto *param = memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state, true);
+        SMP::call_cpu(thread->cpuid, update_state_ipi, (u64)param);
+        while (!param->completed.load(std::memory_order_acquire))
+            cpu_pause();
+        memory::Delete<>(memory::KernelCommonAllocatorV, param);
     }
 }
 
@@ -204,11 +221,6 @@ void schedule()
     task::enable_preempt();
 }
 
-u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size)
-{
-    return target->scheduler->sctl(operator_type, target, attr, value, size);
-}
-
 void timer_tick(timeclock::microsecond_t) noexcept
 {
     (void)timer::schedule_after(5000, timer::timer_handler::bind<&timer_tick>());
@@ -256,6 +268,7 @@ void timer_tick(timeclock::microsecond_t) noexcept
             if (reschedule_task_push(task, targe_cpu->id()))
             {
                 real_time_schedulers->commit_migrate(task);
+                SMP::reschedule_cpu(targe_cpu->id());
                 return;
             }
         }
@@ -266,6 +279,7 @@ void timer_tick(timeclock::microsecond_t) noexcept
             if (reschedule_task_push(task, targe_cpu->id()))
             {
                 normal_schedulers->commit_migrate(task);
+                SMP::reschedule_cpu(targe_cpu->id());
             }
         }
     }

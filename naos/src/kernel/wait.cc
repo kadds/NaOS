@@ -9,38 +9,56 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition)
 {
     if (condition())
         return true;
-    thread_state state = thread_state::stop;
+    auto *thd = current();
 
-    uctx::UninterruptibleContext icu;
     {
-        uctx::RawSpinLockContext ctx(lock);
-        auto waiter = list.push_back(current(), condition);
-        if (condition())
-        {
-            // The condition may become true after the initial check but
-            // before the waiter is linked into the queue.  Do not leave a
-            // stale entry behind in that case.
-            list.remove(waiter);
-            return true;
-        }
+        uctx::RawSpinLockUninterruptibleContext ctx(lock);
+        list.push_back(thd, condition);
+        thd->attributes |= task::thread_attributes::need_schedule;
+        thd->do_wait_queue_now = this;
+        scheduler::update_state(thd, thread_state::stop);
+    }
+
+    if (condition())
+    {
+        scheduler::update_state(thd, thread_state::ready);
+        uctx::RawSpinLockUninterruptibleContext ctx(lock);
+        auto it = list.find(wait_context_t(thd, condition));
+        list.remove(it);
+        thd->do_wait_queue_now = nullptr;
+        return true;
     }
 
     for (;;)
     {
-        auto thd = current();
-        thd->attributes |= task::thread_attributes::need_schedule;
-        thd->do_wait_queue_now = this;
-        scheduler::update_state(thd, state);
         scheduler::schedule();
         if (condition())
             break;
-        // false wake up, try sleep.
+
+        {
+            bool registered = false;
+            {
+                uctx::RawSpinLockUninterruptibleContext ctx(lock);
+                auto it = list.find(wait_context_t(thd, condition));
+                if (it == list.end())
+                    thd->do_wait_queue_now = nullptr;
+                else
+                {
+                    it->wake_requested = false;
+                    scheduler::update_state(thd, thread_state::stop);
+                    registered = true;
+                }
+            }
+            if (!registered)
+                return condition();
+        }
     }
+
     {
-        uctx::RawSpinLockContext ctx(lock);
-        auto it = list.find(wait_context_t(current(), condition));
+        uctx::RawSpinLockUninterruptibleContext ctx(lock);
+        auto it = list.find(wait_context_t(thd, condition));
         list.remove(it);
-        current()->do_wait_queue_now = nullptr;
+        thd->do_wait_queue_now = nullptr;
     }
 
     return condition();
@@ -48,20 +66,26 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition)
 
 u64 wait_queue_t::do_wake_up(u64 count)
 {
-    uctx::RawSpinLockUninterruptibleContext ctx(lock);
-    u64 i = 0;
-    for (auto it = list.begin(); it != list.end() && i < count;)
+    freelibcxx::vector<thread_t *> wake_targets(memory::KernelCommonAllocatorV);
     {
-        if (it->condition())
+        uctx::RawSpinLockUninterruptibleContext ctx(lock);
+        for (auto it = list.begin(); it != list.end() && wake_targets.size() < count; ++it)
         {
-            scheduler::update_state(it->thd, thread_state::ready);
-            it = list.remove(it);
-            i++;
+            if (!it->wake_requested)
+            {
+                it->wake_requested = true;
+                it->thd->wait_queue_wake_refs.fetch_add(1, std::memory_order_relaxed);
+                wake_targets.push_back(it->thd);
+            }
         }
-        else
-            ++it;
     }
-    return i;
+
+    for (auto *thread : wake_targets)
+    {
+        scheduler::update_state_sync(thread, thread_state::ready);
+        thread->wait_queue_wake_refs.fetch_sub(1, std::memory_order_release);
+    }
+    return wake_targets.size();
 }
 
 void wait_queue_t::remove(thread_t *thread)

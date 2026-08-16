@@ -209,8 +209,6 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
     trace::panic("Unreachable control flow.", " CFS thread state:", (int)thread->state, ", to state: ", (int)state);
 }
 
-void completely_fair_scheduler::update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) {}
-
 void completely_fair_scheduler::on_migrate(thread_t *thread)
 {
     auto task_list = get_cpu_task_list();
@@ -327,6 +325,8 @@ void completely_fair_scheduler::commit_migrate(thread_t *thd)
     auto list = get_cpu_task_list();
     uctx::UninterruptibleContext icu;
 
+    // The source entry is removed before the destination CPU can reset its
+    // vtime during migration, so the ordered lookup key is still valid here.
     auto it = list->runable_list.find(cfs_thread_t(thd));
     kassert(it != list->runable_list.end(), "commit task failed!");
 
@@ -334,8 +334,6 @@ void completely_fair_scheduler::commit_migrate(thread_t *thd)
 
     list->runable_list.remove(it);
 }
-
-u64 completely_fair_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) { return 0; }
 
 completely_fair_scheduler::completely_fair_scheduler()
     : sched_min_granularity_us(2000)

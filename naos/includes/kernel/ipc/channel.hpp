@@ -80,6 +80,8 @@ class channel_state
     na_signal_t signals(u8 side) const;
     na_status_t enqueue(u8 sender, channel_message *message, capability::transfer_record_list &records,
                         task::resource_table_t &resources);
+    na_status_t enqueue_kernel(u8 sender, channel_message *message, capability::transfer_record_list &records,
+                               u64 max_queue_messages = 0);
     na_status_t claim_receive(u8 side, channel_message *&message);
     bool cancel_receive(u8 side, channel_message *message);
     bool commit_receive(u8 side, channel_message *message);
@@ -87,6 +89,8 @@ class channel_state
 
     void endpoint_object_created();
     void endpoint_object_destroyed();
+    void kernel_owner_acquired(u8 side);
+    void kernel_owner_released(u8 side);
     void capability_acquired(u8 side, capability::location where);
     void capability_released(u8 side, capability::location where);
     void begin_operation();
@@ -94,6 +98,8 @@ class channel_state
 
     bool has_root() const;
     bool can_reap() const;
+    u64 queued_messages(u8 side) const;
+    u64 max_messages() const { return max_messages_; }
     void collect_reachable_states(freelibcxx::vector<channel_state *> &targets) const;
     void discard_orphan_messages();
     u64 endpoint_object_count() const { return endpoint_objects_.load(); }
@@ -138,14 +144,19 @@ class channel_state
 };
 
 na_status_t create_raw_channel(khandle &left, khandle &right, const na_channel_options_t *options);
+// Kernel callers already own their options in trusted memory and must not pass
+// them through the usercopy-based syscall helper above.
+na_status_t create_raw_channel_kernel(khandle &left, khandle &right, const na_channel_options_t *options);
 
 na_status_t send_raw_channel(task::resource_table_t &resources, na_handle_t endpoint,
                              const na_channel_send_frame_t *frame);
 na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t endpoint,
                                 na_channel_receive_frame_t *frame);
 na_status_t receive_raw_channel_kernel(task::resource_table_t &resources, na_handle_t endpoint, byte *bytes,
-                                        u64 byte_capacity, u64 &actual_bytes,
-                                        freelibcxx::vector<na_handle_t> &handles);
+                                       u64 byte_capacity, u64 &actual_bytes, freelibcxx::vector<na_handle_t> &handles);
+na_status_t send_raw_channel_kernel(task::resource_table_t &resources, na_handle_t endpoint, const byte *bytes,
+                                    u64 byte_count);
+na_status_t send_raw_channel_kernel(const khandle &endpoint, const byte *bytes, u64 byte_count);
 na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t endpoint);
 na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count,
                       timeclock::microsecond_t deadline);

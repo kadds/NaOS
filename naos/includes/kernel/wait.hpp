@@ -12,6 +12,7 @@ struct wait_context_t
 {
     thread_t *thd;
     freelibcxx::function_ref<bool()> condition;
+    bool wake_requested = false;
     wait_context_t(thread_t *thd, freelibcxx::function_ref<bool()> condition)
         : thd(thd)
         , condition(condition)

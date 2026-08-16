@@ -34,7 +34,7 @@ struct cfs_vtime_key
 };
 } // namespace
 
-int main()
+int run_cfs_vtime_order_tests()
 {
     test_allocator allocator;
     freelibcxx::skip_list<cfs_vtime_key> runnable(&allocator, 0);

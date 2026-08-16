@@ -2,23 +2,39 @@
 
 #include <naos/generated/system/Directory.hpp>
 #include <naos/generated/system/File.hpp>
+#include <naos/generated/system/InputEventSource.hpp>
 #include <naos/generated/system/MemoryObject.hpp>
 #include <naos/generated/system/Process.hpp>
 #include <naos/generated/system/SharedRing.hpp>
 #include <naos/generated/system/Stream.hpp>
-#include <naos/generated/system/TtyControl.hpp>
+#include <naos/generated/system/TerminalDriverControl.hpp>
+#include <naos/generated/system/TerminalDriverFactory.hpp>
+#include <naos/generated/system/TerminalJobControl.hpp>
+#include <naos/generated/system/TerminalManager.hpp>
+#include <naos/generated/system/TerminalMaster.hpp>
+#include <naos/generated/system/TerminalSlave.hpp>
 #include <naos/generated/system_uapi.h>
+
+template <typename T>
+concept has_legacy_job_control_process_id = requires(T value) {
+    value.process_id;
+};
 
 static_assert(NA_SCOPE_STREAM == 1);
 static_assert(NA_SCOPE_FILE == 2);
 static_assert(NA_SCOPE_DIRECTORY == 3);
-static_assert(NA_SCOPE_TTY_CONTROL == 4);
 static_assert(NA_SCOPE_MEMORY_OBJECT == 7);
 static_assert(NA_SCOPE_SHARED_RING == 8);
 static_assert(NA_SCOPE_PROCESS == 9);
+static_assert(NA_SCOPE_TERMINAL_MANAGER == 5);
+static_assert(NA_SCOPE_TERMINAL_MASTER == 6);
+static_assert(NA_SCOPE_TERMINAL_SLAVE == 11);
+static_assert(NA_SCOPE_TERMINAL_JOB_CONTROL == 12);
+static_assert(NA_SCOPE_TERMINAL_DRIVER_CONTROL == 13);
+static_assert(NA_SCOPE_TERMINAL_DRIVER_FACTORY == 14);
+static_assert(NA_SCOPE_INPUT_EVENT_SOURCE == 15);
 static_assert(NA_METHOD_STREAM_READ == 1);
 static_assert(NA_METHOD_STREAM_WRITE == 2);
-static_assert(NA_METHOD_STREAM_POLL == 3);
 static_assert(NA_METHOD_DIRECTORY_OPEN == 1);
 static_assert(NA_METHOD_DIRECTORY_LIST == 2);
 static_assert(NA_METHOD_DIRECTORY_STAT == 3);
@@ -41,19 +57,11 @@ static_assert(NA_METHOD_FILE_TRUNCATE == 6);
 static_assert(NA_METHOD_FILE_ALLOCATE == 7);
 static_assert(NA_METHOD_FILE_GET_FLAGS == 8);
 static_assert(NA_METHOD_FILE_SET_FLAGS == 9);
-static_assert(NA_METHOD_TTY_GET_ATTRIBUTES == 1);
-static_assert(NA_METHOD_TTY_SET_ATTRIBUTES == 2);
-static_assert(NA_METHOD_TTY_GET_WINSIZE == 3);
-static_assert(NA_METHOD_TTY_SET_WINSIZE == 4);
-static_assert(NA_METHOD_TTY_FLUSH == 5);
-static_assert(NA_METHOD_TTY_ATTACH == 6);
-static_assert(NA_METHOD_TTY_GET_PGRP == 7);
-static_assert(NA_METHOD_TTY_SET_PGRP == 8);
-static_assert(NA_METHOD_TTY_GET_SID == 9);
-static_assert(NA_METHOD_TTY_DETACH == 10);
-static_assert(NA_METHOD_TTY_GET_INPUT == 11);
-static_assert(NA_METHOD_PTY_GET_NUMBER == 12);
-static_assert(NA_METHOD_PTY_UNLOCK == 13);
+static_assert(NA_METHOD_FILE_DEVICE_CONTROL == 10);
+static_assert(NA_METHOD_FILE_READ == 11);
+static_assert(NA_METHOD_FILE_WRITE == 12);
+static_assert(NA_METHOD_SERVICE_DIRECTORY_LISTEN == 5);
+static_assert(NA_METHOD_SERVICE_DIRECTORY_CONNECT == 6);
 static_assert(NA_METHOD_PROCESS_WAIT == 1);
 static_assert(NA_METHOD_PROCESS_GET_INFO == 2);
 static_assert(NA_METHOD_PROCESS_WAIT_CHILDREN == 3);
@@ -62,6 +70,7 @@ static_assert(NA_METHOD_PROCESS_SET_SESSION == 5);
 static_assert(NA_METHOD_PROCESS_GET_PROCESS_GROUP == 6);
 static_assert(NA_METHOD_PROCESS_SET_PROCESS_GROUP == 7);
 static_assert(NA_METHOD_PROCESS_GET_SESSION == 8);
+static_assert(NA_METHOD_PROCESS_GET_CONTROLLING_TERMINAL == 9);
 static_assert(NA_METHOD_MEMORY_OBJECT_GET_INFO == 1);
 static_assert(NA_METHOD_MEMORY_OBJECT_READ == 2);
 static_assert(NA_METHOD_MEMORY_OBJECT_WRITE == 3);
@@ -69,8 +78,27 @@ static_assert(NA_METHOD_SHARED_RING_GET_INFO == 1);
 static_assert(NA_METHOD_SHARED_RING_PUSH == 2);
 static_assert(NA_METHOD_SHARED_RING_POP == 3);
 
-int main()
+int run_system_idl_tests()
 {
+    // Terminal endpoints must carry method-level authority, rather than
+    // relying on ttyd's handler to rediscover O_RDONLY/O_WRONLY.  The
+    // generated descriptor is the contract consumed by invoke_submit().
+    static_assert(naos::system::TerminalMaster::descriptor.method_rights[0] ==
+                  (NA_PROTOCOL_RIGHT_INVOKE | NA_TERMINAL_RIGHT_READ));
+    static_assert(naos::system::TerminalMaster::descriptor.method_rights[1] ==
+                  (NA_PROTOCOL_RIGHT_INVOKE | NA_TERMINAL_RIGHT_WRITE));
+    static_assert(naos::system::TerminalManager::descriptor.method_rights[
+                      naos::system::TerminalManager::descriptor.method_count] == 0);
+    static_assert(!has_legacy_job_control_process_id<naos::system::TerminalJobControl::check_io_request>);
+
+    // Generated enum decoders are closed: an unknown wire value must not be
+    // interpreted as the first action by a handler switch.
+    const std::uint8_t unknown_driver_action[] = {0xff, 0, 0, 0};
+    naos::system::TerminalDriverControl::raise_foreground_request invalid_driver_request{};
+    if (naos::system::TerminalDriverControl::decode_raise_foreground_request(
+            unknown_driver_action, sizeof(unknown_driver_action), invalid_driver_request))
+        return 100;
+
     std::uint8_t buffer[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
     std::uint64_t written = 0;
 
@@ -96,33 +124,22 @@ int main()
         decoded_seek.whence != 2)
         return 4;
 
-    naos::system::TtyControl::Termios termios{};
-    termios.input_flags = 11;
-    termios.control_chars[3] = 0x7f;
-
-    // tcgetpgrp() has an empty wire request. Its zero-length buffer must be
-    // represented by a null pointer at the native ABI boundary.
-    naos::system::TtyControl::get_pgrp_request get_pgrp_request{};
-    if (!naos::system::TtyControl::encode_get_pgrp_request(buffer, sizeof(buffer), get_pgrp_request, written) ||
-        written != 0 || !naos::system::TtyControl::decode_get_pgrp_request(nullptr, 0, get_pgrp_request))
-        return 100;
+    naos::system::File::read_request file_read_request{};
+    file_read_request.size = sizeof(payload);
+    file_read_request.flags = 0;
+    if (!naos::system::File::encode_read_request(buffer, sizeof(buffer), file_read_request, written) || written != 16)
+        return 5;
+    naos::system::File::read_request decoded_file_read{};
+    if (!naos::system::File::decode_read_request(buffer, written, decoded_file_read) ||
+        decoded_file_read.size != sizeof(payload))
+        return 6;
 
     // getcwd() uses the empty Directory::PATH request. Keep its wire shape
     // covered as well, since the native ABI requires nullptr for zero bytes.
     naos::system::Directory::path_request path_request{};
-    if (!naos::system::Directory::encode_path_request(buffer, sizeof(buffer), path_request, written) ||
-        written != 0 || !naos::system::Directory::decode_path_request(nullptr, 0, path_request))
+    if (!naos::system::Directory::encode_path_request(buffer, sizeof(buffer), path_request, written) || written != 0 ||
+        !naos::system::Directory::decode_path_request(nullptr, 0, path_request))
         return 101;
-
-    naos::system::TtyControl::set_attributes_request tty_request{};
-    tty_request.attributes = termios;
-    if (!naos::system::TtyControl::encode_set_attributes_request(buffer, sizeof(buffer), tty_request, written) ||
-        written != 60)
-        return 5;
-    naos::system::TtyControl::set_attributes_request decoded_tty{};
-    if (!naos::system::TtyControl::decode_set_attributes_request(buffer, written, decoded_tty) ||
-        decoded_tty.attributes.input_flags != 11 || decoded_tty.attributes.control_chars[3] != 0x7f)
-        return 6;
 
     naos::system::Directory::open_request open_request{};
     open_request.mode = 1;
@@ -161,7 +178,8 @@ int main()
     job_control_info.process_group = 12;
     job_control_info.foreground_process_group = 13;
     job_control_info.has_controlling_tty = 1;
-    if (!naos::system::Process::encode_get_job_control_info_response(buffer, sizeof(buffer), job_control_info, written) ||
+    if (!naos::system::Process::encode_get_job_control_info_response(buffer, sizeof(buffer), job_control_info,
+                                                                     written) ||
         written != 32)
         return 13;
     naos::system::Process::get_job_control_info_response decoded_job_control_info{};
@@ -173,7 +191,7 @@ int main()
     naos::system::Process::set_process_group_request set_process_group_request{};
     set_process_group_request.process_group = 17;
     if (!naos::system::Process::encode_set_process_group_request(buffer, sizeof(buffer), set_process_group_request,
-                                                                  written) ||
+                                                                 written) ||
         written != 8)
         return 15;
     naos::system::Process::set_process_group_request decoded_set_process_group{};

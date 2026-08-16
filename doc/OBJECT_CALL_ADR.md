@@ -1066,7 +1066,9 @@ Kernel raw channel不强制用户协议，但 system service generated binding�
 - repository registry记录 UUID、名称、owner和 stable/experimental状态；
 - capability acquisition后，kernel可映射为内部紧凑 scope index。
 
-Compatible revision和features在 connect/acquisition时协商，normal invocation不发送 UUID或version。
+Compatible revision和features在 connect/acquisition时协商，normal invocation不发送 UUID或version。同一 UUID 的
+revision 只能保持既有 method/field/type/rights contract 并作兼容扩展；compatibility checker 对每个 revision 都执行
+该验证。任何删除、收窄或重解释都必须分配新 UUID，并从 revision 1 开始。
 
 ### 18.2 Canonical value rules
 
@@ -1228,6 +1230,7 @@ connect(name, protocol_uuid, revision_range, features, requested_rights)
 ```
 
 Service manager同时把对应 ServerEnd交给 service instance。Name选择实例；UUID验证接口 identity；capability rights表达授权。
+连接方请求的 revision 是其可接受的最低上限：provider revision 不低于该值即可连接，返回实际 selected revision。
 
 ### 20.2 Remote broker
 
@@ -1257,9 +1260,15 @@ Remote transport完全属于用户态：
 
 ### 21.2 TTY/PTY
 
-TTY control 与 PTY administration 使用 `TtyControl` 的 scoped typed methods；终端字节使用 Stream/data-plane，不进入
-control message。现有 [PTY_ADR.md](PTY_ADR.md) 定义 mlibc compatibility mapping，native side 必须映射到本 ADR 的
-opaque handle、Stream、signals 和 protocol model。
+TTY/PTY 已迁移到用户态：line discipline 由 `ttyd` 通过
+`TerminalManager`/`TerminalMaster`/`TerminalSlave` 协议提供；内核只保留
+`TerminalJobControl`/`TerminalDriverControl`/`TerminalDriverFactory`
+KernelView 和 `terminal_identity`（session/foreground-group）。
+终端字节不进入 control message，readiness 用 generation-based `watch`。
+`tty_control_acquire` 与 kernel `TtyControl` dispatcher 已删除。
+现有 [PTY_ADR.md](PTY_ADR.md) 定义 mlibc compatibility mapping，native
+side 必须映射到本 ADR 的 opaque handle、typed protocols、signals 和
+protocol model。
 
 ### 21.3 Display 与 Console
 

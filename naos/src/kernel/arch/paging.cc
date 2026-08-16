@@ -137,8 +137,6 @@ int counter(PageTable &base)
     return n;
 }
 
-bool move_forward_index(int level, int &pml4e_index, int &pdpe_index, int &pde_index, int &pte_index) { return false; }
-
 Unpaged_Text_Section u64 get_bits_unpaged(u64 addr, u8 start_bit, u8 bit_count)
 {
     return (addr >> start_bit) & ((1 << (bit_count + 1)) - 1);
@@ -685,7 +683,9 @@ void page_table_t::unmap(void *virt_start, size_t pages)
                 kassert(memory::global_zones->get_page_reference(pde->get_addr()) == 1, "pml4e ", pml4e_index, " pdpe ",
                         pdpe_index, " pde ", pde_index, " check status fail ", trace::hex(addr));
 
-                memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
+                const phy_addr_t leaf_physical = memory::va2pa(pte->get_addr());
+                if (memory::global_zones->which(leaf_physical) != nullptr)
+                    memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
                 pte->set_flags(0);
 
                 auto pde_page = page_table2page(pde->next());

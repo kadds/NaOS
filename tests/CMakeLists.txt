@@ -1,106 +1,36 @@
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
-add_executable(cfs_vtime_order_test cfs_vtime_order_test.cc)
-target_include_directories(cfs_vtime_order_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
+set(NAOS_UNIT_TEST_SOURCES
+    unit_tests_main.cc
+    cfs_vtime_order_test.cc
+    phase1_channel_queue_test.cc
+    phase0_abi_test.cc
+    bootstrap_contract_test.cc
+    capability_restrict_policy_test.cc
+    system_idl_test.cc
+    invocation_deadline_test.cc
+    system_binding_contract_test.cc
+    service_directory_contract_test.cc
+    signal_policy_test.cc
+    wait_deadline_test.cc
+    ttyd_terminal_core_test.cc
+    syscall_header_test.cc
+    framebuffer_abi_test.cc
+    ${PROJECT_SOURCE_DIR}/naos/src/usr/ttyd/terminal_core.cc
 )
-set_target_properties(cfs_vtime_order_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME cfs_vtime_order_test COMMAND cfs_vtime_order_test)
 
-add_executable(phase1_channel_queue_test phase1_channel_queue_test.cc)
-target_include_directories(phase1_channel_queue_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/includes
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(phase1_channel_queue_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME phase1_channel_queue_test COMMAND phase1_channel_queue_test)
-
-add_executable(phase0_abi_test phase0_abi_test.cc)
-target_include_directories(phase0_abi_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(phase0_abi_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME phase0_abi_test COMMAND phase0_abi_test)
-
-add_executable(bootstrap_contract_test bootstrap_contract_test.cc)
-target_include_directories(bootstrap_contract_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(bootstrap_contract_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME bootstrap_contract_test COMMAND bootstrap_contract_test)
-
-add_executable(capability_restrict_policy_test capability_restrict_policy_test.cc)
-target_include_directories(capability_restrict_policy_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
-    ${PROJECT_SOURCE_DIR}/naos/includes
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(capability_restrict_policy_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME capability_restrict_policy_test COMMAND capability_restrict_policy_test)
-
-add_executable(system_idl_test system_idl_test.cc)
-target_include_directories(system_idl_test PRIVATE
+add_executable(naos_unit_tests ${NAOS_UNIT_TEST_SOURCES})
+target_include_directories(naos_unit_tests PRIVATE
     ${CMAKE_BINARY_DIR}/naos
+    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
+    ${PROJECT_SOURCE_DIR}/naos/includes
     ${PROJECT_SOURCE_DIR}/naos/include
+    ${PROJECT_SOURCE_DIR}/naos/src/usr
 )
-set_target_properties(system_idl_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_dependencies(system_idl_test naos_system_idl)
-add_test(NAME system_idl_test COMMAND system_idl_test)
-
-add_test(NAME system_idl_metadata_test
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/system_idl_metadata_test.py
-            ${CMAKE_BINARY_DIR}/naos/naos/generated/system)
+set_target_properties(naos_unit_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+add_dependencies(naos_unit_tests naos_system_idl)
+add_test(NAME naos_unit_tests COMMAND naos_unit_tests)
 
 add_test(NAME idl_output_location_test
     COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/idl_output_location_test.py
             ${PROJECT_SOURCE_DIR}/idl/system ${CMAKE_BINARY_DIR}/naos/naos/generated/system)
-
-add_test(NAME naoidl_template_test
-    COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/naoidl_template_test.py
-            ${PROJECT_SOURCE_DIR})
-
-add_executable(invocation_deadline_test invocation_deadline_test.cc)
-target_include_directories(invocation_deadline_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
-    ${PROJECT_SOURCE_DIR}/naos/includes
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(invocation_deadline_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME invocation_deadline_test COMMAND invocation_deadline_test)
-
-add_executable(system_binding_contract_test system_binding_contract_test.cc)
-target_include_directories(system_binding_contract_test PRIVATE
-    ${CMAKE_BINARY_DIR}/naos
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
-    ${PROJECT_SOURCE_DIR}/naos/includes
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(system_binding_contract_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_dependencies(system_binding_contract_test naos_system_idl)
-add_test(NAME system_binding_contract_test COMMAND system_binding_contract_test)
-
-add_executable(service_directory_contract_test service_directory_contract_test.cc)
-target_include_directories(service_directory_contract_test PRIVATE
-    ${CMAKE_BINARY_DIR}/naos
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(service_directory_contract_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_dependencies(service_directory_contract_test naos_system_idl)
-add_test(NAME service_directory_contract_test COMMAND service_directory_contract_test)
-
-add_executable(signal_policy_test signal_policy_test.cc)
-target_include_directories(signal_policy_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
-    ${PROJECT_SOURCE_DIR}/naos/includes
-    ${PROJECT_SOURCE_DIR}/naos/include
-)
-set_target_properties(signal_policy_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME signal_policy_test COMMAND signal_policy_test)
-
-add_executable(wait_deadline_test wait_deadline_test.cc)
-target_include_directories(wait_deadline_test PRIVATE
-    ${PROJECT_SOURCE_DIR}/naos/freelibcxx/include
-    ${PROJECT_SOURCE_DIR}/naos/includes
-)
-set_target_properties(wait_deadline_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-add_test(NAME wait_deadline_test COMMAND wait_deadline_test)

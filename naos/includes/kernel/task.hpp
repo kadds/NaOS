@@ -24,7 +24,7 @@ class scheduler;
 
 namespace dev::tty
 {
-class tty_core;
+class terminal_identity;
 }
 
 namespace task
@@ -85,6 +85,11 @@ struct process_t
     na_handle_t console_in_handle = NA_HANDLE_INVALID;
     na_handle_t console_out_handle = NA_HANDLE_INVALID;
     na_handle_t console_err_handle = NA_HANDLE_INVALID;
+    /// Capabilities provisioned by the parent for the process bootstrap
+    /// contract. Their meanings are carried by the capability kind rather
+    /// than by process-specific fields.
+    uint32_t bootstrap_capability_count = 0;
+    na_bootstrap_capability_t bootstrap_capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES]{};
     /// A native child consumes this endpoint exactly once during startup.
     na_handle_t bootstrap_channel_handle = NA_HANDLE_INVALID;
     std::atomic_bool bootstrap_consumed{false};
@@ -94,6 +99,8 @@ struct process_t
     wait_queue_t child_wait_queue;
     std::atomic_int wait_counter;
     std::atomic_bool wait_claimed;
+    std::atomic_bool wait_stop_reported{false};
+    i64 last_stop_signal = 0;
     std::atomic_uint64_t child_wait_generation;
     std::atomic_uint64_t capability_refs;
     std::atomic_bool reap_pending;
@@ -113,7 +120,8 @@ struct process_t
     group_id process_group_id = 0;
     session_t *session = nullptr;
     process_group_t *process_group = nullptr;
-    dev::tty::tty_core *controlling_tty = nullptr;
+    dev::tty::terminal_identity *controlling_terminal = nullptr;
+    handle_t<dev::tty::terminal_identity> controlling_terminal_ref;
 
     /// Only meaningful on the session leader. The value is shared through the
     /// session leader rather than duplicated in every process in the session.
@@ -240,6 +248,7 @@ struct thread_t
     std::atomic_int wait_counter;
     u64 error_code = 0;
     wait_queue_t *do_wait_queue_now = nullptr;
+    std::atomic_uint32_t wait_queue_wake_refs{0};
     void *tcb = 0;
 
     // A fault-safe usercopy temporarily arms the page-fault dispatcher with
@@ -354,7 +363,13 @@ void do_sleep(const timeclock::time &time);
 NoReturn void do_exit(i64 value);
 
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid);
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
+                          freelibcxx::function_ref<bool()> interrupt,
+                          freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid);
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
+                        freelibcxx::function_ref<bool()> interrupt,
+                        freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
 i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object);
 
 NoReturn void do_exit_thread(i64 ret);
@@ -389,22 +404,17 @@ int setpgid(process_t *caller, process_id pid, group_id pgid);
 
 /// Snapshot the job-control state associated with a process capability.
 bool get_job_control_info(const process_t *process, job_control_info &info);
+bool get_controlling_terminal_locator(const process_t *process, na_terminal_locator_t &locator);
 
-/// Attach/detach the controlling tty associated with a session.
-int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force = false);
-void detach_controlling_tty(process_t *process);
-
-/// Query or update the foreground process group for a controlling tty.
-i64 get_foreground_process_group(dev::tty::tty_core *tty);
-int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, group_id pgid);
-
-/// Enforce the controlling-terminal rules for a process using a tty.
-/// Returns zero when the operation may proceed, or a negative errno after
-/// delivering the appropriate job-control signal.
-i64 check_tty_job_control(process_t *process, dev::tty::tty_core *tty, bool input, bool tostop = false);
-
-/// Return the controlling tty without exposing its definition to task users.
-dev::tty::tty_core *get_controlling_tty(process_t *process);
+/// Terminal-identity based job control used by the userspace terminal driver.
+int attach_controlling_terminal(process_t *process, handle_t<dev::tty::terminal_identity> terminal, bool force = false);
+void detach_controlling_terminal(process_t *process);
+void detach_session_terminal(dev::tty::terminal_identity *terminal);
+i64 get_foreground_process_group(dev::tty::terminal_identity *terminal);
+int set_foreground_process_group(process_t *process, dev::tty::terminal_identity *terminal, group_id pgid);
+i64 check_terminal_job_control(process_t *process, dev::tty::terminal_identity *terminal, bool input,
+                               bool tostop = false, bool acquire_io_lease = false);
+dev::tty::terminal_identity *get_controlling_terminal(process_t *process);
 
 void exit_process(process_t *process, i64 ret, flag_t flags);
 

@@ -30,6 +30,9 @@ typedef uint64_t na_handle_t;
 #define NA_PROTOCOL_METHOD_BITMAP_WORDS 4
 #define NA_PROTOCOL_MAX_METHOD_ID ((uint64_t)(NA_PROTOCOL_METHOD_BITMAP_WORDS * 64))
 
+/* Native syscall transport results. These values are never negative; native
+ * syscalls return one of these statuses and place successful results in their
+ * frame or output parameters. */
 typedef enum na_status
 {
     NA_STATUS_OK = 0,
@@ -48,6 +51,7 @@ typedef enum na_status
     NA_STATUS_PEER_CLOSED = 13,
     NA_STATUS_ALREADY_CONSUMED = 14,
     NA_STATUS_NOT_SUPPORTED = 15,
+    NA_STATUS_IO_ERROR = 16,
 } na_status_t;
 
 typedef uint64_t na_meta_rights_t;
@@ -70,11 +74,37 @@ enum
     NA_SIGNAL_CANCEL_REQUESTED = ((na_signal_t)1 << 5),
 };
 
+/* InputEventSource kinds.  Keyboard press/release events use the first two
+ * values; the remaining values are kernel-to-frontend control notifications
+ * carried on the same single-owner input channel. */
+enum
+{
+    NA_INPUT_EVENT_KIND_PRESS = 0,
+    NA_INPUT_EVENT_KIND_RELEASE = 1,
+    NA_INPUT_EVENT_KIND_OVERRUN = 2,
+    NA_INPUT_EVENT_KIND_FRAMEBUFFER_DISABLE = 3,
+    NA_INPUT_EVENT_KIND_FRAMEBUFFER_ENABLE = 4,
+    NA_INPUT_EVENT_KIND_REPEAT = 5,
+};
+
 /* A minimal protocol-level call right.  Object-specific protocols may use
  * the remaining bits for finer-grained method authorization. */
 enum
 {
     NA_PROTOCOL_RIGHT_INVOKE = ((uint64_t)1 << 0),
+    /* ServiceDirectory registry operations are deliberately separate from
+     * public resolve/connect/list access. */
+    NA_SERVICE_DIRECTORY_RIGHT_ADMIN = ((uint64_t)1 << 1),
+    /* Permit registry mutations only below naos://system/. */
+    NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER = ((uint64_t)1 << 3),
+    /* Terminal protocol method rights.  They are checked by the invocation
+     * layer against the generated per-method descriptor metadata. */
+    NA_TERMINAL_RIGHT_READ = ((uint64_t)1 << 8),
+    NA_TERMINAL_RIGHT_WRITE = ((uint64_t)1 << 9),
+    NA_TERMINAL_RIGHT_CONTROL = ((uint64_t)1 << 10),
+    NA_TERMINAL_RIGHT_WATCH = ((uint64_t)1 << 11),
+    NA_TERMINAL_RIGHT_ADMIN = ((uint64_t)1 << 12),
+    NA_DISPLAY_RIGHT_WRITER = ((uint64_t)1 << 3),
 };
 
 enum
@@ -101,11 +131,20 @@ enum
     NA_PROCESS_RIGHT_WAIT = ((uint64_t)1 << 0),
     NA_PROCESS_RIGHT_INSPECT = ((uint64_t)1 << 1),
     NA_PROCESS_RIGHT_JOB_CONTROL = ((uint64_t)1 << 2),
+    /* Start a child that was created with deferred execution. */
+    NA_PROCESS_RIGHT_START = ((uint64_t)1 << 3),
+};
+
+enum
+{
+    /* The parent must explicitly start the returned Process capability. */
+    NA_PROCESS_SPAWN_DEFERRED_START = ((uint32_t)1 << 0),
 };
 
 enum
 {
     NA_PROCESS_WAIT_FLAG_NOHANG = ((uint64_t)1 << 0),
+    NA_PROCESS_WAIT_FLAG_UNTRACED = ((uint64_t)1 << 1),
 };
 
 static inline uint64_t na_process_wait_status_exit(int64_t exit_code)
@@ -136,6 +175,7 @@ typedef enum na_outcome_reason
     NA_OUTCOME_REASON_RESPONDER_ABANDONED = 6,
     NA_OUTCOME_REASON_BROKER_FAILURE = 7,
     NA_OUTCOME_REASON_PROTOCOL_VIOLATION = 8,
+    NA_OUTCOME_REASON_UNSUPPORTED = 9,
 } na_outcome_reason_t;
 
 enum
@@ -241,6 +281,7 @@ typedef struct na_protocol_descriptor
     uint64_t reserved1;
     uint64_t method_bitmap[NA_PROTOCOL_METHOD_BITMAP_WORDS];
     uint64_t oneway_bitmap[NA_PROTOCOL_METHOD_BITMAP_WORDS];
+    uint64_t method_rights[NA_PROTOCOL_MAX_METHOD_ID];
 } na_protocol_descriptor_t;
 
 typedef struct na_protocol_endpoint_options
@@ -287,7 +328,6 @@ typedef struct na_result_frame
     uint32_t execution_outcome;
     uint32_t outcome_reason;
     int64_t protocol_error;
-    uint64_t reserved0;
 } na_result_frame_t;
 
 typedef struct na_reply_frame
@@ -308,9 +348,32 @@ typedef struct na_fail_frame
     uint32_t flags;
     uint32_t execution_outcome;
     uint32_t outcome_reason;
-    uint64_t reserved0;
-    uint64_t reserved1;
+    /* A responder may attach a negative POSIX errno to a typed failure. */
+    int64_t protocol_error;
 } na_fail_frame_t;
+
+#define NA_BOOTSTRAP_MAX_CAPABILITIES ((uint32_t)8)
+
+enum
+{
+    NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY = 1,
+    NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND = 2,
+    NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE = 3,
+};
+
+/* A capability attached to a child startup contract.  The message form
+ * stores a resource-table index; the frame form stores the received handle. */
+typedef struct na_bootstrap_capability_ref
+{
+    uint32_t kind;
+    uint32_t resource;
+} na_bootstrap_capability_ref_t;
+
+typedef struct na_bootstrap_capability
+{
+    uint32_t kind;
+    na_handle_t handle;
+} na_bootstrap_capability_t;
 
 typedef struct na_bootstrap_frame
 {
@@ -322,12 +385,22 @@ typedef struct na_bootstrap_frame
     na_handle_t stdin_stream;
     na_handle_t stdout_stream;
     na_handle_t stderr_stream;
-    uint64_t reserved0;
+    uint32_t capability_count;
+    uint32_t reserved0;
+    na_bootstrap_capability_t capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES];
     uint64_t reserved1;
 } na_bootstrap_frame_t;
 
-#define NA_BOOTSTRAP_MESSAGE_VERSION ((uint32_t)1)
+/* A forked child may replace its terminal endpoint bindings before exec().
+ * This mode updates the kernel-owned stdio capability references without
+ * consuming the process bootstrap contract. */
+#define NA_BOOTSTRAP_FLAG_REBIND_CONSOLE ((uint32_t)1u)
+
+#define NA_BOOTSTRAP_MESSAGE_VERSION ((uint32_t)4)
 #define NA_BOOTSTRAP_RESOURCE_COUNT ((uint32_t)6)
+/* root, current directory, service directory and at least one stdio resource.
+ * stdin/stdout/stderr may refer to that same terminal binding. */
+#define NA_BOOTSTRAP_MIN_RESOURCE_COUNT ((uint32_t)4)
 
 enum
 {
@@ -339,11 +412,11 @@ enum
     NA_BOOTSTRAP_RESOURCE_STDERR = 5,
 };
 
-/* The fixed part of a native child bootstrap message.  The first six
- * transferred resources are identified by the indices below; additional
- * resources may follow for an application-specific startup contract.
- * argc/envc are advisory startup metadata and are not used to authorize
- * capabilities. */
+/* The child bootstrap message carries the standard namespace/stdio resource
+ * indices and a typed list of additional capabilities. The stdio fields may
+ * alias one transferred terminal resource so dup-style sharing survives
+ * spawn. argc/envc are advisory startup metadata and are not used to
+ * authorize capabilities. */
 typedef struct na_bootstrap_message
 {
     uint32_t struct_size;
@@ -356,13 +429,24 @@ typedef struct na_bootstrap_message
     uint32_t stdin_stream;
     uint32_t stdout_stream;
     uint32_t stderr_stream;
-    uint32_t reserved0;
+    uint32_t capability_count;
     uint32_t reserved1;
+    na_bootstrap_capability_ref_t capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES];
     uint64_t argc;
     uint64_t envc;
     uint64_t reserved2;
     uint64_t reserved3;
 } na_bootstrap_message_t;
+
+/* A kernel-authorized locator for the current process' controlling terminal.
+ * The token is opaque to callers and is accepted only by the terminal
+ * manager for the matching terminal identity. */
+typedef struct na_terminal_locator
+{
+    uint64_t terminal_id;
+    uint64_t generation;
+    uint8_t token[16];
+} na_terminal_locator_t;
 
 /* Replace the legacy path-based exec syscall.  The executable is acquired
  * through a Directory capability; the remaining fields are user pointers
@@ -443,7 +527,10 @@ typedef struct na_channel_receive_frame
     uint64_t actual_resources;
     uint64_t required_bytes;
     uint64_t required_resources;
-    uint64_t reserved0;
+    /* Output-only identity of the process that submitted the invocation.
+     * Receivers must provide zero on input; the kernel stamps this field when
+     * delivering a protocol request. Raw channel receives keep it zero. */
+    uint64_t caller_pid;
 } na_channel_receive_frame_t;
 
 enum

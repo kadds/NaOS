@@ -135,6 +135,15 @@ class transferred_resource
         return std::move(object_);
     }
 
+    // Transfer ownership without firing a capability-location hook.  Resource
+    // tables use this while their map lock is held, then perform the table-root
+    // and transit callbacks after unlocking.
+    khandle take_object_without_callback()
+    {
+        in_transit_ = false;
+        return std::move(object_);
+    }
+
     void release_transit()
     {
         if (!in_transit_)
@@ -156,16 +165,89 @@ class transferred_resource
     bool in_transit_ = false;
 };
 
+class transfer_restore_token
+{
+  public:
+    using discard_function = void (*)(void *, void *);
+
+    transfer_restore_token() = default;
+
+    transfer_restore_token(void *context, void *slot, discard_function discard)
+        : context_(context)
+        , slot_(slot)
+        , discard_(discard)
+    {
+    }
+
+    transfer_restore_token(const transfer_restore_token &) = delete;
+    transfer_restore_token &operator=(const transfer_restore_token &) = delete;
+
+    transfer_restore_token(transfer_restore_token &&other) noexcept
+        : context_(other.context_)
+        , slot_(other.slot_)
+        , discard_(other.discard_)
+        , callback_object_(std::move(other.callback_object_))
+    {
+        other.context_ = nullptr;
+        other.slot_ = nullptr;
+        other.discard_ = nullptr;
+    }
+
+    transfer_restore_token &operator=(transfer_restore_token &&other) noexcept
+    {
+        if (this == &other)
+            return *this;
+        reset();
+        context_ = other.context_;
+        slot_ = other.slot_;
+        discard_ = other.discard_;
+        callback_object_ = std::move(other.callback_object_);
+        other.context_ = nullptr;
+        other.slot_ = nullptr;
+        other.discard_ = nullptr;
+        return *this;
+    }
+
+    ~transfer_restore_token() { reset(); }
+
+    bool valid() const { return slot_ != nullptr; }
+    bool belongs_to(const void *context) const { return valid() && context_ == context; }
+    void *slot() const { return slot_; }
+
+    void set_callback_object(khandle object) { callback_object_ = std::move(object); }
+    khandle &callback_object() { return callback_object_; }
+    void disarm() { slot_ = nullptr; }
+
+    void reset()
+    {
+        if (slot_ != nullptr && discard_ != nullptr)
+            discard_(context_, slot_);
+        context_ = nullptr;
+        slot_ = nullptr;
+        discard_ = nullptr;
+        callback_object_.reset();
+    }
+
+  private:
+    void *context_ = nullptr;
+    void *slot_ = nullptr;
+    discard_function discard_ = nullptr;
+    khandle callback_object_;
+};
+
 struct transfer_record
 {
     na_handle_t source = NA_HANDLE_INVALID;
     bool moved = false;
     transferred_resource resource;
+    transfer_restore_token restore_token;
 
-    transfer_record(na_handle_t source, bool moved, transferred_resource resource)
+    transfer_record(na_handle_t source, bool moved, transferred_resource resource,
+                    transfer_restore_token restore_token = {})
         : source(source)
         , moved(moved)
         , resource(std::move(resource))
+        , restore_token(std::move(restore_token))
     {
     }
 };

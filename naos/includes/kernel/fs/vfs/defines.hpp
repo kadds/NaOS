@@ -60,6 +60,7 @@ enum mode : flag_t
     no_block = 16,
     unlink_on_close = 32,
     stand_alone = 64,
+    exclusive = 128,
 };
 } // namespace mode
 

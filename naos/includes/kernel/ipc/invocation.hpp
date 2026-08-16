@@ -101,6 +101,9 @@ class invocation_state
     void set_queue_owner(const handle_t<protocol_state> &owner);
     void clear_queue_owner();
     bool cancellation_requested() const;
+    bool execution_interrupted() const;
+    void set_execution_wait_queue(task::wait_queue_t *queue);
+    void clear_execution_wait_queue(task::wait_queue_t *queue);
     bool cancel(protocol_state *queue_owner);
     na_status_t arm_deadline(const handle_t<invocation_state> &self);
     void expire_deadline();
@@ -110,10 +113,10 @@ class invocation_state
     bool reserve_result_budget();
 
     bool complete_reply(freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
-                        i64 protocol_error = 0);
+                        i64 protocol_error = 0, task::resource_table_t *source_resources = nullptr);
     bool complete_reply(freelibcxx::vector<byte> &bytes, capability::transfer_record_list &resources,
-                        i64 protocol_error = 0);
-    bool complete_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason);
+                        i64 protocol_error = 0, task::resource_table_t *source_resources = nullptr);
+    bool complete_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason, i64 protocol_error = 0);
     bool complete_not_delivered(na_outcome_reason_t reason);
     bool deadline_expired(bool dispatched_unknown);
     bool response_within_limits(u64 bytes, u64 resources) const;
@@ -127,6 +130,9 @@ class invocation_state
     void release_result_budget_locked();
     bool publish_locked(na_execution_outcome_t outcome, na_outcome_reason_t reason, freelibcxx::vector<byte> &&bytes,
                         capability::transfer_record_list &&resources, i64 protocol_error);
+    bool publish_locked_no_wake(na_execution_outcome_t outcome, na_outcome_reason_t reason,
+                                freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
+                                i64 protocol_error);
 
     mutable lock::spinlock_t lock_;
     task::wait_queue_t wait_queue_;
@@ -140,6 +146,7 @@ class invocation_state
     bool client_closed_;
     bool cancellation_requested_;
     bool result_budget_reserved_;
+    task::wait_queue_t *execution_wait_queue_ = nullptr;
     na_execution_outcome_t execution_outcome_;
     na_outcome_reason_t outcome_reason_;
     i64 protocol_error_;
@@ -202,6 +209,8 @@ struct invocation_request
     handle_t<invocation_state> state;
     u64 method_id = 0;
     u64 operation_deadline = 0;
+    process_id caller_pid = 0;
+    task::resource_table_t *source_resources = nullptr;
     // Queue accounting must survive delivery moving resources out of this
     // request into the receiver's table.
     u64 queued_resource_count = 0;
@@ -210,10 +219,11 @@ struct invocation_request
     capability::transferred_resource responder;
 
     invocation_request(freelibcxx::Allocator *allocator, handle_t<invocation_state> state, u64 method_id,
-                       u64 operation_deadline)
+                       u64 operation_deadline, process_id caller_pid)
         : state(std::move(state))
         , method_id(method_id)
         , operation_deadline(operation_deadline)
+        , caller_pid(caller_pid)
         , bytes(allocator)
         , resources(allocator)
     {
@@ -284,6 +294,10 @@ na_status_t create_protocol_descriptor(task::resource_table_t &resources, const 
 na_status_t create_protocol_endpoint(task::resource_table_t &resources, na_handle_t descriptor,
                                      const na_protocol_endpoint_options_t *options, na_handle_t *client,
                                      na_handle_t *server);
+na_status_t create_protocol_endpoint_objects(const na_protocol_descriptor_t &descriptor,
+                                             const na_protocol_endpoint_options_t *options, khandle &client,
+                                             khandle &server, capability::metadata &client_metadata,
+                                             capability::metadata &server_metadata);
 na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target, const na_submit_frame_t *frame,
                           na_handle_t *invocation, bool oneway);
 na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endpoint,
@@ -294,5 +308,6 @@ na_status_t responder_reply(task::resource_table_t &resources, na_handle_t respo
 na_status_t responder_fail(task::resource_table_t &resources, na_handle_t responder, const na_fail_frame_t *frame);
 
 void notify_invocation_waiters();
+void init_kernel_dispatch_worker();
 
 } // namespace naos::ipc

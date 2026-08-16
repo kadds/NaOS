@@ -1,5 +1,6 @@
 #pragma once
 #include "defines.hpp"
+#include "kernel/access_context.hpp"
 #include "kernel/common.hpp"
 #include "kernel/fs/stat.hpp"
 #include "kernel/fs/vfs/dentry.hpp"
@@ -20,6 +21,8 @@ dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags,
 dentry *path_walk(const char *name, dentry *root, dentry *cur_dir, flag_t flags);
 
 handle_t<file> open(const char *path, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr);
+handle_t<file> open(const char *path, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr,
+                    const task::access_context &context);
 
 bool create(const char *path, dentry *root, dentry *cur_dir, flag_t flags);
 

@@ -7,7 +7,9 @@
 #include "kernel/clock.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/common.hpp"
+#include "kernel/dev/framebuffer.hpp"
 #include "kernel/framebuffer.hpp"
+#include "kernel/input_event_source.hpp"
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/memory.hpp"
@@ -23,6 +25,8 @@ namespace term
 minimal_terminal *early_terminal = nullptr;
 terminal_manager *manager = nullptr;
 std::atomic_bool use_stand_terminal = false;
+std::atomic_bool framebuffer_user_writer = false;
+std::atomic_bool framebuffer_user_enabled_state = true;
 
 constexpr u8 default_bg_index = 0;
 constexpr u8 default_fg_index = 7;
@@ -464,33 +468,120 @@ terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &back
 
 bool terminal_manager::switch_term(int index)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
     if (!valid_index(index))
     {
         return false;
     }
-    if (index == cur_)
+
+    if (index == user_terminal_index)
     {
+        framebuffer_user_enabled_state.store(true, std::memory_order_release);
+        timer::watcher_id watcher = timer::invalid_watcher_id;
+        {
+            uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+            pending_switch_ = -1;
+            cur_ = index;
+            watcher = framebuffer_handoff_watcher_;
+            framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
+        }
+        if (watcher != timer::invalid_watcher_id)
+            (void)timer::cancel(watcher);
+        // The frontend may have been offline while the kernel term was
+        // active.  Re-enabling is idempotent and is intentionally sent even
+        // when the writer is already present.
+        dev::input::publish_framebuffer_event(true);
         return true;
     }
-    if (cur_ >= 0)
+
+    framebuffer_user_enabled_state.store(false, std::memory_order_release);
+    if (framebuffer_user_writer.load(std::memory_order_acquire))
     {
-        terms_[cur_].detach_backend();
-    }
-    if (index > 0)
-    {
-        if (cmdline::get_bool("debug_stand", false))
+        bool notify = false;
         {
-            for (;;)
+            uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+            if (pending_switch_ != index)
             {
+                pending_switch_ = index;
+                notify = true;
             }
         }
+        if (notify)
+        {
+            dev::input::publish_framebuffer_event(false);
+            const auto watcher = timer::schedule_after(
+                250'000, timer::timer_handler::bind<&terminal_manager::force_framebuffer_handoff>(*this));
+            bool keep_watcher = false;
+            {
+                uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+                if (pending_switch_ == index && framebuffer_handoff_watcher_ == timer::invalid_watcher_id)
+                {
+                    framebuffer_handoff_watcher_ = watcher;
+                    keep_watcher = true;
+                }
+            }
+            if (!keep_watcher)
+                (void)timer::cancel(watcher);
+        }
+        return true;
     }
-    cur_ = index;
-    terms_[cur_].attach_backend(&backend_);
-    uctx::UninterruptibleContext uninterruptible;
-    terms_[cur_].flush_all();
+
+    timer::watcher_id watcher = timer::invalid_watcher_id;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+        pending_switch_ = -1;
+        watcher = framebuffer_handoff_watcher_;
+        framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
+        if (cur_ >= 0 && cur_ != index)
+            terms_[cur_].detach_backend();
+        cur_ = index;
+    }
+    if (watcher != timer::invalid_watcher_id)
+        (void)timer::cancel(watcher);
+    if (index == kernel_console_index)
+    {
+        reset_panic_term();
+        if (early_terminal != nullptr)
+            early_terminal->flush_dirty();
+    }
     return true;
+}
+
+void terminal_manager::framebuffer_writer_released()
+{
+    int pending = -1;
+    timer::watcher_id watcher = timer::invalid_watcher_id;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+        pending = pending_switch_;
+        watcher = framebuffer_handoff_watcher_;
+        framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
+        if (pending == kernel_console_index)
+        {
+            pending_switch_ = -1;
+            cur_ = kernel_console_index;
+        }
+    }
+    if (watcher != timer::invalid_watcher_id)
+        (void)timer::cancel(watcher);
+    if (pending == kernel_console_index)
+    {
+        reset_panic_term();
+        if (early_terminal != nullptr)
+            early_terminal->flush_dirty();
+    }
+}
+
+void terminal_manager::force_framebuffer_handoff(timeclock::microsecond_t expiration) noexcept
+{
+    (void)expiration;
+    bool pending = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(manager_lock_);
+        pending = pending_switch_ == kernel_console_index && framebuffer_handoff_watcher_ != timer::invalid_watcher_id;
+        framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
+    }
+    if (pending && framebuffer_user_writer.load(std::memory_order_acquire))
+        (void)dev::framebuffer::force_user_offline();
 }
 
 void terminal_manager::flush_active_terminal()
@@ -527,6 +618,25 @@ int terminal_manager::term_index() const
 }
 
 terminal_manager *get_terms() { return manager; }
+
+fb::framebuffer_backend *get_framebuffer_backend()
+{
+    return early_terminal == nullptr ? nullptr : early_terminal->backend();
+}
+
+void set_framebuffer_user_writer(bool active)
+{
+    framebuffer_user_writer.store(active, std::memory_order_release);
+    if (!active)
+    {
+        if (early_terminal != nullptr)
+            early_terminal->flush_dirty();
+        if (manager != nullptr)
+            manager->framebuffer_writer_released();
+    }
+}
+
+bool framebuffer_user_enabled() { return framebuffer_user_enabled_state.load(std::memory_order_acquire); }
 
 void early_init(kernel_start_args *args)
 {
@@ -573,13 +683,18 @@ void reset_panic_term()
 {
     early_terminal->reattach_backend();
     use_stand_terminal = false;
+    framebuffer_user_enabled_state.store(false, std::memory_order_release);
+    framebuffer_user_writer.store(false, std::memory_order_release);
 }
 
 void init()
 {
     manager = memory::MemoryAllocatorV->New<terminal_manager>(terminal_manager::default_terminal_count,
                                                               *early_terminal->backend());
-    use_stand_terminal = true;
+    // Runtime VT emulation belongs to consoled. Retain this manager only for
+    // compatibility with early-console setup; it never owns runtime output.
+    use_stand_terminal = false;
+    framebuffer_user_enabled_state.store(true, std::memory_order_release);
     arch::device::vga::init();
 }
 
@@ -592,7 +707,8 @@ void write_to(freelibcxx::const_string_view sv, int index)
     else
     {
         early_terminal->push_string(sv);
-        early_terminal->flush_dirty();
+        if (!framebuffer_user_writer.load(std::memory_order_acquire))
+            early_terminal->flush_dirty();
     }
 }
 

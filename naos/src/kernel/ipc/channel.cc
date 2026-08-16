@@ -16,6 +16,7 @@ lock::spinlock_t registry_lock;
 freelibcxx::linked_list<channel_state *> *registry = nullptr;
 lock::spinlock_t waiters_lock;
 task::wait_queue_t *waiters = nullptr;
+std::atomic_uint64_t wait_generation{0};
 
 std::atomic_uint64_t global_messages{0};
 std::atomic_uint64_t global_bytes{0};
@@ -139,6 +140,7 @@ bool wait_condition(wait_request *request)
 
 void wait_deadline_wakeup(timeclock::microsecond_t) noexcept
 {
+    wait_generation.fetch_add(1, std::memory_order_acq_rel);
     if (waiters != nullptr)
         waiters->do_wake_up();
 }
@@ -261,6 +263,15 @@ na_signal_t channel_state::signals(u8 side) const
     return result;
 }
 
+u64 channel_state::queued_messages(u8 side) const
+{
+    if (!valid_ || side > 1)
+        return 0;
+    auto &lock = const_cast<lock::spinlock_t &>(lock_);
+    uctx::RawSpinLockUninterruptibleContext icu(lock);
+    return queues_[side]->fifo.size();
+}
+
 na_status_t channel_state::enqueue(u8 sender, channel_message *message, capability::transfer_record_list &records,
                                    task::resource_table_t &resources)
 {
@@ -326,7 +337,80 @@ na_status_t channel_state::enqueue(u8 sender, channel_message *message, capabili
     }
     if (restore)
     {
-        resources.restore_native_batch(records);
+        const auto restore_status = resources.restore_native_batch(records);
+        if (restore_status != NA_STATUS_OK)
+            result = restore_status;
+    }
+    else if (result == NA_STATUS_OK)
+        resources.commit_native_batch(records);
+    if (result == NA_STATUS_OK)
+        notify_channel_waiters();
+    return result;
+}
+
+na_status_t channel_state::enqueue_kernel(u8 sender, channel_message *message,
+                                          capability::transfer_record_list &records, u64 max_queue_messages)
+{
+    if (!valid_ || sender > 1 || message == nullptr || !message->valid() || records.size() > max_resources_ ||
+        message->resource_count() != 0 || message->resource_capacity() < records.size())
+        return NA_STATUS_INVALID_ARGUMENT;
+    if (message->byte_count() > max_bytes_ || message->resource_count() + records.size() > max_resources_)
+        return NA_STATUS_INVALID_MESSAGE;
+
+    const u8 receiver = 1 - sender;
+    na_status_t result = NA_STATUS_OK;
+    bool failed = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(lock_);
+        auto &queue = *queues_[receiver];
+        if (owners_[receiver].load(std::memory_order_acquire) == 0)
+        {
+            result = NA_STATUS_PEER_CLOSED;
+            failed = true;
+        }
+        else if ((max_queue_messages != 0 && queue.fifo.size() >= max_queue_messages) || queue.fifo.full() ||
+                 queue.bytes > max_bytes_ - message->byte_count() ||
+                 queue.resources > max_resources_ - records.size())
+        {
+            result = NA_STATUS_WOULD_BLOCK;
+            failed = true;
+        }
+        else if (!reserve_global(message->byte_count(), records.size()))
+        {
+            result = NA_STATUS_RESOURCE_EXHAUSTED;
+            failed = true;
+        }
+        else
+        {
+            u64 moved = 0;
+            for (auto &record : records)
+            {
+                if (message->append(std::move(record.resource)))
+                {
+                    moved++;
+                    continue;
+                }
+                result = NA_STATUS_RESOURCE_EXHAUSTED;
+                failed = true;
+                break;
+            }
+            if (!failed && !queue.fifo.try_push(message))
+            {
+                result = NA_STATUS_WOULD_BLOCK;
+                failed = true;
+            }
+            if (failed)
+            {
+                for (u64 i = 0; i < moved; i++)
+                    records[i].resource = std::move(message->resource(i));
+                release_global(message->byte_count(), records.size());
+            }
+            else
+            {
+                queue.bytes += message->byte_count();
+                queue.resources += message->resource_count();
+            }
+        }
     }
     if (result == NA_STATUS_OK)
         notify_channel_waiters();
@@ -413,6 +497,18 @@ bool channel_state::discard(u8 side, channel_message *&message)
 void channel_state::endpoint_object_created() { endpoint_objects_.fetch_add(1, std::memory_order_acq_rel); }
 
 void channel_state::endpoint_object_destroyed() { endpoint_objects_.fetch_sub(1, std::memory_order_acq_rel); }
+
+void channel_state::kernel_owner_acquired(u8 side)
+{
+    if (side <= 1)
+        owners_[side].fetch_add(1, std::memory_order_acq_rel);
+}
+
+void channel_state::kernel_owner_released(u8 side)
+{
+    if (side <= 1)
+        owners_[side].fetch_sub(1, std::memory_order_acq_rel);
+}
 
 void channel_state::capability_acquired(u8 side, capability::location where)
 {
@@ -553,27 +649,10 @@ void raw_channel_endpoint::end_operation()
         state_->end_operation();
 }
 
-na_status_t create_raw_channel(khandle &left, khandle &right, const na_channel_options_t *options)
+namespace
 {
-    na_channel_options_t values{};
-    values.struct_size = sizeof(values);
-    values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
-    values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
-    values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
-    if (options != nullptr)
-    {
-        auto status = naos::usercopy::copy_versioned(values, options);
-        if (status != NA_STATUS_OK)
-            return status;
-        if (!valid_struct_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
-            return NA_STATUS_INVALID_ARGUMENT;
-        if (values.max_messages == 0)
-            values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
-        if (values.max_bytes == 0)
-            values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
-        if (values.max_resources == 0)
-            values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
-    }
+na_status_t create_raw_channel_with_options(khandle &left, khandle &right, na_channel_options_t values)
+{
     if (values.max_messages > NA_CHANNEL_MAX_MESSAGES || values.max_bytes > NA_CHANNEL_MAX_MESSAGE_BYTES * 16 ||
         values.max_resources > NA_CHANNEL_DEFAULT_MAX_RESOURCES)
         return NA_STATUS_INVALID_ARGUMENT;
@@ -600,6 +679,53 @@ na_status_t create_raw_channel(khandle &left, khandle &right, const na_channel_o
     left = left_endpoint;
     right = right_endpoint;
     return NA_STATUS_OK;
+}
+} // namespace
+
+na_status_t create_raw_channel(khandle &left, khandle &right, const na_channel_options_t *options)
+{
+    na_channel_options_t values{};
+    values.struct_size = sizeof(values);
+    values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
+    values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
+    values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
+    if (options != nullptr)
+    {
+        const auto status = naos::usercopy::copy_versioned(values, options);
+        if (status != NA_STATUS_OK)
+            return status;
+        if (!valid_struct_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
+            return NA_STATUS_INVALID_ARGUMENT;
+    }
+    if (values.max_messages == 0)
+        values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
+    if (values.max_bytes == 0)
+        values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
+    if (values.max_resources == 0)
+        values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
+    return create_raw_channel_with_options(left, right, values);
+}
+
+na_status_t create_raw_channel_kernel(khandle &left, khandle &right, const na_channel_options_t *options)
+{
+    na_channel_options_t values{};
+    values.struct_size = sizeof(values);
+    values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
+    values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
+    values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
+    if (options != nullptr)
+    {
+        values = *options;
+        if (!valid_struct_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
+            return NA_STATUS_INVALID_ARGUMENT;
+    }
+    if (values.max_messages == 0)
+        values.max_messages = NA_CHANNEL_DEFAULT_MAX_MESSAGES;
+    if (values.max_bytes == 0)
+        values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
+    if (values.max_resources == 0)
+        values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
+    return create_raw_channel_with_options(left, right, values);
 }
 
 na_status_t send_raw_channel(task::resource_table_t &resources, na_handle_t endpoint,
@@ -691,6 +817,76 @@ na_status_t send_raw_channel(task::resource_table_t &resources, na_handle_t endp
     return finish(status);
 }
 
+na_status_t send_raw_channel_kernel(task::resource_table_t &resources, na_handle_t endpoint, const byte *bytes,
+                                    u64 byte_count)
+{
+    capability::entry target;
+    if (!resources.lookup_native(endpoint, target) || !target.object)
+        return NA_STATUS_INVALID_HANDLE;
+    if (target.meta.binding != NA_BINDING_RAW_CHANNEL_END)
+        return NA_STATUS_WRONG_BINDING;
+    auto *channel = target.object->get<raw_channel_endpoint>();
+    if (channel == nullptr)
+        return NA_STATUS_WRONG_BINDING;
+    channel->begin_operation();
+    auto finish = [&](na_status_t status) {
+        channel->end_operation();
+        return status;
+    };
+    if (byte_count > NA_CHANNEL_MAX_MESSAGE_BYTES || (byte_count != 0 && bytes == nullptr))
+        return finish(NA_STATUS_INVALID_MESSAGE);
+
+    auto *message = memory::New<channel_message>(memory::KernelCommonAllocatorV, byte_count, 0);
+    if (message == nullptr || !message->valid())
+    {
+        if (message != nullptr)
+            memory::Delete<>(memory::KernelCommonAllocatorV, message);
+        return finish(NA_STATUS_RESOURCE_EXHAUSTED);
+    }
+    if (byte_count != 0)
+        memcpy(message->bytes(), bytes, byte_count);
+
+    capability::transfer_record_list records(memory::KernelCommonAllocatorV);
+    const auto status = channel->state()->enqueue(channel->side(), message, records, resources);
+    if (status != NA_STATUS_OK)
+        memory::Delete<>(memory::KernelCommonAllocatorV, message);
+    collect_orphaned_channels();
+    return finish(status);
+}
+
+na_status_t send_raw_channel_kernel(const khandle &endpoint, const byte *bytes, u64 byte_count)
+{
+    if (!endpoint)
+        return NA_STATUS_INVALID_HANDLE;
+    auto *channel = endpoint.as<raw_channel_endpoint>().operator&();
+    if (channel == nullptr)
+        return NA_STATUS_WRONG_BINDING;
+    channel->begin_operation();
+    auto finish = [&](na_status_t status) {
+        channel->end_operation();
+        return status;
+    };
+    if (byte_count > NA_CHANNEL_MAX_MESSAGE_BYTES || (byte_count != 0 && bytes == nullptr))
+        return finish(NA_STATUS_INVALID_MESSAGE);
+
+    auto *message = memory::New<channel_message>(memory::KernelCommonAllocatorV, byte_count, 0);
+    if (message == nullptr || !message->valid())
+    {
+        if (message != nullptr)
+            memory::Delete<>(memory::KernelCommonAllocatorV, message);
+        return finish(NA_STATUS_RESOURCE_EXHAUSTED);
+    }
+    if (byte_count != 0)
+        memcpy(message->bytes(), bytes, byte_count);
+
+    capability::transfer_record_list records(memory::KernelCommonAllocatorV);
+    const auto status = channel->state()->enqueue_kernel(channel->side(), message, records);
+    if (status != NA_STATUS_OK)
+        memory::Delete<>(memory::KernelCommonAllocatorV, message);
+    collect_orphaned_channels();
+    return finish(status);
+}
+
 na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t endpoint,
                                 na_channel_receive_frame_t *frame)
 {
@@ -713,7 +909,7 @@ na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t e
     if (status != NA_STATUS_OK)
         return finish(status);
     if (!valid_struct_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.method_id != 0 ||
-        values.responder != NA_HANDLE_INVALID || values.reserved0 != 0)
+        values.responder != NA_HANDLE_INVALID || values.caller_pid != 0)
         return finish(NA_STATUS_INVALID_ARGUMENT);
     if (values.byte_capacity > NA_CHANNEL_MAX_MESSAGE_BYTES || values.resource_capacity > NA_CHANNEL_MAX_RESOURCES)
         return finish(NA_STATUS_INVALID_ARGUMENT);
@@ -939,8 +1135,19 @@ na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, 
             if (timer::get_high_resolution_time() >= deadline)
                 return NA_STATUS_WAIT_TIMED_OUT;
             ensure_waiters();
+            if (waiters == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
             deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&wait_deadline_wakeup>());
-            waiters->do_wait([&request] { return wait_condition(&request); });
+            for (;;)
+            {
+                const auto generation = wait_generation.load(std::memory_order_acquire);
+                if (wait_condition(&request))
+                    break;
+                if (timer::get_high_resolution_time() >= deadline)
+                    break;
+                waiters->do_wait(
+                    [generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
+            }
             (void)timer::cancel(deadline_watcher);
             if (!wait_condition(&request) && timer::get_high_resolution_time() >= deadline)
                 return NA_STATUS_WAIT_TIMED_OUT;
@@ -948,7 +1155,16 @@ na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, 
         else
         {
             ensure_waiters();
-            waiters->do_wait([&request] { return wait_condition(&request); });
+            if (waiters == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            for (;;)
+            {
+                const auto generation = wait_generation.load(std::memory_order_acquire);
+                if (wait_condition(&request))
+                    break;
+                waiters->do_wait(
+                    [generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
+            }
         }
     }
     if (copy_to_user(reinterpret_cast<u64>(items), snapshot.data(), count * sizeof(na_wait_item_t)) != NA_STATUS_OK)
@@ -993,7 +1209,13 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
             if (waiters == nullptr)
                 return NA_STATUS_RESOURCE_EXHAUSTED;
         }
-        waiters->do_wait([&request] { return wait_condition(&request); });
+        for (;;)
+        {
+            const auto generation = wait_generation.load(std::memory_order_acquire);
+            if (wait_condition(&request))
+                break;
+            waiters->do_wait([generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
+        }
         if (deadline_watcher != timer::invalid_watcher_id)
             (void)timer::cancel(deadline_watcher);
         if (!wait_condition(&request) && deadline != std::numeric_limits<u64>::max() &&
@@ -1005,6 +1227,7 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
 
 void notify_channel_waiters()
 {
+    wait_generation.fetch_add(1, std::memory_order_acq_rel);
     if (waiters != nullptr)
         waiters->do_wake_up();
 }

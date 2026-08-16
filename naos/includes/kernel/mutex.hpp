@@ -16,7 +16,7 @@ struct mutex_t
 
     void lock()
     {
-        while (!lock_m.test_and_set())
+        while (lock_m.test_and_set(std::memory_order_acquire))
         {
             wait_queue.do_wait([this] { return !lock_m.test(std::memory_order_acquire); });
         };
@@ -24,7 +24,7 @@ struct mutex_t
 
     void unlock()
     {
-        lock_m.clear();
+        lock_m.clear(std::memory_order_release);
         wait_queue.do_wake_up(1);
     }
 };

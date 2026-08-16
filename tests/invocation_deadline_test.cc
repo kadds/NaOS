@@ -1,7 +1,7 @@
 #include "kernel/ipc/invocation_deadline.hpp"
 #include <cassert>
 
-int main()
+int run_invocation_deadline_tests()
 {
     using naos::ipc::deadline_action;
     using naos::ipc::deadline_phase;

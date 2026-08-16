@@ -41,7 +41,7 @@ and committed transactionally, with MOVE/DUPLICATE attenuation and iterative
 orphan-channel collection. Async protocol endpoints use immutable descriptors,
 Invocation/Responder one-shot lifetimes, explicit cancellation/deadline
 outcomes, and result take transactions. The system protocols are specified in
-`idl/system/`; `util/naoidl.py` generates their public UAPI, canonical wire
+`idl/system/`; `idl/naoidl.py` generates their public UAPI, canonical wire
 codecs, and typed bindings under each build directory's generated include root
 (for example `build/naos/naos/generated/system`). The source tree contains only
 `.naidl` schemas; ABI JSON manifests and generated headers never belong under
@@ -53,7 +53,13 @@ Root/cwd are process path context, not entries in the capability table.
 Bootstrap exposes native Directory, ServiceDirectory, and Stream capabilities; mlibc maps these
 to its private POSIX fd table (where only the numeric indices 0/1/2,
 `O_NONBLOCK`, `O_APPEND`, and `FD_CLOEXEC` exist). TTY and PTY control calls
-are KernelView protocol methods, while terminal byte flow remains Stream data.
+are protocol methods (`TerminalManager`/`TerminalMaster`/`TerminalSlave`),
+with job control and driver signal delivery through the
+`TerminalJobControl`/`TerminalDriverControl`/`TerminalDriverFactory`
+KernelViews; terminal byte flow is no longer kernel Stream state. The line
+discipline lives in the userland `ttyd` service, the renderer/keymap in
+`consoled`, and kernel input is published as `InputEventSource` KeyEvents.
+The kernel console pseudo devices only mirror early/emergency diagnostics.
 MemoryObject and shared-ring operations are typed KernelView object calls with
 bounded limits and protocol-right checks; virtual-memory mapping remains a
 separate address-space syscall.
@@ -69,11 +75,12 @@ namespace policy remain the next layer above this primitive.
 Native process creation is a two-stage transaction: the kernel creates a
 deferred child with an empty resource table, transfers the executable and one
 bootstrap-channel endpoint, and starts the child only after the endpoint is
-installed. The parent then duplicates the explicitly selected namespace and
-stdio capabilities into a fixed bootstrap message. The child consumes that
-message once, closes the channel endpoint, and enters userland with only the
-transferred capabilities; POSIX `posix_spawn` uses this path when no file
-actions or spawn attributes require the compatibility implementation.
+installed. The parent then duplicates the explicitly selected namespace,
+stdio, and typed startup capabilities into a versioned bootstrap message. The
+child consumes that message once, closes the channel endpoint, and enters
+userland with only the transferred capabilities; POSIX `posix_spawn` uses this
+path when no file actions or spawn attributes require the compatibility
+implementation.
 
 The old kernel `file_desc -> kobject` table, VFS `ioctl` switch, and native
 open/read/write/dup2/fcntl/ioctl syscall registrations are not part of the

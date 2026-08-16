@@ -3,6 +3,7 @@
 #include "kernel/mm/new.hpp"
 #include "kernel/task.hpp"
 #include "kernel/trace.hpp"
+#include "kernel/ucontext.hpp"
 namespace cpu
 {
 bool cpu_data_t::is_bsp() { return arch::cpu::get(smp_id).is_bsp(); }
@@ -13,6 +14,31 @@ void cpu_data_t::set_task(task::thread_t *task)
 {
     arch::cpu::current().set_context(task->kernel_stack_top);
     current_task = task;
+}
+
+call_cpu_enqueue_result cpu_data_t::enqueue_call_cpu(const call_cpu_operation_t &operation)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(call_cpu_queue_lock);
+    if (call_cpu_queue_size == call_cpu_queue_capacity)
+        return call_cpu_enqueue_result::full;
+
+    const bool needs_ipi = call_cpu_queue_size == 0;
+    call_cpu_queue[call_cpu_queue_tail] = operation;
+    call_cpu_queue_tail = (call_cpu_queue_tail + 1) % call_cpu_queue_capacity;
+    call_cpu_queue_size++;
+    return needs_ipi ? call_cpu_enqueue_result::queued_needs_ipi : call_cpu_enqueue_result::queued;
+}
+
+bool cpu_data_t::try_dequeue_call_cpu(call_cpu_operation_t &operation)
+{
+    uctx::RawSpinLockUninterruptibleContext ctx(call_cpu_queue_lock);
+    if (call_cpu_queue_size == 0)
+        return false;
+
+    operation = call_cpu_queue[call_cpu_queue_head];
+    call_cpu_queue_head = (call_cpu_queue_head + 1) % call_cpu_queue_capacity;
+    call_cpu_queue_size--;
+    return true;
 }
 
 bool just_init = false;

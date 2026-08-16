@@ -1,6 +1,7 @@
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
 #include "naos/canonical.hpp"
+#include "naos/outcome.hpp"
 
 #include <array>
 #include <cassert>
@@ -71,9 +72,11 @@ void test_layouts()
     static_assert(sizeof(na_resource_disposition_t) == 32);
     static_assert(sizeof(na_submit_frame_t) == 72);
     static_assert(sizeof(na_channel_receive_frame_t) == 96);
-    static_assert(sizeof(na_result_frame_t) == 104);
-    static_assert(sizeof(na_bootstrap_message_t) == 80);
+    static_assert(sizeof(na_result_frame_t) == 96);
+    static_assert(sizeof(na_bootstrap_message_t) == 144);
     static_assert(sizeof(na_process_spawn_frame_t) == 80);
+    static_assert(sizeof(na_fail_frame_t) == 24);
+    static_assert(offsetof(na_channel_receive_frame_t, caller_pid) == 88);
     static_assert(offsetof(na_submit_frame_t, method_id) == 8);
     static_assert(offsetof(na_submit_frame_t, resources) == 32);
     static_assert(offsetof(na_result_frame_t, execution_outcome) == 80);
@@ -118,12 +121,36 @@ void test_empty_value()
     assert(reader.get_bytes(nullptr, 0));
     assert(reader.good());
 }
+
+void test_outcome_errno_mapping()
+{
+    na_result_frame_t result{};
+    assert(naos::result_errno(result) == 0);
+    result.execution_outcome = NA_EXECUTION_NOT_DELIVERED;
+    result.outcome_reason = NA_OUTCOME_REASON_CANCEL_REQUESTED;
+    assert(naos::result_errno(result) == ECANCELED);
+    result.outcome_reason = NA_OUTCOME_REASON_OPERATION_DEADLINE;
+    assert(naos::result_errno(result) == ETIMEDOUT);
+    result.outcome_reason = NA_OUTCOME_REASON_PEER_CLOSED;
+    assert(naos::result_errno(result) == EPIPE);
+    result.outcome_reason = NA_OUTCOME_REASON_REQUEST_DISCARDED;
+    assert(naos::result_errno(result) == EAGAIN);
+    result.outcome_reason = NA_OUTCOME_REASON_PROTOCOL_VIOLATION;
+    assert(naos::result_errno(result) == EPROTO);
+    result.outcome_reason = NA_OUTCOME_REASON_UNSUPPORTED;
+    assert(naos::result_errno(result) == ENOTSUP);
+    result.protocol_error = -EINVAL;
+    assert(naos::result_errno(result) == EINVAL);
+    result.protocol_error = EINVAL;
+    assert(naos::result_errno(result) == EIO);
+}
 } // namespace
 
-int main()
+int run_phase0_abi_tests()
 {
     test_layouts();
     test_canonical_little_endian();
     test_empty_value();
+    test_outcome_errno_mapping();
     return 0;
 }

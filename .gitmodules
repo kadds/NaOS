@@ -13,3 +13,6 @@
 [submodule "idl"]
 	path = idl
 	url = https://github.com/kadds/naos_idl.git
+[submodule "naos/third_party/libvterm"]
+	path = naos/third_party/libvterm
+	url = https://github.com/neovim/libvterm.git

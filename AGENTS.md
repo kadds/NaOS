@@ -18,6 +18,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DFREELIBCXX_TEST=OFF
 cmake --build build -j
 ```
 
+Incremental-build note: `naos/libc/mlibc` is an external submodule exposed to
+CMake as an imported static library, so changes there require rebuilding it
+explicitly with `ninja -C naos/libc/mlibc/build` before relinking userland.
+Building only individual targets such as `init` or `kernel` updates their
+direct binaries but does not refresh `build/bin/system/rfsimg`; build the
+`make-rfs-image` target (or the complete default target) before boot testing.
+`python3 util/run.py q --iso` only packages the already-built kernel and
+rootfs image into an ISO; it does not compile or repack userland.
+
 Use `-DCMAKE_BUILD_TYPE=Release` for an optimized kernel. Run the ISO in QEMU with `python3 util/run.py q --iso`; for a disk image, mount it first with `python3 util/disk.py mount`, then run `python3 util/run.py q`. Use `--uefi` when testing UEFI. Kernel serial output is written to `run/kernel_out.log`.
 
 ## Coding Style & Naming Conventions
@@ -27,6 +36,8 @@ Use `.clang-format`: four-space indentation, spaces only, a 120-column limit, an
 ## Testing Guidelines
 
 There is no standalone kernel unit-test suite or repository-wide coverage threshold. Every change should at least compile and boot in an appropriate emulator, with relevant serial output checked. When changing `freelibcxx`, configure with `-DFREELIBCXX_TEST=ON` and run `ctest --test-dir build`; its Catch2 tests use lower_snake_case source names.
+
+Do not use Python tests that read, scan, or parse C++ source code. Test C++ behavior with real C++ tests, compilation, and appropriate emulator execution instead.
 
 ## Commit & Pull Request Guidelines
 

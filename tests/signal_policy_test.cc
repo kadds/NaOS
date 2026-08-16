@@ -1,7 +1,7 @@
 #include "kernel/signal.hpp"
 #include "naos/abi.h"
 
-int main()
+int run_signal_policy_tests()
 {
     using task::signal::default_action;
     using task::signal::default_action_for;

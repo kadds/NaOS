@@ -7,4 +7,7 @@ static_assert(capability::derive_tty_control_rights(NA_RIGHT_DUPLICATE | NA_RIGH
 static_assert(capability::derive_tty_control_rights(NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT) ==
               (NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT));
 
-int main() { return capability::entry_state::restricting == capability::entry_state::active ? 1 : 0; }
+int run_capability_restrict_policy_tests()
+{
+    return capability::entry_state::restricting == capability::entry_state::active ? 1 : 0;
+}

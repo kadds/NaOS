@@ -15,14 +15,7 @@ class kobject
     {
         unknown = 0,
         file = 1,
-        dentry,
-        inode,
-        spinlock,
         semaphore,
-        rwlock,
-        mutex,
-        message_queue,
-        list_entries,
         raw_channel_end,
         protocol_descriptor,
         protocol_client_end,
@@ -34,6 +27,12 @@ class kobject
         shared_ring,
         process,
         service_directory,
+        input_event_source,
+        terminal_identity,
+        terminal_job_control,
+        terminal_driver_control,
+        terminal_driver_factory,
+        console_frontend,
     };
 
   public:
@@ -53,18 +52,6 @@ class kobject
     virtual na_signal_t capability_signals() const { return 0; }
     virtual u64 capability_state() const { return 0; }
 
-    template <typename T, type_e t> T *get_by()
-    {
-        if (likely(t == this->ty))
-            return (T *)this;
-        return nullptr;
-    }
-    template <typename T, type_e t> const T *get_by() const
-    {
-        if (likely(t == this->ty))
-            return (const T *)this;
-        return nullptr;
-    }
     template <typename T> T *get()
     {
         if (likely(T::type_of() == this->ty))

@@ -18,10 +18,14 @@
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/terminal.hpp"
+#include "kernel/terminal_identity.hpp"
+#include "kernel/terminal_views.hpp"
 #include "kernel/time.hpp"
 #include "kernel/trace.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
+#include "naos/generated/system/InputEventSource.hpp"
+#include "naos/generated/system/TerminalDriverFactory.hpp"
 #include "naos/generated/system_uapi.h"
 
 #include "kernel/fs/vfs/dentry.hpp"
@@ -29,6 +33,8 @@
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/pseudo.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/input_event_source.hpp"
+#include "kernel/service_directory.hpp"
 
 #include "kernel/scheduler.hpp"
 
@@ -47,8 +53,7 @@
 #include "naos/generated/system/Stream.hpp"
 
 #include "kernel/dev/framebuffer.hpp"
-#include "kernel/dev/tty/pty_manager.hpp"
-#include "kernel/dev/tty/tty.hpp"
+#include "kernel/dev/tty/console_pseudo.hpp"
 
 using mm_info_t = memory::vm::info_t;
 namespace task
@@ -102,7 +107,8 @@ struct session_t
 {
     ::session_id id;
     process_map_t members;
-    dev::tty::tty_core *controlling_tty = nullptr;
+    dev::tty::terminal_identity *controlling_terminal = nullptr;
+    handle_t<dev::tty::terminal_identity> controlling_terminal_ref;
     group_id foreground_process_group = 0;
 
     explicit session_t(::session_id id)
@@ -149,7 +155,7 @@ capability::metadata stream_capability_metadata()
     metadata.binding = NA_BINDING_KERNEL_VIEW;
     metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
     metadata.scope = NA_SCOPE_STREAM;
-    metadata.revision = 1;
+    metadata.revision = naos::system::Stream::revision;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
     return metadata;
@@ -261,7 +267,7 @@ void remove_process_group_if_empty_unlocked(process_group_t *process_group)
 
 void remove_session_if_empty_unlocked(session_t *session)
 {
-    if (session == nullptr || session->members.size() != 0 || session->controlling_tty != nullptr)
+    if (session == nullptr || session->members.size() != 0 || session->controlling_terminal != nullptr)
         return;
 
     global_session_map->remove(session->id);
@@ -276,6 +282,9 @@ void register_process_job_control_unlocked(process_t *process)
     process_group->members.insert(process->pid, process);
     process->session = session;
     process->process_group = process_group;
+    process->controlling_terminal_ref = session->controlling_terminal_ref;
+    process->controlling_terminal = session->controlling_terminal;
+    process->foreground_process_group = session->foreground_process_group;
 }
 
 void unregister_process_job_control_unlocked(process_t *process)
@@ -335,8 +344,8 @@ void move_process_group_unlocked(process_t *process, group_id process_group_id)
     if (session != nullptr && session->foreground_process_group == old_process_group_id && old_process_group_empty)
     {
         session->foreground_process_group = 0;
-        if (session->controlling_tty != nullptr)
-            session->controlling_tty->set_foreground_process_group(0);
+        if (session->controlling_terminal != nullptr)
+            session->controlling_terminal->set_foreground_process_group(0);
     }
 }
 } // namespace
@@ -393,7 +402,6 @@ inline process_t *copy_process(process_t *p)
     process->parent_pid = p->pid;
     process->session_id = p->session_id;
     process->process_group_id = p->process_group_id;
-    process->controlling_tty = p->controlling_tty;
     process->signal_pack.inherit_mask_from(p->signal_pack);
     process->foreground_process_group = 0;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
@@ -476,6 +484,8 @@ void delete_thread(thread_t *thd)
     kassert(thd->state == thread_state::destroy, "thread state check failed.");
     if (thd->do_wait_queue_now)
         thd->do_wait_queue_now->remove(thd);
+    while (thd->wait_queue_wake_refs.load(std::memory_order_acquire) != 0)
+        cpu_pause();
 
     uctx::RawSpinLockUninterruptibleContext icu(thd->process->thread_list_lock);
 
@@ -536,27 +546,28 @@ void create_devs()
 {
     auto root = fs::vfs::global_root;
     fs::vfs::create("/dev", root, root, fs::create_flags::directory);
-    fs::vfs::mkdir("/dev/pts", root, root, fs::create_flags::directory);
-    fs::vfs::create("/dev/ptmx", root, root, fs::create_flags::chr);
-    dev::pty::init();
 
-    auto create_tty = [&](const char *name, int terminal_index) {
+    auto create_console = [&](const char *name, int terminal_index) {
         fs::vfs::create(name, root, root, fs::create_flags::chr);
         auto f = fs::vfs::open(name, root, root, fs::mode::read | fs::mode::write, 0);
-        auto *ps = memory::KernelCommonAllocatorV->New<dev::tty::tty_pseudo_t>(terminal_index, memory::page_size * 2);
+        auto *ps = memory::KernelCommonAllocatorV->New<dev::tty::console_pseudo_t>(terminal_index);
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&ps), 8);
     };
 
-    create_tty("/dev/console", term::terminal_manager::kernel_console_index);
-    create_tty("/dev/tty0", term::terminal_manager::user_terminal_index);
-    fs::vfs::symbolink("/dev/tty", "/dev/tty0", root, root, 0);
+    // Bootstrap-only diagnostic stream. POSIX console paths are routed by the
+    // user-space TerminalManager; do not leave a kernel TTY fallback behind.
+    create_console("/dev/kconsole", term::terminal_manager::kernel_console_index);
 
     {
         constexpr const char *fb_name = "/dev/fb0";
         fs::vfs::create(fb_name, root, root, fs::create_flags::chr);
         auto f = fs::vfs::open(fb_name, root, root, fs::mode::read | fs::mode::write, 0);
-        auto *fb = memory::KernelCommonAllocatorV->New<dev::framebuffer::framebuffer_pseudo_t>(term::get_terms());
+        auto *fb = memory::KernelCommonAllocatorV->New<dev::framebuffer::framebuffer_pseudo_t>(
+            term::get_framebuffer_backend());
         fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&fb), 8);
+        // The pseudo was attached after open(), so account for the boot-time
+        // handle explicitly; its close() below releases the writer.
+        (void)fb->open(fs::mode::read | fs::mode::write, task::access_context{task::current_process()});
     }
 }
 
@@ -617,11 +628,49 @@ void init()
     if (cpu::current().is_bsp())
     {
         create_devs();
-        auto tty0read = fs::vfs::open("/dev/tty0", root, root, fs::mode::read, 0);
-        auto tty0write = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
-        auto tty0err = fs::vfs::open("/dev/tty0", root, root, fs::mode::write, 0);
+        auto global_directory = handle_t<service::directory>::make();
+        service::set_global_service_directory(global_directory);
+        auto input_handle = dev::input::init_input_event_source();
+        auto factory_handle = handle_t<dev::tty::terminal_driver_factory>::make();
+        auto tty0read = fs::vfs::open("/dev/kconsole", root, root, fs::mode::read, 0);
+        auto tty0write = fs::vfs::open("/dev/kconsole", root, root, fs::mode::write, 0);
+        auto tty0err = fs::vfs::open("/dev/kconsole", root, root, fs::mode::write, 0);
         kassert(tty0read, "invalid tty");
         auto *init_process = current_process();
+        capability::metadata input_meta;
+        input_meta.binding = NA_BINDING_KERNEL_VIEW;
+        input_meta.protocol_uuid = naos::system::InputEventSource::protocol_uuid;
+        input_meta.scope = NA_SCOPE_INPUT_EVENT_SOURCE;
+        input_meta.revision = naos::system::InputEventSource::revision;
+        input_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+        input_meta.protocol_rights =
+            NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
+        const auto input_event_source_handle =
+            init_process->resource.install_native(std::move(input_handle), input_meta);
+        kassert(input_event_source_handle != NA_HANDLE_INVALID, "unable to install input event source capability");
+
+        capability::metadata factory_meta;
+        factory_meta.binding = NA_BINDING_KERNEL_VIEW;
+        factory_meta.protocol_uuid = naos::system::TerminalDriverFactory::protocol_uuid;
+        factory_meta.scope = NA_SCOPE_TERMINAL_DRIVER_FACTORY;
+        factory_meta.revision = naos::system::TerminalDriverFactory::revision;
+        factory_meta.meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+        factory_meta.protocol_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
+        const auto terminal_driver_factory_handle =
+            init_process->resource.install_native(std::move(factory_handle), factory_meta);
+        kassert(terminal_driver_factory_handle != NA_HANDLE_INVALID,
+                "unable to install terminal driver factory capability");
+
+        auto console_frontend = handle_t<dev::framebuffer::console_frontend_capability>::make();
+        capability::metadata console_frontend_meta;
+        console_frontend_meta.binding = NA_BINDING_KERNEL_VIEW;
+        console_frontend_meta.scope = NA_SCOPE_NONE;
+        console_frontend_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+        console_frontend_meta.protocol_rights = NA_DISPLAY_RIGHT_WRITER;
+        const auto console_frontend_handle =
+            init_process->resource.install_native(std::move(console_frontend), console_frontend_meta);
+        kassert(console_frontend_handle != NA_HANDLE_INVALID, "unable to install console frontend capability");
+        init_process->bootstrap_capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, console_frontend_handle};
         const auto metadata = stream_capability_metadata();
         init_process->console_in_handle = init_process->resource.install_native(tty0read, metadata);
         init_process->console_out_handle = init_process->resource.install_native(tty0write, metadata);
@@ -630,6 +679,11 @@ void init()
                     init_process->console_out_handle != NA_HANDLE_INVALID &&
                     init_process->console_err_handle != NA_HANDLE_INVALID,
                 "unable to install bootstrap console capabilities");
+        init_process->bootstrap_capabilities[1] = {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE,
+                                                   input_event_source_handle};
+        init_process->bootstrap_capabilities[2] = {NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY,
+                                                   terminal_driver_factory_handle};
+        init_process->bootstrap_capability_count = 3;
         is_init = true;
         term::get_terms()->switch_term(term::terminal_manager::user_terminal_index);
 
@@ -642,7 +696,11 @@ void init()
 
 thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, void *arg, flag_t flags)
 {
+    if (process == nullptr || start_func == nullptr)
+        return nullptr;
     thread_t *thd = new_thread(process);
+    if (thd == nullptr)
+        return nullptr;
     thd->state = thread_state::ready;
 
     auto &vma = ((mm_info_t *)process->mm_info)->vma();
@@ -884,7 +942,6 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     {
         uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
         process->parent_pid = parent->pid;
-        process->controlling_tty = parent->controlling_tty;
         process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
@@ -994,7 +1051,6 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
     {
         uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
         process->parent_pid = parent->pid;
-        process->controlling_tty = parent->controlling_tty;
         process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
@@ -1166,7 +1222,7 @@ void exit_process_inner(thread_t *thd);
 namespace
 {
 void cleanup_process_job_control(process_t *process);
-void notify_parent_of_exit(process_t *process);
+void notify_parent_of_child_state_change(process_t *process);
 } // namespace
 
 void exit_process_thread(process_t *process)
@@ -1184,6 +1240,9 @@ void exit_process_thread(process_t *process)
     else
     {
         icu.end();
+        auto services = service::get_global_service_directory();
+        if (services)
+            services->cleanup_owner(process->pid);
         process->resource.clear();
         naos::ipc::collect_orphaned_channels();
         process->attributes |= process_attributes::no_thread;
@@ -1191,7 +1250,7 @@ void exit_process_thread(process_t *process)
         {
             trace::panic("init process startup fail");
         }
-        notify_parent_of_exit(process);
+        notify_parent_of_child_state_change(process);
         process->wait_queue.do_wake_up();
     }
 }
@@ -1278,6 +1337,7 @@ bool child_wait_generation_changed(const child_wait_context *context)
 struct child_selection
 {
     process_t *process = nullptr;
+    process_t *stopped_process = nullptr;
     bool has_child = false;
 };
 
@@ -1294,7 +1354,7 @@ bool matches_wait_pid(const process_t *parent, const process_t *child, i64 reque
     return child->process_group_id == static_cast<group_id>(-requested_pid);
 }
 
-child_selection select_child(process_t *parent, i64 requested_pid)
+child_selection select_child(process_t *parent, i64 requested_pid, bool want_stop)
 {
     child_selection selection;
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
@@ -1309,11 +1369,14 @@ child_selection select_child(process_t *parent, i64 requested_pid)
         if ((child->attributes.load() & process_attributes::no_thread) && !child->wait_claimed.load() &&
             selection.process == nullptr)
             selection.process = child;
+        if (want_stop && (child->attributes.load() & process_attributes::job_control_stopped) != 0 &&
+            !child->wait_stop_reported.load() && !child->wait_claimed.load() && selection.stopped_process == nullptr)
+            selection.stopped_process = child;
     }
     return selection;
 }
 
-process_t *reserve_child(process_t *parent, i64 requested_pid, bool exited_only)
+process_t *reserve_child(process_t *parent, i64 requested_pid, bool exited_only, bool stopped_only = false)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     for (auto item : *global_process_map)
@@ -1322,7 +1385,9 @@ process_t *reserve_child(process_t *parent, i64 requested_pid, bool exited_only)
         if (child == nullptr || child->parent_pid != parent->pid ||
             (child->attributes.load() & process_attributes::destroy) ||
             !matches_wait_pid(parent, child, requested_pid) || child->wait_claimed.load() ||
-            (exited_only && !(child->attributes.load() & process_attributes::no_thread)))
+            (exited_only && !(child->attributes.load() & process_attributes::no_thread)) ||
+            (stopped_only && ((child->attributes.load() & process_attributes::job_control_stopped) == 0 ||
+                              child->wait_stop_reported.load())))
             continue;
         child->wait_claimed.store(true);
         child->wait_counter++;
@@ -1331,7 +1396,23 @@ process_t *reserve_child(process_t *parent, i64 requested_pid, bool exited_only)
     return nullptr;
 }
 
-void notify_parent_of_exit(process_t *process)
+bool report_stopped_child(process_t *process, i64 &ret, process_id &waited_pid)
+{
+    if (process == nullptr || (process->attributes.load() & process_attributes::job_control_stopped) == 0 ||
+        process->wait_stop_reported.load())
+        return false;
+
+    bool expected = false;
+    if (!process->wait_stop_reported.compare_exchange_strong(expected, true))
+        return false;
+    process->wait_claimed.store(false);
+    --process->wait_counter;
+    ret = (process->last_stop_signal << 8) | 0x7f;
+    waited_pid = process->pid;
+    return true;
+}
+
+void notify_parent_of_child_state_change(process_t *process)
 {
     process_t *parent = nullptr;
     {
@@ -1351,7 +1432,7 @@ u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
     waited_pid = process->pid;
     if (--process->wait_counter == 0)
     {
-        notify_parent_of_exit(process);
+        notify_parent_of_child_state_change(process);
         process->attributes |= process_attributes::destroy;
         delete_process(process);
     }
@@ -1362,14 +1443,39 @@ u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
 
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid)
 {
+    return wait_process_handle(parent, target, flags, ret, waited_pid, nullptr, nullptr);
+}
+
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
+                        freelibcxx::function_ref<bool()> interrupt,
+                        freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue)
+{
     if (parent == nullptr || target == nullptr || target->parent_pid != parent->pid || target->reap_pending.load())
         return ECHILD;
 
     uctx::UninterruptibleContext icu;
+    const bool want_stop = (flags & NA_PROCESS_WAIT_FLAG_UNTRACED) != 0;
+    const auto interrupted = [&]() { return interrupt != nullptr && interrupt(); };
+    if (interrupted())
+        return EINTR;
+    auto stopped_unreported = [&]() {
+        return want_stop && (target->attributes.load() & process_attributes::job_control_stopped) != 0 &&
+               !target->wait_stop_reported.load();
+    };
     if (target->attributes.load() & process_attributes::no_thread)
     {
         auto *reserved = reserve_child(parent, target->pid, true);
         return reserved == target ? static_cast<i64>(reap_waited_child(reserved, ret, waited_pid)) : ECHILD;
+    }
+    if (stopped_unreported())
+    {
+        bool expected = false;
+        if (target->wait_stop_reported.compare_exchange_strong(expected, true))
+        {
+            ret = (target->last_stop_signal << 8) | 0x7f;
+            waited_pid = target->pid;
+            return 0;
+        }
     }
     if (flags & NA_PROCESS_WAIT_FLAG_NOHANG) // WNOHANG
     {
@@ -1380,7 +1486,37 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
     auto *reserved = reserve_child(parent, target->pid, false);
     if (reserved == nullptr)
         return ECHILD;
-    reserved->wait_queue.do_wait([reserved] { return reserved->attributes & process_attributes::no_thread; });
+    if (register_wait_queue)
+        register_wait_queue(&reserved->wait_queue);
+    reserved->wait_queue.do_wait([reserved, stopped_unreported, interrupted] {
+        return (reserved->attributes.load() & process_attributes::no_thread) != 0 || stopped_unreported() ||
+               interrupted();
+    });
+    if (register_wait_queue)
+        register_wait_queue(nullptr);
+    if (interrupted())
+    {
+        reserved->wait_claimed.store(false);
+        --reserved->wait_counter;
+        return EINTR;
+    }
+    if (reserved->attributes.load() & process_attributes::no_thread)
+        return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
+    if (stopped_unreported())
+    {
+        bool expected = false;
+        if (reserved->wait_stop_reported.compare_exchange_strong(expected, true))
+        {
+            reserved->wait_claimed.store(false);
+            if (--reserved->wait_counter == 0)
+            {
+                // No exit reap is pending; keep the process object alive.
+            }
+            ret = (reserved->last_stop_signal << 8) | 0x7f;
+            waited_pid = reserved->pid;
+            return 0;
+        }
+    }
     return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
 }
 
@@ -1402,21 +1538,44 @@ i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object)
 
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid)
 {
+    return wait_process_children(parent, requested_pid, flags, ret, waited_pid, nullptr, nullptr);
+}
+
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
+                          freelibcxx::function_ref<bool()> interrupt,
+                          freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue)
+{
     if (parent == nullptr || global_process_map == nullptr)
         return ECHILD;
 
     uctx::UninterruptibleContext icu;
 
     const bool wait_any = requested_pid <= 0;
+    const bool want_stop = (flags & NA_PROCESS_WAIT_FLAG_UNTRACED) != 0;
+    const auto interrupted = [&]() { return interrupt != nullptr && interrupt(); };
     for (;;)
     {
+        if (interrupted())
+            return EINTR;
         child_wait_context context{parent, parent->child_wait_generation.load()};
-        auto selection = select_child(parent, requested_pid);
+        auto selection = select_child(parent, requested_pid, want_stop);
         if (selection.process != nullptr)
         {
             auto target = reserve_child(parent, requested_pid, true);
             if (target != nullptr)
                 return reap_waited_child(target, ret, waited_pid);
+            continue;
+        }
+        if (selection.stopped_process != nullptr)
+        {
+            auto target = reserve_child(parent, requested_pid, false, true);
+            if (target != nullptr && report_stopped_child(target, ret, waited_pid))
+                return 0;
+            if (target != nullptr)
+            {
+                target->wait_claimed.store(false);
+                --target->wait_counter;
+            }
             continue;
         }
         if (!selection.has_child)
@@ -1429,15 +1588,40 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
 
         if (wait_any)
         {
-            parent->child_wait_queue.do_wait([&context] { return child_wait_generation_changed(&context); });
+            if (register_wait_queue)
+                register_wait_queue(&parent->child_wait_queue);
+            parent->child_wait_queue.do_wait(
+                [&context, interrupted] { return child_wait_generation_changed(&context) || interrupted(); });
+            if (register_wait_queue)
+                register_wait_queue(nullptr);
         }
         else
         {
             auto target = reserve_child(parent, requested_pid, false);
             if (target == nullptr)
                 return ECHILD;
-            target->wait_queue.do_wait([target] { return target->attributes & process_attributes::no_thread; });
-            return reap_waited_child(target, ret, waited_pid);
+            if (register_wait_queue)
+                register_wait_queue(&target->wait_queue);
+            target->wait_queue.do_wait([target, want_stop, interrupted] {
+                return (target->attributes.load() & process_attributes::no_thread) != 0 ||
+                       (want_stop && (target->attributes.load() & process_attributes::job_control_stopped) != 0 &&
+                        !target->wait_stop_reported.load()) ||
+                       interrupted();
+            });
+            if (register_wait_queue)
+                register_wait_queue(nullptr);
+            if (interrupted())
+            {
+                target->wait_claimed.store(false);
+                --target->wait_counter;
+                return EINTR;
+            }
+            if (target->attributes.load() & process_attributes::no_thread)
+                return reap_waited_child(target, ret, waited_pid);
+            if (report_stopped_child(target, ret, waited_pid))
+                return 0;
+            target->wait_claimed.store(false);
+            --target->wait_counter;
         }
     }
 }
@@ -1565,11 +1749,18 @@ void stop_process(process_t *process, flag_t flags)
     if (process == nullptr || (process->attributes.load() & process_attributes::no_thread))
         return;
 
-    process->attributes |= process_attributes::job_control_stopped;
-    uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
-    auto &list = *(thread_list_t *)process->thread_list;
-    for (auto *thread : list)
-        stop_thread(thread, 0);
+    const auto previous = process->attributes.fetch_or(process_attributes::job_control_stopped);
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+        auto &list = *(thread_list_t *)process->thread_list;
+        for (auto *thread : list)
+            stop_thread(thread, 0);
+    }
+    process->wait_queue.do_wake_up();
+    if ((previous & process_attributes::job_control_stopped) == 0)
+    {
+        notify_parent_of_child_state_change(process);
+    }
 }
 
 void continue_process(process_t *process, flag_t flags)
@@ -1613,28 +1804,27 @@ process_t *find_session_leader_unlocked(::session_id session_id)
     return nullptr;
 }
 
-void detach_session_tty_unlocked(::session_id session_id, dev::tty::tty_core *tty)
+void detach_session_terminal_unlocked(::session_id session_id, dev::tty::terminal_identity *terminal)
 {
     auto *session = find_session_unlocked(session_id);
     if (session == nullptr)
         return;
 
-    for (auto item : session->members)
+    if (session->controlling_terminal == terminal)
     {
-        auto *process = item.value;
-        if (process->controlling_tty == tty)
-            process->controlling_tty = nullptr;
-    }
-
-    if (session->controlling_tty == tty)
-    {
-        session->controlling_tty = nullptr;
+        session->controlling_terminal_ref.reset();
+        session->controlling_terminal = nullptr;
         session->foreground_process_group = 0;
-        auto *leader = find_session_leader_unlocked(session_id);
-        if (leader != nullptr)
-            leader->foreground_process_group = 0;
-        tty->set_foreground_process_group(0);
-        tty->set_session_id(0);
+        terminal->set_foreground_process_group(0);
+        terminal->set_session_id(0);
+
+        for (auto item : session->members)
+        {
+            auto *process = item.value;
+            process->controlling_terminal_ref.reset();
+            process->controlling_terminal = nullptr;
+            process->foreground_process_group = 0;
+        }
     }
 }
 
@@ -1649,17 +1839,18 @@ void cleanup_process_job_control(process_t *process)
 
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
 
-    auto *tty = process->controlling_tty;
-    if (tty != nullptr && process->pid == process->session_id)
+    auto *session = find_session_unlocked(process->session_id);
+    auto *terminal = session == nullptr ? nullptr : session->controlling_terminal;
+    if (terminal != nullptr && process->pid == process->session_id)
     {
-        detach_session_tty_unlocked(process->session_id, tty);
+        detach_session_terminal_unlocked(process->session_id, terminal);
     }
-    else if (tty != nullptr)
+    else if (terminal != nullptr)
     {
-        process->controlling_tty = nullptr;
+        process->controlling_terminal_ref.reset();
+        process->controlling_terminal = nullptr;
     }
 
-    auto *session = find_session_unlocked(process->session_id);
     if (session != nullptr && session->foreground_process_group == process->process_group_id &&
         !process_group_exists_unlocked(process->session_id, process->process_group_id, process))
     {
@@ -1667,8 +1858,8 @@ void cleanup_process_job_control(process_t *process)
         auto *leader = find_session_leader_unlocked(process->session_id);
         if (leader != nullptr)
             leader->foreground_process_group = 0;
-        if (session->controlling_tty != nullptr)
-            session->controlling_tty->set_foreground_process_group(0);
+        if (session->controlling_terminal != nullptr)
+            session->controlling_terminal->set_foreground_process_group(0);
     }
 
     unregister_process_job_control_unlocked(process);
@@ -1719,7 +1910,25 @@ bool get_job_control_info(const process_t *process, job_control_info &info)
     info.session = process->session_id;
     info.process_group = process->process_group_id;
     info.foreground_process_group = process->session == nullptr ? 0 : process->session->foreground_process_group;
-    info.has_controlling_tty = process->session != nullptr && process->session->controlling_tty != nullptr;
+    info.has_controlling_tty = process->session != nullptr && process->session->controlling_terminal != nullptr;
+    return true;
+}
+
+bool get_controlling_terminal_locator(const process_t *process, na_terminal_locator_t &locator)
+{
+    locator = {};
+    if (process == nullptr || global_process_map == nullptr)
+        return false;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    auto *session = find_session_unlocked(process->session_id);
+    auto *terminal = session == nullptr ? nullptr : session->controlling_terminal;
+    if (terminal == nullptr || !terminal->live())
+        return false;
+    locator.terminal_id = terminal->id();
+    locator.generation = terminal->generation();
+    for (u64 i = 0; i < sizeof(locator.token); i++)
+        locator.token[i] = terminal->token()[i];
     return true;
 }
 
@@ -1734,15 +1943,17 @@ i64 setsid(process_t *process)
     if (process->process_group_id == process->pid)
         return EPERMISSION;
 
-    process->controlling_tty = nullptr;
+    process->controlling_terminal_ref.reset();
+    process->controlling_terminal = nullptr;
     process->foreground_process_group = 0;
     move_process_session_unlocked(process, process->pid, process->pid);
     return process->session_id;
 }
 
-int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool force)
+int attach_controlling_terminal(process_t *process, handle_t<dev::tty::terminal_identity> terminal_ref, bool force)
 {
-    if (process == nullptr || tty == nullptr || global_process_map == nullptr)
+    auto *terminal = terminal_ref.operator&();
+    if (process == nullptr || terminal == nullptr || global_process_map == nullptr)
         return EPARAM;
 
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
@@ -1750,117 +1961,153 @@ int attach_controlling_tty(process_t *process, dev::tty::tty_core *tty, bool for
         return ENOEXIST;
     if (process->pid != process->session_id)
         return EPERMISSION;
-    if (process->controlling_tty != nullptr && process->controlling_tty != tty && !force)
+    auto *session = find_session_unlocked(process->session_id);
+    if (session == nullptr)
+        return ENOEXIST;
+    if (session->controlling_terminal != nullptr && session->controlling_terminal != terminal && !force)
         return ERESOURCE_NOT_NULL;
 
-    ::session_id foreign_session = tty->session_id();
+    ::session_id foreign_session = terminal->session_id();
     auto *foreign = find_session_unlocked(foreign_session);
-    if (foreign == nullptr || foreign->controlling_tty != tty || foreign_session == process->session_id)
+    if (foreign == nullptr || foreign->controlling_terminal != terminal || foreign_session == process->session_id)
         foreign_session = 0;
 
     if (foreign_session != 0 && !force)
         return EPERMISSION;
     if (foreign_session != 0)
-        detach_session_tty_unlocked(foreign_session, tty);
+        detach_session_terminal_unlocked(foreign_session, terminal);
 
-    if (process->controlling_tty != nullptr && process->controlling_tty != tty)
-        detach_session_tty_unlocked(process->session_id, process->controlling_tty);
+    if (session->controlling_terminal != nullptr && session->controlling_terminal != terminal)
+        detach_session_terminal_unlocked(process->session_id, session->controlling_terminal);
 
-    auto *session = find_session_unlocked(process->session_id);
-    if (session == nullptr)
-        return ENOEXIST;
-
-    process->controlling_tty = tty;
-    session->controlling_tty = tty;
+    session->controlling_terminal_ref = terminal_ref;
+    session->controlling_terminal = terminal;
     session->foreground_process_group = process->process_group_id;
-    process->foreground_process_group = process->process_group_id;
-    tty->set_session_id(process->session_id);
-    tty->set_foreground_process_group(process->process_group_id);
+    for (auto item : session->members)
+    {
+        auto *member = item.value;
+        member->controlling_terminal_ref = session->controlling_terminal_ref;
+        member->controlling_terminal = session->controlling_terminal;
+        member->foreground_process_group = session->foreground_process_group;
+    }
+    terminal->set_session_id(process->session_id);
+    terminal->set_foreground_process_group(process->process_group_id);
     return OK;
 }
 
-void detach_controlling_tty(process_t *process)
+void detach_controlling_terminal(process_t *process)
 {
     if (process == nullptr || global_process_map == nullptr)
         return;
 
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    auto *tty = process->controlling_tty;
-    if (tty == nullptr)
+    auto *session = find_session_unlocked(process->session_id);
+    auto *terminal = session == nullptr ? nullptr : session->controlling_terminal;
+    if (terminal == nullptr)
         return;
 
     if (process->pid == process->session_id)
-        detach_session_tty_unlocked(process->session_id, tty);
+        detach_session_terminal_unlocked(process->session_id, terminal);
     else
-        process->controlling_tty = nullptr;
+    {
+        process->controlling_terminal_ref.reset();
+        process->controlling_terminal = nullptr;
+    }
 }
 
-i64 get_foreground_process_group(dev::tty::tty_core *tty)
+void detach_session_terminal(dev::tty::terminal_identity *terminal)
 {
-    if (tty == nullptr || global_process_map == nullptr)
+    if (terminal == nullptr || global_process_map == nullptr)
+        return;
+
+    uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+    const auto session_id = terminal->session_id();
+    if (session_id != 0)
+        detach_session_terminal_unlocked(session_id, terminal);
+}
+
+i64 get_foreground_process_group(dev::tty::terminal_identity *terminal)
+{
+    if (terminal == nullptr || global_process_map == nullptr)
         return EPARAM;
 
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    auto *session = find_session_unlocked(tty->session_id());
-    if (session != nullptr && session->controlling_tty == tty)
+    auto *session = find_session_unlocked(terminal->session_id());
+    if (session != nullptr && session->controlling_terminal == terminal)
         return session->foreground_process_group;
     return ENOEXIST;
 }
 
-int set_foreground_process_group(process_t *process, dev::tty::tty_core *tty, group_id pgid)
+int set_foreground_process_group(process_t *process, dev::tty::terminal_identity *terminal, group_id pgid)
 {
-    if (process == nullptr || tty == nullptr || pgid == 0 || global_process_map == nullptr)
+    if (process == nullptr || terminal == nullptr || pgid == 0 || global_process_map == nullptr)
         return EPARAM;
 
-    const auto job_control = check_tty_job_control(process, tty, false, true);
+    const auto job_control = check_terminal_job_control(process, terminal, false, true, false);
     if (job_control != 0)
         return static_cast<int>(job_control);
 
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-    if (!process_is_live(process) || process->controlling_tty != tty)
+    if (!process_is_live(process) || process->session == nullptr || process->session->controlling_terminal != terminal)
         return EPERMISSION;
 
     auto *session = find_session_unlocked(process->session_id);
-    if (session == nullptr || session->controlling_tty != tty)
+    if (session == nullptr || session->controlling_terminal != terminal)
         return ENOEXIST;
     auto *leader = find_session_leader_unlocked(process->session_id);
     if (leader == nullptr)
         return ENOEXIST;
     if (!process_group_exists_unlocked(process->session_id, pgid))
         return ENOEXIST;
+    if (!terminal->try_set_foreground_process_group(pgid))
+        return EAGAIN;
 
     session->foreground_process_group = pgid;
     leader->foreground_process_group = pgid;
-    tty->set_foreground_process_group(pgid);
     return OK;
 }
 
-i64 check_tty_job_control(process_t *process, dev::tty::tty_core *tty, bool input, bool tostop)
+i64 check_terminal_job_control(process_t *process, dev::tty::terminal_identity *terminal, bool input, bool tostop,
+                               bool acquire_io_lease)
 {
-    if (process == nullptr || tty == nullptr)
+    if (process == nullptr || terminal == nullptr)
         return EPARAM;
-    if (process->controlling_tty != tty || process->session_id != tty->session_id())
+    if (process->session == nullptr || process->session->controlling_terminal != terminal ||
+        process->session_id != terminal->session_id())
         return OK;
 
-    const auto foreground_group = tty->foreground_process_group();
-    if (foreground_group == 0 || foreground_group == process->process_group_id)
-        return OK;
+    const auto foreground_group = terminal->foreground_process_group();
+    const bool foreground = foreground_group == 0 || foreground_group == process->process_group_id;
+    if (foreground)
+    {
+        if (!acquire_io_lease)
+            return OK;
+        return terminal->try_acquire_io_lease(process->process_group_id) ? OK : EAGAIN;
+    }
     if (!input && !tostop)
-        return OK;
+    {
+        if (!acquire_io_lease)
+            return OK;
+        return terminal->try_acquire_unrestricted_io_lease() ? OK : EAGAIN;
+    }
 
     const auto signal_number = input ? signal::sigttin : signal::sigttou;
     if (input && process->signal_pack.is_ignored_or_blocked(signal_number))
         return EIO;
     if (!input && process->signal_pack.is_ignored_or_blocked(signal_number))
-        return OK;
+    {
+        if (!acquire_io_lease)
+            return OK;
+        return terminal->try_acquire_unrestricted_io_lease() ? OK : EAGAIN;
+    }
 
     const auto result = send_signal_to_process_group(process->process_group_id, signal_number);
     return result < 0 ? result : EINTR;
 }
 
-dev::tty::tty_core *get_controlling_tty(process_t *process)
+dev::tty::terminal_identity *get_controlling_terminal(process_t *process)
 {
-    return process == nullptr ? nullptr : process->controlling_tty;
+    return process == nullptr || process->session == nullptr ? nullptr : process->session->controlling_terminal;
 }
 
 i64 send_signal_to_process_group(group_id process_group, signal_num_t num, i64 error, i64 code, i64 status)

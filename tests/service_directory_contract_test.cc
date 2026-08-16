@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <string>
@@ -8,7 +9,7 @@
 #include <naos/generated/system_uapi.h>
 #include <naos/service_directory.hpp>
 
-int main()
+int run_service_directory_contract_tests()
 {
     using namespace naos::system::ServiceDirectory;
 
@@ -18,6 +19,8 @@ int main()
     assert(method_resolve == 2);
     assert(method_unregister == 3);
     assert(method_list == 4);
+    assert(method_listen == 5);
+    assert(method_connect == 6);
 
     using register_handle_function = int (*)(const char *, na_handle_t);
     static_assert(std::is_same_v<decltype(&naos_service_register_handle), register_handle_function>);
@@ -66,6 +69,48 @@ int main()
     resolve_response decoded_response{};
     assert(decode_resolve_response(buffer, written, decoded_response));
     assert(decoded_response.service.value == 0);
+
+    listen_request listen_value{};
+    listen_value.max_pending = 16;
+    listen_value.listener.value = 0;
+    listen_value.descriptor.value = 1;
+    listen_value.uri = {uri, sizeof(uri) - 1};
+    assert(encode_listen_request(buffer, sizeof(buffer), listen_value, written));
+    assert(written == 16 + sizeof(uri) - 1);
+    listen_request decoded_listen{};
+    assert(decode_listen_request(buffer, written, decoded_listen));
+    assert(decoded_listen.max_pending == 16);
+    assert(decoded_listen.listener.value == 0);
+    assert(decoded_listen.descriptor.value == 1);
+    assert(decoded_listen.uri.size == sizeof(uri) - 1);
+
+    connect_request connect_value{};
+    const std::uint8_t expected_uuid[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    std::copy(expected_uuid, expected_uuid + 16, connect_value.expected_uuid.begin());
+    connect_value.requested_rights = NA_PROTOCOL_RIGHT_INVOKE;
+    connect_value.requested_revision = revision;
+    connect_value.requested_features = features;
+    connect_value.uri = {uri, sizeof(uri) - 1};
+    assert(encode_connect_request(buffer, sizeof(buffer), connect_value, written));
+    connect_request decoded_connect{};
+    assert(decode_connect_request(buffer, written, decoded_connect));
+    assert(decoded_connect.expected_uuid[0] == 1 && decoded_connect.expected_uuid[15] == 16);
+    assert(decoded_connect.requested_rights == NA_PROTOCOL_RIGHT_INVOKE);
+    assert(decoded_connect.requested_revision == revision);
+    assert(decoded_connect.requested_features == features);
+    assert(decoded_connect.uri.size == sizeof(uri) - 1);
+
+    connect_response connect_response_value{};
+    connect_response_value.client.value = 0;
+    connect_response_value.revision = revision;
+    connect_response_value.features = features;
+    assert(validate_connect_response_resources(connect_response_value, 1));
+    assert(encode_connect_response(buffer, sizeof(buffer), connect_response_value, written));
+    connect_response decoded_connect_response{};
+    assert(decode_connect_response(buffer, written, decoded_connect_response));
+    assert(decoded_connect_response.client.value == 0);
+    assert(decoded_connect_response.revision == revision);
+    assert(decoded_connect_response.features == features);
 
     return 0;
 }

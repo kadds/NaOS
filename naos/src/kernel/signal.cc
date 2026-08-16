@@ -22,12 +22,15 @@ void sig_kill_dump(process_t *proc, signal_info_t *info)
 void sig_stop(process_t *proc, signal_info_t *info)
 {
     trace::info("signal ", info->number, ": stop process ", proc->pid);
+    proc->last_stop_signal = info->number;
     task::stop_process(proc);
 }
 
 void sig_continue(process_t *proc, signal_info_t *info)
 {
     trace::info("signal ", info->number, ": continue process ", proc->pid);
+    proc->wait_stop_reported.store(false);
+    proc->last_stop_signal = 0;
     task::continue_process(proc);
 }
 
@@ -38,8 +41,14 @@ void sig_continue(process_t *proc, signal_info_t *info)
 #define CONT sig_continue,
 
 signal_func_t default_signal_handler[max_signal_count] = {
-    KILL KILL KILL KILL DUMP DUMP DUMP DUMP KILL KILL DUMP KILL KILL KILL KILL KILL IGRE CONT STOP STOP STOP STOP
-        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE};
+    KILL KILL KILL KILL        // 0-3
+        DUMP DUMP DUMP DUMP    // 4-7
+        KILL KILL DUMP KILL    // 8-11
+        KILL KILL KILL KILL    // 12-15
+        KILL                    // 16 SIGSTKFLT
+        IGRE CONT STOP STOP STOP STOP // 17-22
+        IGRE IGRE IGRE IGRE IGRE IGRE IGRE IGRE // 23-30
+};
 
 void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i64 status)
 {

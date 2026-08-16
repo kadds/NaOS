@@ -21,6 +21,33 @@
 namespace naos::syscall
 {
 
+namespace
+{
+na_status_t native_status_from_errno(i64 error)
+{
+    switch (error)
+    {
+    case 0:
+        return NA_STATUS_OK;
+    case EFAULT:
+        return NA_STATUS_FAULT;
+    case EINVAL:
+        return NA_STATUS_INVALID_ARGUMENT;
+    case EBADF:
+    case ECHILD:
+        return NA_STATUS_INVALID_HANDLE;
+    case ENOMEM:
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    case ENOEXEC:
+        return NA_STATUS_NOT_SUPPORTED;
+    case EIO:
+        return NA_STATUS_IO_ERROR;
+    default:
+        return NA_STATUS_IO_ERROR;
+    }
+}
+} // namespace
+
 enum futex_op
 {
     futex_wake = 1,
@@ -107,8 +134,8 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
                 return EOVERFLOW;
             if (duration == 0)
                 return ETIMEDOUT;
-            deadline_watcher = timer::schedule_at(
-                now + duration, timer::timer_handler::bind<&futex_bucket::wake>(bucket));
+            deadline_watcher =
+                timer::schedule_at(now + duration, timer::timer_handler::bind<&futex_bucket::wake>(bucket));
             if (deadline_watcher == timer::invalid_watcher_id)
                 return EFAILED;
         }
@@ -167,32 +194,33 @@ void before_user_thread(task::thread_start_info_t *info)
     arch::task::enter_userland(task::current(), offset, entry, args, 0);
 }
 
-i64 process_handle_open(i64 pid, na_handle_t *output)
+na_status_t process_handle_open(i64 pid, na_handle_t *output)
 {
     if (output == nullptr || !is_user_space_range(output, sizeof(*output)))
-        return EFAULT;
+        return NA_STATUS_FAULT;
 
     khandle object;
     const auto open_status = task::open_process_handle(task::current_process(), pid, object);
     if (open_status != 0)
-        return open_status;
+        return native_status_from_errno(open_status);
 
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
     metadata.protocol_uuid = naos::system::Process::protocol_uuid;
     metadata.scope = NA_SCOPE_PROCESS;
-    metadata.revision = 1;
+    metadata.revision = naos::system::Process::revision;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     metadata.protocol_rights = static_cast<u64>(NA_PROTOCOL_RIGHT_INVOKE) | static_cast<u64>(NA_PROCESS_RIGHT_WAIT) |
                                static_cast<u64>(NA_PROCESS_RIGHT_INSPECT) |
-                               static_cast<u64>(NA_PROCESS_RIGHT_JOB_CONTROL);
+                               static_cast<u64>(NA_PROCESS_RIGHT_JOB_CONTROL) |
+                               static_cast<u64>(NA_PROCESS_RIGHT_START);
     const auto handle = task::current_process()->resource.install_native(std::move(object), metadata);
     if (handle == NA_HANDLE_INVALID)
-        return EFAILED;
+        return NA_STATUS_RESOURCE_EXHAUSTED;
     const auto copy_status = naos::usercopy::copy_to(reinterpret_cast<u64>(output), &handle, sizeof(handle));
     if (copy_status != NA_STATUS_OK)
         task::current_process()->resource.close_native(handle);
-    return copy_status == NA_STATUS_OK ? 0 : EFAULT;
+    return copy_status;
 }
 
 namespace
@@ -203,11 +231,12 @@ capability::metadata process_capability_metadata()
     metadata.binding = NA_BINDING_KERNEL_VIEW;
     metadata.protocol_uuid = naos::system::Process::protocol_uuid;
     metadata.scope = NA_SCOPE_PROCESS;
-    metadata.revision = 1;
+    metadata.revision = naos::system::Process::revision;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     metadata.protocol_rights = static_cast<u64>(NA_PROTOCOL_RIGHT_INVOKE) | static_cast<u64>(NA_PROCESS_RIGHT_WAIT) |
                                static_cast<u64>(NA_PROCESS_RIGHT_INSPECT) |
-                               static_cast<u64>(NA_PROCESS_RIGHT_JOB_CONTROL);
+                               static_cast<u64>(NA_PROCESS_RIGHT_JOB_CONTROL) |
+                               static_cast<u64>(NA_PROCESS_RIGHT_START);
     return metadata;
 }
 
@@ -282,11 +311,11 @@ u64 sigsend(target_t *target, task::signal_num_t num, sig_info_t *info)
     }
     else
     {
-        const auto group = target_values.id == 0 ? task::current_process()->process_group_id
-                                                 : static_cast<group_id>(target_values.id);
-        const auto result = task::send_signal_to_process_group(
-            group, num, info != nullptr ? info_values.error : 0, info != nullptr ? info_values.code : 0,
-            info != nullptr ? info_values.status : 0);
+        const auto group =
+            target_values.id == 0 ? task::current_process()->process_group_id : static_cast<group_id>(target_values.id);
+        const auto result = task::send_signal_to_process_group(group, num, info != nullptr ? info_values.error : 0,
+                                                               info != nullptr ? info_values.code : 0,
+                                                               info != nullptr ? info_values.status : 0);
         if (result < 0)
             return result;
     }
@@ -314,8 +343,8 @@ i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
     const auto read_mask = [](u64 *source, u64 &destination) {
         if (source == nullptr)
             return true;
-        return naos::usercopy::copy_from(
-                   &destination, reinterpret_cast<u64>(source), sizeof(destination)) == NA_STATUS_OK;
+        return naos::usercopy::copy_from(&destination, reinterpret_cast<u64>(source), sizeof(destination)) ==
+               NA_STATUS_OK;
     };
     const auto write_mask = [](u64 *destination, u64 value) {
         return destination == nullptr ||
@@ -427,52 +456,53 @@ int clone(void *entry, void *arg, void *tcb)
     return EFAILED;
 }
 
-int64_t process_exec(const na_process_exec_frame_t *frame)
+na_status_t process_exec(const na_process_exec_frame_t *frame)
 {
     if (frame == nullptr || !is_user_space_range(frame, sizeof(u32)))
-        return EFAULT;
+        return NA_STATUS_FAULT;
 
     na_process_exec_frame_t values{};
     const auto copy_status = naos::usercopy::copy_versioned(values, frame);
     if (copy_status != NA_STATUS_OK)
-        return copy_status == NA_STATUS_FAULT ? EFAULT : EINVAL;
+        return copy_status;
     if (values.flags != 0 || values.reserved0 != 0 || values.reserved1 != 0 || values.executable == NA_HANDLE_INVALID)
-        return EINVAL;
+        return NA_STATUS_INVALID_ARGUMENT;
 
     const auto path = reinterpret_cast<const char *>(values.path);
     const auto argv = reinterpret_cast<char *const *>(values.argv);
     const auto envp = reinterpret_cast<char *const *>(values.envp);
     if (!is_user_space_pointer(path) || !is_user_space_pointer_or_null(argv) || !is_user_space_pointer(envp))
-        return EFAULT;
+        return NA_STATUS_FAULT;
 
     auto *process = task::current_process();
     capability::entry entry;
     if (process == nullptr || !process->resource.lookup_native(values.executable, entry) || !entry.object)
-        return EBADF;
+        return NA_STATUS_INVALID_HANDLE;
     if (entry.meta.binding != NA_BINDING_KERNEL_VIEW)
-        return EINVAL;
+        return NA_STATUS_WRONG_BINDING;
     if (entry.meta.scope != NA_SCOPE_FILE)
-        return EINVAL;
+        return NA_STATUS_WRONG_SCOPE;
     if (entry.object->get<fs::vfs::file>() == nullptr)
-        return EINVAL;
+        return NA_STATUS_WRONG_BINDING;
 
     handle_t<fs::vfs::file> file(entry.object.get_control());
     process->resource.close_native(values.executable);
-    return task::execve(std::move(file), path, before_user_thread, argv, envp);
+    return native_status_from_errno(task::execve(std::move(file), path, before_user_thread, argv, envp));
 }
 
-int64_t process_spawn(const na_process_spawn_frame_t *frame)
+na_status_t process_spawn(const na_process_spawn_frame_t *frame)
 {
     if (frame == nullptr || !is_user_space_range(frame, sizeof(u32)))
-        return EFAULT;
+        return NA_STATUS_FAULT;
 
     na_process_spawn_frame_t values{};
     const auto copy_status = naos::usercopy::copy_versioned(values, frame);
     if (copy_status != NA_STATUS_OK)
-        return copy_status == NA_STATUS_FAULT ? EFAULT : EINVAL;
-    if (values.struct_size < sizeof(values) || values.flags != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
+        return copy_status;
+    if (values.struct_size < sizeof(values) ||
+        (values.flags & ~NA_PROCESS_SPAWN_DEFERRED_START) != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
         values.executable == NA_HANDLE_INVALID || values.bootstrap_endpoint == NA_HANDLE_INVALID || values.process == 0)
-        return EINVAL;
+        return NA_STATUS_INVALID_ARGUMENT;
 
     const auto path = reinterpret_cast<const char *>(values.path);
     const auto argv = reinterpret_cast<char *const *>(values.argv);
@@ -480,10 +510,10 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     if (!is_user_space_pointer(path) || !is_user_space_pointer_or_null(argv) || !is_user_space_pointer_or_null(envp) ||
         !is_user_space_range(reinterpret_cast<void *>(values.process), sizeof(na_handle_t)) ||
         (values.pid != 0 && !is_user_space_range(reinterpret_cast<void *>(values.pid), sizeof(process_id))))
-        return EFAULT;
+        return NA_STATUS_FAULT;
     if (values.pid != 0 &&
         naos::usercopy::ranges_overlap(values.process, sizeof(na_handle_t), values.pid, sizeof(process_id)))
-        return EINVAL;
+        return NA_STATUS_INVALID_ARGUMENT;
 
     auto *parent = task::current_process();
     capability::entry executable_entry;
@@ -491,12 +521,14 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     if (parent == nullptr || !parent->resource.lookup_native(values.executable, executable_entry) ||
         !parent->resource.lookup_native(values.bootstrap_endpoint, endpoint_entry) || !executable_entry.object ||
         !endpoint_entry.object)
-        return EBADF;
-    if (executable_entry.meta.binding != NA_BINDING_KERNEL_VIEW || executable_entry.meta.scope != NA_SCOPE_FILE ||
+        return NA_STATUS_INVALID_HANDLE;
+    if (executable_entry.meta.binding != NA_BINDING_KERNEL_VIEW ||
         executable_entry.object->get<fs::vfs::file>() == nullptr)
-        return EINVAL;
+        return NA_STATUS_WRONG_BINDING;
+    if (executable_entry.meta.scope != NA_SCOPE_FILE)
+        return NA_STATUS_WRONG_SCOPE;
     if (endpoint_entry.meta.binding != NA_BINDING_RAW_CHANNEL_END)
-        return EINVAL;
+        return NA_STATUS_WRONG_BINDING;
 
     na_resource_disposition_t dispositions[2]{};
     dispositions[0].handle = values.executable;
@@ -506,14 +538,15 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     capability::transfer_record_list records(memory::KernelCommonAllocatorV);
     auto status = parent->resource.take_native_batch(dispositions, 2, NA_HANDLE_INVALID, records);
     if (status != NA_STATUS_OK)
-        return EINVAL;
+        return status;
+    auto restore = [&](na_status_t failure) {
+        const auto restore_status = parent->resource.restore_native_batch(records);
+        return restore_status == NA_STATUS_OK ? failure : restore_status;
+    };
 
     auto *file_object = records[0].resource.object()->get<fs::vfs::file>();
     if (file_object == nullptr)
-    {
-        parent->resource.restore_native_batch(records);
-        return EINVAL;
-    }
+        return restore(NA_STATUS_WRONG_BINDING);
     handle_t<fs::vfs::file> file(records[0].resource.object().get_control());
     const auto child_flags = task::create_process_flags::deferred_start | task::create_process_flags::no_shared_root |
                              task::create_process_flags::no_shared_work_dir |
@@ -524,10 +557,7 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
         task::create_process(std::move(file), path, before_user_thread, reinterpret_cast<const char *const *>(argv),
                              reinterpret_cast<const char *const *>(envp), child_flags);
     if (child == nullptr)
-    {
-        parent->resource.restore_native_batch(records);
-        return EFAILED;
-    }
+        return restore(NA_STATUS_RESOURCE_EXHAUSTED);
     child->bootstrap_root_directory.reset();
     child->bootstrap_current_directory.reset();
     child->console_in_handle = NA_HANDLE_INVALID;
@@ -540,8 +570,7 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     if (process_handle == NA_HANDLE_INVALID)
     {
         task::abort_unstarted_process(child);
-        parent->resource.restore_native_batch(records);
-        return EFAILED;
+        return restore(NA_STATUS_RESOURCE_EXHAUSTED);
     }
 
     status = naos::usercopy::copy_to(values.process, &process_handle, sizeof(process_handle));
@@ -554,8 +583,7 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
     {
         parent->resource.close_native(process_handle);
         task::abort_unstarted_process(child);
-        parent->resource.restore_native_batch(records);
-        return status == NA_STATUS_FAULT ? EFAULT : EFAILED;
+        return restore(status);
     }
 
     freelibcxx::vector<na_handle_t> child_handles(memory::KernelCommonAllocatorV);
@@ -567,26 +595,27 @@ int64_t process_spawn(const na_process_spawn_frame_t *frame)
         child->resource.rollback_native(child_handles);
         parent->resource.close_native(process_handle);
         task::abort_unstarted_process(child);
-        parent->resource.restore_native_batch(records);
-        return EFAILED;
+        return restore(status);
     }
 
     child->bootstrap_channel_handle = child_handles[0];
     auto dropped_executable = records[0].resource.take_object();
     dropped_executable.reset();
-    task::start_process(child);
-    return 0;
+    parent->resource.commit_native_batch(records);
+    if ((values.flags & NA_PROCESS_SPAWN_DEFERRED_START) == 0)
+        task::start_process(child);
+    return NA_STATUS_OK;
 }
 int yield() { return 0; }
 
-int64_t pipe_create(na_pipe_create_frame_t *frame)
+na_status_t pipe_create(na_pipe_create_frame_t *frame)
 {
     if (frame == nullptr || !is_user_space_range(frame, sizeof(*frame)))
-        return EFAULT;
+        return NA_STATUS_FAULT;
 
     auto file = fs::vfs::open_pipe();
     if (!file)
-        return EIO;
+        return NA_STATUS_IO_ERROR;
 
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
@@ -605,7 +634,7 @@ int64_t pipe_create(na_pipe_create_frame_t *frame)
     {
         resources.close_native(read_handle);
         resources.close_native(write_handle);
-        return EIO;
+        return NA_STATUS_RESOURCE_EXHAUSTED;
     }
 
     na_pipe_create_frame_t values{read_handle, write_handle};
@@ -614,9 +643,9 @@ int64_t pipe_create(na_pipe_create_frame_t *frame)
     {
         resources.close_native(read_handle);
         resources.close_native(write_handle);
-        return EFAULT;
+        return status;
     }
-    return 0;
+    return NA_STATUS_OK;
 }
 
 BEGIN_SYSCALL

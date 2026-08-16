@@ -28,6 +28,7 @@ MemoryAllocator *MemoryAllocatorV;
 zones *KernelBuddyAllocatorV;
 
 lock::spinlock_t buddy_lock;
+lock::spinlock_t kernel_vmalloc_paging_lock;
 
 phy_addr_t PhyBootAllocator::base_ptr;
 phy_addr_t PhyBootAllocator::current_ptr;
@@ -342,8 +343,13 @@ void kfree(void *addr)
 void *vmalloc(u64 size, u64 align)
 {
     auto vm = kernel_vm_info->vma().allocate_map(size, align, vm::page_fault_method::none, 0);
-    kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
-                                 arch::paging::flags::writable, 0);
+    if (vm == nullptr)
+        trace::panic("vmalloc exhausted");
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
+        kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
+                                     arch::paging::flags::writable, 0);
+    }
 
     arch::paging::page_table_t::reload();
     return (void *)vm->start;
@@ -357,7 +363,10 @@ void vfree(void *addr)
         auto start = vm->start;
         auto end = vm->end;
         kernel_vm_info->vma().deallocate_map(vm);
-        kernel_vm_info->paging().unmap(reinterpret_cast<void *>(start), (end - start) / page_size);
+        {
+            uctx::RawSpinLockUninterruptibleContext icu(kernel_vmalloc_paging_lock);
+            kernel_vm_info->paging().unmap(reinterpret_cast<void *>(start), (end - start) / page_size);
+        }
     }
 }
 

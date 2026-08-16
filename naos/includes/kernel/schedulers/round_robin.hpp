@@ -13,13 +13,9 @@ class round_robin_scheduler : public scheduler
 
     void update_state(thread_t *thread, thread_state state) override;
 
-    void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) override;
-
     bool schedule() override;
 
     void schedule_tick() override;
-
-    u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) override;
 
     u64 scheduleable_task_count() override;
 

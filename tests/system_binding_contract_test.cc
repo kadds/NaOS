@@ -42,7 +42,7 @@ na_status_t channel_receive(void *, na_handle_t, na_channel_receive_frame_t *fra
 }
 } // namespace
 
-int main()
+int run_system_binding_contract_tests()
 {
     probe state{};
     state.info.struct_size = sizeof(state.info);

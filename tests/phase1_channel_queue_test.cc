@@ -1,6 +1,7 @@
 #include "kernel/ipc/bounded_queue.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/abi.h"
+#include "naos/libnao.hpp"
 
 #include <array>
 #include <cassert>
@@ -9,6 +10,40 @@
 
 namespace
 {
+void record_task(void *context)
+{
+    auto *value = static_cast<int *>(context);
+    *value = *value * 10 + 1;
+}
+
+void test_libnao_queues()
+{
+    nao::task_queue<2> tasks;
+    int first = 0;
+    int second = 0;
+    assert(tasks.push(record_task, &first));
+    assert(tasks.push(record_task, &second));
+    assert(!tasks.push(record_task, &first));
+    assert(tasks.run_one());
+    assert(tasks.run_one());
+    assert(!tasks.run_one());
+    assert(first == 1);
+    assert(second == 1);
+
+    nao::timer_queue<2> timers;
+    assert(timers.arm(7, 300));
+    assert(timers.arm(11, 100));
+    assert(!timers.arm(13, 500));
+    std::uint64_t deadline = 0;
+    assert(timers.next_deadline(deadline));
+    assert(deadline == 100);
+    std::uint64_t expired = 0;
+    assert(timers.pop_expired(150, expired));
+    assert(expired == 11);
+    assert(timers.cancel(7));
+    assert(!timers.next_deadline(deadline));
+}
+
 void test_fifo_and_capacity()
 {
     std::array<int, 2> storage{};
@@ -81,8 +116,9 @@ void test_zero_length_ranges_require_null()
 }
 } // namespace
 
-int main()
+int run_phase1_channel_queue_tests()
 {
+    test_libnao_queues();
     test_fifo_and_capacity();
     test_public_layout();
     test_remove_unclaimed_entry();

@@ -142,8 +142,6 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
 
 i64 calc_span(thread_t *thread) { return ((u64)thread->static_priority + 1000) / 100; }
 
-void round_robin_scheduler::update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) {}
-
 void round_robin_scheduler::on_migrate(thread_t *thread)
 {
     auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
@@ -154,8 +152,6 @@ void round_robin_scheduler::on_migrate(thread_t *thread)
     thread->schedule_data = rr;
 
     uctx::UninterruptibleContext icu;
-    l->runable_list.push_back(thread);
-
     if (thread->state == thread_state::ready)
         l->runable_list.push_back(thread);
     else if (thread->state == thread_state::stop)
@@ -266,8 +262,6 @@ void round_robin_scheduler::commit_migrate(thread_t *thd)
 
     l->runable_list.remove(it);
 }
-
-u64 round_robin_scheduler::sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) { return 0; }
 
 void round_robin_scheduler::init_cpu()
 {

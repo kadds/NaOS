@@ -20,7 +20,7 @@ template <typename T> na_status_t copy_in(const T *source, T &destination)
 }
 } // namespace
 
-u64 memory_map(na_memory_map_frame_t *frame)
+na_status_t memory_map(na_memory_map_frame_t *frame)
 {
     na_memory_map_frame_t values{};
     auto status = copy_in(frame, values);
@@ -33,9 +33,6 @@ u64 memory_map(na_memory_map_frame_t *frame)
         (values.hint != 0 && (!is_user_space_pointer(values.hint) || (values.hint & (memory::page_size - 1)) != 0)) ||
         values.length > NA_MEMORY_MAP_MAX_BYTES)
         return NA_STATUS_INVALID_ARGUMENT;
-    if ((values.flags & NA_MEMORY_MAP_SHARED) != 0)
-        return NA_STATUS_NOT_SUPPORTED;
-
     fs::vfs::file *file = nullptr;
     naos::data_plane::memory_object *memory_object = nullptr;
     khandle backing;
@@ -65,6 +62,20 @@ u64 memory_map(na_memory_map_frame_t *frame)
             file = entry.object->get<fs::vfs::file>();
             if (file == nullptr)
                 return NA_STATUS_WRONG_BINDING;
+            const auto open_mode = file->get_mode();
+            if ((values.flags & NA_MEMORY_MAP_READ) != 0 && (open_mode & fs::mode::read) == 0)
+                return NA_STATUS_ACCESS_DENIED;
+            // A shared writable mapping is a write capability on the open
+            // description.  MAP_PRIVATE writes are allowed to remain
+            // process-local, but MAP_SHARED must never turn a read-only fd
+            // into a writable file mapping.
+            if ((values.flags & NA_MEMORY_MAP_SHARED) != 0 && (values.flags & NA_MEMORY_MAP_WRITE) != 0 &&
+                (open_mode & fs::mode::write) == 0)
+                return NA_STATUS_ACCESS_DENIED;
+            auto *pseudo = file->get_pseudo();
+            if (pseudo != nullptr && !pseudo->allow_mapping((values.flags & NA_MEMORY_MAP_WRITE) != 0,
+                                                            (values.flags & NA_MEMORY_MAP_SHARED) != 0))
+                return NA_STATUS_ACCESS_DENIED;
         }
     }
     flag_t vm_flags = 0;
@@ -74,6 +85,8 @@ u64 memory_map(na_memory_map_frame_t *frame)
         vm_flags |= memory::vm::flags::writeable;
     if ((values.flags & NA_MEMORY_MAP_EXEC) != 0)
         vm_flags |= memory::vm::flags::executeable;
+    if ((values.flags & NA_MEMORY_MAP_SHARED) != 0)
+        vm_flags |= memory::vm::flags::shared;
     auto *vm_info = reinterpret_cast<memory::vm::info_t *>(task::current_process()->mm_info);
     const auto *vm = memory_object != nullptr
                          ? vm_info->map_memory_object(values.hint, std::move(backing), memory_object, values.offset,
@@ -91,7 +104,7 @@ u64 memory_map(na_memory_map_frame_t *frame)
     return NA_STATUS_OK;
 }
 
-u64 memory_unmap(na_memory_unmap_frame_t *frame)
+na_status_t memory_unmap(na_memory_unmap_frame_t *frame)
 {
     na_memory_unmap_frame_t values{};
     auto status = copy_in(frame, values);

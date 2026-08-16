@@ -1,0 +1,4 @@
+interface:
+  display_name: "PRD Implementation Audit"
+  short_description: "Review PRD coverage and implementation risks"
+  default_prompt: "Use $prd-implementation-audit to audit this PRD and its implementation with file-and-line evidence."

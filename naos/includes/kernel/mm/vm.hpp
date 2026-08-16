@@ -15,6 +15,7 @@
 namespace fs::vfs
 {
 class file;
+class pseudo_t;
 } // namespace fs::vfs
 
 namespace naos::data_plane
@@ -42,6 +43,7 @@ enum flags : u64
     file = 1ul << 16,
     big_page = 1ul << 17,
     huge_page = 1ul << 18,
+    shared = 1ul << 19,
 };
 }
 
@@ -143,6 +145,7 @@ class info_t
     void sync_map_file(u64 addr);
 
     void share_to(process_id from_id, process_id to_id, info_t *info);
+    void remove_fork_disallowed_mappings();
     bool copy_at(u64 vir);
 
     void load() { paging_.load(); }
@@ -159,6 +162,7 @@ class info_t
     bool expand_file(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_memory_object(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_physical(u64 alignment_page, u64 access_address, vm_t *item);
+    void restore_fork_disallowed_mappings();
 
   private:
     memory::vm::vm_allocator vma_;
@@ -176,6 +180,7 @@ struct map_t
     naos::data_plane::memory_object *memory_object;
     khandle backing;
     phy_addr_t physical_address;
+    fs::vfs::pseudo_t *pseudo;
     u64 file_offset;
     u64 file_length;
     u64 mmap_length;
@@ -185,6 +190,7 @@ struct map_t
         , memory_object(nullptr)
         , backing()
         , physical_address(nullptr)
+        , pseudo(nullptr)
         , file_offset(file_offset)
         , file_length(file_length)
         , mmap_length(mmap_length)
@@ -194,6 +200,7 @@ struct map_t
         , memory_object(object)
         , backing(std::move(backing))
         , physical_address(nullptr)
+        , pseudo(nullptr)
         , file_offset(object_offset)
         , file_length(length)
         , mmap_length(length)
@@ -203,6 +210,7 @@ struct map_t
         , memory_object(nullptr)
         , backing()
         , physical_address(physical_address)
+        , pseudo(nullptr)
         , file_offset(file_offset)
         , file_length(file_length)
         , mmap_length(mmap_length)
@@ -212,6 +220,7 @@ struct map_t
         , memory_object(rhs.memory_object)
         , backing(rhs.backing)
         , physical_address(rhs.physical_address)
+        , pseudo(rhs.pseudo)
         , file_offset(rhs.file_offset)
         , file_length(rhs.file_length)
         , mmap_length(rhs.mmap_length)

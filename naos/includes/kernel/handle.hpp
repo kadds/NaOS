@@ -156,6 +156,7 @@ template <typename T> class handle_t
     raw_handle_t as_raw();
 
     template <typename U> handle_t<U> as() { return handle_t<U>(this->control); }
+    template <typename U> handle_t<U> as() const { return handle_t<U>(this->control); }
 
     handle_control *get_control() const { return control; }
     void clear_control() { control = nullptr; }

@@ -241,75 +241,90 @@ template <typename CHILD, typename CHAR> class terminal
 
     void flush_dirty()
     {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
         bool update_placeholder = false;
-        if (enable_placeholder_)
+        rectangle dirty;
+        rectangle view;
+        fb::framebuffer_backend *backend = nullptr;
+        int placeholder_row = 0;
+        int placeholder_col = 0;
+        bool placeholder_show = false;
         {
-            auto current = timer::get_high_resolution_time();
-            const bool cursor_moved = !placeholder_valid_ || placeholder_row_ != row_ || placeholder_col_ != col_;
-            const bool blink = current - placeholder_time_ > placeholder_freq_us;
-            if (cursor_moved || blink || placeholder_reset_)
+            uctx::RawSpinLockUninterruptibleContext icu(lock_);
+            if (enable_placeholder_)
             {
-                placeholder_time_ = current;
-                if (placeholder_valid_)
+                auto current = timer::get_high_resolution_time();
+                const bool cursor_moved = !placeholder_valid_ || placeholder_row_ != row_ || placeholder_col_ != col_;
+                const bool blink = current - placeholder_time_ > placeholder_freq_us;
+                if (cursor_moved || blink || placeholder_reset_)
                 {
-                    dirty_ += rectangle(placeholder_col_, placeholder_col_ + 1, placeholder_row_, placeholder_row_ + 1);
+                    placeholder_time_ = current;
+                    if (placeholder_valid_)
+                    {
+                        dirty_ += rectangle(placeholder_col_, placeholder_col_ + 1, placeholder_row_, placeholder_row_ + 1);
+                    }
+                    dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
+                    if (placeholder_reset_)
+                    {
+                        placeholder_show_ = true;
+                        placeholder_reset_ = false;
+                    }
+                    else if (!cursor_moved)
+                    {
+                        placeholder_show_ = !placeholder_show_;
+                    }
+                    placeholder_row_ = row_;
+                    placeholder_col_ = col_;
+                    placeholder_valid_ = true;
+                    update_placeholder = true;
                 }
-                dirty_ += rectangle(col_, col_ + 1, row_, row_ + 1);
-                if (placeholder_reset_)
-                {
-                    placeholder_show_ = true;
-                    placeholder_reset_ = false;
-                }
-                else if (!cursor_moved)
-                {
-                    placeholder_show_ = !placeholder_show_;
-                }
-                placeholder_row_ = row_;
-                placeholder_col_ = col_;
-                placeholder_valid_ = true;
-                update_placeholder = true;
             }
+
+            if (dirty_.empty() || backend_ == nullptr)
+                return;
+
+            view = viewport();
+            dirty = dirty_;
+            if (dirty.top < view.top)
+                dirty.top = view.top;
+            if (dirty.bottom > view.bottom)
+                dirty.bottom = view.bottom;
+            if (dirty.left < view.left)
+                dirty.left = view.left;
+            if (dirty.right > view.right)
+                dirty.right = view.right;
+            backend = backend_;
+            placeholder_row = placeholder_row_;
+            placeholder_col = placeholder_col_;
+            placeholder_show = placeholder_show_;
+            dirty_ = rectangle();
         }
 
-        if (dirty_.empty() || backend_ == nullptr)
-        {
-            return;
-        }
-
-        auto view = viewport();
         auto child = static_cast<CHILD *>(this);
-        if (dirty_.top < view.top)
+        for (int row = dirty.top; row < dirty.bottom; row++)
         {
-            dirty_.top = view.top;
-        }
-        if (dirty_.bottom > view.bottom)
-        {
-            dirty_.bottom = view.bottom;
-        }
-        if (dirty_.left < view.left)
-        {
-            dirty_.left = view.left;
-        }
-        if (dirty_.right > view.right)
-        {
-            dirty_.right = view.right;
-        }
-
-        for (int row = dirty_.top; row < dirty_.bottom; row++)
-        {
-            for (int col = dirty_.left; col < dirty_.right; col++)
+            for (int col = dirty.left; col < dirty.right; col++)
             {
-                auto term_char = child->get_char(row, col);
-                backend_->commit(row - view.top, col - view.left, child->to_cell(term_char));
+                fb::cell_t cell;
+                {
+                    uctx::RawSpinLockUninterruptibleContext icu(lock_);
+                    if (backend_ != backend)
+                        return;
+                    cell = child->to_cell(child->get_char(row, col));
+                }
+                backend->commit(row - view.top, col - view.left, cell);
             }
         }
-        if (enable_placeholder_ && update_placeholder && placeholder_valid_ && row_ >= view.top && row_ < view.bottom &&
-            col_ >= view.left && col_ < view.right)
+        if (update_placeholder && placeholder_row >= view.top && placeholder_row < view.bottom &&
+            placeholder_col >= view.left && placeholder_col < view.right)
         {
-            backend_->commit_placeholder(row_ - view.top, col_ - view.left, placeholder_show_);
+            bool backend_attached = false;
+            {
+                uctx::RawSpinLockUninterruptibleContext icu(lock_);
+                backend_attached = backend_ == backend;
+            }
+            if (backend_attached)
+                backend->commit_placeholder(placeholder_row - view.top, placeholder_col - view.left, placeholder_show);
         }
-        dirty_ = rectangle();
     }
 
     void scroll(int lines)
@@ -903,6 +918,7 @@ class terminal_manager
 
     terminal_manager(int nums, const fb::framebuffer_backend &backend);
     bool switch_term(int index);
+    void framebuffer_writer_released();
     void flush_active_terminal();
     void push_string(int index, freelibcxx::const_string_view str);
     void commit_changes(int index);
@@ -917,6 +933,10 @@ class terminal_manager
     fb::framebuffer_backend backend_;
     mutable lock::spinlock_t manager_lock_;
     int cur_ = -1;
+    int pending_switch_ = -1;
+    timer::watcher_id framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
+
+    void force_framebuffer_handoff(timeclock::microsecond_t expiration) noexcept;
 };
 
 void early_init(kernel_start_args *args);
@@ -925,6 +945,9 @@ void reset_panic_term();
 void init();
 
 terminal_manager *get_terms();
+fb::framebuffer_backend *get_framebuffer_backend();
+void set_framebuffer_user_writer(bool active);
+bool framebuffer_user_enabled();
 
 void write_to(freelibcxx::const_string_view sv, int index);
 void write_to_klog(freelibcxx::const_string_view sv);

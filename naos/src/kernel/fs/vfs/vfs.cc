@@ -603,6 +603,12 @@ bool umount(const char *path, dentry *path_root, dentry *cur_dir)
 
 handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr)
 {
+    return open(filepath, root, cur_dir, mode, attr, task::access_context{});
+}
+
+handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t mode, flag_t attr,
+                    const task::access_context &context)
+{
     nameidata idata(&data->dir_entry_allocator);
     dentry *entry = path_walk(filepath, root, cur_dir, attr, idata);
     while (entry == nullptr)
@@ -632,7 +638,7 @@ handle_t<file> open(const char *filepath, dentry *root, dentry *cur_dir, flag_t 
     }
 
     auto f = entry->get_inode()->get_super_block()->alloc_file();
-    if (f->open(entry, mode) != 0)
+    if (f->open(entry, mode, context) != 0)
         return {};
     return f;
 }

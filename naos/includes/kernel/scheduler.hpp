@@ -41,8 +41,6 @@ class scheduler
     ///
     virtual void update_state(thread_t *thread, thread_state state) = 0;
 
-    virtual void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority) = 0;
-
     ///
     /// \brief call when the task is migrating to other cpu
     ///
@@ -85,11 +83,6 @@ class scheduler
     virtual void init_cpu() = 0;
     virtual void destroy_cpu() = 0;
 
-    ///
-    /// \brief control scheduler
-    ///
-    virtual u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size) = 0;
-
     scheduler() = default;
     scheduler(const scheduler &) = delete;
     scheduler &operator=(const scheduler &) = delete;
@@ -104,11 +97,9 @@ typedef void (*remove_func)(u64 data);
 void add(thread_t *thread, scheduler_class scher);
 void remove(thread_t *thread, remove_func, u64 user_data);
 void update_state(thread_t *thread, thread_state state);
-void update_prop(thread_t *thread, u8 static_priority, u8 dyn_priority);
+void update_state_sync(thread_t *thread, thread_state state);
 bool reschedule_task_push(thread_t *task, u32 cpuid);
 bool reschedule_task_pull(thread_t *task);
-
-u64 sctl(int operator_type, thread_t *target, u64 attr, u64 *value, u64 size);
 
 ExportC void schedule();
 

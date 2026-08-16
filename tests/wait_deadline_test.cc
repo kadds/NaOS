@@ -35,7 +35,7 @@ void test_rejects_microsecond_overflow()
 }
 } // namespace
 
-int main()
+int run_wait_deadline_tests()
 {
     test_converts_valid_timespec();
     test_truncates_sub_microsecond_precision();

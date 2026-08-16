@@ -289,6 +289,8 @@ void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
         {
             map_t *mt = (map_t *)item.user_data;
             new_item.user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, *mt, info);
+            if (mt->pseudo != nullptr)
+                mt->pseudo->on_mapping_created(item.flags);
         }
         else
         {
@@ -341,7 +343,12 @@ info_t::~info_t()
         // trace::info("umap ", trace::hex(it->start), "-", trace::hex(it->end));
         paging_.unmap(reinterpret_cast<void *>(it->start), (it->end - it->start) / page_size);
         if (it->flags & flags::file)
+        {
+            auto *map_data = reinterpret_cast<map_t *>(it->user_data);
+            if (map_data->pseudo != nullptr)
+                map_data->pseudo->on_mapping_released(it->flags);
             memory::Delete<>(memory::KernelCommonAllocatorV, reinterpret_cast<map_t *>(it->user_data));
+        }
     }
 }
 
@@ -609,6 +616,13 @@ const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_offset, u6
         {
             user_data = (u64)memory::KernelCommonAllocatorV->New<map_t>(physical_address, file_offset, file_length,
                                                                         mmap_length, this);
+            if (user_data != 0)
+            {
+                auto *mapping = reinterpret_cast<map_t *>(user_data);
+                mapping->pseudo = pseudo;
+                if (pseudo != nullptr)
+                    pseudo->on_mapping_created(cflags);
+            }
         }
         else
         {
@@ -632,6 +646,9 @@ const vm_t *info_t::map_file(u64 start, fs::vfs::file *file, u64 file_offset, u6
     {
         if (file)
         {
+            auto *mapping = reinterpret_cast<map_t *>(user_data);
+            if (mapping->pseudo != nullptr)
+                mapping->pseudo->on_mapping_released(cflags);
             memory::KernelCommonAllocatorV->Delete(reinterpret_cast<map_t *>(user_data));
         }
     }
@@ -683,6 +700,7 @@ bool info_t::umap_file(u64 addr, u64 size)
     const u64 vm_start = vm->start;
     const u64 vm_pages = (vm->end - vm->start) / page_size;
     const bool file_backed = (vm->flags & flags::file) != 0;
+    const flag_t vm_flags = vm->flags;
     auto *map_data = reinterpret_cast<map_t *>(vm->user_data);
 
     {
@@ -692,7 +710,11 @@ bool info_t::umap_file(u64 addr, u64 size)
 
     vma_.deallocate_map(vm);
     if (file_backed)
+    {
+        if (map_data->pseudo != nullptr)
+            map_data->pseudo->on_mapping_released(vm_flags);
         memory::Delete<>(memory::KernelCommonAllocatorV, map_data);
+    }
 
     arch::paging::page_table_t::reload();
     return true;
@@ -700,10 +722,84 @@ bool info_t::umap_file(u64 addr, u64 size)
 
 void info_t::share_to(process_id from_id, process_id to_id, info_t *info)
 {
+    (void)from_id;
+    (void)to_id;
     vma_.clone(info, info->vma_, flags::cow);
     {
         uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
         paging_.clone_readonly_to((void *)0, memory::user_mmap_top_address / memory::page_size, &info->paging_);
+        restore_fork_disallowed_mappings();
+        arch::paging::page_table_t::reload();
+    }
+    info->remove_fork_disallowed_mappings();
+}
+
+void info_t::restore_fork_disallowed_mappings()
+{
+    struct physical_mapping
+    {
+        u64 start;
+        u64 pages;
+        u64 flags;
+        phy_addr_t physical_address;
+
+        physical_mapping(u64 start, u64 pages, u64 flags, phy_addr_t physical_address)
+            : start(start)
+            , pages(pages)
+            , flags(flags)
+            , physical_address(physical_address)
+        {
+        }
+    };
+
+    freelibcxx::vector<physical_mapping> mappings(memory::KernelCommonAllocatorV);
+    {
+        uctx::RawReadLockUninterruptibleContext guard(vma_.get_lock());
+        for (auto &item : vma_.get_list())
+        {
+            if ((item.flags & flags::file) == 0 || item.method != page_fault_method::physical)
+                continue;
+
+            auto *mapping = reinterpret_cast<map_t *>(item.user_data);
+            if (mapping == nullptr || mapping->pseudo == nullptr || mapping->pseudo->allow_fork_mapping(true))
+                continue;
+
+            mappings.push_back(item.start, (item.end - item.start) / page_size, item.flags, mapping->physical_address);
+        }
+    }
+
+    for (const auto &mapping : mappings)
+    {
+        paging_.map_to(reinterpret_cast<void *>(mapping.start), mapping.pages, mapping.physical_address,
+                       to_paging_flags(mapping.flags),
+                       arch::paging::action_flags::override | arch::paging::action_flags::cow);
+    }
+}
+
+void info_t::remove_fork_disallowed_mappings()
+{
+    for (;;)
+    {
+        u64 start = 0;
+        u64 length = 0;
+        {
+            uctx::RawReadLockUninterruptibleContext guard(vma_.get_lock());
+            for (auto &item : vma_.get_list())
+            {
+                if ((item.flags & flags::file) == 0 || (item.flags & flags::writeable) == 0 ||
+                    item.method != page_fault_method::physical)
+                    continue;
+                auto *mapping = reinterpret_cast<map_t *>(item.user_data);
+                if (mapping != nullptr && mapping->pseudo != nullptr && !mapping->pseudo->allow_fork_mapping(true))
+                {
+                    start = item.start;
+                    length = item.end - item.start;
+                    break;
+                }
+            }
+        }
+        if (length == 0 || !umap_file(start, length))
+            return;
     }
 }
 
@@ -721,8 +817,20 @@ bool info_t::copy_at(u64 virt_addr)
         if (vm->flags & vm::flags::cow)
         {
             uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
-            // trace::info("cow at ", trace::hex(alignment_page), " at ", task::current_process()->pid);
             u64 page_flags = to_paging_flags(vm->flags);
+            if (vm->method == page_fault_method::physical)
+            {
+                auto *mapping = reinterpret_cast<map_t *>(vm->user_data);
+                if (mapping == nullptr || mapping->physical_address == nullptr)
+                    return false;
+
+                const auto offset = static_cast<ptrdiff_t>(alignment_page - vm->start);
+                paging_.map_to(reinterpret_cast<void *>(alignment_page), 1, mapping->physical_address + offset,
+                               page_flags, arch::paging::action_flags::override | arch::paging::action_flags::cow);
+                return true;
+            }
+
+            // trace::info("cow at ", trace::hex(alignment_page), " at ", task::current_process()->pid);
             paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags,
                         arch::paging::action_flags::override | arch::paging::action_flags::cow);
             return true;

@@ -18,11 +18,11 @@ constexpr int clock_monotonic = 1;
 
 void log(const char *message)
 {
-#ifdef _DEBUG
     if (message == nullptr)
         return;
 
     char buffer[128];
+    bool ends_with_newline = false;
     for (u64 index = 0; index < 4096; index++)
     {
         char value = 0;
@@ -38,14 +38,15 @@ void log(const char *message)
             trace::print(buffer);
             break;
         }
+        ends_with_newline = value == '\n';
         if (index % (sizeof(buffer) - 1) == sizeof(buffer) - 2)
         {
             buffer[sizeof(buffer) - 1] = '\0';
             trace::print(buffer);
         }
     }
-    trace::print("\n");
-#endif
+    if (!ends_with_newline)
+        trace::print("\n");
 }
 
 int clock_get(int clock_index, timeclock::time *time)

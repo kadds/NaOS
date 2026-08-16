@@ -17,6 +17,20 @@ namespace cpu
 {
 typedef void (*call_cpu_func_t)(u64 user_data);
 typedef void (*task_func)(u64);
+
+struct call_cpu_operation_t
+{
+    call_cpu_func_t func = nullptr;
+    u64 data = 0;
+};
+
+enum class call_cpu_enqueue_result : u8
+{
+    full,
+    queued,
+    queued_needs_ipi,
+};
+
 struct next_schedule_microtask_data_t
 {
     task_func func;
@@ -40,6 +54,8 @@ struct load_data_t
 /// per cpu data
 class cpu_data_t
 {
+    static constexpr u32 call_cpu_queue_capacity = 64;
+
     task::thread_t *current_task = nullptr;
     task::thread_t *idle_task = nullptr;
     u32 smp_id;
@@ -52,9 +68,11 @@ class cpu_data_t
     timeclock::clock_event *clock_ev = nullptr;
     void *clock_queue = nullptr;
 
-    call_cpu_func_t cpu_func;
-    u64 call_data;
-    lock::spinlock_t call_lock;
+    call_cpu_operation_t call_cpu_queue[call_cpu_queue_capacity]{};
+    u32 call_cpu_queue_head = 0;
+    u32 call_cpu_queue_tail = 0;
+    u32 call_cpu_queue_size = 0;
+    lock::spinlock_t call_cpu_queue_lock;
 
     task::wait_queue_t *soft_irq_wait_queue;
 
@@ -102,15 +120,8 @@ class cpu_data_t
 
     void set_clock_queue(void *q) { clock_queue = q; }
 
-    void set_call_cpu_func(call_cpu_func_t func, u64 user_data)
-    {
-        this->cpu_func = func;
-        this->call_data = user_data;
-    }
-
-    void call_cpu() { cpu_func(call_data); }
-
-    lock::spinlock_t &cpu_call_lock() { return call_lock; }
+    call_cpu_enqueue_result enqueue_call_cpu(const call_cpu_operation_t &operation);
+    bool try_dequeue_call_cpu(call_cpu_operation_t &operation);
 
     task::wait_queue_t *get_soft_irq_wait_queue() { return soft_irq_wait_queue; }
 

@@ -1,33 +1,37 @@
 #include "kernel/ipc/invocation.hpp"
 #include "kernel/ipc/channel.hpp"
 
+#include "freelibcxx/linked_list.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/dev/tty/pty.hpp"
-#include "kernel/dev/tty/pty_manager.hpp"
-#include "kernel/dev/tty/tty.hpp"
 #include "kernel/errno.hpp"
 #include "kernel/fs/stat.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/inode.hpp"
 #include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/input_event_source.hpp"
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/service_directory.hpp"
 #include "kernel/task.hpp"
+#include "kernel/terminal_views.hpp"
 #include "kernel/timer.hpp"
+#include "kernel/trace.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/canonical.hpp"
 #include "naos/generated/system/Directory.hpp"
 #include "naos/generated/system/File.hpp"
+#include "naos/generated/system/InputEventSource.hpp"
 #include "naos/generated/system/MemoryObject.hpp"
 #include "naos/generated/system/Process.hpp"
-#include "naos/generated/system/SharedRing.hpp"
 #include "naos/generated/system/ServiceDirectory.hpp"
+#include "naos/generated/system/SharedRing.hpp"
 #include "naos/generated/system/Stream.hpp"
-#include "naos/generated/system/TtyControl.hpp"
+#include "naos/generated/system/TerminalDriverControl.hpp"
+#include "naos/generated/system/TerminalDriverFactory.hpp"
+#include "naos/generated/system/TerminalJobControl.hpp"
 #include "naos/generated/system_uapi.h"
 #include <limits>
 
@@ -59,6 +63,67 @@ struct deadline_watch
 std::atomic_uint64_t global_protocol_messages{0};
 std::atomic_uint64_t global_protocol_bytes{0};
 std::atomic_uint64_t global_protocol_resources{0};
+
+struct kernel_dispatch_request
+{
+    handle_t<invocation_state> state;
+    capability::entry target;
+    handle_t<task::process_object> caller;
+    u64 method_id;
+    freelibcxx::vector<byte> bytes;
+    capability::transfer_record_list resources;
+
+    kernel_dispatch_request(handle_t<invocation_state> state, capability::entry target,
+                            handle_t<task::process_object> caller, u64 method_id)
+        : state(std::move(state))
+        , target(std::move(target))
+        , caller(std::move(caller))
+        , method_id(method_id)
+        , bytes(memory::MemoryAllocatorV)
+        , resources(memory::KernelCommonAllocatorV)
+    {
+    }
+
+    kernel_dispatch_request(const kernel_dispatch_request &) = delete;
+    kernel_dispatch_request &operator=(const kernel_dispatch_request &) = delete;
+};
+
+struct kernel_dispatch_queue
+{
+    lock::spinlock_t lock;
+    task::wait_queue_t wait;
+    freelibcxx::linked_list<kernel_dispatch_request *> requests;
+    std::atomic_uint64_t pending{0};
+
+    kernel_dispatch_queue()
+        : requests(memory::KernelCommonAllocatorV)
+    {
+    }
+
+    void enqueue(kernel_dispatch_request *request)
+    {
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(lock);
+            requests.push_back(request);
+            pending.fetch_add(1, std::memory_order_release);
+        }
+        wait.do_wake_up(1);
+    }
+
+    kernel_dispatch_request *pop()
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock);
+        if (requests.empty())
+            return nullptr;
+        auto *request = requests.pop_front();
+        pending.fetch_sub(1, std::memory_order_release);
+        return request;
+    }
+};
+
+kernel_dispatch_queue *kernel_dispatcher = nullptr;
+
+void kernel_dispatch_worker(task::thread_start_info_t *info);
 
 bool reserve_protocol_global(u64 bytes, u64 resources)
 {
@@ -117,7 +182,7 @@ bool checked_multiply(u64 left, u64 right, u64 &result)
 bool valid_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason)
 {
     if ((outcome != NA_EXECUTION_NOT_DELIVERED && outcome != NA_EXECUTION_OUTCOME_UNKNOWN) ||
-        reason <= NA_OUTCOME_REASON_NONE || reason > NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+        reason <= NA_OUTCOME_REASON_NONE || reason > NA_OUTCOME_REASON_UNSUPPORTED)
         return false;
 
     if (outcome == NA_EXECUTION_NOT_DELIVERED)
@@ -125,25 +190,13 @@ bool valid_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason)
         return reason == NA_OUTCOME_REASON_PEER_CLOSED || reason == NA_OUTCOME_REASON_OBJECT_REVOKED ||
                reason == NA_OUTCOME_REASON_OPERATION_DEADLINE || reason == NA_OUTCOME_REASON_CANCEL_REQUESTED ||
                reason == NA_OUTCOME_REASON_REQUEST_DISCARDED || reason == NA_OUTCOME_REASON_RESPONDER_ABANDONED ||
-               reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION;
+               reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION || reason == NA_OUTCOME_REASON_UNSUPPORTED;
     }
 
     return reason == NA_OUTCOME_REASON_PEER_CLOSED || reason == NA_OUTCOME_REASON_OBJECT_REVOKED ||
            reason == NA_OUTCOME_REASON_OPERATION_DEADLINE || reason == NA_OUTCOME_REASON_CANCEL_REQUESTED ||
            reason == NA_OUTCOME_REASON_RESPONDER_ABANDONED || reason == NA_OUTCOME_REASON_BROKER_FAILURE ||
-           reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION;
-}
-
-bool has_prefix(const char *value, const char *prefix)
-{
-    if (value == nullptr || prefix == nullptr)
-        return false;
-    while (*prefix != 0)
-    {
-        if (*value++ != *prefix++)
-            return false;
-    }
-    return true;
+           reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION || reason == NA_OUTCOME_REASON_UNSUPPORTED;
 }
 
 u64 calculate_deadline(u64 budget)
@@ -219,62 +272,6 @@ void append_u32(freelibcxx::vector<byte> &destination, u32 value)
         destination.push_back(value_byte);
 }
 
-void append_canonical_termios(freelibcxx::vector<byte> &destination, const dev::tty::termios_t &value)
-{
-    naos::system::TtyControl::get_attributes_response response{};
-    response.attributes.input_flags = value.c_iflag;
-    response.attributes.output_flags = value.c_oflag;
-    response.attributes.control_flags = value.c_cflag;
-    response.attributes.local_flags = value.c_lflag;
-    response.attributes.line = value.c_line;
-    for (u64 i = 0; i < sizeof(value.c_cc); i++)
-        response.attributes.control_chars[i] = value.c_cc[i];
-    response.attributes.input_baud = value.ibaud;
-    response.attributes.output_baud = value.obaud;
-    encode_message(destination, response, naos::system::TtyControl::encode_get_attributes_response);
-}
-
-bool decode_canonical_termios(const freelibcxx::vector<byte> &source, dev::tty::termios_t &value)
-{
-    naos::system::TtyControl::set_attributes_request request{};
-    if (!decode_message(source, request, naos::system::TtyControl::decode_set_attributes_request) ||
-        request.attributes.padding0 != 0 || request.attributes.padding1 != 0 || request.attributes.padding2 != 0)
-        return false;
-    value = {};
-    value.c_iflag = request.attributes.input_flags;
-    value.c_oflag = request.attributes.output_flags;
-    value.c_cflag = request.attributes.control_flags;
-    value.c_lflag = request.attributes.local_flags;
-    value.c_line = request.attributes.line;
-    for (u64 i = 0; i < sizeof(value.c_cc); i++)
-        value.c_cc[i] = request.attributes.control_chars[i];
-    value.ibaud = request.attributes.input_baud;
-    value.obaud = request.attributes.output_baud;
-    return true;
-}
-
-void append_canonical_winsize(freelibcxx::vector<byte> &destination, const dev::tty::winsize_t &value)
-{
-    naos::system::TtyControl::get_winsize_response response{};
-    response.size.rows = value.ws_row;
-    response.size.columns = value.ws_col;
-    response.size.x_pixels = value.ws_xpixel;
-    response.size.y_pixels = value.ws_ypixel;
-    encode_message(destination, response, naos::system::TtyControl::encode_get_winsize_response);
-}
-
-bool decode_canonical_winsize(const freelibcxx::vector<byte> &source, dev::tty::winsize_t &value)
-{
-    naos::system::TtyControl::set_winsize_request request{};
-    if (!decode_message(source, request, naos::system::TtyControl::decode_set_winsize_request))
-        return false;
-    value.ws_row = request.size.rows;
-    value.ws_col = request.size.columns;
-    value.ws_xpixel = request.size.x_pixels;
-    value.ws_ypixel = request.size.y_pixels;
-    return true;
-}
-
 void append_canonical_stat(freelibcxx::vector<byte> &destination, const naos_stat &value)
 {
     naos::system::File::stat_response response{};
@@ -302,13 +299,14 @@ void append_canonical_stat(freelibcxx::vector<byte> &destination, const naos_sta
 }
 
 capability::metadata kernel_view_metadata(u64 scope, const na_uuid_t &uuid, na_meta_rights_t rights,
-                                          u64 protocol_rights)
+                                          u64 protocol_rights, u64 revision = 1, u64 features = 0)
 {
     capability::metadata metadata;
     metadata.binding = NA_BINDING_KERNEL_VIEW;
     metadata.protocol_uuid = uuid;
     metadata.scope = scope;
-    metadata.revision = 1;
+    metadata.revision = revision;
+    metadata.features = features;
     metadata.meta_rights = rights;
     metadata.protocol_rights = protocol_rights | NA_PROTOCOL_RIGHT_INVOKE;
     return metadata;
@@ -362,6 +360,50 @@ na_status_t snapshot_request(const na_submit_frame_t &frame, freelibcxx::vector<
     return NA_STATUS_OK;
 }
 
+template <typename Layout> bool valid_iov_layout(const Layout &layout, u64 size)
+{
+    if (layout.segment_count > layout.lengths.size())
+        return false;
+    u64 total = 0;
+    for (u64 i = 0; i < layout.segment_count; i++)
+    {
+        if (layout.lengths[i] > max_kernel_payload || total > max_kernel_payload - layout.lengths[i])
+            return false;
+        total += layout.lengths[i];
+    }
+    return total == size && size <= max_kernel_payload;
+}
+
+class file_call_wait_registration
+{
+  public:
+    explicit file_call_wait_registration(invocation_state &state)
+        : state_(state)
+    {
+    }
+
+    ~file_call_wait_registration()
+    {
+        if (queue_ != nullptr)
+            state_.clear_execution_wait_queue(queue_);
+    }
+
+    bool interrupted() const { return state_.execution_interrupted(); }
+
+    void register_queue(task::wait_queue_t *queue)
+    {
+        if (queue_ != nullptr && queue_ != queue)
+            state_.clear_execution_wait_queue(queue_);
+        queue_ = queue;
+        if (queue_ != nullptr)
+            state_.set_execution_wait_queue(queue_);
+    }
+
+  private:
+    invocation_state &state_;
+    task::wait_queue_t *queue_ = nullptr;
+};
+
 na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 scope, u64 method_id,
                               const freelibcxx::vector<byte> &request)
 {
@@ -369,864 +411,1063 @@ na_status_t publish_file_call(invocation_state &state, fs::vfs::file &file, u64 
     freelibcxx::vector<byte> response(allocator);
     auto *pseudo = file.get_pseudo();
 
-    if (scope == NA_SCOPE_TTY_CONTROL && method_id >= NA_METHOD_TTY_GET_ATTRIBUTES &&
-        method_id <= NA_METHOD_TTY_GET_INPUT)
+    if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_READV) ||
+        (scope == NA_SCOPE_FILE && (method_id == NA_METHOD_FILE_PREADV || method_id == NA_METHOD_FILE_READV)))
     {
-        if (pseudo == nullptr)
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        if (method_id == NA_METHOD_TTY_GET_ATTRIBUTES)
-        {
-            naos::system::TtyControl::get_attributes_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_attributes_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            dev::tty::termios_t attributes{};
-            if (!pseudo->native_tty_get_attributes(attributes))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            append_canonical_termios(response, attributes);
-        }
-        else if (method_id == NA_METHOD_TTY_SET_ATTRIBUTES)
-        {
-            if (request.size() != sizeof(dev::tty::termios_t))
-                return NA_STATUS_INVALID_MESSAGE;
-            dev::tty::termios_t attributes{};
-            if (!decode_canonical_termios(request, attributes))
-                return NA_STATUS_INVALID_MESSAGE;
-            if (!pseudo->native_tty_set_attributes(attributes))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-        }
-        else if (method_id == NA_METHOD_TTY_GET_WINSIZE)
-        {
-            naos::system::TtyControl::get_winsize_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_winsize_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            dev::tty::winsize_t size{};
-            if (!pseudo->native_tty_get_winsize(size))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            append_canonical_winsize(response, size);
-        }
-        else if (method_id == NA_METHOD_TTY_SET_WINSIZE)
-        {
-            if (request.size() != sizeof(dev::tty::winsize_t))
-                return NA_STATUS_INVALID_MESSAGE;
-            dev::tty::winsize_t size{};
-            if (!decode_canonical_winsize(request, size))
-                return NA_STATUS_INVALID_MESSAGE;
-            if (!pseudo->native_tty_set_winsize(size))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-        }
-        else if (method_id == NA_METHOD_TTY_FLUSH)
-        {
-            naos::system::TtyControl::flush_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_flush_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            const auto result = pseudo->native_tty_flush(static_cast<i32>(decoded.queue));
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        }
-        else if (method_id == NA_METHOD_TTY_ATTACH)
-        {
-            naos::system::TtyControl::attach_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_attach_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            const auto result = pseudo->native_tty_attach(decoded.controlling != 0);
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        }
-        else if (method_id == NA_METHOD_TTY_GET_PGRP)
-        {
-            naos::system::TtyControl::get_pgrp_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_pgrp_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            u32 group = 0;
-            const auto result = pseudo->native_tty_get_pgrp(group);
-            if (result != 0)
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            u64 size = 0;
+            u64 flags = 0;
+            i64 offset = 0;
+            bool pread = false;
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::readv_request decoded{};
+                if (!decode_message(request, decoded, naos::system::Stream::decode_readv_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size))
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+            }
+            else if (method_id == NA_METHOD_FILE_PREADV)
+            {
+                naos::system::File::preadv_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_preadv_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size))
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                offset = decoded.offset;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                pread = true;
+            }
+            else
+            {
+                naos::system::File::readv_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_readv_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size))
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+            }
+            response.resize(size, byte{});
+            file_call_wait_registration wait_registration(state);
+            const i64 result =
+                pread
+                    ? file.pread(
+                          offset, response.data(), size, flags,
+                          [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); })
+                    : file.read(
+                          response.data(), size, flags,
+                          [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); });
+            if (result < 0)
                 return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
                                                                                       : NA_STATUS_PEER_CLOSED;
-            naos::system::TtyControl::get_pgrp_response encoded{};
-            encoded.group = group;
-            if (!encode_message(response, encoded, naos::system::TtyControl::encode_get_pgrp_response))
+            const naoidl::bounded_bytes data{reinterpret_cast<const u8 *>(response.data()), static_cast<u32>(result)};
+            auto encoded_response = freelibcxx::vector<byte>(allocator);
+            bool encoded = false;
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::readv_response value{data};
+                encoded = encode_message(encoded_response, value, naos::system::Stream::encode_readv_response);
+            }
+            else if (method_id == NA_METHOD_FILE_PREADV)
+            {
+                naos::system::File::preadv_response value{data};
+                encoded = encode_message(encoded_response, value, naos::system::File::encode_preadv_response);
+            }
+            else
+            {
+                naos::system::File::readv_response value{data};
+                encoded = encode_message(encoded_response, value, naos::system::File::encode_readv_response);
+            }
+            if (!encoded)
                 return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        else if (method_id == NA_METHOD_TTY_SET_PGRP)
-        {
-            naos::system::TtyControl::set_pgrp_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_set_pgrp_request) ||
-                decoded.group > 0xffffffffULL)
-                return NA_STATUS_INVALID_MESSAGE;
-            const auto result = pseudo->native_tty_set_pgrp(static_cast<u32>(decoded.group));
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        }
-        else if (method_id == NA_METHOD_TTY_GET_SID)
-        {
-            naos::system::TtyControl::get_sid_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_sid_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            u32 session = 0;
-            const auto result = pseudo->native_tty_get_sid(session);
-            if (result != 0)
-                return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            naos::system::TtyControl::get_sid_response encoded{};
-            encoded.session = session;
-            if (!encode_message(response, encoded, naos::system::TtyControl::encode_get_sid_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        else if (method_id == NA_METHOD_TTY_DETACH)
-        {
-            naos::system::TtyControl::detach_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_detach_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            const auto result = pseudo->native_tty_detach();
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        }
-        else
-        {
-            naos::system::TtyControl::get_input_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_input_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            u64 count = 0;
-            const auto result = pseudo->native_tty_get_input(count);
-            if (result != 0)
-                return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            naos::system::TtyControl::get_input_response encoded{};
-            encoded.count = count;
-            if (!encode_message(response, encoded, naos::system::TtyControl::encode_get_input_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-    }
-
-    if (scope == NA_SCOPE_TTY_CONTROL && (method_id == NA_METHOD_PTY_GET_NUMBER || method_id == NA_METHOD_PTY_UNLOCK))
-    {
-        if (pseudo == nullptr)
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        if (method_id == NA_METHOD_PTY_GET_NUMBER)
-        {
-            naos::system::TtyControl::get_number_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_get_number_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            u32 number = 0;
-            if (!pseudo->native_pty_get_number(number))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            naos::system::TtyControl::get_number_response encoded{};
-            encoded.number = number;
-            if (!encode_message(response, encoded, naos::system::TtyControl::encode_get_number_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        else
-        {
-            naos::system::TtyControl::unlock_request decoded{};
-            if (!decode_message(request, decoded, naos::system::TtyControl::decode_unlock_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            if (!pseudo->native_pty_set_locked(decoded.locked != 0))
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOTTY) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-        }
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+            return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK
+                                                                                        : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_READ) ||
-        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PREAD))
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PREAD) ||
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_READ))
     {
-        u64 size = 0;
-        u64 flags = 0;
-        i64 offset = 0;
-        if (scope == NA_SCOPE_STREAM)
-        {
-            naos::system::Stream::read_request decoded{};
-            if (!decode_message(request, decoded, naos::system::Stream::decode_read_request))
-                return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
-                           ? NA_STATUS_OK
-                           : NA_STATUS_INVALID_MESSAGE;
-            size = decoded.size;
-            flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
-        }
-        else
-        {
-            naos::system::File::pread_request decoded{};
-            if (!decode_message(request, decoded, naos::system::File::decode_pread_request))
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            u64 size = 0;
+            u64 flags = 0;
+            i64 offset = 0;
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::read_request decoded{};
+                if (!decode_message(request, decoded, naos::system::Stream::decode_read_request))
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+            }
+            else if (method_id == NA_METHOD_FILE_PREAD)
+            {
+                naos::system::File::pread_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_pread_request))
+                    return NA_STATUS_INVALID_MESSAGE;
+                offset = decoded.offset;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+            }
+            else
+            {
+                naos::system::File::read_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_read_request))
+                    return NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+            }
+            if (size > max_kernel_payload)
                 return NA_STATUS_INVALID_MESSAGE;
-            offset = decoded.offset;
-            size = decoded.size;
-            flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
-        }
-        if (size > max_kernel_payload)
-            return NA_STATUS_INVALID_MESSAGE;
-        response.resize(size, byte{});
-        const i64 result = scope == NA_SCOPE_STREAM ? file.read(response.data(), size, flags)
-                                                    : file.pread(offset, response.data(), size, flags);
-        if (result < 0)
-        {
-            response.clear();
-            append_u64(response, static_cast<u64>(-result));
-            return state.complete_reply(std::move(response), empty_resources(), result) ? NA_STATUS_OK
+            response.resize(size, byte{});
+            file_call_wait_registration wait_registration(state);
+            const i64 result =
+                scope == NA_SCOPE_STREAM || method_id == NA_METHOD_FILE_READ
+                    ? file.read(
+                          response.data(), size, flags,
+                          [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); })
+                    : file.pread(
+                          offset, response.data(), size, flags,
+                          [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); });
+            if (result < 0)
+            {
+                response.clear();
+                append_u64(response, static_cast<u64>(-result));
+                return state.complete_reply(std::move(response), empty_resources(), result) ? NA_STATUS_OK
+                                                                                            : NA_STATUS_PEER_CLOSED;
+            }
+            const naoidl::bounded_bytes data{reinterpret_cast<const u8 *>(response.data()), static_cast<u32>(result)};
+            auto encoded_response = freelibcxx::vector<byte>(allocator);
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::read_response encoded{data};
+                if (!encode_message(encoded_response, encoded, naos::system::Stream::encode_read_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else if (method_id == NA_METHOD_FILE_PREAD)
+            {
+                naos::system::File::pread_response encoded{data};
+                if (!encode_message(encoded_response, encoded, naos::system::File::encode_pread_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else
+            {
+                naos::system::File::read_response encoded{data};
+                if (!encode_message(encoded_response, encoded, naos::system::File::encode_read_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK
                                                                                         : NA_STATUS_PEER_CLOSED;
-        }
-        const naoidl::bounded_bytes data{reinterpret_cast<const u8 *>(response.data()), static_cast<u32>(result)};
-        auto encoded_response = freelibcxx::vector<byte>(allocator);
-        if (scope == NA_SCOPE_STREAM)
-        {
-            naos::system::Stream::read_response encoded{data};
-            if (!encode_message(encoded_response, encoded, naos::system::Stream::encode_read_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        else
-        {
-            naos::system::File::pread_response encoded{data};
-            if (!encode_message(encoded_response, encoded, naos::system::File::encode_pread_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK
-                                                                                    : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_WRITE) ||
-        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PWRITE))
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_PWRITE) ||
+        (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_WRITE))
     {
-        const byte *data = nullptr;
-        u64 size = 0;
-        i64 offset = 0;
-        u64 flags = 0;
-        if (scope == NA_SCOPE_STREAM)
-        {
-            naos::system::Stream::write_request decoded{};
-            if (!decode_message(request, decoded, naos::system::Stream::decode_write_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            size = decoded.size;
-            flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
-            data = reinterpret_cast<const byte *>(decoded.data.data);
-        }
-        else
-        {
-            naos::system::File::pwrite_request decoded{};
-            if (!decode_message(request, decoded, naos::system::File::decode_pwrite_request))
-                return NA_STATUS_INVALID_MESSAGE;
-            offset = decoded.offset;
-            size = decoded.size;
-            flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
-            data = reinterpret_cast<const byte *>(decoded.data.data);
-        }
-        const i64 result = scope == NA_SCOPE_STREAM ? file.write(data, size, flags)
-                                                    : file.pwrite(offset, data, size, flags);
-        if (scope == NA_SCOPE_STREAM)
-        {
-            naos::system::Stream::write_response encoded{};
-            encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
-            if (!encode_message(response, encoded, naos::system::Stream::encode_write_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        else
-        {
-            naos::system::File::pwrite_response encoded{};
-            encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
-            if (!encode_message(response, encoded, naos::system::File::encode_pwrite_response))
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        return state.complete_reply(std::move(response), empty_resources(), result < 0 ? result : 0)
-                   ? NA_STATUS_OK
-                   : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            const byte *data = nullptr;
+            u64 size = 0;
+            i64 offset = 0;
+            u64 flags = 0;
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::write_request decoded{};
+                if (!decode_message(request, decoded, naos::system::Stream::decode_write_request))
+                    return NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+            }
+            else if (method_id == NA_METHOD_FILE_PWRITE)
+            {
+                naos::system::File::pwrite_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_pwrite_request))
+                    return NA_STATUS_INVALID_MESSAGE;
+                offset = decoded.offset;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+            }
+            else
+            {
+                naos::system::File::write_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_write_request))
+                    return NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+            }
+            file_call_wait_registration wait_registration(state);
+            const i64 result =
+                scope == NA_SCOPE_STREAM || method_id == NA_METHOD_FILE_WRITE
+                    ? file.write(
+                          data, size, flags, [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); })
+                    : file.pwrite(
+                          offset, data, size, flags, [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); });
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::write_response encoded{};
+                encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, encoded, naos::system::Stream::encode_write_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else if (method_id == NA_METHOD_FILE_PWRITE)
+            {
+                naos::system::File::pwrite_response encoded{};
+                encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, encoded, naos::system::File::encode_pwrite_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else
+            {
+                naos::system::File::write_response encoded{};
+                encoded.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, encoded, naos::system::File::encode_write_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            return state.complete_reply(std::move(response), empty_resources(), result < 0 ? result : 0)
+                       ? NA_STATUS_OK
+                       : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
-    if (scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_POLL)
+    if ((scope == NA_SCOPE_STREAM && method_id == NA_METHOD_STREAM_WRITEV) ||
+        (scope == NA_SCOPE_FILE && (method_id == NA_METHOD_FILE_PWRITEV || method_id == NA_METHOD_FILE_WRITEV)))
     {
-        naos::system::Stream::poll_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Stream::decode_poll_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        naos::system::Stream::poll_response encoded{};
-        encoded.events = pseudo == nullptr ? 0 : pseudo->poll_events();
-        if (!encode_message(response, encoded, naos::system::Stream::encode_poll_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            const byte *data = nullptr;
+            u64 size = 0;
+            u64 flags = 0;
+            i64 offset = 0;
+            bool pwrite = false;
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::writev_request decoded{};
+                if (!decode_message(request, decoded, naos::system::Stream::decode_writev_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size) || decoded.data.size != decoded.size)
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+            }
+            else if (method_id == NA_METHOD_FILE_PWRITEV)
+            {
+                naos::system::File::pwritev_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_pwritev_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size) || decoded.data.size != decoded.size)
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                offset = decoded.offset;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+                pwrite = true;
+            }
+            else
+            {
+                naos::system::File::writev_request decoded{};
+                if (!decode_message(request, decoded, naos::system::File::decode_writev_request) ||
+                    !valid_iov_layout(decoded.layout, decoded.size) || decoded.data.size != decoded.size)
+                    return state.complete_failure(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_PROTOCOL_VIOLATION)
+                               ? NA_STATUS_OK
+                               : NA_STATUS_INVALID_MESSAGE;
+                size = decoded.size;
+                flags = (decoded.flags & NA_IO_FLAG_NONBLOCK) != 0 ? fs::rw_flags::no_block : 0;
+                data = reinterpret_cast<const byte *>(decoded.data.data);
+            }
+            file_call_wait_registration wait_registration(state);
+            const i64 result =
+                pwrite
+                    ? file.pwrite(
+                          offset, data, size, flags, [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); })
+                    : file.write(
+                          data, size, flags, [&wait_registration] { return wait_registration.interrupted(); },
+                          [&wait_registration](task::wait_queue_t *queue) { wait_registration.register_queue(queue); });
+            if (scope == NA_SCOPE_STREAM)
+            {
+                naos::system::Stream::writev_response value{};
+                value.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, value, naos::system::Stream::encode_writev_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else if (method_id == NA_METHOD_FILE_PWRITEV)
+            {
+                naos::system::File::pwritev_response value{};
+                value.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, value, naos::system::File::encode_pwritev_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            else
+            {
+                naos::system::File::writev_response value{};
+                value.count = result < 0 ? static_cast<u64>(-result) : static_cast<u64>(result);
+                if (!encode_message(response, value, naos::system::File::encode_writev_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            return state.complete_reply(std::move(response), empty_resources(), result < 0 ? result : 0)
+                       ? NA_STATUS_OK
+                       : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SEEK)
     {
-        naos::system::File::seek_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_seek_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto offset = decoded.offset;
-        const auto whence = static_cast<u32>(decoded.whence);
-        if (whence == 0)
-            file.seek(offset);
-        else if (whence == 1)
-            file.move(offset);
-        else if (whence == 2)
-            file.move(file.size() + offset);
-        else
-            return NA_STATUS_INVALID_ARGUMENT;
-        naos::system::File::seek_response encoded{};
-        encoded.offset = file.current_offset();
-        if (!encode_message(response, encoded, naos::system::File::encode_seek_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::seek_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_seek_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto offset = decoded.offset;
+            const auto whence = static_cast<u32>(decoded.whence);
+            if (whence == 0)
+                file.seek(offset);
+            else if (whence == 1)
+                file.move(offset);
+            else if (whence == 2)
+                file.move(file.size() + offset);
+            else
+                return NA_STATUS_INVALID_ARGUMENT;
+            naos::system::File::seek_response encoded{};
+            encoded.offset = file.current_offset();
+            if (!encode_message(response, encoded, naos::system::File::encode_seek_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SYNC)
     {
-        naos::system::File::sync_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_sync_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto result = file.native_sync();
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::sync_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_sync_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto result = file.native_sync();
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_TRUNCATE)
     {
-        naos::system::File::truncate_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_truncate_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto result = file.native_truncate(decoded.length) ? 0 : EACCES;
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::truncate_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_truncate_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto result = file.native_truncate(decoded.length) ? 0 : EACCES;
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_ALLOCATE)
     {
-        naos::system::File::allocate_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_allocate_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto result = file.native_allocate(decoded.offset, decoded.length) ? 0 : EIO;
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::allocate_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_allocate_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto result = file.native_allocate(decoded.offset, decoded.length) ? 0 : EIO;
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_GET_FLAGS)
     {
-        naos::system::File::get_flags_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_get_flags_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto flags = file.native_get_flags();
-        naos::system::File::get_flags_response encoded{};
-        encoded.flags = (flags & fs::mode::append) != 0 ? NA_IO_FLAG_APPEND : 0;
-        if ((flags & fs::mode::no_block) != 0)
-            encoded.flags |= NA_IO_FLAG_NONBLOCK;
-        if (!encode_message(response, encoded, naos::system::File::encode_get_flags_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::get_flags_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_get_flags_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto flags = file.native_get_flags();
+            naos::system::File::get_flags_response encoded{};
+            encoded.flags = (flags & fs::mode::append) != 0 ? NA_IO_FLAG_APPEND : 0;
+            if ((flags & fs::mode::no_block) != 0)
+                encoded.flags |= NA_IO_FLAG_NONBLOCK;
+            if (!encode_message(response, encoded, naos::system::File::encode_get_flags_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_SET_FLAGS)
     {
-        naos::system::File::set_flags_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_set_flags_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        flag_t flags = 0;
-        const auto wire_flags = decoded.flags;
-        if ((wire_flags & NA_IO_FLAG_NONBLOCK) != 0)
-            flags |= fs::mode::no_block;
-        if ((wire_flags & NA_IO_FLAG_APPEND) != 0)
-            flags |= fs::mode::append;
-        const auto result = file.native_set_flags(flags) ? 0 : EINVAL;
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::set_flags_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_set_flags_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            flag_t flags = 0;
+            const auto wire_flags = decoded.flags;
+            if ((wire_flags & NA_IO_FLAG_NONBLOCK) != 0)
+                flags |= fs::mode::no_block;
+            if ((wire_flags & NA_IO_FLAG_APPEND) != 0)
+                flags |= fs::mode::append;
+            const auto result = file.native_set_flags(flags) ? 0 : EINVAL;
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+
+    if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_DEVICE_CONTROL)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::device_control_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_device_control_request) ||
+                decoded.argument.size != decoded.argument_size)
+                return NA_STATUS_INVALID_MESSAGE;
+            if (decoded.argument_size > max_kernel_payload)
+                return NA_STATUS_INVALID_MESSAGE;
+            auto output = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
+            output.resize(max_kernel_payload, byte{});
+            if (output.data() == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            u64 output_size = 0;
+            const auto result =
+                pseudo == nullptr
+                    ? ENOTTY
+                    : pseudo->native_device_control(
+                          decoded.request, reinterpret_cast<const byte *>(decoded.argument.data), decoded.argument.size,
+                          reinterpret_cast<byte *>(output.data()), output.size(), output_size);
+            if (result != 0)
+                return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            output.resize(output_size, byte{});
+            naos::system::File::device_control_response encoded{};
+            encoded.result = {reinterpret_cast<const u8 *>(output.data()), static_cast<u32>(output.size())};
+            if (!encode_message(response, encoded, naos::system::File::encode_device_control_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (scope == NA_SCOPE_FILE && method_id == NA_METHOD_FILE_STAT)
     {
-        naos::system::File::stat_request decoded{};
-        if (!decode_message(request, decoded, naos::system::File::decode_stat_request))
-            return NA_STATUS_INVALID_MESSAGE;
-        naos_stat value{};
-        if (file.get_entry() == nullptr || !fs::vfs::fill_stat(file.get_entry(), &value))
-            return state.complete_reply(empty_bytes(), empty_resources(), EFAILED) ? NA_STATUS_OK
-                                                                                   : NA_STATUS_PEER_CLOSED;
-        append_canonical_stat(response, value);
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::File::stat_request decoded{};
+            if (!decode_message(request, decoded, naos::system::File::decode_stat_request))
+                return NA_STATUS_INVALID_MESSAGE;
+            naos_stat value{};
+            if (file.get_entry() == nullptr || !fs::vfs::fill_stat(file.get_entry(), &value))
+                return state.complete_reply(empty_bytes(), empty_resources(), EFAILED) ? NA_STATUS_OK
+                                                                                       : NA_STATUS_PEER_CLOSED;
+            append_canonical_stat(response, value);
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     return NA_STATUS_NOT_SUPPORTED;
 }
 
 na_status_t publish_directory_call(invocation_state &state, fs::vfs::native_directory &directory, u64 method_id,
-                                   const freelibcxx::vector<byte> &request)
+                                   const freelibcxx::vector<byte> &request, task::process_t *caller)
 {
     auto response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
     if (method_id == NA_METHOD_DIRECTORY_SET_CURRENT || method_id == NA_METHOD_DIRECTORY_SET_ROOT)
     {
-        bool valid_request = false;
-        if (method_id == NA_METHOD_DIRECTORY_SET_CURRENT)
-        {
-            naos::system::Directory::set_current_request decoded{};
-            valid_request = decode_message(request, decoded, naos::system::Directory::decode_set_current_request);
-        }
-        else
-        {
-            naos::system::Directory::set_root_request decoded{};
-            valid_request = decode_message(request, decoded, naos::system::Directory::decode_set_root_request);
-        }
-        if (!valid_request || directory.root() == nullptr || directory.current() == nullptr ||
-            task::current_process() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            bool valid_request = false;
+            if (method_id == NA_METHOD_DIRECTORY_SET_CURRENT)
+            {
+                naos::system::Directory::set_current_request decoded{};
+                valid_request = decode_message(request, decoded, naos::system::Directory::decode_set_current_request);
+            }
+            else
+            {
+                naos::system::Directory::set_root_request decoded{};
+                valid_request = decode_message(request, decoded, naos::system::Directory::decode_set_root_request);
+            }
+            if (!valid_request || directory.root() == nullptr || directory.current() == nullptr || caller == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
 
-        auto *process = task::current_process();
-        if (method_id == NA_METHOD_DIRECTORY_SET_ROOT)
-        {
-            process->bootstrap_root_directory =
-                handle_t<fs::vfs::native_directory>::make(directory.root(), directory.root());
-            process->bootstrap_current_directory =
-                handle_t<fs::vfs::native_directory>::make(directory.root(), directory.current());
-        }
-        else
-        {
-            const auto root =
-                process->bootstrap_root_directory ? process->bootstrap_root_directory->root() : directory.root();
-            process->bootstrap_current_directory = handle_t<fs::vfs::native_directory>::make(root, directory.current());
-        }
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+            auto *process = caller;
+            if (method_id == NA_METHOD_DIRECTORY_SET_ROOT)
+            {
+                process->bootstrap_root_directory =
+                    handle_t<fs::vfs::native_directory>::make(directory.root(), directory.root());
+                process->bootstrap_current_directory =
+                    handle_t<fs::vfs::native_directory>::make(directory.root(), directory.current());
+            }
+            else
+            {
+                const auto root =
+                    process->bootstrap_root_directory ? process->bootstrap_root_directory->root() : directory.root();
+                process->bootstrap_current_directory =
+                    handle_t<fs::vfs::native_directory>::make(root, directory.current());
+            }
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_PATH)
     {
-        naos::system::Directory::path_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Directory::decode_path_request) ||
-            directory.root() == nullptr || directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        char path[4096] = {};
-        fs::vfs::pathname(directory.root(), directory.current(), path, sizeof(path));
-        if (path[0] == 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), EOVERFLOW) ? NA_STATUS_OK
-                                                                                     : NA_STATUS_PEER_CLOSED;
-        const naoidl::bounded_bytes path_bytes{reinterpret_cast<const u8 *>(path), static_cast<u32>(strlen(path))};
-        naos::system::Directory::path_response encoded{path_bytes};
-        if (!encode_message(response, encoded, naos::system::Directory::encode_path_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::Directory::path_request decoded{};
+            if (!decode_message(request, decoded, naos::system::Directory::decode_path_request) ||
+                directory.root() == nullptr || directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            constexpr u64 path_capacity = 4096;
+            char *path =
+                reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_capacity, alignof(char)));
+            if (path == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            memset(path, 0, path_capacity);
+            fs::vfs::pathname(directory.root(), directory.current(), path, path_capacity);
+            if (path[0] == 0)
+            {
+                memory::KernelCommonAllocatorV->deallocate(path);
+                return state.complete_reply(empty_bytes(), empty_resources(), EOVERFLOW) ? NA_STATUS_OK
+                                                                                         : NA_STATUS_PEER_CLOSED;
+            }
+            const naoidl::bounded_bytes path_bytes{reinterpret_cast<const u8 *>(path), static_cast<u32>(strlen(path))};
+            naos::system::Directory::path_response encoded{path_bytes};
+            if (!encode_message(response, encoded, naos::system::Directory::encode_path_response))
+            {
+                memory::KernelCommonAllocatorV->deallocate(path);
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            memory::KernelCommonAllocatorV->deallocate(path);
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_ACCESS)
     {
-        naos::system::Directory::access_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Directory::decode_access_request) ||
-            decoded.path.size == 0 || directory.root() == nullptr || directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        const auto mode = decoded.mode;
-        const u64 path_size = decoded.path.size;
-        if (decoded.path.data[path_size - 1] != 0)
-            return NA_STATUS_INVALID_MESSAGE;
-        char *path = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size, alignof(char)));
-        if (path == nullptr)
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        memcpy(path, decoded.path.data, path_size);
-        flag_t access_mode = 0;
-        if ((mode & 1) != 0)
-            access_mode |= fs::access_flags::exec;
-        if ((mode & 2) != 0)
-            access_mode |= fs::access_flags::write;
-        if ((mode & 4) != 0)
-            access_mode |= fs::access_flags::read;
-        if ((mode & 8) != 0)
-            access_mode |= fs::access_flags::exist;
-        const bool allowed = fs::vfs::access(path, directory.root(), directory.current(), access_mode);
-        memory::KernelCommonAllocatorV->deallocate(path);
-        return state.complete_reply(empty_bytes(), empty_resources(), allowed ? 0 : EACCES) ? NA_STATUS_OK
-                                                                                            : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::Directory::access_request decoded{};
+            if (!decode_message(request, decoded, naos::system::Directory::decode_access_request) ||
+                decoded.path.size == 0 || directory.root() == nullptr || directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            const auto mode = decoded.mode;
+            const u64 path_size = decoded.path.size;
+            if (decoded.path.data[path_size - 1] != 0)
+                return NA_STATUS_INVALID_MESSAGE;
+            char *path = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size, alignof(char)));
+            if (path == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            memcpy(path, decoded.path.data, path_size);
+            flag_t access_mode = 0;
+            if ((mode & 1) != 0)
+                access_mode |= fs::access_flags::exec;
+            if ((mode & 2) != 0)
+                access_mode |= fs::access_flags::write;
+            if ((mode & 4) != 0)
+                access_mode |= fs::access_flags::read;
+            if ((mode & 8) != 0)
+                access_mode |= fs::access_flags::exist;
+            const bool allowed = fs::vfs::access(path, directory.root(), directory.current(), access_mode);
+            memory::KernelCommonAllocatorV->deallocate(path);
+            return state.complete_reply(empty_bytes(), empty_resources(), allowed ? 0 : EACCES) ? NA_STATUS_OK
+                                                                                                : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_RENAME || method_id == NA_METHOD_DIRECTORY_LINK ||
         method_id == NA_METHOD_DIRECTORY_SYMLINK)
     {
-        const u8 *first_data = nullptr;
-        const u8 *second_data = nullptr;
-        u64 first_size = 0;
-        u64 second_size = 0;
-        bool decoded_request = false;
-        if (method_id == NA_METHOD_DIRECTORY_RENAME)
-        {
-            naos::system::Directory::rename_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_rename_request);
-            if (decoded_request)
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            const u8 *first_data = nullptr;
+            const u8 *second_data = nullptr;
+            u64 first_size = 0;
+            u64 second_size = 0;
+            bool decoded_request = false;
+            if (method_id == NA_METHOD_DIRECTORY_RENAME)
             {
-                first_data = decoded.first.data;
-                second_data = decoded.second.data;
-                first_size = decoded.first.size;
-                second_size = decoded.second.size;
+                naos::system::Directory::rename_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_rename_request);
+                if (decoded_request)
+                {
+                    first_data = decoded.first.data;
+                    second_data = decoded.second.data;
+                    first_size = decoded.first.size;
+                    second_size = decoded.second.size;
+                }
             }
-        }
-        else if (method_id == NA_METHOD_DIRECTORY_LINK)
-        {
-            naos::system::Directory::link_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_link_request);
-            if (decoded_request)
+            else if (method_id == NA_METHOD_DIRECTORY_LINK)
             {
-                first_data = decoded.first.data;
-                second_data = decoded.second.data;
-                first_size = decoded.first.size;
-                second_size = decoded.second.size;
+                naos::system::Directory::link_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_link_request);
+                if (decoded_request)
+                {
+                    first_data = decoded.first.data;
+                    second_data = decoded.second.data;
+                    first_size = decoded.first.size;
+                    second_size = decoded.second.size;
+                }
             }
-        }
-        else
-        {
-            naos::system::Directory::symlink_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_symlink_request);
-            if (decoded_request)
+            else
             {
-                first_data = decoded.first.data;
-                second_data = decoded.second.data;
-                first_size = decoded.first.size;
-                second_size = decoded.second.size;
+                naos::system::Directory::symlink_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_symlink_request);
+                if (decoded_request)
+                {
+                    first_data = decoded.first.data;
+                    second_data = decoded.second.data;
+                    first_size = decoded.first.size;
+                    second_size = decoded.second.size;
+                }
             }
-        }
-        if (!decoded_request || first_size == 0 || second_size == 0 || directory.root() == nullptr ||
-            directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        char *first = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(first_size + 1, alignof(char)));
-        char *second =
-            reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(second_size + 1, alignof(char)));
-        if (first == nullptr || second == nullptr)
-        {
-            if (first != nullptr)
-                memory::KernelCommonAllocatorV->deallocate(first);
-            if (second != nullptr)
-                memory::KernelCommonAllocatorV->deallocate(second);
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        memcpy(first, first_data, first_size);
-        memcpy(second, second_data, second_size);
-        first[first_size] = 0;
-        second[second_size] = 0;
-        bool changed = false;
-        if (method_id == NA_METHOD_DIRECTORY_RENAME)
-            changed = fs::vfs::rename(second, first, directory.root(), directory.current());
-        else if (method_id == NA_METHOD_DIRECTORY_LINK)
-            changed = fs::vfs::link(second, first, directory.root(), directory.current());
-        else
-            changed = fs::vfs::symbolink(second, first, directory.root(), directory.current(), 0);
-        memory::KernelCommonAllocatorV->deallocate(first);
-        memory::KernelCommonAllocatorV->deallocate(second);
-        return state.complete_reply(empty_bytes(), empty_resources(), changed ? 0 : ENOENT) ? NA_STATUS_OK
-                                                                                            : NA_STATUS_PEER_CLOSED;
+            if (!decoded_request || first_size == 0 || second_size == 0 || directory.root() == nullptr ||
+                directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            char *first =
+                reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(first_size + 1, alignof(char)));
+            char *second =
+                reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(second_size + 1, alignof(char)));
+            if (first == nullptr || second == nullptr)
+            {
+                if (first != nullptr)
+                    memory::KernelCommonAllocatorV->deallocate(first);
+                if (second != nullptr)
+                    memory::KernelCommonAllocatorV->deallocate(second);
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            memcpy(first, first_data, first_size);
+            memcpy(second, second_data, second_size);
+            first[first_size] = 0;
+            second[second_size] = 0;
+            bool changed = false;
+            if (method_id == NA_METHOD_DIRECTORY_RENAME)
+                changed = fs::vfs::rename(second, first, directory.root(), directory.current());
+            else if (method_id == NA_METHOD_DIRECTORY_LINK)
+                changed = fs::vfs::link(second, first, directory.root(), directory.current());
+            else
+                changed = fs::vfs::symbolink(second, first, directory.root(), directory.current(), 0);
+            memory::KernelCommonAllocatorV->deallocate(first);
+            memory::KernelCommonAllocatorV->deallocate(second);
+            return state.complete_reply(empty_bytes(), empty_resources(), changed ? 0 : ENOENT) ? NA_STATUS_OK
+                                                                                                : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_READLINK)
     {
-        naos::system::Directory::readlink_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Directory::decode_readlink_request) ||
-            decoded.path.size == 0 || directory.root() == nullptr || directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        const u64 path_size = decoded.path.size;
-        char *path = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size + 1, alignof(char)));
-        if (path == nullptr)
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        memcpy(path, decoded.path.data, path_size);
-        path[path_size] = 0;
-        auto *entry = fs::vfs::path_walk(path, directory.root(), directory.current(),
-                                         fs::path_walk_flags::not_resolve_symbolic_link);
-        const char *target =
-            entry != nullptr && entry->get_inode() != nullptr ? entry->get_inode()->symbolink() : nullptr;
-        const bool valid = target != nullptr;
-        if (valid)
-        {
-            const naoidl::bounded_bytes target_bytes{reinterpret_cast<const u8 *>(target),
-                                                     static_cast<u32>(strlen(target))};
-            naos::system::Directory::readlink_response encoded{target_bytes};
-            if (!encode_message(response, encoded, naos::system::Directory::encode_readlink_response))
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::Directory::readlink_request decoded{};
+            if (!decode_message(request, decoded, naos::system::Directory::decode_readlink_request) ||
+                decoded.path.size == 0 || directory.root() == nullptr || directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            const u64 path_size = decoded.path.size;
+            char *path =
+                reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size + 1, alignof(char)));
+            if (path == nullptr)
                 return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        memory::KernelCommonAllocatorV->deallocate(path);
-        return state.complete_reply(std::move(response), empty_resources(), valid ? 0 : EINVAL) ? NA_STATUS_OK
-                                                                                                : NA_STATUS_PEER_CLOSED;
+            memcpy(path, decoded.path.data, path_size);
+            path[path_size] = 0;
+            auto *entry = fs::vfs::path_walk(path, directory.root(), directory.current(),
+                                             fs::path_walk_flags::not_resolve_symbolic_link);
+            const char *target =
+                entry != nullptr && entry->get_inode() != nullptr ? entry->get_inode()->symbolink() : nullptr;
+            const bool valid = target != nullptr;
+            if (valid)
+            {
+                const naoidl::bounded_bytes target_bytes{reinterpret_cast<const u8 *>(target),
+                                                         static_cast<u32>(strlen(target))};
+                naos::system::Directory::readlink_response encoded{target_bytes};
+                if (!encode_message(response, encoded, naos::system::Directory::encode_readlink_response))
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+            memory::KernelCommonAllocatorV->deallocate(path);
+            return state.complete_reply(std::move(response), empty_resources(), valid ? 0 : EINVAL)
+                       ? NA_STATUS_OK
+                       : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_LIST)
     {
-        naos::system::Directory::list_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Directory::decode_list_request) ||
-            directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        const u64 offset = decoded.offset;
-        const u64 requested_bytes = decoded.requested_bytes;
-        const u64 max_bytes = requested_bytes == 0 ? max_kernel_payload : requested_bytes;
-        if (max_bytes > max_kernel_payload)
-            return NA_STATUS_INVALID_MESSAGE;
-        append_u64(response, offset);
-        append_u64(response, 0);
-        u64 index = 0;
-        u64 next = offset;
-        u64 count = 0;
-        for (auto *child : directory.current()->list_children())
-        {
-            if (child == nullptr || child->get_inode() == nullptr)
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::Directory::list_request decoded{};
+            if (!decode_message(request, decoded, naos::system::Directory::decode_list_request) ||
+                directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            const u64 offset = decoded.offset;
+            const u64 requested_bytes = decoded.requested_bytes;
+            const u64 max_bytes = requested_bytes == 0 ? max_kernel_payload : requested_bytes;
+            if (max_bytes > max_kernel_payload)
+                return NA_STATUS_INVALID_MESSAGE;
+            append_u64(response, offset);
+            append_u64(response, 0);
+            u64 index = 0;
+            u64 next = offset;
+            u64 count = 0;
+            for (auto *child : directory.current()->list_children())
             {
-                index++;
-                continue;
+                if (child == nullptr || child->get_inode() == nullptr)
+                {
+                    index++;
+                    continue;
+                }
+                if (index++ < offset)
+                    continue;
+                const char *name = child->get_name();
+                if (name == nullptr)
+                    continue;
+                const u64 name_bytes = strlen(name) + 1;
+                const u64 record_bytes = sizeof(u64) + sizeof(u32) + sizeof(u32) + name_bytes;
+                if (response.size() > max_bytes || record_bytes > max_bytes - response.size())
+                    break;
+                append_u64(response, child->get_inode()->get_index());
+                append_u32(response, static_cast<u32>(child->get_inode()->get_type()));
+                append_u32(response, static_cast<u32>(name_bytes));
+                append_bytes(response, reinterpret_cast<const byte *>(name), name_bytes);
+                count++;
+                next = index;
             }
-            if (index++ < offset)
-                continue;
-            const char *name = child->get_name();
-            if (name == nullptr)
-                continue;
-            const u64 name_bytes = strlen(name) + 1;
-            const u64 record_bytes = sizeof(u64) + sizeof(u32) + sizeof(u32) + name_bytes;
-            if (response.size() > max_bytes || record_bytes > max_bytes - response.size())
-                break;
-            append_u64(response, child->get_inode()->get_index());
-            append_u32(response, static_cast<u32>(child->get_inode()->get_type()));
-            append_u32(response, static_cast<u32>(name_bytes));
-            append_bytes(response, reinterpret_cast<const byte *>(name), name_bytes);
-            count++;
-            next = index;
-        }
-        const naoidl::bounded_bytes records{reinterpret_cast<const u8 *>(response.data() + 16),
-                                            static_cast<u32>(response.size() - 16)};
-        naos::system::Directory::list_response encoded{next, count, records};
-        auto encoded_response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
-        if (!encode_message(encoded_response, encoded, naos::system::Directory::encode_list_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK
-                                                                                    : NA_STATUS_PEER_CLOSED;
+            const naoidl::bounded_bytes records{reinterpret_cast<const u8 *>(response.data() + 16),
+                                                static_cast<u32>(response.size() - 16)};
+            naos::system::Directory::list_response encoded{next, count, records};
+            auto encoded_response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
+            if (!encode_message(encoded_response, encoded, naos::system::Directory::encode_list_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK
+                                                                                        : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_STAT)
     {
-        naos::system::Directory::stat_request decoded{};
-        if (!decode_message(request, decoded, naos::system::Directory::decode_stat_request) ||
-            directory.current() == nullptr)
-            return NA_STATUS_INVALID_MESSAGE;
-        naos_stat value{};
-        if (!fs::vfs::fill_stat(directory.current(), &value))
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
-        append_canonical_stat(response, value);
-        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::Directory::stat_request decoded{};
+            if (!decode_message(request, decoded, naos::system::Directory::decode_stat_request) ||
+                directory.current() == nullptr)
+                return NA_STATUS_INVALID_MESSAGE;
+            naos_stat value{};
+            if (!fs::vfs::fill_stat(directory.current(), &value))
+                return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            append_canonical_stat(response, value);
+            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     if (method_id == NA_METHOD_DIRECTORY_CREATE || method_id == NA_METHOD_DIRECTORY_REMOVE ||
         method_id == NA_METHOD_DIRECTORY_OPEN)
     {
-        u64 mode = 0;
-        u64 flags = 0;
-        const u8 *path_bytes = nullptr;
-        u64 path_size = 0;
-        bool decoded_request = false;
-        if (method_id == NA_METHOD_DIRECTORY_CREATE)
-        {
-            naos::system::Directory::create_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_create_request);
-            if (decoded_request)
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            u64 mode = 0;
+            u64 flags = 0;
+            const u8 *path_bytes = nullptr;
+            u64 path_size = 0;
+            bool decoded_request = false;
+            if (method_id == NA_METHOD_DIRECTORY_CREATE)
             {
-                mode = decoded.mode;
-                flags = decoded.flags;
-                path_bytes = decoded.path.data;
-                path_size = decoded.path.size;
+                naos::system::Directory::create_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_create_request);
+                if (decoded_request)
+                {
+                    mode = decoded.mode;
+                    flags = decoded.flags;
+                    path_bytes = decoded.path.data;
+                    path_size = decoded.path.size;
+                }
             }
-        }
-        else if (method_id == NA_METHOD_DIRECTORY_REMOVE)
-        {
-            naos::system::Directory::remove_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_remove_request);
-            if (decoded_request)
+            else if (method_id == NA_METHOD_DIRECTORY_REMOVE)
             {
-                mode = decoded.mode;
-                flags = decoded.flags;
-                path_bytes = decoded.path.data;
-                path_size = decoded.path.size;
+                naos::system::Directory::remove_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_remove_request);
+                if (decoded_request)
+                {
+                    mode = decoded.mode;
+                    flags = decoded.flags;
+                    path_bytes = decoded.path.data;
+                    path_size = decoded.path.size;
+                }
             }
-        }
-        else
-        {
-            naos::system::Directory::open_request decoded{};
-            decoded_request = decode_message(request, decoded, naos::system::Directory::decode_open_request);
-            if (decoded_request)
-            {
-                mode = decoded.mode;
-                flags = decoded.flags;
-                path_bytes = decoded.path.data;
-                path_size = decoded.path.size;
-            }
-        }
-        if (!decoded_request || path_size == 0)
-            return NA_STATUS_INVALID_MESSAGE;
-        if (path_bytes[path_size - 1] != 0)
-            return NA_STATUS_INVALID_MESSAGE;
-        char *path = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size, alignof(char)));
-        if (path == nullptr)
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        memcpy(path, path_bytes, path_size);
-
-        if (method_id == NA_METHOD_DIRECTORY_CREATE)
-        {
-            const bool created =
-                (flags & fs::create_flags::directory) != 0
-                    ? fs::vfs::mkdir(path, directory.root(), directory.current(), mode)
-                    : fs::vfs::create(path, directory.root(), directory.current(), fs::create_flags::file);
-            memory::KernelCommonAllocatorV->deallocate(path);
-            if (!created)
-                return state.complete_reply(empty_bytes(), empty_resources(), EFAILED) ? NA_STATUS_OK
-                                                                                       : NA_STATUS_PEER_CLOSED;
-            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        }
-        if (method_id == NA_METHOD_DIRECTORY_REMOVE)
-        {
-            const bool removed = (flags & fs::create_flags::directory) != 0
-                                     ? fs::vfs::rmdir(path, directory.root(), directory.current())
-                                     : fs::vfs::unlink(path, directory.root(), directory.current());
-            memory::KernelCommonAllocatorV->deallocate(path);
-            if (!removed)
-                return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
-                                                                                      : NA_STATUS_PEER_CLOSED;
-            return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        }
-
-        handle_t<fs::vfs::file> file;
-        if (method_id == NA_METHOD_DIRECTORY_OPEN && strcmp(path, "/dev/ptmx") == 0)
-            file = dev::pty::open_master(mode);
-        else if (method_id == NA_METHOD_DIRECTORY_OPEN && has_prefix(path, "/dev/pts/"))
-        {
-            const char *cursor = path + 9;
-            u64 number = 0;
-            if (*cursor == 0)
-                file.reset();
             else
             {
-                bool valid = true;
-                for (; *cursor != 0; cursor++)
+                naos::system::Directory::open_request decoded{};
+                decoded_request = decode_message(request, decoded, naos::system::Directory::decode_open_request);
+                if (decoded_request)
                 {
-                    if (*cursor < '0' || *cursor > '9')
-                    {
-                        valid = false;
-                        break;
-                    }
-                    number = number * 10 + static_cast<u64>(*cursor - '0');
-                    if (number > 0xffffffffULL)
-                    {
-                        valid = false;
-                        break;
-                    }
+                    mode = decoded.mode;
+                    flags = decoded.flags;
+                    path_bytes = decoded.path.data;
+                    path_size = decoded.path.size;
                 }
-                if (valid)
-                    file = dev::pty::open_slave(static_cast<u32>(number), mode);
             }
-        }
-        else
-            file = fs::vfs::open(path, directory.root(), directory.current(), mode, flags);
-        memory::KernelCommonAllocatorV->deallocate(path);
-        if (!file)
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
+            if (!decoded_request || path_size == 0)
+                return NA_STATUS_INVALID_MESSAGE;
+            if (path_bytes[path_size - 1] != 0)
+                return NA_STATUS_INVALID_MESSAGE;
+            char *path = reinterpret_cast<char *>(memory::KernelCommonAllocatorV->allocate(path_size, alignof(char)));
+            if (path == nullptr)
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            memcpy(path, path_bytes, path_size);
 
-        if (method_id == NA_METHOD_DIRECTORY_OPEN && (flags & fs::path_walk_flags::trunc) != 0 &&
-            !file->native_truncate(0))
-            return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
+            if (method_id == NA_METHOD_DIRECTORY_CREATE)
+            {
+                const bool created =
+                    (flags & fs::create_flags::directory) != 0
+                        ? fs::vfs::mkdir(path, directory.root(), directory.current(), mode)
+                        : fs::vfs::create(path, directory.root(), directory.current(), fs::create_flags::file);
+                memory::KernelCommonAllocatorV->deallocate(path);
+                if (!created)
+                    return state.complete_reply(empty_bytes(), empty_resources(), EFAILED) ? NA_STATUS_OK
+                                                                                           : NA_STATUS_PEER_CLOSED;
+                return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK
+                                                                                    : NA_STATUS_PEER_CLOSED;
+            }
+            if (method_id == NA_METHOD_DIRECTORY_REMOVE)
+            {
+                const bool removed = (flags & fs::create_flags::directory) != 0
+                                         ? fs::vfs::rmdir(path, directory.root(), directory.current())
+                                         : fs::vfs::unlink(path, directory.root(), directory.current());
+                memory::KernelCommonAllocatorV->deallocate(path);
+                if (!removed)
+                    return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
+                                                                                          : NA_STATUS_PEER_CLOSED;
+                return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK
+                                                                                    : NA_STATUS_PEER_CLOSED;
+            }
 
-        capability::metadata metadata;
-        khandle object;
-        if (file->get_entry() != nullptr && file->get_entry()->get_inode() != nullptr &&
-            file->get_entry()->get_inode()->get_type() == fs::inode_type_t::directory)
-        {
-            metadata = kernel_view_metadata(NA_SCOPE_DIRECTORY, naos::system::Directory::protocol_uuid,
-                                            NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
-                                            NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
-            const auto opened_root =
-                (flags & NA_DIRECTORY_OPEN_FLAG_CHROOT) != 0 ? file->get_entry() : directory.root();
-            auto opened_directory = handle_t<fs::vfs::native_directory>::make(opened_root, file->get_entry());
-            object = std::move(opened_directory);
-        }
-        else
-        {
-            metadata = kernel_view_metadata(NA_SCOPE_FILE, naos::system::File::protocol_uuid,
-                                            NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
-                                            NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
-            object = khandle(file);
-        }
-        capability::transfer_record_list resources(memory::KernelCommonAllocatorV);
-        resources.push_back(make_response_resource(std::move(object), metadata));
-        naos::system::Directory::open_response encoded{};
-        encoded.object.value = 0;
-        if (!encode_message(response, encoded, naos::system::Directory::encode_open_response))
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        return state.complete_reply(std::move(response), std::move(resources)) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+            const task::access_context access{caller};
+            handle_t<fs::vfs::file> file =
+                fs::vfs::open(path, directory.root(), directory.current(), mode, flags, access);
+            memory::KernelCommonAllocatorV->deallocate(path);
+            if (!file)
+                return state.complete_reply(empty_bytes(), empty_resources(), ENOENT) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+
+            if (method_id == NA_METHOD_DIRECTORY_OPEN && (flags & fs::path_walk_flags::trunc) != 0 &&
+                !file->native_truncate(0))
+                return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+
+            capability::metadata metadata;
+            khandle object;
+            if (file->get_entry() != nullptr && file->get_entry()->get_inode() != nullptr &&
+                file->get_entry()->get_inode()->get_type() == fs::inode_type_t::directory)
+            {
+                metadata =
+                    kernel_view_metadata(NA_SCOPE_DIRECTORY, naos::system::Directory::protocol_uuid,
+                                         NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                                         NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
+                const auto opened_root =
+                    (flags & NA_DIRECTORY_OPEN_FLAG_CHROOT) != 0 ? file->get_entry() : directory.root();
+                auto opened_directory = handle_t<fs::vfs::native_directory>::make(opened_root, file->get_entry());
+                object = std::move(opened_directory);
+            }
+            else
+            {
+                metadata =
+                    kernel_view_metadata(NA_SCOPE_FILE, naos::system::File::protocol_uuid,
+                                         NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                                         NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                                         naos::system::File::revision, naos::system::File::features);
+                object = khandle(file);
+            }
+            capability::transfer_record_list resources(memory::KernelCommonAllocatorV);
+            resources.push_back(make_response_resource(std::move(object), metadata));
+            naos::system::Directory::open_response encoded{};
+            encoded.object.value = 0;
+            if (!encode_message(response, encoded, naos::system::Directory::encode_open_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(response), std::move(resources)) ? NA_STATUS_OK
+                                                                                   : NA_STATUS_PEER_CLOSED;
+        }();
     }
 
     return NA_STATUS_NOT_SUPPORTED;
 }
 
+bool service_directory_mutation_allowed(const char *data, u32 size, u64 protocol_rights)
+{
+    constexpr char system_prefix[] = "naos://system/";
+    const bool system_namespace =
+        size >= sizeof(system_prefix) - 1 && memcmp(data, system_prefix, sizeof(system_prefix) - 1) == 0;
+    if (system_namespace)
+        return (protocol_rights & NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER) != 0;
+    return (protocol_rights & NA_SERVICE_DIRECTORY_RIGHT_ADMIN) != 0;
+}
+
+na_status_t publish_service_directory_register_call(invocation_state &state, service::directory &directory,
+                                                    const freelibcxx::vector<byte> &request,
+                                                    capability::transfer_record_list &resources, u64 protocol_rights,
+                                                    task::process_t *caller)
+{
+    naos::system::ServiceDirectory::register_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_register_request) ||
+        !naos::system::ServiceDirectory::validate_register_request_resources(decoded, resources.size()) ||
+        decoded.service.value >= resources.size())
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    if (!service_directory_mutation_allowed(decoded.uri.data, decoded.uri.size, protocol_rights))
+        return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    const auto result = directory.register_service(reinterpret_cast<const char *>(decoded.uri.data), decoded.uri.size,
+                                                   resources[decoded.service.value], false, caller->pid);
+    return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+}
+
+na_status_t publish_service_directory_resolve_call(invocation_state &state, service::directory &directory,
+                                                   const freelibcxx::vector<byte> &request)
+{
+    naos::system::ServiceDirectory::resolve_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_resolve_request))
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    capability::transferred_resource resource;
+    const auto result =
+        directory.resolve_service(reinterpret_cast<const char *>(decoded.uri.data), decoded.uri.size, resource);
+    if (result != 0)
+        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    naos::system::ServiceDirectory::resolve_response response{};
+    response.service.value = 0;
+    freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+    if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_resolve_response))
+        return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
+    response_resources.push_back(capability::transfer_record(NA_HANDLE_INVALID, true, std::move(resource)));
+    return state.complete_reply(std::move(encoded_response), std::move(response_resources)) ? NA_STATUS_OK
+                                                                                            : NA_STATUS_PEER_CLOSED;
+}
+
+na_status_t publish_service_directory_listen_call(invocation_state &state, service::directory &directory,
+                                                  const freelibcxx::vector<byte> &request,
+                                                  capability::transfer_record_list &resources, u64 protocol_rights,
+                                                  task::process_t *caller)
+{
+    naos::system::ServiceDirectory::listen_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_listen_request) ||
+        !naos::system::ServiceDirectory::validate_listen_request_resources(decoded, resources.size()) ||
+        decoded.listener.value >= resources.size() || decoded.descriptor.value >= resources.size() ||
+        decoded.listener.value == decoded.descriptor.value)
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    if (!service_directory_mutation_allowed(decoded.uri.data, decoded.uri.size, protocol_rights))
+        return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    khandle send_endpoint = resources[decoded.listener.value].resource.take_object_to_table();
+    khandle descriptor = resources[decoded.descriptor.value].resource.take_object_to_table();
+    const auto result =
+        directory.listen_service(reinterpret_cast<const char *>(decoded.uri.data), decoded.uri.size,
+                                 std::move(send_endpoint), std::move(descriptor), decoded.max_pending, caller->pid);
+    return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+}
+
+na_status_t publish_service_directory_connect_call(invocation_state &state, service::directory &directory,
+                                                   const freelibcxx::vector<byte> &request)
+{
+    naos::system::ServiceDirectory::connect_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_connect_request))
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    na_uuid_t expected_uuid{};
+    memcpy(expected_uuid.bytes, decoded.expected_uuid.data(), sizeof(expected_uuid.bytes));
+    capability::transferred_resource client_resource;
+    naos::system::ServiceDirectory::connect_response response{};
+    response.client.value = 0;
+    const auto result = directory.connect_service(
+        reinterpret_cast<const char *>(decoded.uri.data), decoded.uri.size, expected_uuid, decoded.requested_rights,
+        decoded.requested_revision, decoded.requested_features, client_resource, response.revision, response.features);
+    if (result != 0)
+        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+    if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_connect_response))
+        return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
+    response_resources.push_back(capability::transfer_record(NA_HANDLE_INVALID, true, std::move(client_resource)));
+    return state.complete_reply(std::move(encoded_response), std::move(response_resources)) ? NA_STATUS_OK
+                                                                                            : NA_STATUS_PEER_CLOSED;
+}
+
+na_status_t publish_service_directory_unregister_call(invocation_state &state, service::directory &directory,
+                                                      const freelibcxx::vector<byte> &request, u64 protocol_rights,
+                                                      task::process_t *caller)
+{
+    naos::system::ServiceDirectory::unregister_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_unregister_request))
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    if (!service_directory_mutation_allowed(decoded.uri.data, decoded.uri.size, protocol_rights))
+        return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    const auto result =
+        directory.unregister_service(reinterpret_cast<const char *>(decoded.uri.data), decoded.uri.size, caller->pid);
+    return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+}
+
+na_status_t publish_service_directory_list_call(invocation_state &state, service::directory &directory,
+                                                const freelibcxx::vector<byte> &request)
+{
+    naos::system::ServiceDirectory::list_request decoded{};
+    if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_list_request) ||
+        decoded.requested_bytes > max_kernel_payload)
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    freelibcxx::vector<byte> records(memory::MemoryAllocatorV);
+    u64 next = 0;
+    u64 count = 0;
+    const auto result = directory.list_services(decoded.offset, decoded.requested_bytes, records, next, count);
+    if (result != 0)
+        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    naos::system::ServiceDirectory::list_response response{};
+    response.next = next;
+    response.count = count;
+    response.records = {reinterpret_cast<const u8 *>(records.data()), static_cast<u32>(records.size())};
+    freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+    if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_list_response))
+        return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+}
+
 na_status_t publish_service_directory_call(invocation_state &state, service::directory &directory, u64 method_id,
-                                            const freelibcxx::vector<byte> &request,
-                                            capability::transfer_record_list &resources)
+                                           const freelibcxx::vector<byte> &request,
+                                           capability::transfer_record_list &resources, u64 protocol_rights,
+                                           task::process_t *caller)
 {
     if (method_id == NA_METHOD_SERVICE_DIRECTORY_REGISTER)
     {
-        naos::system::ServiceDirectory::register_request decoded{};
-        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_register_request) ||
-            !naos::system::ServiceDirectory::validate_register_request_resources(decoded, resources.size()) ||
-            decoded.service.value >= resources.size())
-            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-
-        const auto result = directory.register_service(reinterpret_cast<const char *>(decoded.uri.data),
-                                                       decoded.uri.size, resources[decoded.service.value]);
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return publish_service_directory_register_call(state, directory, request, resources, protocol_rights, caller);
     }
 
     if (method_id == NA_METHOD_SERVICE_DIRECTORY_RESOLVE)
     {
-        naos::system::ServiceDirectory::resolve_request decoded{};
-        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_resolve_request))
-            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return publish_service_directory_resolve_call(state, directory, request);
+    }
 
-        capability::transferred_resource resource;
-        const auto result = directory.resolve_service(reinterpret_cast<const char *>(decoded.uri.data),
-                                                       decoded.uri.size, resource);
-        if (result != 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_LISTEN)
+    {
+        return publish_service_directory_listen_call(state, directory, request, resources, protocol_rights, caller);
+    }
 
-        naos::system::ServiceDirectory::resolve_response response{};
-        response.service.value = 0;
-        freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
-        if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_resolve_response))
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
-        response_resources.push_back(capability::transfer_record(NA_HANDLE_INVALID, true, std::move(resource)));
-        return state.complete_reply(std::move(encoded_response), std::move(response_resources)) ? NA_STATUS_OK
-                                                                                                  : NA_STATUS_PEER_CLOSED;
+    if (method_id == NA_METHOD_SERVICE_DIRECTORY_CONNECT)
+    {
+        return publish_service_directory_connect_call(state, directory, request);
     }
 
     if (method_id == NA_METHOD_SERVICE_DIRECTORY_UNREGISTER)
     {
-        naos::system::ServiceDirectory::unregister_request decoded{};
-        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_unregister_request))
-            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        const auto result = directory.unregister_service(reinterpret_cast<const char *>(decoded.uri.data),
-                                                         decoded.uri.size);
-        return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return publish_service_directory_unregister_call(state, directory, request, protocol_rights, caller);
     }
 
     if (method_id == NA_METHOD_SERVICE_DIRECTORY_LIST)
     {
-        naos::system::ServiceDirectory::list_request decoded{};
-        if (!decode_message(request, decoded, naos::system::ServiceDirectory::decode_list_request) ||
-            decoded.requested_bytes > max_kernel_payload)
-            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-
-        freelibcxx::vector<byte> records(memory::MemoryAllocatorV);
-        u64 next = 0;
-        u64 count = 0;
-        const auto result = directory.list_services(decoded.offset, decoded.requested_bytes, records, next, count);
-        if (result != 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-
-        naos::system::ServiceDirectory::list_response response{};
-        response.next = next;
-        response.count = count;
-        response.records = {reinterpret_cast<const u8 *>(records.data()), static_cast<u32>(records.size())};
-        freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
-        if (!encode_message(encoded_response, response, naos::system::ServiceDirectory::encode_list_response))
-            return state.complete_reply(empty_bytes(), empty_resources(), ENOMEM) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
-        return state.complete_reply(std::move(encoded_response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        return publish_service_directory_list_call(state, directory, request);
     }
 
     return NA_STATUS_NOT_SUPPORTED;
 }
 
 na_status_t publish_process_call(invocation_state &state, task::process_object &process, u64 method_id,
-                                 const freelibcxx::vector<byte> &request)
+                                 const freelibcxx::vector<byte> &request, task::process_t *caller)
 {
     auto response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
     auto *target = process.process();
@@ -1241,7 +1482,11 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         i64 status = 0;
         process_id waited_pid = 0;
         const auto result = static_cast<i64>(task::wait_process_handle(
-            task::current_process(), target, static_cast<flag_t>(decoded.flags), status, waited_pid));
+            caller, target, static_cast<flag_t>(decoded.flags), status, waited_pid,
+            [&state] { return state.execution_interrupted(); },
+            [&state](task::wait_queue_t *queue) { state.set_execution_wait_queue(queue); }));
+        if (state.execution_interrupted())
+            return NA_STATUS_PEER_CLOSED;
         if (result != 0)
             return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
                                                                                   : NA_STATUS_PEER_CLOSED;
@@ -1255,15 +1500,19 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
 
     if (method_id == NA_METHOD_PROCESS_WAIT_CHILDREN)
     {
-        if (target != task::current_process())
+        if (target != caller)
             return NA_STATUS_ACCESS_DENIED;
         naos::system::Process::wait_children_request decoded{};
         if (!decode_message(request, decoded, naos::system::Process::decode_wait_children_request))
             return NA_STATUS_INVALID_MESSAGE;
         i64 status = 0;
         process_id waited_pid = 0;
-        const auto result = task::wait_process_children(task::current_process(), decoded.pid,
-                                                        static_cast<flag_t>(decoded.flags), status, waited_pid);
+        const auto result = task::wait_process_children(
+            caller, decoded.pid, static_cast<flag_t>(decoded.flags), status, waited_pid,
+            [&state] { return state.execution_interrupted(); },
+            [&state](task::wait_queue_t *queue) { state.set_execution_wait_queue(queue); });
+        if (state.execution_interrupted())
+            return NA_STATUS_PEER_CLOSED;
         if (result != 0)
             return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
                                                                                   : NA_STATUS_PEER_CLOSED;
@@ -1308,9 +1557,29 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
+    if (method_id == NA_METHOD_PROCESS_GET_CONTROLLING_TERMINAL)
+    {
+        if (target != caller)
+            return NA_STATUS_ACCESS_DENIED;
+        naos::system::Process::get_controlling_terminal_request decoded{};
+        if (!decode_message(request, decoded, naos::system::Process::decode_get_controlling_terminal_request))
+            return NA_STATUS_INVALID_MESSAGE;
+        na_terminal_locator_t locator{};
+        if (!task::get_controlling_terminal_locator(target, locator))
+            return state.complete_reply(empty_bytes(), empty_resources(), ENXIO) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        naos::system::Process::get_controlling_terminal_response encoded{};
+        encoded.terminal_id = locator.terminal_id;
+        encoded.generation = locator.generation;
+        for (u64 i = 0; i < encoded.token.size(); i++)
+            encoded.token[i] = locator.token[i];
+        if (!encode_message(response, encoded, naos::system::Process::encode_get_controlling_terminal_response))
+            return NA_STATUS_RESOURCE_EXHAUSTED;
+        return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+
     if (method_id == NA_METHOD_PROCESS_SET_SESSION)
     {
-        if (target != task::current_process())
+        if (target != caller)
             return NA_STATUS_ACCESS_DENIED;
         naos::system::Process::set_session_request decoded{};
         if (!decode_message(request, decoded, naos::system::Process::decode_set_session_request))
@@ -1361,9 +1630,27 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
             return NA_STATUS_INVALID_MESSAGE;
         if (decoded.process_group < 0)
             return NA_STATUS_INVALID_ARGUMENT;
-        const auto result = task::setpgid(task::current_process(), target->pid,
-                                          static_cast<group_id>(decoded.process_group));
+        const auto result = task::setpgid(caller, target->pid, static_cast<group_id>(decoded.process_group));
         return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+
+    if (method_id == NA_METHOD_PROCESS_START)
+    {
+        if (caller == nullptr || target->parent_pid != caller->pid)
+        {
+            return NA_STATUS_ACCESS_DENIED;
+        }
+        naos::system::Process::start_request decoded{};
+        if (!decode_message(request, decoded, naos::system::Process::decode_start_request))
+        {
+            return NA_STATUS_INVALID_MESSAGE;
+        }
+        if (target->main_thread_started.load())
+        {
+            return state.complete_reply(empty_bytes(), empty_resources(), EBUSY) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }
+        task::start_process(target);
+        return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
     }
 
     return NA_STATUS_NOT_SUPPORTED;
@@ -1521,15 +1808,359 @@ na_status_t publish_shared_ring_call(invocation_state &state, data_plane::shared
     return NA_STATUS_NOT_SUPPORTED;
 }
 
+na_status_t publish_input_event_source_call(invocation_state &state, dev::input::input_event_source &source,
+                                            u64 method_id, const freelibcxx::vector<byte> &request)
+{
+    if (method_id != NA_METHOD_INPUT_EVENT_SOURCE_SUBSCRIBE)
+        return NA_STATUS_NOT_SUPPORTED;
+
+    naos::system::InputEventSource::subscribe_request decoded{};
+    if (!decode_message(request, decoded, naos::system::InputEventSource::decode_subscribe_request))
+        return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    khandle receiver;
+    if (!source.subscribe(receiver, decoded.max_events))
+        return state.complete_reply(empty_bytes(), empty_resources(), EAGAIN) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+
+    auto meta = kernel_view_metadata(NA_SCOPE_INPUT_EVENT_SOURCE, naos::system::InputEventSource::protocol_uuid,
+                                     NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                                     NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
+    meta.binding = NA_BINDING_RAW_CHANNEL_END;
+    meta.scope = 0;
+
+    naos::system::InputEventSource::subscribe_response response{};
+    response.receiver.value = 0;
+    freelibcxx::vector<byte> encoded_response(memory::MemoryAllocatorV);
+    if (!encode_message(encoded_response, response, naos::system::InputEventSource::encode_subscribe_response))
+    {
+        (void)source.rollback_subscription(receiver.operator&());
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
+
+    capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
+    auto *receiver_object = receiver.operator&();
+    response_resources.push_back(
+        capability::transfer_record(NA_HANDLE_INVALID, true, capability::transferred_resource(receiver, meta)));
+    if (!state.complete_reply(std::move(encoded_response), std::move(response_resources)))
+    {
+        (void)source.rollback_subscription(receiver_object);
+        return NA_STATUS_PEER_CLOSED;
+    }
+    return NA_STATUS_OK;
+}
+
+na_status_t publish_terminal_job_control_call(invocation_state &state, dev::tty::terminal_job_control &view,
+                                              u64 method_id, const freelibcxx::vector<byte> &request,
+                                              task::process_t *caller)
+{
+    auto *identity = view.identity();
+    auto *process = caller;
+    if (identity == nullptr || !identity->live() || process == nullptr)
+        return NA_STATUS_OBJECT_REVOKED;
+
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_CHECK_IO)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::check_io_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_check_io_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            const auto result =
+                task::check_terminal_job_control(process, identity, decoded.direction == 1, decoded.tostop != 0);
+            if (result != 0)
+                return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_ATTACH)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::attach_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_attach_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            if (decoded.force != 0 &&
+                !caller->resource.has_native_object_type(kobject::type_e::terminal_driver_factory))
+                return state.complete_reply(empty_bytes(), empty_resources(), EACCES) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            const auto result = task::attach_controlling_terminal(process, view.identity_handle(), decoded.force != 0);
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_DETACH)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::detach_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_detach_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            task::detach_controlling_terminal(process);
+            return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_GET_PGRP)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::get_pgrp_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_get_pgrp_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            const auto group = task::get_foreground_process_group(identity);
+            if (group < 0)
+                return state.complete_reply(empty_bytes(), empty_resources(), static_cast<i64>(-group))
+                           ? NA_STATUS_OK
+                           : NA_STATUS_PEER_CLOSED;
+            naos::system::TerminalJobControl::get_pgrp_response response{};
+            response.group = static_cast<u64>(group);
+            freelibcxx::vector<byte> encoded(memory::MemoryAllocatorV);
+            if (!encode_message(encoded, response, naos::system::TerminalJobControl::encode_get_pgrp_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(encoded), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_SET_PGRP)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::set_pgrp_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_set_pgrp_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            const auto result =
+                task::set_foreground_process_group(process, identity, static_cast<group_id>(decoded.group));
+            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_GET_SID)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::get_sid_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_get_sid_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            naos::system::TerminalJobControl::get_sid_response response{};
+            response.session = identity->session_id();
+            freelibcxx::vector<byte> encoded(memory::MemoryAllocatorV);
+            if (!encode_message(encoded, response, naos::system::TerminalJobControl::encode_get_sid_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(encoded), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_JOB_CONTROL_QUERY)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalJobControl::query_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalJobControl::decode_query_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            naos::system::TerminalJobControl::query_response response{};
+            response.state.session = identity->session_id();
+            response.state.process_group = process->process_group_id;
+            response.state.foreground_process_group = identity->foreground_process_group();
+            response.state.has_controlling_terminal = task::get_controlling_terminal(process) == identity ? 1 : 0;
+            response.state.generation = identity->generation();
+            freelibcxx::vector<byte> encoded(memory::MemoryAllocatorV);
+            if (!encode_message(encoded, response, naos::system::TerminalJobControl::encode_query_response))
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            return state.complete_reply(std::move(encoded), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        }();
+    }
+    return NA_STATUS_NOT_SUPPORTED;
+}
+
+na_status_t publish_terminal_driver_control_call(invocation_state &state, dev::tty::terminal_driver_control &view,
+                                                 u64 method_id, const freelibcxx::vector<byte> &request)
+{
+    auto *identity = view.identity();
+    if (identity == nullptr || !identity->live())
+        return NA_STATUS_OBJECT_REVOKED;
+
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_CONTROL_RAISE_FOREGROUND)
+    {
+        naos::system::TerminalDriverControl::raise_foreground_request decoded{};
+        if (!decode_message(request, decoded, naos::system::TerminalDriverControl::decode_raise_foreground_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        task::signal_num_t signal_number = task::signal::sigint;
+        if (decoded.action == naos::system::TerminalDriverControl::DriverAction::quit)
+            signal_number = task::signal::sigquit;
+        else if (decoded.action == naos::system::TerminalDriverControl::DriverAction::suspend)
+            signal_number = task::signal::sigtstp;
+        group_id foreground = 0;
+        if (!identity->foreground_if_live(foreground))
+            return state.complete_reply(empty_bytes(), empty_resources(), EIO) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        const auto signal_result =
+            foreground > 0 ? task::send_signal_to_process_group(static_cast<group_id>(foreground), signal_number)
+                           : ENOENT;
+        return state.complete_reply(empty_bytes(), empty_resources(), signal_result < 0 ? signal_result : 0)
+                   ? NA_STATUS_OK
+                   : NA_STATUS_PEER_CLOSED;
+    }
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_CONTROL_NOTIFY_WINSIZE_CHANGED)
+    {
+        naos::system::TerminalDriverControl::notify_winsize_changed_request decoded{};
+        if (!decode_message(request, decoded,
+                            naos::system::TerminalDriverControl::decode_notify_winsize_changed_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        group_id foreground = 0;
+        if (!identity->foreground_if_live(foreground))
+            // Resizing still succeeds when there is no foreground process;
+            // there is simply nobody to notify.
+            return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+        const auto signal_result =
+            foreground > 0
+                ? task::send_signal_to_process_group(static_cast<group_id>(foreground), task::signal::sigwinch)
+                : ENOENT;
+        const i64 notification_error = signal_result == ENOENT ? 0 : (signal_result < 0 ? signal_result : 0);
+        return state.complete_reply(empty_bytes(), empty_resources(), notification_error) ? NA_STATUS_OK
+                                                                                          : NA_STATUS_PEER_CLOSED;
+    }
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_CONTROL_HANGUP)
+    {
+        naos::system::TerminalDriverControl::hangup_request decoded{};
+        if (!decode_message(request, decoded, naos::system::TerminalDriverControl::decode_hangup_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        group_id foreground = 0;
+        if (identity->revoke_and_take_foreground(&foreground))
+        {
+            i64 signal_error = 0;
+            if (foreground > 0)
+            {
+                const auto hangup =
+                    task::send_signal_to_process_group(static_cast<group_id>(foreground), task::signal::sighup);
+                const auto continue_result =
+                    task::send_signal_to_process_group(static_cast<group_id>(foreground), task::signal::sigcont);
+                if (hangup < 0)
+                    signal_error = hangup;
+                else if (continue_result < 0)
+                    signal_error = continue_result;
+            }
+            task::detach_session_terminal(identity);
+            return state.complete_reply(empty_bytes(), empty_resources(), signal_error) ? NA_STATUS_OK
+                                                                                        : NA_STATUS_PEER_CLOSED;
+        }
+        return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_CONTROL_REVOKE)
+    {
+        naos::system::TerminalDriverControl::revoke_request decoded{};
+        if (!decode_message(request, decoded, naos::system::TerminalDriverControl::decode_revoke_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        group_id foreground = 0;
+        if (identity->revoke_and_take_foreground(&foreground))
+        {
+            i64 signal_error = 0;
+            if (foreground > 0)
+            {
+                const auto hangup =
+                    task::send_signal_to_process_group(static_cast<group_id>(foreground), task::signal::sighup);
+                const auto continue_result =
+                    task::send_signal_to_process_group(static_cast<group_id>(foreground), task::signal::sigcont);
+                if (hangup < 0)
+                    signal_error = hangup;
+                else if (continue_result < 0)
+                    signal_error = continue_result;
+            }
+            task::detach_session_terminal(identity);
+            return state.complete_reply(empty_bytes(), empty_resources(), signal_error) ? NA_STATUS_OK
+                                                                                        : NA_STATUS_PEER_CLOSED;
+        }
+        return state.complete_reply(empty_bytes(), empty_resources(), 0) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+    return NA_STATUS_NOT_SUPPORTED;
+}
+
+na_status_t publish_terminal_driver_factory_call(invocation_state &state, dev::tty::terminal_driver_factory &factory,
+                                                 u64 method_id, const freelibcxx::vector<byte> &request)
+{
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_FACTORY_CREATE)
+    {
+        return [&]() __attribute__((noinline)) -> na_status_t {
+            naos::system::TerminalDriverFactory::create_request decoded{};
+            if (!decode_message(request, decoded, naos::system::TerminalDriverFactory::decode_create_request))
+                return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+            khandle identity;
+            khandle job_control;
+            khandle driver_control;
+            if (!factory.create(decoded.mode, identity, job_control, driver_control))
+                return state.complete_reply(empty_bytes(), empty_resources(), EAGAIN) ? NA_STATUS_OK
+                                                                                      : NA_STATUS_PEER_CLOSED;
+
+            auto driver_meta = kernel_view_metadata(
+                NA_SCOPE_TERMINAL_DRIVER_CONTROL, naos::system::TerminalDriverControl::protocol_uuid,
+                NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT);
+            auto job_meta = kernel_view_metadata(
+                NA_SCOPE_TERMINAL_JOB_CONTROL, naos::system::TerminalJobControl::protocol_uuid,
+                NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT,
+                NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT, naos::system::TerminalJobControl::revision,
+                naos::system::TerminalJobControl::features);
+            naos::system::TerminalDriverFactory::create_response response{};
+            auto *typed_identity = identity.as<dev::tty::terminal_identity>().operator&();
+            if (typed_identity == nullptr)
+            {
+                factory.rollback(0, 0);
+                return state.complete_reply(empty_bytes(), empty_resources(), EIO) ? NA_STATUS_OK
+                                                                                   : NA_STATUS_PEER_CLOSED;
+            }
+            response.locator.terminal_id = typed_identity == nullptr ? 0 : typed_identity->id();
+            response.locator.generation = typed_identity == nullptr ? 0 : typed_identity->generation();
+            response.locator.token = typed_identity == nullptr ? std::array<u8, 16>{} : typed_identity->token();
+            response.driver.value = 0;
+            response.job_control.value = 1;
+            freelibcxx::vector<byte> encoded(memory::MemoryAllocatorV);
+            if (!encode_message(encoded, response, naos::system::TerminalDriverFactory::encode_create_response))
+            {
+                factory.rollback(response.locator.terminal_id, response.locator.generation);
+                return NA_STATUS_RESOURCE_EXHAUSTED;
+            }
+
+            capability::transfer_record_list response_resources(memory::KernelCommonAllocatorV);
+            response_resources.push_back(capability::transfer_record(
+                NA_HANDLE_INVALID, true, capability::transferred_resource(std::move(driver_control), driver_meta)));
+            response_resources.push_back(capability::transfer_record(
+                NA_HANDLE_INVALID, true, capability::transferred_resource(std::move(job_control), job_meta)));
+            if (!state.complete_reply(std::move(encoded), std::move(response_resources)))
+            {
+                factory.rollback(response.locator.terminal_id, response.locator.generation);
+                return NA_STATUS_PEER_CLOSED;
+            }
+            return NA_STATUS_OK;
+        }();
+    }
+    if (method_id == NA_METHOD_TERMINAL_DRIVER_FACTORY_VALIDATE_LOCATOR)
+    {
+        naos::system::TerminalDriverFactory::validate_locator_request decoded{};
+        if (!decode_message(request, decoded, naos::system::TerminalDriverFactory::decode_validate_locator_request))
+            return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                  : NA_STATUS_PEER_CLOSED;
+        naos::system::TerminalDriverFactory::validate_locator_response response{};
+        response.valid = factory.validate_locator(decoded.locator.terminal_id, decoded.locator.generation,
+                                                  decoded.locator.token.data(), decoded.locator.token.size())
+                             ? 1
+                             : 0;
+        freelibcxx::vector<byte> encoded(memory::MemoryAllocatorV);
+        if (!encode_message(encoded, response, naos::system::TerminalDriverFactory::encode_validate_locator_response))
+            return NA_STATUS_RESOURCE_EXHAUSTED;
+        return state.complete_reply(std::move(encoded), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
+    }
+    return NA_STATUS_NOT_SUPPORTED;
+}
+
 na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &state, u64 method_id,
-                                 const freelibcxx::vector<byte> &request,
-                                 capability::transfer_record_list &resources)
+                                 const freelibcxx::vector<byte> &request, capability::transfer_record_list &resources,
+                                 task::process_t *caller)
 {
     state.mark_dispatched();
     if (auto *file = target.object->get<fs::vfs::file>())
     {
-        if (target.meta.scope != NA_SCOPE_FILE && target.meta.scope != NA_SCOPE_STREAM &&
-            target.meta.scope != NA_SCOPE_TTY_CONTROL)
+        if (target.meta.scope != NA_SCOPE_FILE && target.meta.scope != NA_SCOPE_STREAM)
             return NA_STATUS_WRONG_SCOPE;
         return publish_file_call(state, *file, target.meta.scope, method_id, request);
     }
@@ -1537,7 +2168,7 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
     {
         if (target.meta.scope != NA_SCOPE_DIRECTORY)
             return NA_STATUS_WRONG_SCOPE;
-        return publish_directory_call(state, *directory, method_id, request);
+        return publish_directory_call(state, *directory, method_id, request, caller);
     }
     if (auto *process = target.object->get<task::process_object>())
     {
@@ -1559,7 +2190,10 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
         if ((method_id == NA_METHOD_PROCESS_SET_SESSION || method_id == NA_METHOD_PROCESS_SET_PROCESS_GROUP) &&
             (target.meta.protocol_rights & static_cast<u64>(NA_PROCESS_RIGHT_JOB_CONTROL)) == 0)
             return NA_STATUS_ACCESS_DENIED;
-        return publish_process_call(state, *process, method_id, request);
+        if (method_id == NA_METHOD_PROCESS_START &&
+            (target.meta.protocol_rights & static_cast<u64>(NA_PROCESS_RIGHT_START)) == 0)
+            return NA_STATUS_ACCESS_DENIED;
+        return publish_process_call(state, *process, method_id, request, caller);
     }
     if (auto *memory_object = target.object->get<data_plane::memory_object>())
     {
@@ -1592,9 +2226,92 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
     {
         if (target.meta.scope != NA_SCOPE_SERVICE_DIRECTORY)
             return NA_STATUS_WRONG_SCOPE;
-        return publish_service_directory_call(state, *directory, method_id, request, resources);
+        return publish_service_directory_call(state, *directory, method_id, request, resources,
+                                              target.meta.protocol_rights, caller);
+    }
+    if (auto *source = target.object->get<dev::input::input_event_source>())
+    {
+        if (target.meta.scope != NA_SCOPE_INPUT_EVENT_SOURCE)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_input_event_source_call(state, *source, method_id, request);
+    }
+    if (auto *view = target.object->get<dev::tty::terminal_job_control>())
+    {
+        if (target.meta.scope != NA_SCOPE_TERMINAL_JOB_CONTROL)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_terminal_job_control_call(state, *view, method_id, request, caller);
+    }
+    if (auto *view = target.object->get<dev::tty::terminal_driver_control>())
+    {
+        if (target.meta.scope != NA_SCOPE_TERMINAL_DRIVER_CONTROL)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_terminal_driver_control_call(state, *view, method_id, request);
+    }
+    if (auto *factory = target.object->get<dev::tty::terminal_driver_factory>())
+    {
+        if (target.meta.scope != NA_SCOPE_TERMINAL_DRIVER_FACTORY)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_terminal_driver_factory_call(state, *factory, method_id, request);
     }
     return NA_STATUS_WRONG_BINDING;
+}
+
+void execute_kernel_dispatch(kernel_dispatch_request &request)
+{
+    auto &state = *request.state;
+    auto *caller = request.caller ? request.caller->process() : nullptr;
+
+    if (!state.begin_receive())
+    {
+        if (caller != nullptr)
+            (void)caller->resource.restore_native_batch(request.resources);
+        return;
+    }
+
+    if (caller == nullptr)
+    {
+        state.complete_reply(empty_bytes(), empty_resources(), ECHILD);
+        return;
+    }
+
+    const auto status =
+        dispatch_kernel_view(request.target, state, request.method_id, request.bytes, request.resources, caller);
+    const auto restore_status = caller->resource.restore_native_batch(request.resources);
+    if (restore_status != NA_STATUS_OK)
+    {
+        state.complete_reply(empty_bytes(), empty_resources(), EIO);
+        return;
+    }
+
+    if (state.cancellation_requested())
+    {
+        state.complete_failure(NA_EXECUTION_OUTCOME_UNKNOWN, NA_OUTCOME_REASON_CANCEL_REQUESTED);
+        return;
+    }
+    if (state.execution_interrupted())
+        return;
+
+    if (status == NA_STATUS_NOT_SUPPORTED)
+    {
+        state.complete_reply(empty_bytes(), empty_resources(), ENOTSUP);
+    }
+    else if (status != NA_STATUS_OK)
+    {
+        state.complete_reply(empty_bytes(), empty_resources(), EINVAL);
+    }
+}
+
+void kernel_dispatch_worker(task::thread_start_info_t *)
+{
+    for (;;)
+    {
+        kernel_dispatcher->wait.do_wait([] { return kernel_dispatcher->pending.load(std::memory_order_acquire) != 0; });
+        auto *request = kernel_dispatcher->pop();
+        if (request == nullptr)
+            continue;
+        execute_kernel_dispatch(*request);
+        memory::Delete<>(memory::KernelCommonAllocatorV, request);
+    }
 }
 
 bool endpoint_is_client(capability::entry &entry, protocol_endpoint *&endpoint)
@@ -1631,6 +2348,12 @@ bool descriptor_allows_oneway(const na_protocol_descriptor_t &descriptor, u64 me
     return (descriptor.oneway_bitmap[word] & (1ULL << bit)) != 0;
 }
 
+bool descriptor_allows_method_rights(const na_protocol_descriptor_t &descriptor, u64 method_id, u64 rights)
+{
+    return descriptor_allows_method(descriptor, method_id) &&
+           (rights & descriptor.method_rights[method_id - 1]) == descriptor.method_rights[method_id - 1];
+}
+
 na_status_t validate_descriptor(const na_protocol_descriptor_t &descriptor)
 {
     bool uuid_is_zero = true;
@@ -1654,6 +2377,8 @@ na_status_t validate_descriptor(const na_protocol_descriptor_t &descriptor)
             return NA_STATUS_INVALID_ARGUMENT;
         if ((descriptor.oneway_bitmap[word] & (1ULL << bit)) != 0)
             return NA_STATUS_INVALID_ARGUMENT;
+        if (descriptor.method_rights[method_id - 1] != 0)
+            return NA_STATUS_INVALID_ARGUMENT;
     }
     for (u64 method_id = 1; method_id <= descriptor.method_count; method_id++)
     {
@@ -1665,11 +2390,30 @@ na_status_t validate_descriptor(const na_protocol_descriptor_t &descriptor)
         if ((descriptor.oneway_bitmap[word] & (1ULL << bit)) != 0 &&
             (descriptor.flags & NA_PROTOCOL_FLAG_ALLOW_ONEWAY) == 0)
             return NA_STATUS_INVALID_ARGUMENT;
+        if ((descriptor.method_bitmap[word] & (1ULL << bit)) != 0 &&
+            (descriptor.method_rights[method_id - 1] == 0 ||
+             (descriptor.method_rights[method_id - 1] & ~descriptor.protocol_rights) != 0))
+            return NA_STATUS_INVALID_ARGUMENT;
     }
     return NA_STATUS_OK;
 }
 
 } // namespace
+
+void init_kernel_dispatch_worker()
+{
+    if (kernel_dispatcher != nullptr)
+        return;
+    kernel_dispatcher = memory::New<kernel_dispatch_queue>(memory::KernelCommonAllocatorV);
+    if (kernel_dispatcher == nullptr)
+        trace::panic("Unable to allocate kernel invocation dispatcher");
+    constexpr u64 worker_count = 4;
+    for (u64 worker = 0; worker < worker_count; worker++)
+    {
+        if (task::create_kernel_process(kernel_dispatch_worker, nullptr, 0) == nullptr)
+            trace::panic("Unable to create kernel invocation dispatcher");
+    }
+}
 
 protocol_descriptor::protocol_descriptor(const na_protocol_descriptor_t &descriptor)
     : kobject(type_e::protocol_descriptor)
@@ -1792,9 +2536,9 @@ na_signal_t invocation_state::signals() const
     return result;
 }
 
-bool invocation_state::publish_locked(na_execution_outcome_t outcome, na_outcome_reason_t reason,
-                                      freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
-                                      i64 protocol_error)
+bool invocation_state::publish_locked_no_wake(na_execution_outcome_t outcome, na_outcome_reason_t reason,
+                                              freelibcxx::vector<byte> &&bytes,
+                                              capability::transfer_record_list &&resources, i64 protocol_error)
 {
     if (phase_ == invocation_phase::ready || phase_ == invocation_phase::consumed || client_closed_)
         return false;
@@ -1809,18 +2553,42 @@ bool invocation_state::publish_locked(na_execution_outcome_t outcome, na_outcome
         response_bytes_ = std::move(bytes);
         response_resources_ = std::move(resources);
     }
-    wake_invocation_waiters();
-    wait_queue_.do_wake_up();
     return true;
+}
+
+bool invocation_state::publish_locked(na_execution_outcome_t outcome, na_outcome_reason_t reason,
+                                      freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
+                                      i64 protocol_error)
+{
+    return publish_locked_no_wake(outcome, reason, std::move(bytes), std::move(resources), protocol_error);
 }
 
 bool invocation_state::begin_receive()
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (phase_ != invocation_phase::queued)
-        return false;
-    phase_ = invocation_phase::receiving;
-    return true;
+    bool cancelled = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (phase_ != invocation_phase::queued)
+            return false;
+        if (cancellation_requested_ || client_closed_ || !responder_alive_)
+        {
+            cancelled = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED,
+                                               cancellation_requested_ ? NA_OUTCOME_REASON_CANCEL_REQUESTED
+                                                                       : NA_OUTCOME_REASON_RESPONDER_ABANDONED,
+                                               empty_bytes(), empty_resources(), 0);
+        }
+        else
+        {
+            phase_ = invocation_phase::receiving;
+            return true;
+        }
+    }
+    if (cancelled)
+    {
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
+    }
+    return false;
 }
 
 void invocation_state::rollback_receive()
@@ -1866,6 +2634,27 @@ bool invocation_state::cancellation_requested() const
     return cancellation_requested_;
 }
 
+bool invocation_state::execution_interrupted() const
+{
+    auto &lock = const_cast<lock::spinlock_t &>(lock_);
+    uctx::RawSpinLockUninterruptibleContext guard(lock);
+    return cancellation_requested_ || client_closed_ || !responder_alive_ || phase_ == invocation_phase::ready ||
+           phase_ == invocation_phase::consumed;
+}
+
+void invocation_state::set_execution_wait_queue(task::wait_queue_t *queue)
+{
+    uctx::RawSpinLockUninterruptibleContext guard(lock_);
+    execution_wait_queue_ = queue;
+}
+
+void invocation_state::clear_execution_wait_queue(task::wait_queue_t *queue)
+{
+    uctx::RawSpinLockUninterruptibleContext guard(lock_);
+    if (execution_wait_queue_ == queue)
+        execution_wait_queue_ = nullptr;
+}
+
 void invocation_state::mark_dispatched()
 {
     uctx::RawSpinLockUninterruptibleContext guard(lock_);
@@ -1877,6 +2666,8 @@ bool invocation_state::cancel(protocol_state *queue_owner)
 {
     invocation_request *removed = nullptr;
     bool cancelled = false;
+    bool wake_after = false;
+    task::wait_queue_t *execution_wait_queue = nullptr;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
         if (phase_ == invocation_phase::queued)
@@ -1888,24 +2679,33 @@ bool invocation_state::cancel(protocol_state *queue_owner)
                 removed = owner->remove_queued(this);
                 if (removed == nullptr)
                 {
-                    // A receiver may have claimed the request between the
-                    // state check and queue removal.  Leave it queued for
-                    // that receive transaction and expose cancellation as a
-                    // best-effort signal.
-                    wake_invocation_waiters();
-                    return true;
+                    wake_after = true;
                 }
             }
-            cancelled = publish_locked(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_CANCEL_REQUESTED, empty_bytes(),
-                                       empty_resources(), 0);
+            if (removed != nullptr)
+                cancelled = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_CANCEL_REQUESTED,
+                                                   empty_bytes(), empty_resources(), 0);
+            else if (owner == nullptr)
+            {
+                cancelled = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_CANCEL_REQUESTED,
+                                                   empty_bytes(), empty_resources(), 0);
+                wake_after = cancelled;
+            }
         }
         else if (phase_ == invocation_phase::receiving || phase_ == invocation_phase::dispatched)
         {
             cancellation_requested_ = true;
-            wake_invocation_waiters();
+            wake_after = true;
             cancelled = true;
+            execution_wait_queue = execution_wait_queue_;
         }
     }
+    if (wake_after)
+        wake_invocation_waiters();
+    if (cancelled)
+        wait_queue_.do_wake_up();
+    if (execution_wait_queue != nullptr)
+        execution_wait_queue->do_wake_up();
     if (removed != nullptr)
         removed->state->clear_queue_owner();
     if (removed != nullptr)
@@ -1950,52 +2750,92 @@ void invocation_state::expire_deadline()
         if (request != nullptr)
         {
             clear_queue_owner();
+            bool published = false;
             {
                 uctx::RawSpinLockUninterruptibleContext guard(lock_);
                 if (phase_ == invocation_phase::queued)
-                    publish_locked(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_OPERATION_DEADLINE, empty_bytes(),
-                                   empty_resources(), 0);
+                    published = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_OPERATION_DEADLINE,
+                                                       empty_bytes(), empty_resources(), 0);
+            }
+            if (published)
+            {
+                wake_invocation_waiters();
+                wait_queue_.do_wake_up();
             }
             memory::Delete<>(memory::KernelCommonAllocatorV, request);
             return;
         }
     }
 
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (phase_ == invocation_phase::queued)
+    bool published = false;
+    task::wait_queue_t *execution_wait_queue = nullptr;
     {
-        publish_locked(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_OPERATION_DEADLINE, empty_bytes(),
-                       empty_resources(), 0);
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (phase_ == invocation_phase::queued)
+        {
+            published = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_OPERATION_DEADLINE,
+                                               empty_bytes(), empty_resources(), 0);
+        }
+        else if (phase_ == invocation_phase::receiving || phase_ == invocation_phase::dispatched)
+        {
+            responder_alive_ = false;
+            execution_wait_queue = execution_wait_queue_;
+            published = publish_locked_no_wake(NA_EXECUTION_OUTCOME_UNKNOWN, NA_OUTCOME_REASON_OPERATION_DEADLINE,
+                                               empty_bytes(), empty_resources(), 0);
+        }
     }
-    else if (phase_ == invocation_phase::receiving || phase_ == invocation_phase::dispatched)
+    if (execution_wait_queue != nullptr)
+        execution_wait_queue->do_wake_up();
+    if (published)
     {
-        responder_alive_ = false;
-        publish_locked(NA_EXECUTION_OUTCOME_UNKNOWN, NA_OUTCOME_REASON_OPERATION_DEADLINE, empty_bytes(),
-                       empty_resources(), 0);
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
     }
 }
 
 void invocation_state::close_client()
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    client_closed_ = true;
-    response_bytes_.clear();
-    response_resources_.clear();
-    release_result_budget_locked();
+    task::wait_queue_t *execution_wait_queue = nullptr;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        client_closed_ = true;
+        response_bytes_.clear();
+        response_resources_.clear();
+        release_result_budget_locked();
+        execution_wait_queue = execution_wait_queue_;
+    }
+    if (execution_wait_queue != nullptr)
+        execution_wait_queue->do_wake_up();
 }
 
 void invocation_state::abandon_responder()
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (!responder_alive_)
-        return;
-    responder_alive_ = false;
-    if (phase_ == invocation_phase::queued)
-        publish_locked(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_RESPONDER_ABANDONED, empty_bytes(),
-                       empty_resources(), 0);
-    else if (phase_ == invocation_phase::dispatched)
-        publish_locked(NA_EXECUTION_OUTCOME_UNKNOWN, NA_OUTCOME_REASON_RESPONDER_ABANDONED, empty_bytes(),
-                       empty_resources(), 0);
+    bool published = false;
+    task::wait_queue_t *execution_wait_queue = nullptr;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (!responder_alive_)
+            return;
+        responder_alive_ = false;
+        if (phase_ == invocation_phase::queued)
+        {
+            published = publish_locked_no_wake(NA_EXECUTION_NOT_DELIVERED, NA_OUTCOME_REASON_RESPONDER_ABANDONED,
+                                               empty_bytes(), empty_resources(), 0);
+        }
+        else if (phase_ == invocation_phase::dispatched)
+        {
+            execution_wait_queue = execution_wait_queue_;
+            published = publish_locked_no_wake(NA_EXECUTION_OUTCOME_UNKNOWN, NA_OUTCOME_REASON_RESPONDER_ABANDONED,
+                                               empty_bytes(), empty_resources(), 0);
+        }
+    }
+    if (execution_wait_queue != nullptr)
+        execution_wait_queue->do_wake_up();
+    if (published)
+    {
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
+    }
 }
 
 bool invocation_state::consume_responder()
@@ -2008,29 +2848,60 @@ bool invocation_state::consume_responder()
 }
 
 bool invocation_state::complete_reply(freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
-                                      i64 protocol_error)
+                                      i64 protocol_error, task::resource_table_t *source_resources)
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    return publish_locked(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, std::move(bytes), std::move(resources),
-                          protocol_error);
+    bool result = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        result = publish_locked_no_wake(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, std::move(bytes),
+                                        std::move(resources), protocol_error);
+        if (result && source_resources != nullptr)
+            source_resources->commit_native_batch(response_resources_);
+    }
+    if (result)
+    {
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
+    }
+    return result;
 }
 
 bool invocation_state::complete_reply(freelibcxx::vector<byte> &bytes, capability::transfer_record_list &resources,
-                                      i64 protocol_error)
+                                      i64 protocol_error, task::resource_table_t *source_resources)
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (phase_ == invocation_phase::ready || phase_ == invocation_phase::consumed)
-        return false;
-    return publish_locked(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, std::move(bytes), std::move(resources),
-                          protocol_error);
+    bool result = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (phase_ == invocation_phase::ready || phase_ == invocation_phase::consumed)
+            return false;
+        result = publish_locked_no_wake(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, std::move(bytes),
+                                        std::move(resources), protocol_error);
+        if (result && source_resources != nullptr)
+            source_resources->commit_native_batch(response_resources_);
+    }
+    if (result)
+    {
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
+    }
+    return result;
 }
 
-bool invocation_state::complete_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason)
+bool invocation_state::complete_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason, i64 protocol_error)
 {
     if (!valid_failure(outcome, reason))
         return false;
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    return publish_locked(outcome, reason, empty_bytes(), empty_resources(), 0);
+    bool published = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        published = publish_locked_no_wake(outcome, reason, empty_bytes(), empty_resources(), protocol_error);
+    }
+    if (published)
+    {
+        wake_invocation_waiters();
+        wait_queue_.do_wake_up();
+    }
+    return published;
 }
 
 bool invocation_state::complete_not_delivered(na_outcome_reason_t reason)
@@ -2107,15 +2978,20 @@ void invocation_state::restore_result(freelibcxx::vector<byte> &&bytes, capabili
 
 na_status_t invocation_state::commit_result()
 {
-    uctx::RawSpinLockUninterruptibleContext guard(lock_);
-    if (!result_claimed_ || phase_ != invocation_phase::ready)
-        return phase_ == invocation_phase::consumed ? NA_STATUS_ALREADY_CONSUMED : NA_STATUS_WOULD_BLOCK;
-    phase_ = invocation_phase::consumed;
-    result_claimed_ = false;
-    response_bytes_.clear();
-    response_resources_.clear();
-    release_result_budget_locked();
-    wake_invocation_waiters();
+    bool committed = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (!result_claimed_ || phase_ != invocation_phase::ready)
+            return phase_ == invocation_phase::consumed ? NA_STATUS_ALREADY_CONSUMED : NA_STATUS_WOULD_BLOCK;
+        phase_ = invocation_phase::consumed;
+        result_claimed_ = false;
+        response_bytes_.clear();
+        response_resources_.clear();
+        release_result_budget_locked();
+        committed = true;
+    }
+    if (committed)
+        wake_invocation_waiters();
     return NA_STATUS_OK;
 }
 
@@ -2233,6 +3109,10 @@ na_status_t protocol_state::enqueue(invocation_request *request, bool *queued)
     if (!valid_ || queue_ == nullptr || request == nullptr || request->bytes.size() > max_bytes_ ||
         request->resources.size() > max_resources_)
         return NA_STATUS_INVALID_MESSAGE;
+    // Once the request is published, the peer may consume and destroy it
+    // before this function finishes. Keep the invocation state alive locally
+    // instead of reading it through the queued request after unlocking.
+    auto state = request->state;
     na_status_t result = NA_STATUS_OK;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
@@ -2258,6 +3138,12 @@ na_status_t protocol_state::enqueue(invocation_request *request, bool *queued)
                 request->queued_resource_count = resource_count;
                 queue_->bytes += request->bytes.size();
                 queue_->resources += resource_count;
+                if (request->source_resources != nullptr)
+                {
+                    auto *source_resources = request->source_resources;
+                    request->source_resources = nullptr;
+                    source_resources->commit_native_batch(request->resources);
+                }
                 if (queued != nullptr)
                     *queued = true;
             }
@@ -2265,7 +3151,6 @@ na_status_t protocol_state::enqueue(invocation_request *request, bool *queued)
     }
     if (result == NA_STATUS_OK)
     {
-        auto state = request->state;
         if (state->cancellation_requested())
             state->cancel(this);
         if (queued != nullptr && *queued && (state->signals() & NA_SIGNAL_COMPLETED) != 0)
@@ -2449,25 +3334,38 @@ na_status_t create_protocol_descriptor(task::resource_table_t &resources, const 
 {
     if (!valid_user_output(output))
         return NA_STATUS_FAULT;
-    na_protocol_descriptor_t descriptor{};
-    auto status = copy_frame(descriptor, input);
+    auto *descriptor = memory::New<na_protocol_descriptor_t>(memory::KernelCommonAllocatorV);
+    if (descriptor == nullptr)
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    *descriptor = {};
+    auto status = copy_frame(*descriptor, input);
     if (status != NA_STATUS_OK)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, descriptor);
         return status;
+    }
     if (naos::usercopy::ranges_overlap(reinterpret_cast<u64>(input), sizeof(*input), reinterpret_cast<u64>(output),
                                        sizeof(*output)))
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, descriptor);
         return NA_STATUS_INVALID_ARGUMENT;
-    status = validate_descriptor(descriptor);
+    }
+    status = validate_descriptor(*descriptor);
     if (status != NA_STATUS_OK)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, descriptor);
         return status;
-    auto object = handle_t<protocol_descriptor>::make(descriptor);
+    }
+    auto object = handle_t<protocol_descriptor>::make(*descriptor);
     capability::metadata metadata;
     metadata.binding = NA_BINDING_NONE;
-    metadata.protocol_uuid = descriptor.uuid;
-    metadata.scope = descriptor.scope;
-    metadata.revision = descriptor.revision;
-    metadata.features = descriptor.features;
+    metadata.protocol_uuid = descriptor->uuid;
+    metadata.scope = descriptor->scope;
+    metadata.revision = descriptor->revision;
+    metadata.features = descriptor->features;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT;
-    metadata.protocol_rights = descriptor.protocol_rights;
+    metadata.protocol_rights = descriptor->protocol_rights;
+    memory::Delete<>(memory::KernelCommonAllocatorV, descriptor);
     const na_handle_t handle = resources.install_native(std::move(object), metadata);
     if (handle == NA_HANDLE_INVALID)
         return NA_STATUS_RESOURCE_EXHAUSTED;
@@ -2475,6 +3373,84 @@ na_status_t create_protocol_descriptor(task::resource_table_t &resources, const 
     if (copy_status != NA_STATUS_OK)
         resources.close_native(handle);
     return copy_status;
+}
+
+na_status_t create_protocol_endpoint_objects(const na_protocol_descriptor_t &descriptor,
+                                             const na_protocol_endpoint_options_t *options, khandle &client,
+                                             khandle &server, capability::metadata &client_metadata,
+                                             capability::metadata &server_metadata)
+{
+    na_protocol_endpoint_options_t values{};
+    values.struct_size = sizeof(values);
+    values.client_meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    values.server_meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    values.client_protocol_rights = descriptor.protocol_rights;
+    values.server_protocol_rights = descriptor.protocol_rights;
+    values.max_messages = 64;
+    values.max_bytes =
+        descriptor.max_request_bytes == 0 ? NA_CHANNEL_DEFAULT_MAX_BYTES : descriptor.max_request_bytes * 4;
+    // max_resources is the queue's aggregate resource budget, while the
+    // descriptor's max_resources limits a single request. Every queued
+    // two-way invocation owns a responder resource, so using the latter as
+    // the former makes an endpoint with one request resource accept only one
+    // in-flight call. Keep enough budget for the endpoint's bounded queue.
+    values.max_resources = NA_CHANNEL_MAX_RESOURCES;
+    if (options != nullptr)
+    {
+        auto status = copy_frame(values, options);
+        if (status != NA_STATUS_OK)
+            return status;
+        if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
+            return NA_STATUS_INVALID_ARGUMENT;
+        if (values.max_messages == 0)
+            values.max_messages = 64;
+        if (values.max_bytes == 0)
+            values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
+        if (values.max_resources == 0)
+            values.max_resources = NA_CHANNEL_MAX_RESOURCES;
+    }
+    // Terminal data endpoints are open descriptions, not freely duplicable
+    // capabilities.  Cloning them must go through the protocol's
+    // clone_binding method so the service can preserve pair and lifecycle
+    // invariants.  Apply this after user options as well, so an endpoint
+    // creator cannot opt back into the unsafe source-handle operation.
+    if (descriptor.scope == NA_SCOPE_TERMINAL_MASTER || descriptor.scope == NA_SCOPE_TERMINAL_SLAVE)
+        values.client_meta_rights &= ~NA_RIGHT_DUPLICATE;
+    if (values.client_protocol_rights == 0)
+        values.client_protocol_rights = descriptor.protocol_rights;
+    if (values.server_protocol_rights == 0)
+        values.server_protocol_rights = descriptor.protocol_rights;
+    if ((values.client_protocol_rights & ~descriptor.protocol_rights) != 0 ||
+        (values.server_protocol_rights & ~descriptor.protocol_rights) != 0)
+        return NA_STATUS_ACCESS_DENIED;
+    if (values.max_messages > NA_CHANNEL_MAX_MESSAGES || values.max_bytes > max_kernel_payload * 16 ||
+        values.max_resources > NA_CHANNEL_MAX_RESOURCES ||
+        (values.client_meta_rights &
+         ~((na_meta_rights_t)(NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT))) != 0 ||
+        (values.server_meta_rights & ~((na_meta_rights_t)(NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT))) != 0)
+        return NA_STATUS_INVALID_ARGUMENT;
+
+    auto state =
+        handle_t<protocol_state>::make(descriptor, values.max_messages, values.max_bytes, values.max_resources);
+    if (!state || !state->valid() || state->descriptor().scope == NA_SCOPE_NONE)
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    auto client_object = handle_t<protocol_endpoint>::make(state, endpoint_role::client);
+    auto server_object = handle_t<protocol_endpoint>::make(state, endpoint_role::server);
+    if (!client_object || !server_object)
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    capability::metadata client_meta =
+        kernel_view_metadata(descriptor.scope, descriptor.uuid, values.client_meta_rights,
+                             values.client_protocol_rights, descriptor.revision, descriptor.features);
+    client_meta.binding = NA_BINDING_CLIENT_END;
+    capability::metadata server_meta = client_meta;
+    server_meta.binding = NA_BINDING_SERVER_END;
+    client_meta.protocol_rights |= NA_PROTOCOL_RIGHT_INVOKE;
+    server_meta.protocol_rights = values.server_protocol_rights | NA_PROTOCOL_RIGHT_INVOKE;
+    client = std::move(client_object);
+    server = std::move(server_object);
+    client_metadata = client_meta;
+    server_metadata = server_meta;
+    return NA_STATUS_OK;
 }
 
 na_status_t create_protocol_endpoint(task::resource_table_t &resources, na_handle_t descriptor_handle,
@@ -2495,66 +3471,14 @@ na_status_t create_protocol_endpoint(task::resource_table_t &resources, na_handl
     if (descriptor == nullptr)
         return NA_STATUS_WRONG_BINDING;
 
-    na_protocol_endpoint_options_t values{};
-    values.struct_size = sizeof(values);
-    values.client_meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
-    values.server_meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
-    values.client_protocol_rights = descriptor->descriptor().protocol_rights;
-    values.server_protocol_rights = descriptor->descriptor().protocol_rights;
-    values.max_messages = 64;
-    values.max_bytes = descriptor->descriptor().max_request_bytes == 0 ? NA_CHANNEL_DEFAULT_MAX_BYTES
-                                                                       : descriptor->descriptor().max_request_bytes * 4;
-    values.max_resources = descriptor->descriptor().max_resources == 0 ? NA_CHANNEL_DEFAULT_MAX_RESOURCES
-                                                                       : descriptor->descriptor().max_resources;
-    if (options != nullptr)
-    {
-        auto status = copy_frame(values, options);
-        if (status != NA_STATUS_OK)
-            return status;
-        if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
-            return NA_STATUS_INVALID_ARGUMENT;
-        if (values.max_messages == 0)
-            values.max_messages = 64;
-        if (values.max_bytes == 0)
-            values.max_bytes = NA_CHANNEL_DEFAULT_MAX_BYTES;
-        if (values.max_resources == 0)
-            values.max_resources = NA_CHANNEL_DEFAULT_MAX_RESOURCES;
-    }
-    if (options != nullptr && (naos::usercopy::ranges_overlap(reinterpret_cast<u64>(options), sizeof(*options),
-                                                              reinterpret_cast<u64>(client), sizeof(*client)) ||
-                               naos::usercopy::ranges_overlap(reinterpret_cast<u64>(options), sizeof(*options),
-                                                              reinterpret_cast<u64>(server), sizeof(*server))))
-        return NA_STATUS_INVALID_ARGUMENT;
-    if (values.client_protocol_rights == 0)
-        values.client_protocol_rights = descriptor->descriptor().protocol_rights;
-    if (values.server_protocol_rights == 0)
-        values.server_protocol_rights = descriptor->descriptor().protocol_rights;
-    if ((values.client_protocol_rights & ~descriptor->descriptor().protocol_rights) != 0 ||
-        (values.server_protocol_rights & ~descriptor->descriptor().protocol_rights) != 0)
-        return NA_STATUS_ACCESS_DENIED;
-    if (values.max_messages > NA_CHANNEL_MAX_MESSAGES || values.max_bytes > max_kernel_payload * 16 ||
-        values.max_resources > NA_CHANNEL_MAX_RESOURCES ||
-        (values.client_meta_rights & ~((na_meta_rights_t)(NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT))) !=
-            0 ||
-        (values.server_meta_rights & ~((na_meta_rights_t)(NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT))) != 0)
-        return NA_STATUS_INVALID_ARGUMENT;
-
-    auto state = handle_t<protocol_state>::make(descriptor->descriptor(), values.max_messages, values.max_bytes,
-                                                values.max_resources);
-    if (!state || !state->valid() || state->descriptor().scope == NA_SCOPE_NONE)
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    auto client_object = handle_t<protocol_endpoint>::make(state, endpoint_role::client);
-    auto server_object = handle_t<protocol_endpoint>::make(state, endpoint_role::server);
-    if (!client_object || !server_object)
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    capability::metadata client_metadata =
-        kernel_view_metadata(descriptor->descriptor().scope, descriptor->descriptor().uuid, values.client_meta_rights,
-                             values.client_protocol_rights);
-    client_metadata.binding = NA_BINDING_CLIENT_END;
-    capability::metadata server_metadata = client_metadata;
-    server_metadata.binding = NA_BINDING_SERVER_END;
-    client_metadata.protocol_rights |= NA_PROTOCOL_RIGHT_INVOKE;
-    server_metadata.protocol_rights = values.server_protocol_rights | NA_PROTOCOL_RIGHT_INVOKE;
+    khandle client_object;
+    khandle server_object;
+    capability::metadata client_metadata;
+    capability::metadata server_metadata;
+    auto status = create_protocol_endpoint_objects(descriptor->descriptor(), options, client_object, server_object,
+                                                   client_metadata, server_metadata);
+    if (status != NA_STATUS_OK)
+        return status;
     const na_handle_t client_handle = resources.install_native(std::move(client_object), client_metadata);
     if (client_handle == NA_HANDLE_INVALID)
         return NA_STATUS_RESOURCE_EXHAUSTED;
@@ -2574,8 +3498,11 @@ na_status_t create_protocol_endpoint(task::resource_table_t &resources, na_handl
     return NA_STATUS_OK;
 }
 
-na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_handle, const na_submit_frame_t *frame,
-                          na_handle_t *invocation, bool oneway)
+namespace
+{
+na_status_t invoke_submit_impl(task::resource_table_t &resources, na_handle_t target_handle,
+                               const na_submit_frame_t *frame, na_handle_t *invocation, bool oneway,
+                               bool invocation_output_is_user)
 {
     na_submit_frame_t values{};
     auto status = copy_frame(values, frame);
@@ -2584,8 +3511,10 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
     status = validate_submit_frame(values, oneway);
     if (status != NA_STATUS_OK)
         return status;
-    if (!oneway && !valid_user_output(invocation))
+    if (!oneway && invocation_output_is_user && !valid_user_output(invocation))
         return NA_STATUS_FAULT;
+    if (!oneway && !invocation_output_is_user && invocation == nullptr)
+        return NA_STATUS_INVALID_ARGUMENT;
     if (oneway && invocation != nullptr)
         return NA_STATUS_INVALID_ARGUMENT;
     if (naos::usercopy::ranges_overlap(reinterpret_cast<u64>(frame), sizeof(*frame), values.request,
@@ -2624,6 +3553,8 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
     if (is_client)
     {
         const auto &descriptor = client_endpoint->state()->descriptor();
+        if (!descriptor_allows_method_rights(descriptor, values.method_id, target.meta.protocol_rights))
+            return NA_STATUS_ACCESS_DENIED;
         if ((descriptor.max_request_bytes != 0 && values.request_bytes > descriptor.max_request_bytes) ||
             (descriptor.max_resources != 0 && values.resource_count > descriptor.max_resources))
             return NA_STATUS_INVALID_MESSAGE;
@@ -2680,7 +3611,8 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
     if (is_client)
     {
         auto *request = memory::New<invocation_request>(memory::KernelCommonAllocatorV, memory::MemoryAllocatorV, state,
-                                                        values.method_id, state->operation_deadline());
+                                                        values.method_id, state->operation_deadline(),
+                                                        task::current_process()->pid);
         if (request == nullptr)
         {
             if (!oneway)
@@ -2712,23 +3644,36 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
         }
         request->bytes = std::move(bytes);
         request->resources = std::move(records);
+        request->source_resources = &resources;
         bool queued = false;
         status = client_endpoint->state()->enqueue(request, &queued);
         (void)queued;
         if (status != NA_STATUS_OK)
         {
-            resources.restore_native_batch(request->resources);
+            const auto restore_status = resources.restore_native_batch(request->resources);
             memory::Delete<>(memory::KernelCommonAllocatorV, request);
             if (!oneway)
                 resources.close_native(invocation_handle);
-            return status;
+            return restore_status == NA_STATUS_OK ? status : restore_status;
         }
         if (!oneway)
         {
-            status = naos::usercopy::copy_to(reinterpret_cast<u64>(invocation), &invocation_handle,
-                                             sizeof(invocation_handle));
+            if (invocation_output_is_user)
+                status = naos::usercopy::copy_to(reinterpret_cast<u64>(invocation), &invocation_handle,
+                                                 sizeof(invocation_handle));
+            else
+            {
+                *invocation = invocation_handle;
+                status = NA_STATUS_OK;
+            }
             if (status != NA_STATUS_OK)
             {
+                // The request is already committed to the client endpoint's
+                // queue at this point.  A failed user-output copy must cancel
+                // that queued invocation before releasing its handle; merely
+                // closing the invocation would leave a request that can still
+                // be delivered without an owner.
+                state->cancel(client_endpoint->state());
                 resources.close_native(invocation_handle);
                 return status;
             }
@@ -2736,41 +3681,68 @@ na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_
         return NA_STATUS_OK;
     }
 
+    if (kernel_dispatcher == nullptr)
+    {
+        if (!oneway)
+            resources.close_native(invocation_handle);
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
+
+    auto caller = handle_t<task::process_object>::make(task::current_process());
+    if (!caller)
+    {
+        if (!oneway)
+            resources.close_native(invocation_handle);
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
+
     capability::transfer_record_list records(memory::KernelCommonAllocatorV);
     status = resources.take_native_batch(dispositions.data(), dispositions.size(), target_handle, records);
     if (status != NA_STATUS_OK)
     {
-        resources.restore_native_batch(records);
         if (!oneway)
             resources.close_native(invocation_handle);
         return status;
     }
 
-    status = dispatch_kernel_view(target, *state, values.method_id, bytes, records);
-    resources.restore_native_batch(records);
-    if (status == NA_STATUS_NOT_SUPPORTED)
+    auto *request = memory::New<kernel_dispatch_request>(memory::KernelCommonAllocatorV, state, std::move(target),
+                                                         std::move(caller), values.method_id);
+    if (request == nullptr)
     {
-        state->complete_reply(empty_bytes(), empty_resources(), ENOTSUP);
-        status = NA_STATUS_OK;
+        const auto restore_status = resources.restore_native_batch(records);
+        if (!oneway)
+            resources.close_native(invocation_handle);
+        return restore_status == NA_STATUS_OK ? NA_STATUS_RESOURCE_EXHAUSTED : restore_status;
     }
-    else if (status != NA_STATUS_OK)
+    request->bytes = std::move(bytes);
+    request->resources = std::move(records);
+    kernel_dispatcher->enqueue(request);
+
+    if (!oneway)
     {
-        state->complete_reply(empty_bytes(), empty_resources(), EINVAL);
-        status = NA_STATUS_OK;
-    }
-    if (status == NA_STATUS_OK && !oneway)
-    {
-        status =
-            naos::usercopy::copy_to(reinterpret_cast<u64>(invocation), &invocation_handle, sizeof(invocation_handle));
+        if (invocation_output_is_user)
+            status = naos::usercopy::copy_to(reinterpret_cast<u64>(invocation), &invocation_handle,
+                                             sizeof(invocation_handle));
+        else
+        {
+            *invocation = invocation_handle;
+            status = NA_STATUS_OK;
+        }
         if (status != NA_STATUS_OK)
         {
+            state->cancel(nullptr);
             resources.close_native(invocation_handle);
             return status;
         }
     }
-    if (status != NA_STATUS_OK && !oneway)
-        resources.close_native(invocation_handle);
-    return status;
+    return NA_STATUS_OK;
+}
+} // namespace
+
+na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target_handle, const na_submit_frame_t *frame,
+                          na_handle_t *invocation, bool oneway)
+{
+    return invoke_submit_impl(resources, target_handle, frame, invocation, oneway, true);
 }
 
 na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endpoint_handle,
@@ -2780,7 +3752,7 @@ na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endp
     auto status = copy_frame(values, frame);
     if (status != NA_STATUS_OK)
         return status;
-    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
+    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.caller_pid != 0)
         return NA_STATUS_INVALID_ARGUMENT;
     if (values.byte_capacity > max_kernel_payload || values.resource_capacity > NA_CHANNEL_MAX_RESOURCES)
         return NA_STATUS_INVALID_ARGUMENT;
@@ -2830,6 +3802,7 @@ na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endp
         values.required_resources = request->resources.size();
         values.actual_bytes = 0;
         values.actual_resources = 0;
+        values.caller_pid = request->caller_pid;
         values.responder = NA_HANDLE_INVALID;
         if (values.byte_capacity < request->bytes.size() || values.resource_capacity < request->resources.size())
         {
@@ -2957,7 +3930,7 @@ na_status_t invocation_take_result(task::resource_table_t &resources, na_handle_
     auto status = copy_frame(values, frame);
     if (status != NA_STATUS_OK)
         return status;
-    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0)
+    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0)
         return NA_STATUS_INVALID_ARGUMENT;
     if (values.byte_capacity > max_kernel_payload || values.resource_capacity > NA_CHANNEL_MAX_RESOURCES)
         return NA_STATUS_INVALID_ARGUMENT;
@@ -3089,11 +4062,12 @@ na_status_t responder_reply(task::resource_table_t &resources, na_handle_t respo
     status = resources.take_native_batch(dispositions.data(), dispositions.size(), responder_handle, records);
     if (status != NA_STATUS_OK)
         return status;
-    if (!responder->state()->complete_reply(bytes, records))
+    const bool replied = responder->state()->complete_reply(bytes, records, 0, &resources);
+    if (!replied)
     {
-        resources.restore_native_batch(records);
+        const auto restore_status = resources.restore_native_batch(records);
         resources.close_native(responder_handle);
-        return NA_STATUS_PEER_CLOSED;
+        return restore_status == NA_STATUS_OK ? NA_STATUS_PEER_CLOSED : restore_status;
     }
     responder->consume();
     resources.close_native(responder_handle);
@@ -3107,8 +4081,7 @@ na_status_t responder_fail(task::resource_table_t &resources, na_handle_t respon
     auto status = copy_frame(values, frame);
     if (status != NA_STATUS_OK)
         return status;
-    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 || values.reserved0 != 0 ||
-        values.reserved1 != 0 ||
+    if (!valid_frame_size(values.struct_size, sizeof(values)) || values.flags != 0 ||
         !valid_failure(static_cast<na_execution_outcome_t>(values.execution_outcome),
                        static_cast<na_outcome_reason_t>(values.outcome_reason)))
         return NA_STATUS_INVALID_ARGUMENT;
@@ -3120,8 +4093,11 @@ na_status_t responder_fail(task::resource_table_t &resources, na_handle_t respon
     auto *responder = entry.object->get<responder_object>();
     if (responder == nullptr)
         return NA_STATUS_WRONG_BINDING;
+    if (values.protocol_error > 0 || values.protocol_error < -std::numeric_limits<i32>::max())
+        return NA_STATUS_INVALID_ARGUMENT;
     if (!responder->state()->complete_failure(static_cast<na_execution_outcome_t>(values.execution_outcome),
-                                              static_cast<na_outcome_reason_t>(values.outcome_reason)))
+                                              static_cast<na_outcome_reason_t>(values.outcome_reason),
+                                              values.protocol_error))
     {
         resources.close_native(responder_handle);
         return NA_STATUS_PEER_CLOSED;

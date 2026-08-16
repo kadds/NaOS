@@ -30,14 +30,22 @@ void test_valid_message()
     assert(naos::bootstrap::valid_message(extended, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
 }
 
-void test_rejects_duplicate_or_out_of_range_resources()
+void test_allows_shared_stdio_binding_and_rejects_bad_resources()
 {
     auto message = valid_message();
     message.stderr_stream = message.stdin_stream;
-    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+
+    message.resource_count = NA_BOOTSTRAP_MIN_RESOURCE_COUNT;
+    message.stdout_stream = message.stdin_stream;
+    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_MIN_RESOURCE_COUNT));
 
     message = valid_message();
     message.stderr_stream = NA_BOOTSTRAP_RESOURCE_COUNT;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
+
+    message = valid_message();
+    message.current_directory = message.root_directory;
     assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 }
 
@@ -51,12 +59,52 @@ void test_rejects_unknown_version_and_flags()
     message.flags = 1;
     assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 }
+
+void test_optional_capabilities_are_distinct_resources()
+{
+    auto message = valid_message();
+    message.capability_count = 2;
+    message.resource_count += message.capability_count;
+    message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY, NA_BOOTSTRAP_RESOURCE_COUNT};
+    message.capabilities[1] = {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, NA_BOOTSTRAP_RESOURCE_COUNT + 1};
+    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+
+    message.capabilities[1].resource = message.capabilities[0].resource;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+
+    message.capabilities[1].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
+    message.capabilities[1].kind = message.capabilities[0].kind;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+
+    message.capabilities[1].kind = NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND;
+    message.capabilities[1].resource = message.stdin_stream;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+}
+
+void test_optional_capability_index_must_be_in_range()
+{
+    auto message = valid_message();
+    message.resource_count++;
+    message.capability_count = 1;
+    message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE, NA_BOOTSTRAP_RESOURCE_COUNT};
+    assert(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+
+    message.capabilities[0].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
+
+    message = valid_message();
+    message.resource_count += 2;
+    message.capability_count = NA_BOOTSTRAP_MAX_CAPABILITIES + 1;
+    assert(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+}
 } // namespace
 
-int main()
+int run_bootstrap_contract_tests()
 {
     test_valid_message();
-    test_rejects_duplicate_or_out_of_range_resources();
+    test_allows_shared_stdio_binding_and_rejects_bad_resources();
     test_rejects_unknown_version_and_flags();
+    test_optional_capabilities_are_distinct_resources();
+    test_optional_capability_index_must_be_in_range();
     return 0;
 }

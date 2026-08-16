@@ -1,20 +1,26 @@
 #include "kernel/ipc/channel.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/dev/framebuffer.hpp"
 #include "kernel/fs/vfs/file.hpp"
 #include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/fs/vfs/vfs.hpp"
+#include "kernel/input_event_source.hpp"
 #include "kernel/ipc/invocation.hpp"
 #include "kernel/mm/memory.hpp"
-#include "kernel/syscall.hpp"
 #include "kernel/service_directory.hpp"
+#include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
+#include "kernel/terminal_views.hpp"
 #include "kernel/time.hpp"
 #include "kernel/usercopy.hpp"
 #include "naos/bootstrap.hpp"
 #include "naos/generated/system/Directory.hpp"
+#include "naos/generated/system/InputEventSource.hpp"
 #include "naos/generated/system/ServiceDirectory.hpp"
 #include "naos/generated/system/Stream.hpp"
-#include "naos/generated/system/TtyControl.hpp"
+#include "naos/generated/system/TerminalDriverFactory.hpp"
+#include "naos/generated/system/TerminalMaster.hpp"
+#include "naos/generated/system/TerminalSlave.hpp"
 #include "naos/generated/system_uapi.h"
 #include <limits>
 
@@ -22,6 +28,11 @@ namespace naos::syscall
 {
 namespace
 {
+bool protocol_uuid_matches(const na_uuid_t &left, const na_uuid_t &right)
+{
+    return memcmp(left.bytes, right.bytes, sizeof(left.bytes)) == 0;
+}
+
 bool valid_output_handle(na_handle_t *handle)
 {
     return handle != nullptr && is_user_space_range(handle, sizeof(*handle));
@@ -38,10 +49,18 @@ capability::metadata stream_metadata()
     metadata.binding = NA_BINDING_KERNEL_VIEW;
     metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
     metadata.scope = NA_SCOPE_STREAM;
-    metadata.revision = 1;
+    metadata.revision = naos::system::Stream::revision;
     metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
     return metadata;
+}
+
+capability::metadata bootstrap_stdio_metadata(const capability::metadata &source)
+{
+    if (source.binding == NA_BINDING_CLIENT_END &&
+        (source.scope == NA_SCOPE_TERMINAL_MASTER || source.scope == NA_SCOPE_TERMINAL_SLAVE))
+        return source;
+    return stream_metadata();
 }
 
 void close_received_handles(task::resource_table_t &resources, const freelibcxx::vector<na_handle_t> &handles)
@@ -53,30 +72,65 @@ void close_received_handles(task::resource_table_t &resources, const freelibcxx:
     }
 }
 
+void clear_bootstrap_capabilities(task::process_t &process)
+{
+    process.bootstrap_capability_count = 0;
+    for (auto &capability : process.bootstrap_capabilities)
+        capability = {};
+}
+
+void discard_bootstrap_capabilities(task::process_t &process)
+{
+    for (uint32_t i = 0; i < process.bootstrap_capability_count; i++)
+    {
+        if (process.bootstrap_capabilities[i].handle != NA_HANDLE_INVALID)
+            process.resource.close_native(process.bootstrap_capabilities[i].handle);
+    }
+    clear_bootstrap_capabilities(process);
+}
+
 bool valid_bootstrap_directory(task::resource_table_t &resources, na_handle_t handle)
 {
     capability::entry entry;
     return resources.lookup_native(handle, entry) && entry.object && entry.meta.binding == NA_BINDING_KERNEL_VIEW &&
-           entry.meta.scope == NA_SCOPE_DIRECTORY && entry.object->get<fs::vfs::native_directory>() != nullptr;
+           entry.meta.scope == NA_SCOPE_DIRECTORY &&
+           protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::Directory::protocol_uuid) &&
+           entry.meta.revision == naos::system::Directory::revision &&
+           entry.object->get<fs::vfs::native_directory>() != nullptr;
 }
 
 bool valid_bootstrap_stream(task::resource_table_t &resources, na_handle_t handle)
 {
     capability::entry entry;
-    return resources.lookup_native(handle, entry) && entry.object && entry.meta.binding == NA_BINDING_KERNEL_VIEW &&
-           (entry.meta.scope == NA_SCOPE_STREAM || entry.meta.scope == NA_SCOPE_FILE) &&
-           entry.object->get<fs::vfs::file>() != nullptr;
+    if (!(resources.lookup_native(handle, entry) && entry.object))
+        return false;
+    if (entry.meta.binding == NA_BINDING_KERNEL_VIEW && entry.meta.scope == NA_SCOPE_STREAM &&
+        protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::Stream::protocol_uuid) &&
+        entry.meta.revision == naos::system::Stream::revision && entry.object->get<fs::vfs::file>() != nullptr)
+        return true;
+    return entry.meta.binding == NA_BINDING_CLIENT_END &&
+           (entry.meta.scope == NA_SCOPE_TERMINAL_MASTER || entry.meta.scope == NA_SCOPE_TERMINAL_SLAVE) &&
+           ((entry.meta.scope == NA_SCOPE_TERMINAL_MASTER &&
+             protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::TerminalMaster::protocol_uuid) &&
+             entry.meta.revision == naos::system::TerminalMaster::revision) ||
+            (entry.meta.scope == NA_SCOPE_TERMINAL_SLAVE &&
+             protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::TerminalSlave::protocol_uuid) &&
+             entry.meta.revision == naos::system::TerminalSlave::revision));
 }
 
 bool valid_bootstrap_service_directory(task::resource_table_t &resources, na_handle_t handle)
 {
     capability::entry entry;
     return resources.lookup_native(handle, entry) && entry.object && entry.meta.binding == NA_BINDING_KERNEL_VIEW &&
-           entry.meta.scope == NA_SCOPE_SERVICE_DIRECTORY && entry.object->get<service::directory>() != nullptr;
+           entry.meta.scope == NA_SCOPE_SERVICE_DIRECTORY &&
+           protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::ServiceDirectory::protocol_uuid) &&
+           entry.meta.revision == naos::system::ServiceDirectory::revision &&
+           entry.object->get<service::directory>() != nullptr;
 }
+
 } // namespace
 
-u64 handle_close(na_handle_t handle)
+na_status_t handle_close(na_handle_t handle)
 {
     const auto status = task::current_process()->resource.close_native(handle);
     if (status == NA_STATUS_OK)
@@ -84,7 +138,7 @@ u64 handle_close(na_handle_t handle)
     return status;
 }
 
-u64 handle_duplicate(na_handle_t source, na_meta_rights_t rights, na_handle_t *result)
+na_status_t handle_duplicate(na_handle_t source, na_meta_rights_t rights, na_handle_t *result)
 {
     if (!valid_output_handle(result))
         return NA_STATUS_FAULT;
@@ -98,7 +152,7 @@ u64 handle_duplicate(na_handle_t source, na_meta_rights_t rights, na_handle_t *r
     return copy_status;
 }
 
-u64 handle_restrict(na_handle_t source, const na_handle_restriction_t *restriction, na_handle_t *result)
+na_status_t handle_restrict(na_handle_t source, const na_handle_restriction_t *restriction, na_handle_t *result)
 {
     if (!valid_output_handle(result) || restriction == nullptr || !is_user_space_range(restriction, sizeof(u32)))
         return NA_STATUS_FAULT;
@@ -127,7 +181,7 @@ u64 handle_restrict(na_handle_t source, const na_handle_restriction_t *restricti
     return status;
 }
 
-u64 channel_create(const na_channel_options_t *options, na_handle_t *left, na_handle_t *right)
+na_status_t channel_create(const na_channel_options_t *options, na_handle_t *left, na_handle_t *right)
 {
     if (!valid_output_handle(left) || !valid_output_handle(right))
         return NA_STATUS_FAULT;
@@ -198,12 +252,12 @@ u64 channel_create(const na_channel_options_t *options, na_handle_t *left, na_ha
     return status;
 }
 
-u64 channel_send(na_handle_t endpoint, const na_channel_send_frame_t *frame)
+na_status_t channel_send(na_handle_t endpoint, const na_channel_send_frame_t *frame)
 {
     return ipc::send_raw_channel(task::current_process()->resource, endpoint, frame);
 }
 
-u64 channel_receive(na_handle_t endpoint, na_channel_receive_frame_t *frame)
+na_status_t channel_receive(na_handle_t endpoint, na_channel_receive_frame_t *frame)
 {
     capability::entry entry;
     if (!task::current_process()->resource.lookup_native(endpoint, entry) || !entry.object)
@@ -215,12 +269,12 @@ u64 channel_receive(na_handle_t endpoint, na_channel_receive_frame_t *frame)
     return NA_STATUS_WRONG_BINDING;
 }
 
-u64 channel_discard(na_handle_t endpoint)
+na_status_t channel_discard(na_handle_t endpoint)
 {
     return ipc::discard_raw_channel(task::current_process()->resource, endpoint);
 }
 
-u64 handle_wait_many(na_wait_item_t *items, u64 count, const timeclock::time *deadline)
+na_status_t handle_wait_many(na_wait_item_t *items, u64 count, const timeclock::time *deadline)
 {
     if (deadline == nullptr)
         return ipc::wait_many(task::current_process()->resource, items, count,
@@ -238,7 +292,7 @@ u64 handle_wait_many(na_wait_item_t *items, u64 count, const timeclock::time *de
     return ipc::wait_many(task::current_process()->resource, items, count, deadline_us);
 }
 
-u64 handle_get_info(na_handle_t handle, na_handle_info_t *output)
+na_status_t handle_get_info(na_handle_t handle, na_handle_info_t *output)
 {
     if (output == nullptr || !is_user_space_range(output, sizeof(*output)))
         return NA_STATUS_FAULT;
@@ -264,48 +318,48 @@ u64 handle_get_info(na_handle_t handle, na_handle_info_t *output)
     return naos::usercopy::copy_to(reinterpret_cast<u64>(output), &info, sizeof(info));
 }
 
-u64 protocol_descriptor_create(const na_protocol_descriptor_t *input, na_handle_t *output)
+na_status_t protocol_descriptor_create(const na_protocol_descriptor_t *input, na_handle_t *output)
 {
     return ipc::create_protocol_descriptor(task::current_process()->resource, input, output);
 }
 
-u64 protocol_endpoint_create(na_handle_t descriptor, const na_protocol_endpoint_options_t *options, na_handle_t *client,
-                             na_handle_t *server)
+na_status_t protocol_endpoint_create(na_handle_t descriptor, const na_protocol_endpoint_options_t *options,
+                                     na_handle_t *client, na_handle_t *server)
 {
     return ipc::create_protocol_endpoint(task::current_process()->resource, descriptor, options, client, server);
 }
 
-u64 invoke_submit(na_handle_t target, const na_submit_frame_t *frame, na_handle_t *invocation)
+na_status_t invoke_submit(na_handle_t target, const na_submit_frame_t *frame, na_handle_t *invocation)
 {
     return ipc::invoke_submit(task::current_process()->resource, target, frame, invocation, false);
 }
 
-u64 invoke_send_oneway(na_handle_t target, const na_submit_frame_t *frame)
+na_status_t invoke_send_oneway(na_handle_t target, const na_submit_frame_t *frame)
 {
     return ipc::invoke_submit(task::current_process()->resource, target, frame, nullptr, true);
 }
 
-u64 invocation_cancel(na_handle_t invocation)
+na_status_t invocation_cancel(na_handle_t invocation)
 {
     return ipc::invocation_cancel(task::current_process()->resource, invocation);
 }
 
-u64 invocation_take_result(na_handle_t invocation, na_result_frame_t *frame)
+na_status_t invocation_take_result(na_handle_t invocation, na_result_frame_t *frame)
 {
     return ipc::invocation_take_result(task::current_process()->resource, invocation, frame);
 }
 
-u64 responder_reply(na_handle_t responder, const na_reply_frame_t *frame)
+na_status_t responder_reply(na_handle_t responder, const na_reply_frame_t *frame)
 {
     return ipc::responder_reply(task::current_process()->resource, responder, frame);
 }
 
-u64 responder_fail(na_handle_t responder, const na_fail_frame_t *frame)
+na_status_t responder_fail(na_handle_t responder, const na_fail_frame_t *frame)
 {
     return ipc::responder_fail(task::current_process()->resource, responder, frame);
 }
 
-u64 bootstrap(na_bootstrap_frame_t *frame)
+na_status_t bootstrap(na_bootstrap_frame_t *frame)
 {
     if (frame == nullptr || !is_user_space_range(frame, sizeof(u32)))
         return NA_STATUS_FAULT;
@@ -313,14 +367,29 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     auto status = naos::usercopy::copy_versioned(values, frame);
     if (status != NA_STATUS_OK)
         return status;
-    if (values.struct_size < sizeof(values) || values.flags != 0 || values.reserved0 != 0 || values.reserved1 != 0)
+    if (values.struct_size < sizeof(values) || values.reserved0 != 0 || values.reserved1 != 0)
         return NA_STATUS_INVALID_ARGUMENT;
 
     auto *process = task::current_process();
     auto &resources = process->resource;
 
+    if (values.flags == NA_BOOTSTRAP_FLAG_REBIND_CONSOLE)
+    {
+        if (!valid_bootstrap_stream(resources, values.stdin_stream) ||
+            !valid_bootstrap_stream(resources, values.stdout_stream) ||
+            !valid_bootstrap_stream(resources, values.stderr_stream))
+            return NA_STATUS_INVALID_MESSAGE;
+        process->console_in_handle = values.stdin_stream;
+        process->console_out_handle = values.stdout_stream;
+        process->console_err_handle = values.stderr_stream;
+        return NA_STATUS_OK;
+    }
+    if (values.flags != 0)
+        return NA_STATUS_INVALID_ARGUMENT;
+
     if (process->bootstrap_channel_handle != NA_HANDLE_INVALID)
     {
+        return [&]() __attribute__((noinline)) -> na_status_t {
         if (process->bootstrap_consumed.exchange(true))
             return NA_STATUS_ALREADY_CONSUMED;
 
@@ -385,11 +454,18 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         if (!valid_bootstrap_directory(resources, root_handle) ||
             !valid_bootstrap_directory(resources, current_handle) ||
             !valid_bootstrap_service_directory(resources, service_handle) ||
-            !valid_bootstrap_stream(resources, stdin_handle) ||
-            !valid_bootstrap_stream(resources, stdout_handle) || !valid_bootstrap_stream(resources, stderr_handle))
+            !valid_bootstrap_stream(resources, stdin_handle) || !valid_bootstrap_stream(resources, stdout_handle) ||
+            !valid_bootstrap_stream(resources, stderr_handle))
         {
             close_received_handles(resources, received);
             return NA_STATUS_INVALID_MESSAGE;
+        }
+
+        na_bootstrap_capability_t capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES]{};
+        for (uint32_t i = 0; i < message.capability_count; i++)
+        {
+            capabilities[i].kind = message.capabilities[i].kind;
+            capabilities[i].handle = received[message.capabilities[i].resource];
         }
 
         // Keep the process-owned console capabilities in sync with the
@@ -398,18 +474,23 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         process->console_in_handle = stdin_handle;
         process->console_out_handle = stdout_handle;
         process->console_err_handle = stderr_handle;
+        process->bootstrap_capability_count = message.capability_count;
+        for (uint32_t i = 0; i < message.capability_count; i++)
+            process->bootstrap_capabilities[i] = capabilities[i];
 
         capability::entry root_entry;
         capability::entry current_entry;
-        if (!resources.lookup_native(root_handle, root_entry) || !resources.lookup_native(current_handle, current_entry) ||
-            !root_entry.object || !current_entry.object ||
+        if (!resources.lookup_native(root_handle, root_entry) ||
+            !resources.lookup_native(current_handle, current_entry) || !root_entry.object || !current_entry.object ||
             root_entry.object->get<fs::vfs::native_directory>() == nullptr ||
             current_entry.object->get<fs::vfs::native_directory>() == nullptr)
+        {
+            close_received_handles(resources, received);
+            clear_bootstrap_capabilities(*process);
             return NA_STATUS_INVALID_MESSAGE;
-        process->bootstrap_root_directory =
-            handle_t<fs::vfs::native_directory>(root_entry.object.get_control());
-        process->bootstrap_current_directory =
-            handle_t<fs::vfs::native_directory>(current_entry.object.get_control());
+        }
+        process->bootstrap_root_directory = handle_t<fs::vfs::native_directory>(root_entry.object.get_control());
+        process->bootstrap_current_directory = handle_t<fs::vfs::native_directory>(current_entry.object.get_control());
 
         values.root_directory = root_handle;
         values.current_directory = current_handle;
@@ -417,18 +498,27 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         values.stdin_stream = stdin_handle;
         values.stdout_stream = stdout_handle;
         values.stderr_stream = stderr_handle;
+        values.capability_count = message.capability_count;
+        for (uint32_t i = 0; i < message.capability_count; i++)
+            values.capabilities[i] = capabilities[i];
         status = naos::usercopy::copy_to(reinterpret_cast<u64>(frame), &values, sizeof(values));
         if (status != NA_STATUS_OK)
             close_received_handles(resources, received);
+        clear_bootstrap_capabilities(*process);
         return status;
+        }();
     }
 
+    return [&]() __attribute__((noinline)) -> na_status_t {
     if (process->bootstrap_consumed.exchange(true))
         return NA_STATUS_ALREADY_CONSUMED;
 
     const auto root = fs::vfs::global_root;
     if (root == nullptr)
+    {
+        discard_bootstrap_capabilities(*process);
         return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
     const auto process_root = process->bootstrap_root_directory ? process->bootstrap_root_directory->root() : root;
     const auto process_current =
         process->bootstrap_current_directory ? process->bootstrap_current_directory->current() : process_root;
@@ -439,7 +529,9 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     auto current_object = process->bootstrap_current_directory
                               ? process->bootstrap_current_directory
                               : handle_t<fs::vfs::native_directory>::make(process_root, process_current);
-    auto service_object = handle_t<service::directory>::make();
+    auto service_object = service::get_global_service_directory();
+    if (!service_object)
+        service_object = handle_t<service::directory>::make();
     capability::entry stdin_entry;
     capability::entry stdout_entry;
     capability::entry stderr_entry;
@@ -447,7 +539,10 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         !resources.lookup_native(task::current_process()->console_out_handle, stdout_entry) ||
         !resources.lookup_native(task::current_process()->console_err_handle, stderr_entry) || !stdin_entry.object ||
         !stdout_entry.object || !stderr_entry.object)
+    {
+        discard_bootstrap_capabilities(*process);
         return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
     khandle stdin_object = stdin_entry.object;
     khandle stdout_object = stdout_entry.object;
     khandle stderr_object = stderr_entry.object;
@@ -463,16 +558,20 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     service_meta.binding = NA_BINDING_KERNEL_VIEW;
     service_meta.protocol_uuid = naos::system::ServiceDirectory::protocol_uuid;
     service_meta.scope = NA_SCOPE_SERVICE_DIRECTORY;
-    service_meta.revision = 1;
+    service_meta.revision = naos::system::ServiceDirectory::revision;
     service_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
     service_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
-    auto stdin_meta = stream_metadata();
+    if (task::current_process() == task::get_init_process())
+        service_meta.protocol_rights |= NA_SERVICE_DIRECTORY_RIGHT_ADMIN | NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER;
+    const auto stdin_meta = bootstrap_stdio_metadata(stdin_entry.meta);
+    const auto stdout_meta = bootstrap_stdio_metadata(stdout_entry.meta);
+    const auto stderr_meta = bootstrap_stdio_metadata(stderr_entry.meta);
     const na_handle_t root_handle = resources.install_native(std::move(root_object), directory_meta);
     const na_handle_t current_handle = resources.install_native(std::move(current_object), directory_meta);
     const na_handle_t service_handle = resources.install_native(std::move(service_object), service_meta);
     const na_handle_t stdin_handle = resources.install_native(std::move(stdin_object), stdin_meta);
-    const na_handle_t stdout_handle = resources.install_native(std::move(stdout_object), stdin_meta);
-    const na_handle_t stderr_handle = resources.install_native(std::move(stderr_object), stdin_meta);
+    const na_handle_t stdout_handle = resources.install_native(std::move(stdout_object), stdout_meta);
+    const na_handle_t stderr_handle = resources.install_native(std::move(stderr_object), stderr_meta);
     if (root_handle == NA_HANDLE_INVALID || current_handle == NA_HANDLE_INVALID ||
         service_handle == NA_HANDLE_INVALID || stdin_handle == NA_HANDLE_INVALID ||
         stdout_handle == NA_HANDLE_INVALID || stderr_handle == NA_HANDLE_INVALID)
@@ -483,6 +582,7 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         resources.close_native(stdin_handle);
         resources.close_native(stdout_handle);
         resources.close_native(stderr_handle);
+        discard_bootstrap_capabilities(*process);
         return NA_STATUS_RESOURCE_EXHAUSTED;
     }
     values.root_directory = root_handle;
@@ -491,6 +591,9 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
     values.stdin_stream = stdin_handle;
     values.stdout_stream = stdout_handle;
     values.stderr_stream = stderr_handle;
+    values.capability_count = task::current_process()->bootstrap_capability_count;
+    for (uint32_t i = 0; i < values.capability_count; i++)
+        values.capabilities[i] = task::current_process()->bootstrap_capabilities[i];
     status = naos::usercopy::copy_to(reinterpret_cast<u64>(frame), &values, sizeof(values));
     if (status != NA_STATUS_OK)
     {
@@ -500,35 +603,12 @@ u64 bootstrap(na_bootstrap_frame_t *frame)
         resources.close_native(stdin_handle);
         resources.close_native(stdout_handle);
         resources.close_native(stderr_handle);
+        discard_bootstrap_capabilities(*process);
     }
+    else
+        clear_bootstrap_capabilities(*process);
     return status;
-}
-
-u64 tty_control_acquire(na_handle_t stream, na_handle_t *output)
-{
-    if (!valid_output_handle(output))
-        return NA_STATUS_FAULT;
-    auto &resources = task::current_process()->resource;
-    capability::entry source;
-    if (!resources.lookup_native(stream, source) || !source.object)
-        return NA_STATUS_INVALID_HANDLE;
-    if (source.meta.binding != NA_BINDING_KERNEL_VIEW ||
-        (source.meta.scope != NA_SCOPE_STREAM && source.meta.scope != NA_SCOPE_FILE))
-        return NA_STATUS_WRONG_SCOPE;
-    auto *file = source.object->get<fs::vfs::file>();
-    if (file == nullptr || file->get_pseudo() == nullptr)
-        return NA_STATUS_WRONG_BINDING;
-    capability::metadata metadata = source.meta;
-    metadata.protocol_uuid = naos::system::TtyControl::protocol_uuid;
-    metadata.scope = NA_SCOPE_TTY_CONTROL;
-    metadata.meta_rights = capability::derive_tty_control_rights(source.meta.meta_rights);
-    const auto handle = resources.install_native(source.object, metadata);
-    if (handle == NA_HANDLE_INVALID)
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    const auto status = write_handle(output, handle);
-    if (status != NA_STATUS_OK)
-        resources.close_native(handle);
-    return status;
+    }();
 }
 
 BEGIN_SYSCALL
@@ -550,6 +630,5 @@ SYSCALL(NA_SYSCALL_INVOCATION_TAKE_RESULT, invocation_take_result)
 SYSCALL(NA_SYSCALL_RESPONDER_REPLY, responder_reply)
 SYSCALL(NA_SYSCALL_RESPONDER_FAIL, responder_fail)
 SYSCALL(NA_SYSCALL_BOOTSTRAP, bootstrap)
-SYSCALL(NA_SYSCALL_TTY_CONTROL_ACQUIRE, tty_control_acquire)
 END_SYSCALL
 } // namespace naos::syscall
