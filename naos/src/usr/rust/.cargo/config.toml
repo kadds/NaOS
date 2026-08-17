@@ -1,0 +1,8 @@
+[build]
+target = "targets/x86_64-unknown-naos.json"
+
+[unstable]
+json-target-spec = true
+
+[target.x86_64-unknown-naos]
+linker = "x86_64-pc-linux-gnu-g++"

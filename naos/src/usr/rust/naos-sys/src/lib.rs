@@ -129,7 +129,11 @@ unsafe extern "C" {
     pub fn _s_exit(status: i64) -> !;
 
     pub fn _na_handle_close(handle: Handle) -> Status;
-    pub fn _na_channel_create(options: *const ChannelOptions, left: *mut Handle, right: *mut Handle) -> Status;
+    pub fn _na_channel_create(
+        options: *const ChannelOptions,
+        left: *mut Handle,
+        right: *mut Handle,
+    ) -> Status;
     pub fn _na_channel_send(endpoint: Handle, frame: *const ChannelSendFrame) -> Status;
     pub fn _na_channel_receive(endpoint: Handle, frame: *mut ChannelReceiveFrame) -> Status;
     pub fn _na_handle_wait_many(items: *mut WaitItem, count: u64, deadline: *const u8) -> Status;

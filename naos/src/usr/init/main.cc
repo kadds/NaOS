@@ -109,6 +109,28 @@ bool spawn_ttyd_process(int *pid)
     return true;
 }
 
+bool run_rust_native_smoke()
+{
+    pid_t pid = -1;
+    char *rust_argv[] = {const_cast<char *>("rust-smoke"), nullptr};
+    if (naos_native_spawn_stdio(&pid, "/bin/rust-smoke", rust_argv, environ, STDIN_FILENO, STDOUT_FILENO,
+                                STDERR_FILENO) != 0 ||
+        pid <= 0)
+    {
+        _s_log("init: rust-smoke spawn failed\n");
+        return false;
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    {
+        _s_log("init: rust-smoke failed\n");
+        return false;
+    }
+    _s_log("init: rust-smoke completed\n");
+    return true;
+}
+
 naoidl::native_transport make_native_transport()
 {
     naoidl::native_transport_api api{};
@@ -1195,5 +1217,6 @@ extern "C" void main(int argc, char **argv)
 
     if (!start_ttyd())
         return;
+    (void)run_rust_native_smoke();
     run_user_shell();
 }

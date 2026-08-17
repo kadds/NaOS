@@ -1,0 +1,7 @@
+[toolchain]
+# Keep rust-src and rustfmt in sync with the nightly used by the build
+# environment.  The dated channel is not published by rustup here, so CI
+# should pin the installed nightly revision externally.
+channel = "nightly"
+components = ["rust-src", "rustfmt"]
+profile = "minimal"

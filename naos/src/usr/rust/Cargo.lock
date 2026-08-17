@@ -12,3 +12,11 @@ dependencies = [
 [[package]]
 name = "naos-sys"
 version = "0.1.0"
+
+[[package]]
+name = "rust-smoke"
+version = "0.1.0"
+dependencies = [
+ "naos-runtime",
+ "naos-sys",
+]

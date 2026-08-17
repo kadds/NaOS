@@ -177,8 +177,14 @@ fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
         return false;
     }
 
-    let directories = [frame.root_directory, frame.current_directory, frame.service_directory];
-    if directories.iter().any(|handle| *handle == sys::HANDLE_INVALID)
+    let directories = [
+        frame.root_directory,
+        frame.current_directory,
+        frame.service_directory,
+    ];
+    if directories
+        .iter()
+        .any(|handle| *handle == sys::HANDLE_INVALID)
         || !distinct(directories[0], directories[1])
         || !distinct(directories[0], directories[2])
         || !distinct(directories[1], directories[2])
@@ -196,7 +202,10 @@ fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
         if capability.kind == 0 || capability.handle == sys::HANDLE_INVALID {
             return false;
         }
-        if directories.iter().any(|handle| *handle == capability.handle) {
+        if directories
+            .iter()
+            .any(|handle| *handle == capability.handle)
+        {
             return false;
         }
         if streams.iter().any(|handle| *handle == capability.handle) {
@@ -249,7 +258,8 @@ core::arch::global_asm!(include_str!("start.S"), options(att_syntax));
 
 #[cfg(test)]
 mod tests {
-    use super::{InitialStack, MAX_ARGUMENTS};
+    use super::{InitialStack, MAX_ARGUMENTS, validate_bootstrap};
+    use naos_sys as sys;
 
     #[test]
     fn parses_elf_initial_stack_vectors() {
@@ -285,5 +295,29 @@ mod tests {
         let stack = [MAX_ARGUMENTS + 1];
         let error = unsafe { InitialStack::parse(stack.as_ptr()) }.unwrap_err();
         assert_eq!(error, super::StackError::TooManyArguments);
+    }
+
+    #[test]
+    fn validates_bootstrap_resource_ownership_shape() {
+        let frame = sys::BootstrapFrame {
+            struct_size: core::mem::size_of::<sys::BootstrapFrame>() as u32,
+            root_directory: 1,
+            current_directory: 2,
+            service_directory: 3,
+            stdin_stream: 4,
+            stdout_stream: 5,
+            stderr_stream: 6,
+            ..sys::BootstrapFrame::default()
+        };
+        assert!(validate_bootstrap(&frame));
+
+        let mut duplicate = frame;
+        duplicate.current_directory = duplicate.root_directory;
+        assert!(!validate_bootstrap(&duplicate));
+
+        let mut capability = frame;
+        capability.capability_count = 1;
+        capability.capabilities[0] = sys::BootstrapCapability { kind: 7, handle: 4 };
+        assert!(!validate_bootstrap(&capability));
     }
 }

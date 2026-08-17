@@ -2,11 +2,12 @@ add_subdirectory(init)
 add_subdirectory(ttyd)
 add_subdirectory(consoled)
 add_subdirectory(bin)
+add_subdirectory(rust)
 include(${CMAKE_CURRENT_SOURCE_DIR}/busybox-build.cmake)
 
 add_custom_target(make-rfs-symbol ALL
     COMMAND ${UTIL_LN} ${ROOT_FS_DIR}
-    DEPENDS kernel nanobox init ttyd consoled busybox make-kernel-symbol
+    DEPENDS kernel nanobox init ttyd consoled busybox naos_rust_smoke make-kernel-symbol
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 add_custom_target(update-fake-resource ALL
@@ -16,4 +17,4 @@ add_custom_target(update-fake-resource ALL
 
 add_custom_target(make-rfs-image ALL
     COMMAND python3 ${UTIL_MKIMG}
-    DEPENDS kernel nanobox init ttyd consoled busybox update-fake-resource)
+    DEPENDS kernel nanobox init ttyd consoled busybox naos_rust_smoke update-fake-resource)

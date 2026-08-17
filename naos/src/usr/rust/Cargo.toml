@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["naos-sys", "naos-runtime"]
+members = ["naos-sys", "naos-runtime", "rust-smoke"]
 
 [profile.dev]
 panic = "abort"

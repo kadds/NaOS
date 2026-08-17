@@ -1,0 +1,46 @@
+{
+    "llvm-target": "x86_64-unknown-none-elf",
+    "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
+    "arch": "x86_64",
+    "target-endian": "little",
+    "target-pointer-width": 64,
+    "target-c-int-width": 32,
+    "os": "naos",
+    "vendor": "unknown",
+    "env": "",
+    "executables": true,
+    "linker": "x86_64-pc-linux-gnu-g++",
+    "linker-flavor": "gnu-cc",
+    "linker-is-gnu": true,
+    "dynamic-linking": false,
+    "relocation-model": "static",
+    "position-independent-executables": false,
+    "static-position-independent-executables": false,
+    "crt-static-default": true,
+    "crt-static-respected": true,
+    "panic-strategy": "abort",
+    "code-model": "small",
+    "disable-redzone": false,
+    "features": "+sse2",
+    "max-atomic-width": 64,
+    "has-rpath": false,
+    "has-thread-local": false,
+    "singlethread": true,
+    "pre-link-args": {
+        "gnu-cc": [
+            "-m64",
+            "-nostdlib",
+            "-nostartfiles",
+            "-nodefaultlibs",
+            "-static",
+            "-no-pie",
+            "-Wl,--build-id=none",
+            "-Wl,-T,link.ld"
+        ]
+    },
+    "metadata": {
+        "description": "NaOS x86-64 freestanding native userland",
+        "host_tools": false,
+        "std": false
+    }
+}
