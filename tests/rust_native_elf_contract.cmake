@@ -32,3 +32,12 @@ file(READ ${MAP} LINK_MAP)
 if(LINK_MAP MATCHES "mlibc|crt1|libstdc")
     message(FATAL_ERROR "Rust native link map contains a compatibility runtime")
 endif()
+
+if(DEFINED TLS_IMAGE)
+    execute_process(COMMAND ${NAOS_READELF} -l ${TLS_IMAGE}
+                    OUTPUT_VARIABLE TLS_PROGRAM_HEADERS
+                    RESULT_VARIABLE TLS_PROGRAM_HEADERS_STATUS)
+    if(NOT TLS_PROGRAM_HEADERS_STATUS EQUAL 0 OR NOT TLS_PROGRAM_HEADERS MATCHES "TLS")
+        message(FATAL_ERROR "Rust TLS smoke has no PT_TLS segment: ${TLS_IMAGE}")
+    endif()
+endif()

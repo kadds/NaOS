@@ -534,7 +534,10 @@ process_t::process_t()
     , capability_refs(0)
     , reap_pending(false)
     , storage_released(false)
+    , main_thread(nullptr)
     , ret_val(0)
+    , thread_list(nullptr)
+    , schedule_data(nullptr)
 {
 }
 
@@ -719,7 +722,8 @@ void init()
         cpu_pause();
 }
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, void *arg, flag_t flags)
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *entry, void *arg, flag_t flags,
+                        void *tcb)
 {
     if (process == nullptr || start_func == nullptr)
         return nullptr;
@@ -737,6 +741,13 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
                                              memory::vm::flags::expand | memory::vm::flags::user_mode,
                                          memory::vm::page_fault_method::common, 0);
 
+        if (stack_vm == nullptr)
+        {
+            thd->state = thread_state::destroy;
+            delete_thread(thd);
+            return nullptr;
+        }
+
         thd->user_stack_top = (void *)stack_vm->end;
         thd->user_stack_bottom = (void *)stack_vm->start;
     }
@@ -744,9 +755,29 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
     thd->cpumask.mask = cpumask_none;
 
     thread_start_info_t *info = memory::New<thread_start_info_t>(memory::KernelCommonAllocatorV);
+    if (info == nullptr)
+    {
+        if (process->mm_info != memory::kernel_vm_info && thd->user_stack_bottom != nullptr &&
+            thd->user_stack_top != nullptr && thd->user_stack_top > thd->user_stack_bottom)
+        {
+            auto *mm_info = reinterpret_cast<mm_info_t *>(process->mm_info);
+            (void)mm_info->umap_file(reinterpret_cast<u64>(thd->user_stack_bottom),
+                                     reinterpret_cast<u64>(thd->user_stack_top) -
+                                         reinterpret_cast<u64>(thd->user_stack_bottom));
+        }
+        thd->state = thread_state::destroy;
+        delete_thread(thd);
+        return nullptr;
+    }
     info->args = arg;
     info->userland_entry = entry;
-    info->userland_stack_offset = 0;
+    // create_thread enters a normal user function directly (there is no
+    // synthetic return address on the stack).  Reserve one word so the
+    // function observes the SysV x86-64 ABI entry alignment that it would
+    // have after a call.  The ELF process entry path below deliberately uses
+    // a different initial-stack layout and must remain 16-byte aligned.
+    info->userland_stack_offset = sizeof(void *);
+    info->tcb = tcb;
 
     arch::task::create_thread(thd, (void *)start_func, reinterpret_cast<u64>(info), 0, 0, 0);
 
@@ -979,7 +1010,9 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     auto &paging = mm_info->paging();
     // read file header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
-    file->pread(0, header, 128, 0);
+    const auto header_read = file->pread(0, header, 128, 0);
+    if (header_read != 128)
+        KLOG_WARN("read ELF header for {} returned {} file size {}", path, header_read, file->size());
     bin_handle::execute_info exec_info;
     if (flags & create_process_flags::binary_file)
     {
@@ -988,7 +1021,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     else if (!bin_handle::load(header, &file, mm_info, &exec_info))
     {
         memory::KernelCommonAllocatorV->deallocate(header);
-        KLOG_INFO("Can't load execute file.");
+        KLOG_WARN("Can't load execute file for {}.", path);
         abort_unstarted_process(process);
         return nullptr;
     }
@@ -998,6 +1031,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     thread_t *thd = new_thread(process);
     if (!thd)
     {
+        KLOG_WARN("Can't allocate main thread for {}.", path);
         abort_unstarted_process(process);
         return nullptr;
     }
@@ -1008,6 +1042,7 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
     auto process_args = copy_args(path, args, envp);
     if (process_args == nullptr)
     {
+        KLOG_WARN("Can't copy process arguments for {}.", path);
         abort_unstarted_process(process);
         return nullptr;
     }
@@ -1258,13 +1293,21 @@ void exit_process_thread(process_t *process)
     auto &list = *(thread_list_t *)process->thread_list;
 
     icu.begin();
-    if (!list.empty())
+    thread_t *next = nullptr;
+    for (auto candidate : list)
     {
-        auto thd = list.front();
-        icu.end();
-        exit_process_inner(thd);
+        if (candidate->state != thread_state::destroy)
+        {
+            next = candidate;
+            break;
+        }
     }
-    else
+    if (next != nullptr)
+    {
+        icu.end();
+        exit_process_inner(next);
+    }
+    else if (list.empty())
     {
         icu.end();
         auto services = service::get_global_service_directory();
@@ -1279,6 +1322,14 @@ void exit_process_thread(process_t *process)
         }
         notify_parent_of_child_state_change(process);
         process->wait_queue.do_wake_up();
+    }
+    else
+    {
+        // A concurrent thread-exit callback has already marked every
+        // remaining thread destroy, but has not removed the last one yet.
+        // Its callback will retry exit_process_thread after delete_thread().
+        icu.end();
+        return;
     }
 }
 
@@ -1306,12 +1357,19 @@ void exit_process_inner(thread_t *thd)
     }
     else
     {
-        KLOG_PANIC("{}", (int)thd->state);
+        // The process-exit walk is concurrent with a thread-exit callback.
+        // The callback owns the eventual list removal and will retry the
+        // process walk after it has completed.
+        return;
     }
 }
 
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
+    const auto previous = process->attributes.fetch_or(process_attributes::exiting, std::memory_order_acq_rel);
+    if (previous & process_attributes::exiting)
+        return;
+
     // TODO: write core_dump from flags
     if (ret != 0)
     {
@@ -1322,12 +1380,15 @@ void exit_process(process_t *process, i64 ret, flag_t flags)
     exit_process_thread(process);
 }
 
-void do_exit(i64 ret)
+NoReturn void do_exit(i64 ret)
 {
     process_t *process = current_process();
     exit_process(process, ret, 0);
-    thread_yield();
-    KLOG_PANIC("Unreachable control flow.");
+    for (;;)
+    {
+        scheduler::schedule();
+        cpu_pause();
+    }
 }
 
 process_t *init_process = nullptr;
@@ -1668,6 +1729,16 @@ void exit_thread(thread_t *thd, i64 ret)
         thd,
         [](u64 data) {
             auto *dt = reinterpret_cast<data_t *>(data);
+            auto *process = dt->thd->process;
+            if (!(dt->thd->attributes & thread_attributes::main) &&
+                process->mm_info != memory::kernel_vm_info && dt->thd->user_stack_bottom != nullptr &&
+                dt->thd->user_stack_top != nullptr && dt->thd->user_stack_top > dt->thd->user_stack_bottom)
+            {
+                auto *mm_info = reinterpret_cast<mm_info_t *>(process->mm_info);
+                (void)mm_info->umap_file(reinterpret_cast<u64>(dt->thd->user_stack_bottom),
+                                         reinterpret_cast<u64>(dt->thd->user_stack_top) -
+                                             reinterpret_cast<u64>(dt->thd->user_stack_bottom));
+            }
             dt->thd->user_stack_top = (void *)dt->ret;
             dt->thd->state = thread_state::destroy;
             if (dt->thd->attributes & thread_attributes::detached)
@@ -1679,16 +1750,21 @@ void exit_thread(thread_t *thd, i64 ret)
                 dt->thd->wait_queue.do_wake_up();
             }
             memory::Delete<>(memory::KernelCommonAllocatorV, dt);
+            if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+                exit_process_thread(process);
         },
         reinterpret_cast<u64>(data));
 }
 
-void do_exit_thread(i64 ret)
+NoReturn void do_exit_thread(i64 ret)
 {
     auto thd = current();
     exit_thread(thd, ret);
-    thread_yield();
-    KLOG_PANIC("Unreachable control flow.");
+    for (;;)
+    {
+        scheduler::schedule();
+        cpu_pause();
+    }
 }
 
 u64 detach_thread(thread_t *thd)
@@ -2218,7 +2294,29 @@ void thread_yield()
 
 ExportC void kernel_return() { yield_preempt(); }
 
-ExportC void userland_return() { scheduler::schedule(); }
+ExportC void userland_return()
+{
+    // Keep the scheduler decision and the final return-path state check
+    // atomic with respect to local interrupts.  Otherwise another interrupt
+    // could mark this thread stopped after the check but before sysret.
+    arch::idt::disable();
+    scheduler::schedule();
+
+    // A syscall must never return through sysret for a thread that has been
+    // stopped or destroyed.  Exit is normally non-returning and switches
+    // away through scheduler::remove(), but this guard also covers the case
+    // where scheduling returned without changing the current context.
+    auto thd = current();
+    if (thd != nullptr && thd->state == thread_state::running &&
+        !(thd->attributes & thread_attributes::block_to_stop))
+        return;
+
+    for (;;)
+    {
+        scheduler::schedule();
+        cpu_pause();
+    }
+}
 
 void set_tcb(thread_t *t, void *p)
 {

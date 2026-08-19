@@ -30,6 +30,26 @@ typedef uint64_t na_handle_t;
 #define NA_PROTOCOL_METHOD_BITMAP_WORDS 4
 #define NA_PROTOCOL_MAX_METHOD_ID ((uint64_t)(NA_PROTOCOL_METHOD_BITMAP_WORDS * 64))
 
+/* Static TLS/TCB contract shared by native language runtimes. The kernel
+ * stores the pointer in FS.base; it does not interpret the TLS image or the
+ * runtime-specific extension after this prefix. */
+#define NAOS_TLS_ABI_VERSION 1U
+#define NAOS_TLS_MAX_SIZE ((uint64_t)(1ULL << 20))
+#define NAOS_TLS_MAX_ALIGN ((uint64_t)(1ULL << 20))
+
+typedef struct naos_tls_abi_v1
+{
+    void *self_pointer;
+    uint64_t dtv_size;
+    void **dtv_pointer;
+    uint32_t tid;
+    uint32_t did_exit;
+    uint64_t reserved0;
+    uint64_t stack_canary;
+    uint32_t cancel_bits;
+    uint32_t reserved1;
+} naos_tls_abi_v1_t;
+
 /* Native syscall transport results. These values are never negative; native
  * syscalls return one of these statuses and place successful results in their
  * frame or output parameters. */

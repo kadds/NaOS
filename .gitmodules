@@ -19,3 +19,6 @@
 [submodule "naos/third_party/Catch2"]
 	path = naos/third_party/Catch2
 	url = https://github.com/catchorg/Catch2.git
+[submodule "naos/third_party/rust-naos"]
+	path = naos/third_party/rust-naos
+	url = https://github.com/kadds/rust.git

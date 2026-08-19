@@ -1,0 +1,16 @@
+[package]
+name = "rust-smoke-suite"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rust-smoke-suite"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+naos-idl = { path = "../naos-idl" }
+naos-sys = { path = "../naos-sys" }
+naos-runtime = { path = "../naos-runtime", features = ["alloc", "entry"] }

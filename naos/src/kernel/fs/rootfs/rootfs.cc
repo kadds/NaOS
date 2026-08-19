@@ -22,8 +22,11 @@ void init(byte *start_root_image, u64 size)
     }
     global_root_file_system = memory::New<file_system>(memory::KernelCommonAllocatorV);
     vfs::register_fs(global_root_file_system);
+    // ramfs rounds every regular file allocation up to a page.  Keep the
+    // image size as the primary bound while allowing for that per-file
+    // rounding overhead.
     vfs::mount(global_root_file_system, nullptr, "/", vfs::global_root, vfs::global_root, nullptr,
-               size + memory::page_size * 4);
+               size + size / 16 + memory::page_size);
 
     tar_loader(start_root_image, size);
 }
@@ -35,7 +38,7 @@ file_system::file_system()
 
 vfs::super_block *file_system::load(const char *device_name, const byte *data, u64 size)
 {
-    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, this);
+    super_block *su_block = memory::New<super_block>(memory::KernelCommonAllocatorV, size, this);
     su_block->load();
     return su_block;
 }
@@ -115,7 +118,11 @@ int parse_single(byte *offset)
         auto file = fs::vfs::open(filename, fs::vfs::global_root, fs::vfs::global_root, fs::mode::write,
                                   fs::path_walk_flags::auto_create_file);
         kassert(file, "create file {} fail", filename);
-        file->write(offset + 512, file_size, 0);
+        if (file->write(offset + 512, file_size, 0) != file_size)
+        {
+            KLOG_WARN("rootfs: failed to load {} ({} bytes)", filename, file_size);
+            return -1;
+        }
         fs::vfs::chmod(filename, fs::vfs::global_root, fs::vfs::global_root, mode);
     }
     else if (tag == '1')

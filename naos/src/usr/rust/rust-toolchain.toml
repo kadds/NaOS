@@ -1,7 +1,7 @@
 [toolchain]
-# Keep rust-src and rustfmt in sync with the nightly used by the build
-# environment.  The dated channel is not published by rustup here, so CI
-# should pin the installed nightly revision externally.
+# This is only the fallback Cargo environment for host-side checks.  The NaOS
+# CMake targets override RUSTC and Cargo with the locally built Rust fork
+# stage1 toolchain; they must not consume host rust-src.
 channel = "nightly"
 components = ["rust-src", "rustfmt"]
 profile = "minimal"

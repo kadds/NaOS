@@ -24,8 +24,8 @@
     "features": "+sse2",
     "max-atomic-width": 64,
     "has-rpath": false,
-    "has-thread-local": false,
-    "singlethread": true,
+    "has-thread-local": true,
+    "singlethread": false,
     "pre-link-args": {
         "gnu-cc": [
             "-m64",
@@ -34,8 +34,7 @@
             "-nodefaultlibs",
             "-static",
             "-no-pie",
-            "-Wl,--build-id=none",
-            "-Wl,-T,link.ld"
+            "-Wl,--build-id=none"
         ]
     },
     "metadata": {

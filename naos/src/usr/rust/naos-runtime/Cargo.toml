@@ -7,6 +7,7 @@ publish = false
 [features]
 default = []
 entry = []
+alloc = []
 
 [dependencies]
 naos-sys = { path = "../naos-sys" }

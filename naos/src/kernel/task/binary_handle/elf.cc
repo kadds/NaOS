@@ -213,9 +213,17 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
 {
     elf_header_64 *elf = reinterpret_cast<elf_header_64 *>(header);
     if (!is_valid(elf))
+    {
+        KLOG_WARN("invalid ELF ident {:x} {:x} {:x} {:x} class {} data {} version {}", elf->ident[0], elf->ident[1],
+                  elf->ident[2], elf->ident[3], elf->ident[4], elf->ident[5], elf->ident[6]);
         return false;
+    }
     if (elf->shentsize != sizeof(section_64) || elf->phentsize != sizeof(program_64))
+    {
+        KLOG_WARN("invalid ELF sizes shentsize {}/{} phentsize {}/{}", elf->shentsize, sizeof(section_64), elf->phentsize,
+                  sizeof(program_64));
         return false;
+    }
 
     auto &vma = new_mm_info->vma();
     using namespace memory::vm;
@@ -411,6 +419,7 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
             KLOG_WARN("map file {}-{} fail", log::hex(item.start), log::hex(item.end));
             return false;
         }
+
     }
 
     if (loaded_max_address == 0)

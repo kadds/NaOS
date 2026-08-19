@@ -1,0 +1,20 @@
+[workspace]
+resolver = "3"
+members = [
+    "naos/src/usr/rust/naos-sys",
+    "naos/src/usr/rust/naos-runtime",
+    "naos/src/usr/rust/naos-idl",
+    "naos/src/usr/rust/rust-tls-probe",
+    "naos/src/usr/rust/rust-std-smoke",
+    "tests/rust-interop-fixture",
+]
+exclude = ["naos/third_party/rust-naos/src/bootstrap"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+strip = "symbols"

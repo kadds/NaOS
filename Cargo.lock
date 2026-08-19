@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "naos-idl"
+version = "0.1.0"
+dependencies = [
+ "naos-sys",
+]
+
+[[package]]
 name = "naos-runtime"
 version = "0.1.0"
 dependencies = [
@@ -14,9 +21,21 @@ name = "naos-sys"
 version = "0.1.0"
 
 [[package]]
-name = "rust-smoke"
+name = "rust-interop-fixture"
 version = "0.1.0"
 dependencies = [
+ "naos-idl",
+]
+
+[[package]]
+name = "rust-smoke-suite"
+version = "0.1.0"
+dependencies = [
+ "naos-idl",
  "naos-runtime",
  "naos-sys",
 ]
+
+[[package]]
+name = "rust-tls-probe"
+version = "0.1.0"

@@ -213,7 +213,18 @@ void schedule()
     }
     task::disable_preempt();
 
-    if (!real_time_schedulers->schedule())
+    const bool current_blocked = current() != nullptr &&
+                                 (current()->attributes & thread_attributes::block_to_stop);
+    if (current_blocked)
+    {
+        // A blocking wait/exit has already removed the current normal task
+        // from the runnable set. Let another normal task run before polling
+        // real-time work; otherwise an always-runnable RT queue can starve
+        // the task that is supposed to satisfy the wait.
+        if (!normal_schedulers->schedule())
+            real_time_schedulers->schedule();
+    }
+    else if (!real_time_schedulers->schedule())
     {
         normal_schedulers->schedule();
     }

@@ -6,4 +6,14 @@ protocol Vector @uuid("f1de5f8d-0f4b-48a6-aed4-33a1d6c4a701") @revision(1) @feat
     } -> {
         vector<u32, 8> items @id(1);
     };
+    method inline_values @id(2) {
+        vector<u32, 8> items @id(1) @inline;
+    } -> {
+        vector<u32, 8> items @id(1) @inline;
+    };
+    method matrix @id(3) {
+        array<array<u16, 2>, 2> items @id(1);
+    } -> {
+        array<array<u16, 2>, 2> items @id(1);
+    };
 };

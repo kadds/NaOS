@@ -16,8 +16,8 @@ void init(byte *start_root_image, u64 length);
 class super_block : public ramfs::super_block
 {
   public:
-    super_block(file_system *fs)
-        : ramfs::super_block(0xFFFFFF, fs){};
+    super_block(u64 max_ram_size, file_system *fs)
+        : ramfs::super_block(max_ram_size, fs){};
 };
 
 } // namespace fs::rootfs

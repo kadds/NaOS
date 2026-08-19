@@ -4,9 +4,10 @@ ENTRY(_start)
 
 PHDRS
 {
-    text PT_LOAD FLAGS(5);
+    text PT_LOAD FILEHDR PHDRS FLAGS(5);
     rodata PT_LOAD FLAGS(4);
     data PT_LOAD FLAGS(6);
+    tls PT_TLS FLAGS(6);
     stack PT_GNU_STACK FLAGS(6);
 }
 
@@ -31,6 +32,17 @@ SECTIONS
     {
         *(.data .data.*)
     } :data
+
+    .tdata :
+    {
+        *(.tdata .tdata.*)
+        /* Keep the static TLS image contiguous and file-backed.  LLVM's
+         * local-exec relocations for the NaOS target use the end of this
+         * output section as TP; folding zero-initialized TLS into the same
+         * section makes PT_TLS.p_filesz == PT_TLS.p_memsz and keeps the
+         * runtime's TCB immediately after the complete image. */
+        *(.tbss .tbss.*)
+    } :data :tls
 
     .bss :
     {

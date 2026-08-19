@@ -35,6 +35,7 @@ struct thread_start_info_t
     void *userland_entry;
     u64 userland_stack_offset;
     void *args;
+    void *tcb;
 };
 
 typedef void (*thread_start_func)(thread_start_info_t *);
@@ -63,6 +64,7 @@ enum attributes : flag_t
     userspace = 4,
     job_control_cleanup_done = 8,
     job_control_stopped = 16,
+    exiting = 32,
 };
 } // namespace process_attributes
 
@@ -338,8 +340,8 @@ struct process_args_t
     }
 };
 
-thread_t *create_thread(process_t *process, thread_start_func start_func, void *userland_entry, void *arg,
-                        flag_t flags);
+thread_t *create_thread(process_t *process, thread_start_func start_func, void *userland_entry, void *arg, flag_t flags,
+                        void *tcb = nullptr);
 
 process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
 

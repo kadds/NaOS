@@ -1,9 +1,12 @@
 [package]
-name = "rust-smoke"
+name = "naos-idl"
 version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+alloc = []
+
 [dependencies]
 naos-sys = { path = "../naos-sys" }
-naos-runtime = { path = "../naos-runtime", features = ["entry"] }

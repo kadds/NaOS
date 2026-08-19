@@ -46,6 +46,15 @@ na_status_t native_status_from_errno(i64 error)
         return NA_STATUS_IO_ERROR;
     }
 }
+
+int validate_tcb_address(void *pointer)
+{
+    // The kernel stores this as an opaque FS-base value. TCB layout and
+    // lifetime belong to the userland runtime; do not inspect user TCB data.
+    if (!is_user_space_range(pointer, sizeof(void *)))
+        return EPARAM;
+    return 0;
+}
 } // namespace
 
 enum futex_op
@@ -80,7 +89,10 @@ futex_bucket *ensure_futex_buckets()
     buckets = futex_buckets.load(std::memory_order_relaxed);
     if (buckets == nullptr)
     {
-        buckets = memory::NewArray<futex_bucket>(memory::KernelCommonAllocatorV, futex_bucket_count);
+        // A bucket owns a wait queue and the complete table is larger than
+        // the fixed kmalloc slab limit. Keep this long-lived table in the
+        // virtual allocator; wait-queue nodes still use the common allocator.
+        buckets = memory::NewArray<futex_bucket>(memory::KernelVirtualAllocatorV, futex_bucket_count);
         futex_buckets.store(buckets, std::memory_order_release);
     }
     futex_buckets_lock.clear(std::memory_order_release);
@@ -168,7 +180,7 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
 /// exit process with return value
 void exit(i64 ret_value) { task::do_exit(ret_value); }
 
-void exit_thread(i64 ret)
+NoReturn void exit_thread(i64 ret)
 {
     if (task::current()->attributes & task::thread_attributes::main)
     {
@@ -189,8 +201,11 @@ void before_user_thread(task::thread_start_info_t *info)
     u64 offset = info->userland_stack_offset;
     void *entry = info->userland_entry;
     u64 args = reinterpret_cast<u64>(info->args);
+    void *tcb = info->tcb;
     memory::Delete(memory::KernelCommonAllocatorV, info);
 
+    if (tcb != nullptr)
+        task::set_tcb(task::current(), tcb);
     arch::task::enter_userland(task::current(), offset, entry, args, 0);
 }
 
@@ -431,8 +446,9 @@ i64 sigmask(int opt, u64 *valid_mask, u64 *block_mask, u64 *ignore_mask)
 
 int set_tcb(void *p)
 {
-    if (!is_user_space_pointer(p))
-        return EPARAM;
+    const auto validation = validate_tcb_address(p);
+    if (validation != 0)
+        return validation;
     auto t = task::current();
     task::set_tcb(t, p);
 
@@ -443,14 +459,20 @@ int fork() { return task::fork(); }
 
 int clone(void *entry, void *arg, void *tcb)
 {
-    if (!is_user_space_pointer_or_null(entry))
-    {
+    if (!is_user_space_pointer(entry) || !is_user_space_pointer_or_null(arg))
         return EPARAM;
-    }
+    const auto tcb_validation = validate_tcb_address(tcb);
+    if (tcb_validation != 0)
+        return tcb_validation;
 
-    auto t = task::create_thread(task::current_process(), before_user_thread, entry, arg, 0);
+    auto t = task::create_thread(task::current_process(), before_user_thread, entry, arg, 0, tcb);
     if (t)
     {
+        // Native and mlibc join state is maintained in user space with
+        // futexes. Reap the kernel thread as soon as it exits so a process
+        // exit cannot encounter a destroy-state thread that has no kernel
+        // join syscall.
+        t->attributes |= task::thread_attributes::detached;
         return t->tid;
     }
     return EFAILED;
@@ -606,7 +628,11 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
         task::start_process(child);
     return NA_STATUS_OK;
 }
-int yield() { return 0; }
+int yield()
+{
+    task::thread_yield();
+    return 0;
+}
 
 na_status_t pipe_create(na_pipe_create_frame_t *frame)
 {

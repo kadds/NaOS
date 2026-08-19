@@ -96,7 +96,7 @@ void init()
 
 void trace_debug_info()
 {
-    KLOG_DEBUG("Cpu family: {}. Cpu name: {}.\n    Maximum basic functional number: {}. Maximum extend functional "
+    KLOG_INFO("Cpu family: {}. Cpu name: {}.\n    Maximum basic functional number: {}. Maximum extend functional "
                "number: {}.\n"
                "    Maximum virtual address bits {}. Maximum physical address bits {}",
                family_name, brand_name, log::hex(max_basic_number), log::hex(max_extend_number),
@@ -104,7 +104,7 @@ void trace_debug_info()
 
     if (max_basic_number >= 0x16)
     {
-        KLOG_DEBUG("cpu base frequency {}MHZ max frequency {}MHZ bus frequency {}MHZ",
+        KLOG_INFO("cpu base frequency {}MHZ max frequency {}MHZ bus frequency {}MHZ",
                    get_feature(feature::cpu_base_frequency), get_feature(feature::cpu_max_frequency),
                    get_feature(feature::bus_frequency));
     }
