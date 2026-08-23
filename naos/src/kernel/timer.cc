@@ -286,6 +286,9 @@ void busywait(timeclock::microsecond_t duration)
 
 watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handler)
 {
+    // on_tick() moves and removes these nodes from interrupt context. Keep all
+    // list operations in this API in the same per-CPU critical section.
+    uctx::UninterruptibleContext icu;
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
     const auto id = next_watcher_id.fetch_add(1);
     cpu_timer.watcher_list.push_back(watcher_t(id, duration + get_high_resolution_time(), handler));
@@ -294,6 +297,7 @@ watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handl
 
 watcher_id schedule_at(timeclock::microsecond_t expires_time_point, timer_handler handler)
 {
+    uctx::UninterruptibleContext icu;
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     if (get_high_resolution_time() < expires_time_point)
@@ -309,6 +313,7 @@ bool cancel(watcher_id id)
 {
     if (id == invalid_watcher_id)
         return false;
+    uctx::UninterruptibleContext icu;
     auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
 
     for (auto it = cpu_timer.watcher_list.begin(); it != cpu_timer.watcher_list.end(); ++it)
@@ -319,7 +324,6 @@ bool cancel(watcher_id id)
             return true;
         }
     }
-    uctx::UninterruptibleContext icu;
     for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
     {
         if (it->id == id)

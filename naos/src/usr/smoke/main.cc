@@ -10,6 +10,7 @@
 #include <naos/generated/system/TerminalSlave_client.hpp>
 #include <naos/service_directory.hpp>
 #include <naos/syscall.h>
+#include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdarg.h>
@@ -21,6 +22,7 @@
 #include <sys/mman.h>
 #include <sys/wait.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 [[gnu::weak]] void *__dso_handle;
@@ -91,6 +93,161 @@ int wait_invocation(na_handle_t invocation)
     na_wait_item_t item{invocation, NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
     const auto status = _na_handle_wait_many(&item, 1, nullptr);
     return status == NA_STATUS_OK ? 0 : static_cast<int>(status);
+}
+
+struct wait_deadline_wakeup_context
+{
+    na_handle_t endpoint;
+};
+
+struct parallel_wait_context
+{
+    na_handle_t receiver;
+    int result;
+};
+
+void *send_wait_deadline_wakeup(void *raw_context)
+{
+    auto *context = static_cast<wait_deadline_wakeup_context *>(raw_context);
+    usleep(1'000);
+    na_channel_send_frame_t frame{};
+    frame.struct_size = sizeof(frame);
+    return reinterpret_cast<void *>(static_cast<uintptr_t>(_na_channel_send(context->endpoint, &frame)));
+}
+
+void *wait_for_message_with_deadline(void *raw_context)
+{
+    auto *context = static_cast<parallel_wait_context *>(raw_context);
+    context->result = -1;
+    for (int attempt = 0; attempt < 8; attempt++)
+    {
+        struct timespec deadline{};
+        if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0)
+        {
+            context->result = -2;
+            return nullptr;
+        }
+        deadline.tv_nsec += 100'000'000;
+        if (deadline.tv_nsec >= 1'000'000'000)
+        {
+            deadline.tv_sec++;
+            deadline.tv_nsec -= 1'000'000'000;
+        }
+
+        na_wait_item_t item{context->receiver, NA_SIGNAL_READABLE, 0};
+        const auto wait_status = _na_handle_wait_many(&item, 1, &deadline);
+        if (wait_status == NA_STATUS_OK && (item.observed & NA_SIGNAL_READABLE) != 0 &&
+            _na_channel_discard(context->receiver) == NA_STATUS_OK)
+        {
+            context->result = 0;
+            return nullptr;
+        }
+        if (wait_status != NA_STATUS_WAIT_TIMED_OUT && wait_status != NA_STATUS_OK)
+        {
+            context->result = static_cast<int>(wait_status);
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+bool wait_deadline_smoke()
+{
+    smoke_log("smoke: wait deadline cancellation stress begin\n");
+    na_handle_t receiver = NA_HANDLE_INVALID;
+    na_handle_t sender = NA_HANDLE_INVALID;
+    if (_na_channel_create(nullptr, &receiver, &sender) != NA_STATUS_OK)
+    {
+        smoke_log("smoke: wait deadline channel create failed\n");
+        return false;
+    }
+
+    bool ok = true;
+    for (int iteration = 0; iteration < 512 && ok; iteration++)
+    {
+        wait_deadline_wakeup_context context{sender};
+        pthread_t thread{};
+        if (pthread_create(&thread, nullptr, send_wait_deadline_wakeup, &context) != 0)
+        {
+            ok = false;
+            break;
+        }
+
+        struct timespec deadline{};
+        if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0)
+        {
+            ok = false;
+        }
+        else
+        {
+            deadline.tv_nsec += 50'000'000;
+            if (deadline.tv_nsec >= 1'000'000'000)
+            {
+                deadline.tv_sec++;
+                deadline.tv_nsec -= 1'000'000'000;
+            }
+            na_wait_item_t item{receiver, NA_SIGNAL_READABLE, 0};
+            const auto wait_status = _na_handle_wait_many(&item, 1, &deadline);
+            if (wait_status != NA_STATUS_OK || (item.observed & NA_SIGNAL_READABLE) == 0)
+                ok = false;
+            if (ok && _na_channel_discard(receiver) != NA_STATUS_OK)
+                ok = false;
+        }
+
+        void *thread_result = nullptr;
+        if (pthread_join(thread, &thread_result) != 0 ||
+            static_cast<na_status_t>(reinterpret_cast<uintptr_t>(thread_result)) != NA_STATUS_OK)
+            ok = false;
+    }
+
+    constexpr int parallel_waiter_count = 32;
+    constexpr int parallel_round_count = 64;
+    for (int round = 0; round < parallel_round_count && ok; round++)
+    {
+        parallel_wait_context contexts[parallel_waiter_count]{};
+        pthread_t threads[parallel_waiter_count]{};
+        int created = 0;
+        for (; created < parallel_waiter_count; created++)
+        {
+            contexts[created].receiver = receiver;
+            if (pthread_create(&threads[created], nullptr, wait_for_message_with_deadline, &contexts[created]) != 0)
+            {
+                ok = false;
+                break;
+            }
+        }
+        usleep(1'000);
+
+        na_channel_send_frame_t frame{};
+        frame.struct_size = sizeof(frame);
+        for (int sent = 0; sent < created && ok; sent++)
+        {
+            for (;;)
+            {
+                const auto send_status = _na_channel_send(sender, &frame);
+                if (send_status == NA_STATUS_OK)
+                    break;
+                if (send_status != NA_STATUS_WOULD_BLOCK)
+                {
+                    ok = false;
+                    break;
+                }
+                usleep(1'000);
+            }
+            usleep(1'000);
+        }
+        for (int joined = 0; joined < created; joined++)
+        {
+            if (pthread_join(threads[joined], nullptr) != 0 || contexts[joined].result != 0)
+                ok = false;
+        }
+    }
+
+    (void)_na_handle_close(sender);
+    (void)_na_handle_close(receiver);
+    smoke_log(ok ? "smoke: wait deadline cancellation stress ok\n"
+                 : "smoke: wait deadline cancellation stress failed\n");
+    return ok;
 }
 
 void ttyd_smoke()
@@ -768,6 +925,7 @@ int run_smoke_suite()
     tty_fuzz_smoke();
     openpty_smoke();
     framebuffer_lifetime_smoke();
+    const bool wait_deadline_ok = wait_deadline_smoke();
 
     smoke_log("smoke: PTY limit stress begin\n");
     bool pty_stress_ok = true;
@@ -795,7 +953,7 @@ int run_smoke_suite()
     smoke_log("smoke: ttyd kill recovery is supervisor-owned; skipped in standalone runner\n");
     const int tls_status = run_mlibc_tls_smoke();
     smoke_log(tls_status == 0 ? "smoke: mlibc TLS smoke ok\n" : "smoke: mlibc TLS smoke failed\n");
-    return tls_status;
+    return tls_status != 0 ? tls_status : wait_deadline_ok ? 0 : 1;
 }
 
 } // namespace
