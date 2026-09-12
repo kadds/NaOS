@@ -251,6 +251,8 @@ struct thread_t
     u64 error_code = 0;
     wait_queue_t *do_wait_queue_now = nullptr;
     std::atomic_uint32_t wait_queue_wake_refs{0};
+    /// Timer used to wake a thread blocked in sleep().
+    u64 sleep_watcher = 0;
     void *tcb = 0;
 
     // A fault-safe usercopy temporarily arms the page-fault dispatcher with
@@ -366,7 +368,7 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, co
 
 NoReturn void do_exit(i64 value);
 
-void do_sleep(const timeclock::time &time);
+bool do_sleep(timeclock::microsecond_t duration);
 
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid);
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,

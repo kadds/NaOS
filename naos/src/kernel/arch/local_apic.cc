@@ -623,7 +623,7 @@ clock_source *make_clock()
     lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
     lt_ev->set_source(lt_cs);
     lt_cs->set_event(lt_ev);
-    lt_ev->init(100);
+    lt_ev->init(1000);
     lt_cs->init();
 
     return lt_cs;

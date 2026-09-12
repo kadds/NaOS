@@ -6,6 +6,15 @@ namespace timeclock
 
 constexpr microsecond_t microseconds_per_second = 1'000'000;
 
+constexpr bool try_add_microseconds(microsecond_t base, microsecond_t duration, microsecond_t &result)
+{
+    const auto max = static_cast<microsecond_t>(-1);
+    if (duration > max - base)
+        return false;
+    result = base + duration;
+    return true;
+}
+
 struct time
 {
     int64_t tv_sec;

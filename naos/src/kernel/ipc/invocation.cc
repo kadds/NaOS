@@ -48,7 +48,10 @@ struct deadline_watch
     void invoke(timeclock::microsecond_t) noexcept
     {
         if (state)
+        {
             state->expire_deadline();
+            state->deadline_fired();
+        }
         state.reset();
         memory::Delete<>(memory::KernelCommonAllocatorV, this);
     }
@@ -2026,6 +2029,29 @@ invocation_state::~invocation_state()
     core_ = nullptr;
 }
 
+void invocation_state::deadline_fired()
+{
+    uctx::RawSpinLockUninterruptibleContext guard(lock_);
+    deadline_watcher_ = timer::invalid_watcher_id;
+    deadline_watch_ = nullptr;
+}
+
+void invocation_state::disarm_deadline()
+{
+    timer::watcher_id watcher = timer::invalid_watcher_id;
+    void *watch = nullptr;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        watcher = deadline_watcher_;
+        watch = deadline_watch_;
+        deadline_watcher_ = timer::invalid_watcher_id;
+        deadline_watch_ = nullptr;
+    }
+
+    if (watcher != timer::invalid_watcher_id && timer::cancel(watcher))
+        memory::Delete<>(memory::KernelCommonAllocatorV, reinterpret_cast<deadline_watch *>(watch));
+}
+
 na_signal_t invocation_state::signals() const { return core_ == nullptr ? 0 : naos_ipc_invocation_signals(core_); }
 
 u64 invocation_state::method_id() const { return core_ == nullptr ? 0 : naos_ipc_invocation_method_id(core_); }
@@ -2162,7 +2188,10 @@ void invocation_state::wake_core_execution()
 bool invocation_state::cancel(protocol_state *queue_owner)
 {
     (void)queue_owner;
-    return core_ != nullptr && naos_ipc_invocation_cancel(core_) != 0;
+    const bool canceled = core_ != nullptr && naos_ipc_invocation_cancel(core_) != 0;
+    if (canceled && (signals() & NA_SIGNAL_COMPLETED) != 0)
+        disarm_deadline();
+    return canceled;
 }
 
 na_status_t invocation_state::arm_deadline(const handle_t<invocation_state> &self)
@@ -2172,11 +2201,19 @@ na_status_t invocation_state::arm_deadline(const handle_t<invocation_state> &sel
     auto *watch = memory::New<deadline_watch>(memory::KernelCommonAllocatorV, self);
     if (watch == nullptr)
         return NA_STATUS_RESOURCE_EXHAUSTED;
-    if (timer::schedule_at(operation_deadline(), timer::timer_handler::bind<&deadline_watch::invoke>(*watch)) ==
-        timer::invalid_watcher_id)
+    uctx::UninterruptibleContext guard;
+    const auto watcher =
+        timer::schedule_at(operation_deadline(), timer::timer_handler::bind<&deadline_watch::invoke>(*watch));
+    if (watcher == timer::invalid_watcher_id)
     {
         memory::Delete<>(memory::KernelCommonAllocatorV, watch);
         expire_deadline();
+    }
+    else
+    {
+        uctx::RawSpinLockUninterruptibleContext state_guard(lock_);
+        deadline_watcher_ = watcher;
+        deadline_watch_ = watch;
     }
     return NA_STATUS_OK;
 }
@@ -2191,12 +2228,16 @@ void invocation_state::close_client()
 {
     if (core_ != nullptr)
         naos_ipc_invocation_close_client(core_);
+    if ((signals() & NA_SIGNAL_COMPLETED) != 0)
+        disarm_deadline();
 }
 
 void invocation_state::abandon_responder()
 {
     if (core_ != nullptr)
         naos_ipc_invocation_abandon_responder(core_);
+    if ((signals() & NA_SIGNAL_COMPLETED) != 0)
+        disarm_deadline();
 }
 
 bool invocation_state::consume_responder()
@@ -2229,6 +2270,7 @@ bool invocation_state::complete_reply(freelibcxx::vector<byte> &bytes, capabilit
         source_resources->commit_native_batch(resources);
     bytes.clear();
     resources.clear();
+    disarm_deadline();
     return true;
 }
 
@@ -2240,13 +2282,21 @@ bool invocation_state::complete_reply(freelibcxx::vector<byte> &&bytes, capabili
 
 bool invocation_state::complete_failure(na_execution_outcome_t outcome, na_outcome_reason_t reason, i64 protocol_error)
 {
-    return core_ != nullptr && naos_ipc_invocation_complete_failure(core_, static_cast<u32>(outcome),
-                                                                    static_cast<u32>(reason), protocol_error) != 0;
+    const bool completed =
+        core_ != nullptr && naos_ipc_invocation_complete_failure(core_, static_cast<u32>(outcome),
+                                                                 static_cast<u32>(reason), protocol_error) != 0;
+    if (completed)
+        disarm_deadline();
+    return completed;
 }
 
 bool invocation_state::complete_not_delivered(na_outcome_reason_t reason)
 {
-    return core_ != nullptr && naos_ipc_invocation_complete_not_delivered(core_, static_cast<u32>(reason)) != 0;
+    const bool completed =
+        core_ != nullptr && naos_ipc_invocation_complete_not_delivered(core_, static_cast<u32>(reason)) != 0;
+    if (completed)
+        disarm_deadline();
+    return completed;
 }
 
 bool invocation_state::deadline_expired(bool)
@@ -2255,7 +2305,10 @@ bool invocation_state::deadline_expired(bool)
         return false;
     naos_ipc_invocation_expire_if_due(core_);
     const auto state_signals = naos_ipc_invocation_signals(core_);
-    return (state_signals & NA_SIGNAL_COMPLETED) != 0;
+    const bool completed = (state_signals & NA_SIGNAL_COMPLETED) != 0;
+    if (completed)
+        disarm_deadline();
+    return completed;
 }
 
 bool invocation_state::response_within_limits(u64 bytes, u64 resources) const

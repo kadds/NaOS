@@ -3,6 +3,7 @@
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/arch/acpipm.hpp"
+#include "kernel/arch/cpu.hpp"
 #include "kernel/arch/hpet.hpp"
 #include "kernel/arch/io_apic.hpp"
 #include "kernel/arch/local_apic.hpp"
@@ -28,17 +29,10 @@ using clock_source_array_t = freelibcxx::vector<timeclock::clock_source *>;
 
 struct watcher_t
 {
-    enum class state : u8
-    {
-        enabled,
-        canceled,
-    };
-
     watcher_id id;
     /// target time microsecond
     u64 expires;
     timer_handler handler;
-    state current_state = state::enabled;
 
     watcher_t(watcher_id id, u64 expires, timer_handler handler)
         : id(id)
@@ -47,9 +41,8 @@ struct watcher_t
     {
     }
 
-    bool operator==(const watcher_t &w) { return id == w.id; }
+    bool operator==(const watcher_t &w) const { return id == w.id; }
     bool operator<(const watcher_t &w) { return expires < w.expires; }
-    bool is_enabled() const { return current_state == state::enabled; }
 };
 
 using watcher_list_t = freelibcxx::linked_list<watcher_t>;
@@ -85,41 +78,56 @@ timeclock::clock_event *get_clock_event()
     return nullptr;
 }
 
-constexpr u64 tick_us = 1000;
+cpu_timer_t *timer_queues[arch::cpu::max_cpu_support]{};
+lock::spinlock_t timer_queue_lock;
+
+cpu_timer_t *current_timer_queue()
+{
+    if (!cpu::has_init())
+        return nullptr;
+    const auto id = cpu::current().id();
+    if (id >= arch::cpu::max_cpu_support)
+        return nullptr;
+    return timer_queues[id];
+}
 
 void on_tick(u64 vector) noexcept
 {
-    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
-    u64 us = get_clock_source()->current();
+    (void)vector;
+    auto *cpu_timer = current_timer_queue();
+    auto *source = get_clock_source();
+    if (cpu_timer == nullptr || source == nullptr)
+        return;
+    const u64 us = source->current();
 
     {
         // add to tick list
-        uctx::UninterruptibleContext icu;
-        for (auto &ws : cpu_timer.watcher_list)
+        uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+        for (auto &ws : cpu_timer->watcher_list)
         {
-            if (likely(ws.is_enabled()))
-            {
-                cpu_timer.tick_list.insert(ws);
-            }
+            cpu_timer->tick_list.insert(ws);
         }
-        cpu_timer.watcher_list.clear();
+        cpu_timer->watcher_list.clear();
     }
-    uctx::UninterruptibleController icc;
-    icc.begin();
-    auto it = cpu_timer.tick_list.begin();
-    for (; it != cpu_timer.tick_list.end() && it->expires <= us + tick_us / 2;)
+
+    for (;;)
     {
-        if (likely(it->is_enabled()))
+        timer_handler handler;
+        u64 expires = 0;
         {
-            auto handler = it->handler;
-            auto exp = it->expires;
-            icc.end();
-            handler(exp);
-            icc.begin();
+            uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+            auto it = cpu_timer->tick_list.begin();
+            if (it == cpu_timer->tick_list.end() || it->expires > us)
+                break;
+
+            handler = it->handler;
+            expires = it->expires;
+            // Remove before invoking the callback so cancellation on another
+            // CPU cannot invalidate the iterator held by this loop.
+            cpu_timer->tick_list.remove(it);
         }
-        it = cpu_timer.tick_list.remove(it);
+        handler(expires);
     }
-    icc.end();
 }
 
 bool check_source(timeclock::clock_source *cs)
@@ -164,7 +172,10 @@ void init()
         bool enable_acpipm = cmdline::get_bool("acpipm", true);
 
         auto cpu_timer = memory::New<cpu_timer_t>(memory::KernelCommonAllocatorV);
+        if (cpu_timer == nullptr)
+            KLOG_PANIC("unable to allocate CPU timer queue");
         cpu::current().set_timer_queue(cpu_timer);
+        timer_queues[cpu::current().id()] = cpu_timer;
         arch::device::PIT::disable_all();
 
         if (enable_hpet && global_source == nullptr)
@@ -273,9 +284,12 @@ timeclock::microsecond_t get_high_resolution_time()
 
 void busywait(timeclock::microsecond_t duration)
 {
-    timeclock::microsecond_t t = get_high_resolution_time() + duration;
+    const auto start = get_high_resolution_time();
+    timeclock::microsecond_t deadline = 0;
+    if (!timeclock::try_add_microseconds(start, duration, deadline))
+        return;
     volatile int v = 0;
-    while (t < get_high_resolution_time())
+    while (get_high_resolution_time() < deadline)
     {
         for (int i = 0; i < 100; i++)
         {
@@ -286,24 +300,35 @@ void busywait(timeclock::microsecond_t duration)
 
 watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handler)
 {
-    // on_tick() moves and removes these nodes from interrupt context. Keep all
-    // list operations in this API in the same per-CPU critical section.
-    uctx::UninterruptibleContext icu;
-    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
+    if (handler == nullptr)
+        return invalid_watcher_id;
+    auto *cpu_timer = current_timer_queue();
+    if (cpu_timer == nullptr)
+        return invalid_watcher_id;
+    const auto now = get_high_resolution_time();
+    timeclock::microsecond_t expires = 0;
+    if (!timeclock::try_add_microseconds(now, duration, expires))
+        return invalid_watcher_id;
+
+    uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
     const auto id = next_watcher_id.fetch_add(1);
-    cpu_timer.watcher_list.push_back(watcher_t(id, duration + get_high_resolution_time(), handler));
+    cpu_timer->watcher_list.push_back(watcher_t(id, expires, handler));
     return id;
 }
 
 watcher_id schedule_at(timeclock::microsecond_t expires_time_point, timer_handler handler)
 {
-    uctx::UninterruptibleContext icu;
-    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
+    if (handler == nullptr)
+        return invalid_watcher_id;
+    auto *cpu_timer = current_timer_queue();
+    if (cpu_timer == nullptr)
+        return invalid_watcher_id;
 
     if (get_high_resolution_time() < expires_time_point)
     {
+        uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
         const auto id = next_watcher_id.fetch_add(1);
-        cpu_timer.watcher_list.push_back(watcher_t(id, expires_time_point, handler));
+        cpu_timer->watcher_list.push_back(watcher_t(id, expires_time_point, handler));
         return id;
     }
     return invalid_watcher_id;
@@ -313,27 +338,30 @@ bool cancel(watcher_id id)
 {
     if (id == invalid_watcher_id)
         return false;
-    uctx::UninterruptibleContext icu;
-    auto &cpu_timer = *reinterpret_cast<cpu_timer_t *>(cpu::current().get_timer_queue());
+    uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+    const auto count = cpu::count();
+    for (u64 cpu_id = 0; cpu_id < count && cpu_id < arch::cpu::max_cpu_support; cpu_id++)
+    {
+        auto *cpu_timer = timer_queues[cpu_id];
+        if (cpu_timer == nullptr)
+            continue;
 
-    for (auto it = cpu_timer.watcher_list.begin(); it != cpu_timer.watcher_list.end(); ++it)
-    {
-        if (it->id == id)
+        for (auto it = cpu_timer->watcher_list.begin(); it != cpu_timer->watcher_list.end(); ++it)
         {
-            cpu_timer.watcher_list.remove(it);
-            return true;
+            if (it->id == id)
+            {
+                cpu_timer->watcher_list.remove(it);
+                return true;
+            }
         }
-    }
-    for (auto it = cpu_timer.tick_list.begin(); it != cpu_timer.tick_list.end();)
-    {
-        if (it->id == id)
+
+        for (auto it = cpu_timer->tick_list.begin(); it != cpu_timer->tick_list.end(); ++it)
         {
-            it->current_state = watcher_t::state::canceled;
-            return true;
-        }
-        else
-        {
-            ++it;
+            if (it->id == id)
+            {
+                cpu_timer->tick_list.remove(it);
+                return true;
+            }
         }
     }
     return false;

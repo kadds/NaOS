@@ -302,8 +302,10 @@ int sleep(const timeclock::time *time)
     timeclock::time value(0, 0);
     if (naos::usercopy::copy_from(&value, reinterpret_cast<u64>(time), sizeof(value)) != NA_STATUS_OK)
         return EFAULT;
-    task::do_sleep(value);
-    return OK;
+    timeclock::microsecond_t duration = 0;
+    if (!timeclock::try_to_microseconds(value, duration))
+        return EPARAM;
+    return task::do_sleep(duration) ? OK : EFAILED;
 }
 
 struct sig_info_t

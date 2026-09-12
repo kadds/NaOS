@@ -501,6 +501,12 @@ inline thread_t *new_thread(process_t *p)
 void delete_thread(thread_t *thd)
 {
     kassert(thd->state == thread_state::destroy, "thread state check failed.");
+    if (thd->sleep_watcher != timer::invalid_watcher_id)
+    {
+        const auto watcher = thd->sleep_watcher;
+        thd->sleep_watcher = timer::invalid_watcher_id;
+        (void)timer::cancel(watcher);
+    }
     if (thd->do_wait_queue_now)
         thd->do_wait_queue_now->remove(thd);
     while (thd->wait_queue_wake_refs.load(std::memory_order_acquire) != 0)
@@ -1270,24 +1276,29 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, co
 
 void thread_t::wake_from_sleep(timeclock::microsecond_t) noexcept
 {
+    sleep_watcher = timer::invalid_watcher_id;
     scheduler::update_state(this, thread_state::ready);
 }
 
-void do_sleep(const timeclock::time &time)
+bool do_sleep(timeclock::microsecond_t duration)
 {
-    timeclock::time t = time;
-    auto us = t.tv_nsec / 1000 + t.tv_sec * 1000 * 1000;
     uctx::UninterruptibleContext icu;
+    auto *thd = current();
 
-    if (us != 0)
+    if (duration != 0)
     {
-        scheduler::update_state(current(), thread_state::stop);
-        (void)timer::schedule_after(us, timer::timer_handler::bind<&thread_t::wake_from_sleep>(*current()));
+        const auto watcher =
+            timer::schedule_after(duration, timer::timer_handler::bind<&thread_t::wake_from_sleep>(*thd));
+        if (watcher == timer::invalid_watcher_id)
+            return false;
+        thd->sleep_watcher = watcher;
+        scheduler::update_state(thd, thread_state::stop);
     }
     else
     {
-        current()->attributes |= task::thread_attributes::need_schedule;
+        thd->attributes |= task::thread_attributes::need_schedule;
     }
+    return true;
 }
 
 struct process_data_t

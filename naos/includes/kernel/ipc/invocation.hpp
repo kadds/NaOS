@@ -101,6 +101,7 @@ class invocation_state
     bool cancel(protocol_state *queue_owner);
     na_status_t arm_deadline(const handle_t<invocation_state> &self);
     void expire_deadline();
+    void deadline_fired();
     void close_client();
     void abandon_responder();
     bool consume_responder();
@@ -143,8 +144,12 @@ class invocation_state
     naos_ipc_clock_t core_clock_api_{};
     naos_ipc_invocation_callbacks_t core_callbacks_{};
     naos_ipc_invocation_t *core_ = nullptr;
+    u64 deadline_watcher_ = 0;
+    void *deadline_watch_ = nullptr;
     invocation_object *invocation_object_ = nullptr;
     responder_object *responder_object_ = nullptr;
+
+    void disarm_deadline();
 };
 
 class invocation_object final : public kobject
