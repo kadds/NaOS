@@ -84,6 +84,8 @@ struct process_t
     na_handle_t console_err_handle = NA_HANDLE_INVALID;
     /// A native child consumes this endpoint exactly once during startup.
     na_handle_t bootstrap_channel_handle = NA_HANDLE_INVALID;
+    /// Replace normal bootstrap stdout/stderr with a kernel klog stream.
+    bool klog_stdio = false;
     /// Handles carried across an in-place exec.  The old image has already
     /// consumed its bootstrap channel, so the new image receives the
     /// namespace directly from the retained resource table on its first

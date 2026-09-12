@@ -187,6 +187,8 @@ enum
 {
     /* The parent must explicitly start the returned Process capability. */
     NA_PROCESS_SPAWN_DEFERRED_START = ((uint32_t)1 << 0),
+    /* Replace child stdout/stderr with the kernel klog stream on bootstrap. */
+    NA_PROCESS_SPAWN_KLOG_STDIO = ((uint32_t)1 << 1),
 };
 
 enum

@@ -70,6 +70,7 @@ class kobject
         terminal_driver_control,
         terminal_driver_factory,
         console_stream,
+        klog_stream,
         framebuffer,
         epoll,
     };

@@ -45,20 +45,20 @@ bool spawn_ttyd_process(int *pid)
         return false;
 
     char *ttyd_argv[] = {const_cast<char *>("ttyd"), nullptr};
-    _s_log("init: spawning ttyd\n");
+    printf("init: spawning ttyd\n");
     const int spawn_error = naos_native_spawn_stdio_with_service_manager(pid, "/bin/ttyd", ttyd_argv, environ);
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: ttyd spawn returned error=%d pid=%d errno=%d\n", spawn_error, *pid,
                  errno);
-        _s_log(message);
+        printf("%s", message);
     }
     if (spawn_error != 0 || *pid <= 0)
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: ttyd spawn failed error=%d pid=%d errno=%d\n", spawn_error,
                  pid != nullptr ? *pid : -1, errno);
-        _s_log(message);
+        printf("%s", message);
         return false;
     }
     return true;
@@ -69,7 +69,7 @@ bool start_ttyd()
     int ttyd_pid = -1;
     if (!spawn_ttyd_process(&ttyd_pid))
     {
-        _s_log("init: ttyd start failed\n");
+        printf("init: ttyd start failed\n");
         return false;
     }
     g_ttyd_pid = ttyd_pid;
@@ -102,14 +102,14 @@ bool start_ttyd()
                     close(console);
                     if (ready)
                     {
-                        _s_log("init: ttyd console ready\n");
-                        _s_log("init: ttyd ready\n");
+                        printf("init: ttyd console ready\n");
+                        printf("init: ttyd ready\n");
                         return true;
                     }
                 }
                 usleep(5'000);
             }
-            _s_log("init: ttyd console readiness timed out\n");
+            printf("init: ttyd console readiness timed out\n");
             return false;
         }
         sleep(1);
@@ -118,7 +118,7 @@ bool start_ttyd()
     int status = 0;
     (void)waitpid(ttyd_pid, &status, 0);
     g_ttyd_pid = -1;
-    _s_log("init: ttyd readiness timed out\n");
+    printf("init: ttyd readiness timed out\n");
     return false;
 }
 
@@ -133,11 +133,11 @@ bool spawn_consoled_process(pid_t *pid)
                                                     STDOUT_FILENO, STDERR_FILENO);
     if (spawn_error != 0 || *pid <= 0)
     {
-        _s_log("init: consoled spawn failed\n");
+        printf("init: consoled spawn failed\n");
         *pid = -1;
         return false;
     }
-    _s_log("init: consoled started\n");
+    printf("init: consoled started\n");
     return true;
 }
 
@@ -150,7 +150,7 @@ bool framebuffer_available()
         char message[112]{};
         snprintf(message, sizeof(message), "init: framebuffer service resolve failed error=%u\n",
                  static_cast<unsigned>(error));
-        _s_log(message);
+        printf("%s", message);
         return false;
     }
     (void)naos_handle_close(framebuffer);
@@ -165,7 +165,7 @@ bool spawn_user_shell(pid_t *shell, int *slave)
     const int new_slave = open("/dev/console", O_RDWR);
     if (new_slave < 0)
     {
-        _s_log("init: user console slave failed\n");
+        printf("init: user console slave failed\n");
         return false;
     }
     char *shell_argv[] = {const_cast<char *>("sh"), const_cast<char *>("-i"), nullptr};
@@ -178,7 +178,7 @@ bool spawn_user_shell(pid_t *shell, int *slave)
         char message[96]{};
         snprintf(message, sizeof(message), "init: user shell spawn failed error=%d pid=%d errno=%d\n", shell_spawn,
                  shell != nullptr ? *shell : -1, errno);
-        _s_log(message);
+        printf("%s", message);
         close(new_slave);
         *shell = -1;
         return false;
@@ -188,40 +188,40 @@ bool spawn_user_shell(pid_t *shell, int *slave)
     {
         char error_message[80]{};
         snprintf(error_message, sizeof(error_message), "init: user shell TIOCSCTTY failed %d\n", errno);
-        _s_log(error_message);
+        printf("%s", error_message);
     }
     else
-        _s_log("init: user shell TIOCSCTTY ok\n");
+        printf("init: user shell TIOCSCTTY ok\n");
     if (setpgid(*shell, *shell) != 0)
-        _s_log("init: user shell setpgid failed\n");
+        printf("init: user shell setpgid failed\n");
     else
-        _s_log("init: user shell setpgid ok\n");
+        printf("init: user shell setpgid ok\n");
     int shell_pgid = static_cast<int>(*shell);
     if (ioctl(new_slave, TIOCSPGRP, &shell_pgid) != 0)
     {
         char error_message[80]{};
         snprintf(error_message, sizeof(error_message), "init: user shell TIOCSPGRP failed %d\n", errno);
-        _s_log(error_message);
+        printf("%s", error_message);
     }
     else
-        _s_log("init: user shell TIOCSPGRP ok\n");
+        printf("init: user shell TIOCSPGRP ok\n");
     int foreground_pgid = -1;
     if (ioctl(new_slave, TIOCGPGRP, &foreground_pgid) != 0)
     {
         char error_message[80]{};
         snprintf(error_message, sizeof(error_message), "init: user shell TIOCGPGRP failed %d\n", errno);
-        _s_log(error_message);
+        printf("%s", error_message);
     }
     else if (foreground_pgid == shell_pgid)
-        _s_log("init: user shell TIOCGPGRP ok\n");
+        printf("init: user shell TIOCGPGRP ok\n");
     else
-        _s_log("init: user shell TIOCGPGRP mismatch\n");
+        printf("init: user shell TIOCGPGRP mismatch\n");
     const int shell_start = naos_native_start_process(shell_process);
     if (shell_start != 0)
     {
         char start_error[64]{};
         snprintf(start_error, sizeof(start_error), "init: user shell start failed %d\n", shell_start);
-        _s_log(start_error);
+        printf("%s", start_error);
         (void)_na_handle_close(shell_process);
         close(new_slave);
         *shell = -1;
@@ -230,7 +230,7 @@ bool spawn_user_shell(pid_t *shell, int *slave)
     (void)_na_handle_close(shell_process);
 
     *slave = new_slave;
-    _s_log("init: user shell started\n");
+    printf("init: user shell started\n");
     return true;
 }
 
@@ -258,7 +258,7 @@ bool reap_process(pid_t *pid, const char *name)
     {
         snprintf(message, sizeof(message), "init: %s wait failed errno=%d\n", name, errno);
     }
-    _s_log(message);
+    printf("%s", message);
     *pid = -1;
     return true;
 }
@@ -299,14 +299,14 @@ bool script_has_work(const char *script)
 
 bool run_optional_init_script()
 {
-    _s_log("init: checking optional init hook\n");
+    printf("init: checking optional init hook\n");
     const int init_script_access = access("/etc/init.sh", R_OK);
     const int shell_access = access("/bin/sh", X_OK);
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: optional init hook access=%d shell=%d\n", init_script_access,
                  shell_access);
-        _s_log(message);
+        printf("%s", message);
     }
     if (init_script_access != 0 || shell_access != 0)
         return true;
@@ -316,13 +316,13 @@ bool run_optional_init_script()
     auto *script = static_cast<char *>(malloc(max_script_bytes + 1));
     if (script == nullptr)
     {
-        _s_log("init: /etc/init.sh allocation failed\n");
+        printf("init: /etc/init.sh allocation failed\n");
         return false;
     }
     const int script_fd = open("/etc/init.sh", O_RDONLY);
     if (script_fd < 0)
     {
-        _s_log("init: /etc/init.sh open failed\n");
+        printf("init: /etc/init.sh open failed\n");
         free(script);
         return false;
     }
@@ -353,7 +353,7 @@ bool run_optional_init_script()
         char message[112]{};
         snprintf(message, sizeof(message), "init: /etc/init.sh read failed or too large errno=%d bytes=%u\n", errno,
                  static_cast<unsigned>(script_bytes));
-        _s_log(message);
+        printf("%s", message);
         free(script);
         return false;
     }
@@ -361,7 +361,7 @@ bool run_optional_init_script()
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: /etc/init.sh loaded bytes=%u\n", static_cast<unsigned>(script_bytes));
-        _s_log(message);
+        printf("%s", message);
     }
 
     // The production hook is intentionally empty.  Starting an interpreter for
@@ -369,7 +369,7 @@ bool run_optional_init_script()
     // boot, so skip the spawn when the script has no command to run.
     if (!script_has_work(script))
     {
-        _s_log("init: /etc/init.sh has no commands; skipping the hook\n");
+        printf("init: /etc/init.sh has no commands; skipping the hook\n");
         free(script);
         return true;
     }
@@ -387,30 +387,30 @@ bool run_optional_init_script()
     {
         char message[112]{};
         snprintf(message, sizeof(message), "init: optional init hook spawn error=%d pid=%d\n", spawn_error, pid);
-        _s_log(message);
+        printf("%s", message);
     }
     free(script);
     if (spawn_error != 0 || pid <= 0)
     {
-        _s_log("init: /etc/init.sh spawn failed\n");
+        printf("init: /etc/init.sh spawn failed\n");
         return false;
     }
 
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: /etc/init.sh spawned pid=%d\n", pid);
-        _s_log(message);
+        printf("%s", message);
     }
 
     const int start_error = naos_native_start_process(process);
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: optional init hook start error=%d\n", start_error);
-        _s_log(message);
+        printf("%s", message);
     }
     if (start_error != 0)
     {
-        _s_log("init: /etc/init.sh start failed\n");
+        printf("init: /etc/init.sh start failed\n");
         (void)_na_handle_close(process);
         return false;
     }
@@ -420,21 +420,21 @@ bool run_optional_init_script()
     {
         char message[112]{};
         snprintf(message, sizeof(message), "init: optional init hook wait pid=%d status=%d\n", waited, status);
-        _s_log(message);
+        printf("%s", message);
     }
     if (waited != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
         char message[128]{};
         snprintf(message, sizeof(message), "init: /etc/init.sh failed pid=%d waited=%d status=%d errno=%d\n", pid,
                  waited, status, errno);
-        _s_log(message);
+        printf("%s", message);
         (void)_na_handle_close(process);
         return false;
     }
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: /etc/init.sh completed pid=%d status=%d\n", pid, status);
-        _s_log(message);
+        printf("%s", message);
     }
     (void)_na_handle_close(process);
     return true;
@@ -470,12 +470,12 @@ void run_user_shell(pid_t initial_console)
     int slave = -1;
     bool framebuffer_notice_logged = false;
 
-    _s_log("init: frontend supervision started\n");
+    printf("init: frontend supervision started\n");
     for (;;)
     {
         if (g_ttyd_pid <= 0)
         {
-            _s_log("init: ttyd unavailable; restarting frontend\n");
+            printf("init: ttyd unavailable; restarting frontend\n");
             if (console > 0)
             {
                 (void)kill(console, SIGTERM);
@@ -521,13 +521,13 @@ void run_user_shell(pid_t initial_console)
                 close(slave);
                 slave = -1;
             }
-            _s_log("init: consoled restart scheduled\n");
+            printf("init: consoled restart scheduled\n");
         }
         if (reap_process(&shell, "user shell"))
         {
             close(slave);
             slave = -1;
-            _s_log("init: user shell restart scheduled\n");
+            printf("init: user shell restart scheduled\n");
         }
         bool framebuffer_ready = false;
         if (console <= 0)
@@ -540,7 +540,7 @@ void run_user_shell(pid_t initial_console)
                 // consoled frontend; do not spin forever waiting for a display service.
                 if (!framebuffer_notice_logged)
                 {
-                    _s_log("init: framebuffer unavailable; using ttyd-only shell\n");
+                    printf("init: framebuffer unavailable; using ttyd-only shell\n");
                     framebuffer_notice_logged = true;
                 }
             }
@@ -559,7 +559,7 @@ void run_user_shell(pid_t initial_console)
         }
 
         if (console > 0 && shell <= 0)
-            _s_log("init: spawning user shell\n");
+            printf("init: spawning user shell\n");
 
         if (shell <= 0 && (console > 0 || !framebuffer_ready) && !spawn_user_shell(&shell, &slave))
         {
@@ -578,16 +578,16 @@ extern "C" void main(int argc, char **argv)
     // ServiceDirectory before the filesystem worker is ready, but it must not
     // touch a path or spawn a normal service until vfsd has published the
     // committed root route.
-    _s_log("init: waiting for committed root route\n");
     const int root_error = naos_native_install_root_namespace();
+    (void)setvbuf(stdout, nullptr, _IONBF, 0);
     if (root_error != 0)
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: root route unavailable error=%d\n", root_error);
-        _s_log(message);
+        printf("%s", message);
         return;
     }
-    _s_log("init: committed root route ready\n");
+    printf("init: committed root route ready\n");
 
     // init owns the first interactive session.  The kernel only permits a
     // session leader to acquire a controlling terminal; bootstrapping init
@@ -599,13 +599,13 @@ extern "C" void main(int argc, char **argv)
     {
         char message[96]{};
         snprintf(message, sizeof(message), "init: session setup failed errno=%d\n", errno);
-        _s_log(message);
+        printf("%s", message);
     }
     else
-        _s_log("init: session ready\n");
+        printf("init: session ready\n");
     if (!start_ttyd())
         return;
-    _s_log("init: ttyd ready; rootfsd ownership remains with vfsd\n");
+    printf("init: ttyd ready; rootfsd ownership remains with vfsd\n");
 
     // The graphical frontend is independent of the optional init hook and
     // the ordinary shell readiness barrier. Start it as soon as ttyd is
@@ -613,11 +613,11 @@ extern "C" void main(int argc, char **argv)
     // without waiting for another large executable materialization.
     pid_t initial_console = -1;
     if (framebuffer_available() && !spawn_consoled_process(&initial_console))
-        _s_log("init: pre-barrier consoled spawn failed; will retry later\n");
+        printf("init: pre-barrier consoled spawn failed; will retry later\n");
     (void)run_optional_init_script();
-    _s_log("init: running startup barrier\n");
+    printf("init: running startup barrier\n");
     if (!run_startup_barrier())
-        _s_log("init: startup barrier failed; continuing with shell supervision\n");
-    _s_log("init: startup barrier returned\n");
+        printf("init: startup barrier failed; continuing with shell supervision\n");
+    printf("init: startup barrier returned\n");
     run_user_shell(initial_console);
 }

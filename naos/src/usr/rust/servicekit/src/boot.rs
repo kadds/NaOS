@@ -168,7 +168,7 @@ mod naos_boot {
         let argv = [path.as_ptr(), core::ptr::null()];
         let mut frame = sys::ProcessSpawnFrame {
             struct_size: size_of::<sys::ProcessSpawnFrame>() as u32,
-            flags: sys::PROCESS_SPAWN_DEFERRED_START,
+            flags: sys::PROCESS_SPAWN_DEFERRED_START | sys::PROCESS_SPAWN_KLOG_STDIO,
             executable: executable.get(),
             bootstrap_endpoint: child.get(),
             path: path.as_ptr() as u64,

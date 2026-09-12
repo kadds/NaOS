@@ -32,6 +32,24 @@ class console_stream final : public kobject
     int terminal_index_;
 };
 
+/// A write-only diagnostic stream.  It implements the ordinary Stream
+/// protocol but turns each write into a structured user klog record instead
+/// of displaying bytes on a terminal.
+class klog_stream final : public kobject
+{
+  public:
+    static constexpr kobject::type_e type_of() { return kobject::type_e::klog_stream; }
+
+    klog_stream()
+        : kobject(kobject::type_e::klog_stream)
+    {
+    }
+
+    bool capability_is_unique() const override { return false; }
+    i64 read(byte *data, u64 size);
+    i64 write(const byte *data, u64 size, const char *process_name);
+};
+
 class terminal_job_control final : public kobject
 {
   public:

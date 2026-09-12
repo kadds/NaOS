@@ -92,7 +92,9 @@ bool valid_bootstrap_stream(task::resource_table_t &resources, na_handle_t handl
         return false;
     if (entry.meta.binding == NA_BINDING_KERNEL_VIEW && entry.meta.scope == NA_SCOPE_STREAM &&
         protocol_uuid_matches(entry.meta.protocol_uuid, naos::system::Stream::protocol_uuid) &&
-        entry.meta.revision == naos::system::Stream::revision && entry.object->get<dev::tty::console_stream>() != nullptr)
+        entry.meta.revision == naos::system::Stream::revision &&
+        (entry.object->get<dev::tty::console_stream>() != nullptr ||
+         entry.object->get<dev::tty::klog_stream>() != nullptr))
         return true;
     return entry.meta.binding == NA_BINDING_CLIENT_END &&
            (entry.meta.scope == NA_SCOPE_TERMINAL_MASTER || entry.meta.scope == NA_SCOPE_TERMINAL_SLAVE) &&
@@ -650,8 +652,8 @@ na_status_t bootstrap(na_bootstrap_frame_t *frame)
             const auto current_handle = received[message.current_directory];
             const auto service_handle = received[message.service_directory];
             const auto stdin_handle = received[message.stdin_stream];
-            const auto stdout_handle = received[message.stdout_stream];
-            const auto stderr_handle = received[message.stderr_stream];
+            auto stdout_handle = received[message.stdout_stream];
+            auto stderr_handle = received[message.stderr_stream];
             if (!valid_bootstrap_directory(resources, root_handle) ||
                 !valid_bootstrap_directory(resources, current_handle) ||
                 !valid_bootstrap_service_directory(resources, service_handle) ||
@@ -660,6 +662,32 @@ na_status_t bootstrap(na_bootstrap_frame_t *frame)
             {
                 close_received_handles(resources, received);
                 return NA_STATUS_INVALID_MESSAGE;
+            }
+
+            if (process->klog_stdio)
+            {
+                const auto original_stdout = stdout_handle;
+                const auto original_stderr = stderr_handle;
+                resources.close_native(original_stdout);
+                if (original_stderr != original_stdout)
+                    resources.close_native(original_stderr);
+
+                auto stdout_object = handle_t<dev::tty::klog_stream>::make();
+                auto stderr_object = handle_t<dev::tty::klog_stream>::make();
+                if (!stdout_object || !stderr_object)
+                {
+                    close_received_handles(resources, received);
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+                }
+                stdout_handle = resources.install_native(std::move(stdout_object), stream_metadata());
+                stderr_handle = resources.install_native(std::move(stderr_object), stream_metadata());
+                if (stdout_handle == NA_HANDLE_INVALID || stderr_handle == NA_HANDLE_INVALID)
+                {
+                    resources.close_native(stdout_handle);
+                    resources.close_native(stderr_handle);
+                    close_received_handles(resources, received);
+                    return NA_STATUS_RESOURCE_EXHAUSTED;
+                }
             }
 
             // Keep the process-owned console capabilities in sync with the

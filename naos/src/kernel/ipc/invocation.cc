@@ -375,7 +375,8 @@ na_status_t copy_object_span(data_plane::memory_object &source, u64 source_offse
 /// segment lengths are consecutive inside the region, so the transfer stays
 /// contiguous there; `error` receives the stream's negative errno when it
 /// fails mid-transfer, and the returned count is what was written.
-u64 fill_region_from_stream(dev::tty::console_stream &stream, data_plane::memory_object &region, u64 region_offset,
+template <typename Stream>
+u64 fill_region_from_stream(Stream &stream, data_plane::memory_object &region, u64 region_offset,
                             u64 size, i64 &error)
 {
     u64 count = 0;
@@ -408,8 +409,20 @@ u64 fill_region_from_stream(dev::tty::console_stream &stream, data_plane::memory
 
 /// Send the bytes the caller placed in its region to the stream, returning
 /// how many were consumed and the negative errno on failure.
-u64 drain_region_to_stream(dev::tty::console_stream &stream, data_plane::memory_object &region, u64 region_offset,
-                           u64 size, i64 &error)
+i64 write_to_stream(dev::tty::console_stream &stream, const byte *data, u64 size, const char *process_name)
+{
+    (void)process_name;
+    return stream.write(data, size);
+}
+
+i64 write_to_stream(dev::tty::klog_stream &stream, const byte *data, u64 size, const char *process_name)
+{
+    return stream.write(data, size, process_name);
+}
+
+template <typename Stream>
+u64 drain_region_to_stream(Stream &stream, data_plane::memory_object &region, u64 region_offset, u64 size,
+                           const char *process_name, i64 &error)
 {
     u64 consumed = 0;
     byte bounce[region_copy_chunk];
@@ -424,7 +437,7 @@ u64 drain_region_to_stream(dev::tty::console_stream &stream, data_plane::memory_
             error = EINVAL;
             break;
         }
-        const auto written = stream.write(bounce, read_bytes);
+        const auto written = write_to_stream(stream, bounce, read_bytes, process_name);
         if (written < 0)
         {
             error = written;
@@ -467,12 +480,14 @@ class file_call_wait_registration
     task::wait_queue_t *queue_ = nullptr;
 };
 
-na_status_t publish_console_stream_call(invocation_state &state, dev::tty::console_stream &stream, u64 method_id,
-                                        const freelibcxx::vector<byte> &request,
-                                        capability::transfer_record_list &resources)
+template <typename Stream>
+na_status_t publish_stream_call(invocation_state &state, Stream &stream, u64 method_id,
+                                const freelibcxx::vector<byte> &request, capability::transfer_record_list &resources,
+                                task::process_t *caller)
 {
     state.mark_dispatched();
     auto response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
+    const char *process_name = caller == nullptr || caller->name[0] == '\0' ? "process" : caller->name;
 
     if (method_id == NA_METHOD_STREAM_READ)
     {
@@ -516,7 +531,7 @@ na_status_t publish_console_stream_call(invocation_state &state, dev::tty::conso
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
         i64 error = 0;
         naos::system::Stream::write_response value{};
-        const u64 consumed = drain_region_to_stream(stream, *region, region_offset, decoded.size, error);
+        const u64 consumed = drain_region_to_stream(stream, *region, region_offset, decoded.size, process_name, error);
         value.count = error < 0 ? static_cast<u64>(-error) : consumed;
         if (!encode_message(response, value, naos::system::Stream::encode_write_response))
             return NA_STATUS_RESOURCE_EXHAUSTED;
@@ -568,7 +583,7 @@ na_status_t publish_console_stream_call(invocation_state &state, dev::tty::conso
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
         i64 error = 0;
         naos::system::Stream::writev_response value{};
-        const u64 consumed = drain_region_to_stream(stream, *region, region_offset, decoded.size, error);
+        const u64 consumed = drain_region_to_stream(stream, *region, region_offset, decoded.size, process_name, error);
         value.count = error < 0 ? static_cast<u64>(-error) : consumed;
         if (!encode_message(response, value, naos::system::Stream::encode_writev_response))
             return NA_STATUS_RESOURCE_EXHAUSTED;
@@ -1518,7 +1533,13 @@ na_status_t dispatch_kernel_view(capability::entry &target, invocation_state &st
     {
         if (target.meta.scope != NA_SCOPE_STREAM)
             return NA_STATUS_WRONG_SCOPE;
-        return publish_console_stream_call(state, *stream, method_id, request, resources);
+        return publish_stream_call(state, *stream, method_id, request, resources, caller);
+    }
+    if (auto *stream = target.object->get<dev::tty::klog_stream>())
+    {
+        if (target.meta.scope != NA_SCOPE_STREAM)
+            return NA_STATUS_WRONG_SCOPE;
+        return publish_stream_call(state, *stream, method_id, request, resources, caller);
     }
     if (auto *process = target.object->get<task::process_object>())
     {

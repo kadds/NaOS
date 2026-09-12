@@ -1,6 +1,7 @@
 #include "kernel/terminal_views.hpp"
 
 #include "kernel/errno.hpp"
+#include "kernel/log.hpp"
 #include "kernel/terminal.hpp"
 #include "kernel/task.hpp"
 
@@ -18,6 +19,23 @@ i64 console_stream::write(const byte *data, u64 size)
     if (data == nullptr)
         return -EINVAL;
     term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), terminal_index_);
+    return static_cast<i64>(size);
+}
+
+i64 klog_stream::read(byte *data, u64 size)
+{
+    (void)data;
+    (void)size;
+    return 0;
+}
+
+i64 klog_stream::write(const byte *data, u64 size, const char *process_name)
+{
+    if (data == nullptr)
+        return -EINVAL;
+
+    log::detail::emit_user_message(process_name == nullptr ? "process" : process_name, __FILE__, __LINE__, true,
+                                   reinterpret_cast<const char *>(data), size);
     return static_cast<i64>(size);
 }
 
