@@ -3,7 +3,6 @@
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/common.hpp"
-#include "kernel/ksybs.hpp"
 #include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"
@@ -55,12 +54,6 @@ int get_stackframes(int skip, stack_frame_t *frames, int count)
     __asm__ __volatile__("movq %%rbp, %0 \n\t" : "=g"(rbp) : :);
     __asm__ __volatile__("movq %%rsp, %0 \n\t" : "=g"(rsp) : :);
     return get_stackframes_by(rbp, rsp, rip, skip + 1, frames, count);
-}
-
-const char *stack_frame_t::get_frame_name()
-{
-    const char *func = ksybs::get_symbol_name(log::hex(rip));
-    return func;
 }
 
 void get_task_id(u64 &pid, u64 &tid)
@@ -140,17 +133,7 @@ void *print_stack(const regs_t *regs, int max_depth)
         for (int i = 0; i < n; i++)
         {
             auto &frame = frames[i];
-            const char *fn = frame.get_frame_name();
-            if (fn != nullptr)
-            {
-                KLOG_RAW("{}", fn);
-                KLOG_RAW(" [{}]", log::hex(frame.rip));
-                KLOG_RAW(" rbp:{}\n", log::hex(frame.rbp));
-            }
-            else
-            {
-                KLOG_RAW("{} rbp:{}\n", log::hex(frame.rip), log::hex(frame.rbp));
-            }
+            KLOG_RAW("{} rbp:{}\n", log::hex(frame.rip), log::hex(frame.rbp));
         }
 
         KLOG_RAW("end of stack trace. \n");

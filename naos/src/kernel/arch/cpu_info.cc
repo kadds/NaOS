@@ -97,17 +97,53 @@ void init()
 void trace_debug_info()
 {
     KLOG_INFO("Cpu family: {}. Cpu name: {}.\n    Maximum basic functional number: {}. Maximum extend functional "
-               "number: {}.\n"
-               "    Maximum virtual address bits {}. Maximum physical address bits {}",
-               family_name, brand_name, log::hex(max_basic_number), log::hex(max_extend_number),
-               log::hex(get_feature(feature::max_virt_addr)), log::hex(get_feature(feature::max_phy_addr)));
+              "number: {}.\n"
+              "    Maximum virtual address bits {}. Maximum physical address bits {}",
+              family_name, brand_name, log::hex(max_basic_number), log::hex(max_extend_number),
+              log::hex(get_feature(feature::max_virt_addr)), log::hex(get_feature(feature::max_phy_addr)));
+
+    const bool erms = max_basic_number >= 0x7 && has_feature(feature::erms);
+    const bool fsrm = max_basic_number >= 0x7 && has_feature(feature::fsrm);
+    KLOG_INFO("CPU string operations: ERMS {} FSRM {}", erms ? "present" : "absent", fsrm ? "present" : "absent");
+
+    const auto tsc_info = get_tsc_cpuid15_info();
+    if (tsc_info.has_frequency())
+    {
+        KLOG_INFO("TSC CPUID.15H ratio {}/{} crystal {}MHz frequency {}MHz", tsc_info.numerator, tsc_info.denominator,
+                  tsc_info.crystal_frequency_hz / 1'000'000UL, tsc_info.frequency_hz() / 1'000'000UL);
+    }
+    else if (tsc_info.leaf_available)
+    {
+        KLOG_INFO("TSC CPUID.15H incomplete denominator {} numerator {} crystal {}Hz", tsc_info.denominator,
+                  tsc_info.numerator, tsc_info.crystal_frequency_hz);
+    }
+    else
+    {
+        KLOG_INFO("TSC CPUID.15H unavailable (max basic leaf {})", log::hex(max_basic_number));
+    }
+    KLOG_INFO("TSC invariant {}", has_feature(feature::constant_tsc) ? "yes" : "no");
 
     if (max_basic_number >= 0x16)
     {
         KLOG_INFO("cpu base frequency {}MHZ max frequency {}MHZ bus frequency {}MHZ",
-                   get_feature(feature::cpu_base_frequency), get_feature(feature::cpu_max_frequency),
-                   get_feature(feature::bus_frequency));
+                  get_feature(feature::cpu_base_frequency), get_feature(feature::cpu_max_frequency),
+                  get_feature(feature::bus_frequency));
     }
+}
+
+tsc_cpuid15_info get_tsc_cpuid15_info()
+{
+    tsc_cpuid15_info info;
+    if (max_basic_number < 0x15)
+        return info;
+
+    u32 eax, ebx, ecx, edx;
+    cpu_id(0x15, 0, eax, ebx, ecx, edx);
+    info.leaf_available = true;
+    info.denominator = eax;
+    info.numerator = ebx;
+    info.crystal_frequency_hz = ecx;
+    return info;
 }
 
 bool has_feature(feature f)
@@ -157,9 +193,54 @@ bool has_feature(feature f)
             ret_cpu_feature(0x1, ecx, 27);
         case feature::avx:
             ret_cpu_feature(0x1, ecx, 28);
+        case feature::erms:
+            ret_cpu_feature(0x7, ebx, 9);
+        case feature::fsrm:
+            ret_cpu_feature(0x7, edx, 4);
+        case feature::rdseed:
+            ret_cpu_feature(0x7, ebx, 18);
+        case feature::rdrand:
+            ret_cpu_feature(0x1, ecx, 30);
         default:
             KLOG_PANIC("Unknown feature");
     }
+}
+
+namespace
+{
+constexpr u32 hardware_random_attempts = 8;
+}
+
+bool try_rdseed(u64 &value)
+{
+    if (!has_feature(feature::rdseed))
+        return false;
+
+    unsigned char valid = 0;
+    for (u32 attempt = 0; attempt < hardware_random_attempts; attempt++)
+    {
+        __asm__ __volatile__("rdseed %0; setc %1" : "=r"(value), "=qm"(valid) : : "cc");
+        if (valid != 0)
+            return true;
+        cpu_pause();
+    }
+    return false;
+}
+
+bool try_rdrand(u64 &value)
+{
+    if (!has_feature(feature::rdrand))
+        return false;
+
+    unsigned char valid = 0;
+    for (u32 attempt = 0; attempt < hardware_random_attempts; attempt++)
+    {
+        __asm__ __volatile__("rdrand %0; setc %1" : "=r"(value), "=qm"(valid) : : "cc");
+        if (valid != 0)
+            return true;
+        cpu_pause();
+    }
+    return false;
 }
 
 u64 get_feature(feature f)
@@ -174,15 +255,9 @@ u64 get_feature(feature f)
             cpu_id(0x80000008, 0, eax, ebx, ecx, edx);
             return bits(eax, 8, 15);
         case feature::crystal_frequency:
-            cpu_id(0x15, 0, eax, ebx, ecx, edx);
-            return ecx; // hz
+            return get_tsc_cpuid15_info().crystal_frequency_hz;
         case feature::tsc_frequency:
-            cpu_id(0x15, 0, eax, ebx, ecx, edx);
-            if (eax != 0 && ebx != 0)
-            {
-                return ecx * ebx / eax;
-            }
-            return 0;
+            return get_tsc_cpuid15_info().frequency_hz();
         case feature::cpu_base_frequency:
             cpu_id(0x16, 0, eax, ebx, ecx, edx);
             return eax & 0xFFFF; // mhz

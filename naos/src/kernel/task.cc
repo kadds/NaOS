@@ -4,15 +4,14 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 
-#include "kernel/fs/vfs/defines.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/ipc/channel.hpp"
 #include "kernel/kobject.hpp"
+#include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
-#include "kernel/mm/vm.hpp"
 
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/string.hpp"
@@ -25,14 +24,10 @@
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
 #include "naos/generated/system/InputEventSource.hpp"
+#include "naos/generated/system/Framebuffer.hpp"
 #include "naos/generated/system/TerminalDriverFactory.hpp"
 #include "naos/generated/system_uapi.h"
 
-#include "kernel/fs/vfs/dentry.hpp"
-#include "kernel/fs/vfs/file.hpp"
-#include "kernel/fs/vfs/inode.hpp"
-#include "kernel/fs/vfs/pseudo.hpp"
-#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/input_event_source.hpp"
 #include "kernel/service_directory.hpp"
 
@@ -51,9 +46,9 @@
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "kernel/wait.hpp"
 #include "naos/generated/system/Stream.hpp"
+#include <utility>
 
 #include "kernel/dev/framebuffer.hpp"
-#include "kernel/dev/tty/console_pseudo.hpp"
 
 KLOG_MODULE(kernel);
 using mm_info_t = memory::vm::info_t;
@@ -423,7 +418,6 @@ inline process_t *copy_process(process_t *p)
     process->attributes.store(p->attributes.load() & ~process_attributes::job_control_cleanup_done);
     process->pid = id;
     memcpy(process->name, p->name, sizeof(process->name));
-    process->file = p->file;
     process->parent_pid = p->pid;
     process->session_id = p->session_id;
     process->process_group_id = p->process_group_id;
@@ -570,42 +564,20 @@ thread_t::thread_t()
 {
 }
 
-void create_devs()
-{
-    auto root = fs::vfs::global_root;
-    fs::vfs::create("/dev", root, root, fs::create_flags::directory);
-
-    auto create_console = [&](const char *name, int terminal_index) {
-        fs::vfs::create(name, root, root, fs::create_flags::chr);
-        auto f = fs::vfs::open(name, root, root, fs::mode::read | fs::mode::write, 0);
-        auto *ps = memory::KernelCommonAllocatorV->New<dev::tty::console_pseudo_t>(terminal_index);
-        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&ps), 8);
-    };
-
-    // Bootstrap-only diagnostic stream. POSIX console paths are routed by the
-    // user-space TerminalManager; do not leave a kernel TTY fallback behind.
-    create_console("/dev/kconsole", term::terminal_manager::kernel_console_index);
-
-    {
-        constexpr const char *fb_name = "/dev/fb0";
-        fs::vfs::create(fb_name, root, root, fs::create_flags::chr);
-        auto f = fs::vfs::open(fb_name, root, root, fs::mode::read | fs::mode::write, 0);
-        auto *fb = memory::KernelCommonAllocatorV->New<dev::framebuffer::framebuffer_pseudo_t>(
-            term::get_framebuffer_backend());
-        fs::vfs::fcntl(f, fs::fcntl_type::set, 0, fs::fcntl_attr::pseudo_func, reinterpret_cast<u64 *>(&fb), 8);
-        // The pseudo was attached after open(), so account for the boot-time
-        // handle explicitly; its close() below releases the writer.
-        (void)fb->open(fs::mode::read | fs::mode::write, task::access_context{task::current_process()});
-    }
-}
-
 std::atomic_bool is_init = false, init_ok = false;
 bool has_init() { return is_init; }
+
+void sync_current_kernel_space()
+{
+    auto *process = current_process();
+    if (process == nullptr || process->mm_info == memory::kernel_vm_info)
+        return;
+    reinterpret_cast<mm_info_t *>(process->mm_info)->paging().map_kernel_space();
+}
 
 void init()
 {
     process_t *process;
-    auto root = fs::vfs::global_root;
     if (cpu::current().is_bsp())
     {
         uctx::UninterruptibleContext icu;
@@ -627,8 +599,6 @@ void init()
         // init for kernel process
         process = new_kernel_process();
         process->parent_pid = 0;
-        process->bootstrap_root_directory = handle_t<fs::vfs::native_directory>::make(root, root);
-        process->bootstrap_current_directory = handle_t<fs::vfs::native_directory>::make(root, root);
     }
     else
     {
@@ -655,15 +625,14 @@ void init()
 
     if (cpu::current().is_bsp())
     {
-        create_devs();
         auto global_directory = handle_t<service::directory>::make();
         service::set_global_service_directory(global_directory);
         auto input_handle = dev::input::init_input_event_source();
         auto factory_handle = handle_t<dev::tty::terminal_driver_factory>::make();
-        auto tty0read = fs::vfs::open("/dev/kconsole", root, root, fs::mode::read, 0);
-        auto tty0write = fs::vfs::open("/dev/kconsole", root, root, fs::mode::write, 0);
-        auto tty0err = fs::vfs::open("/dev/kconsole", root, root, fs::mode::write, 0);
-        kassert(tty0read, "invalid tty");
+        auto tty0read = handle_t<dev::tty::console_stream>::make(term::terminal_manager::kernel_console_index);
+        auto tty0write = handle_t<dev::tty::console_stream>::make(term::terminal_manager::kernel_console_index);
+        auto tty0err = handle_t<dev::tty::console_stream>::make(term::terminal_manager::kernel_console_index);
+        kassert(tty0read && tty0write && tty0err, "unable to create bootstrap console streams");
         auto *init_process = current_process();
         capability::metadata input_meta;
         input_meta.binding = NA_BINDING_KERNEL_VIEW;
@@ -673,6 +642,10 @@ void init()
         input_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
         input_meta.protocol_rights =
             NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
+        if (service::register_kernel_service(service::input_event_source_uri,
+                                              sizeof(service::input_event_source_uri) - 1,
+                                              handle_t<kobject>(input_handle.get_control()), input_meta) != 0)
+            KLOG_PANIC("unable to publish input event source service");
         const auto input_event_source_handle =
             init_process->resource.install_native(std::move(input_handle), input_meta);
         kassert(input_event_source_handle != NA_HANDLE_INVALID, "unable to install input event source capability");
@@ -684,34 +657,59 @@ void init()
         factory_meta.revision = naos::system::TerminalDriverFactory::revision;
         factory_meta.meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
         factory_meta.protocol_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
+        if (service::register_kernel_service(service::terminal_driver_factory_uri,
+                                              sizeof(service::terminal_driver_factory_uri) - 1,
+                                              handle_t<kobject>(factory_handle.get_control()), factory_meta) != 0)
+            KLOG_PANIC("unable to publish terminal driver factory service");
         const auto terminal_driver_factory_handle =
             init_process->resource.install_native(std::move(factory_handle), factory_meta);
         kassert(terminal_driver_factory_handle != NA_HANDLE_INVALID,
                 "unable to install terminal driver factory capability");
 
-        auto console_frontend = handle_t<dev::framebuffer::console_frontend_capability>::make();
-        capability::metadata console_frontend_meta;
-        console_frontend_meta.binding = NA_BINDING_KERNEL_VIEW;
-        console_frontend_meta.scope = NA_SCOPE_NONE;
-        console_frontend_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
-        console_frontend_meta.protocol_rights = NA_DISPLAY_RIGHT_WRITER;
-        const auto console_frontend_handle =
-            init_process->resource.install_native(std::move(console_frontend), console_frontend_meta);
-        kassert(console_frontend_handle != NA_HANDLE_INVALID, "unable to install console frontend capability");
-        init_process->bootstrap_capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, console_frontend_handle};
+        auto *framebuffer_backend = term::get_framebuffer_backend();
+        kassert(framebuffer_backend != nullptr, "unable to access early framebuffer backend");
+        const auto &framebuffer = framebuffer_backend->fb();
+        const u64 page_mask = memory::page_size - 1;
+        const u64 physical_offset = reinterpret_cast<uintptr_t>(framebuffer.physical_addr()) & page_mask;
+        const auto physical_base = phy_addr_t::from(
+            memory::align_down(framebuffer.physical_addr(), memory::page_size));
+        auto *kernel_view = memory::align_down(static_cast<byte *>(framebuffer.ptr), memory::page_size);
+        const u64 framebuffer_bytes = memory::align_up(framebuffer_backend->frame_bytes() + physical_offset,
+                                                       memory::page_size);
+        auto framebuffer_handle = handle_t<dev::framebuffer::framebuffer_service>::make(
+            physical_base, kernel_view, framebuffer_bytes, framebuffer.width, framebuffer.height, framebuffer.pitch,
+            framebuffer.bbp, framebuffer.bbp == 32 ? 0 : 1);
+        kassert(framebuffer_handle, "unable to create framebuffer service");
+        capability::metadata framebuffer_meta;
+        framebuffer_meta.binding = NA_BINDING_KERNEL_VIEW;
+        framebuffer_meta.protocol_uuid = naos::system::Framebuffer::protocol_uuid;
+        framebuffer_meta.scope = NA_SCOPE_FRAMEBUFFER;
+        framebuffer_meta.revision = naos::system::Framebuffer::revision;
+        framebuffer_meta.features = naos::system::Framebuffer::features;
+        framebuffer_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+        framebuffer_meta.protocol_rights = NA_DISPLAY_RIGHT_WRITER | NA_PROTOCOL_RIGHT_INVOKE;
+        const auto framebuffer_register_status =
+            service::register_kernel_service(service::framebuffer_uri, sizeof(service::framebuffer_uri) - 1,
+                                             handle_t<kobject>(framebuffer_handle.get_control()), framebuffer_meta);
+        KLOG_INFO("framebuffer service registration status {}", framebuffer_register_status);
+        if (framebuffer_register_status != 0)
+            KLOG_PANIC("unable to publish framebuffer service");
+        const auto framebuffer_capability =
+            init_process->resource.install_native(std::move(framebuffer_handle), framebuffer_meta);
+        kassert(framebuffer_capability != NA_HANDLE_INVALID, "unable to install framebuffer capability");
         const auto metadata = stream_capability_metadata();
-        init_process->console_in_handle = init_process->resource.install_native(tty0read, metadata);
-        init_process->console_out_handle = init_process->resource.install_native(tty0write, metadata);
-        init_process->console_err_handle = init_process->resource.install_native(tty0err, metadata);
+        init_process->console_in_handle =
+            init_process->resource.install_native(khandle(tty0read.get_control()), metadata);
+        init_process->console_out_handle =
+            init_process->resource.install_native(khandle(tty0write.get_control()), metadata);
+        init_process->console_err_handle =
+            init_process->resource.install_native(khandle(tty0err.get_control()), metadata);
         kassert(init_process->console_in_handle != NA_HANDLE_INVALID &&
                     init_process->console_out_handle != NA_HANDLE_INVALID &&
                     init_process->console_err_handle != NA_HANDLE_INVALID,
                 "unable to install bootstrap console capabilities");
-        init_process->bootstrap_capabilities[1] = {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE,
-                                                   input_event_source_handle};
-        init_process->bootstrap_capabilities[2] = {NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY,
-                                                   terminal_driver_factory_handle};
-        init_process->bootstrap_capability_count = 3;
+        (void)input_event_source_handle;
+        (void)terminal_driver_factory_handle;
         is_init = true;
         term::get_terms()->switch_term(term::terminal_manager::user_terminal_index);
 
@@ -761,9 +759,9 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
             thd->user_stack_top != nullptr && thd->user_stack_top > thd->user_stack_bottom)
         {
             auto *mm_info = reinterpret_cast<mm_info_t *>(process->mm_info);
-            (void)mm_info->umap_file(reinterpret_cast<u64>(thd->user_stack_bottom),
-                                     reinterpret_cast<u64>(thd->user_stack_top) -
-                                         reinterpret_cast<u64>(thd->user_stack_bottom));
+            (void)mm_info->unmap(reinterpret_cast<u64>(thd->user_stack_bottom),
+                                 reinterpret_cast<u64>(thd->user_stack_top) -
+                                     reinterpret_cast<u64>(thd->user_stack_bottom));
         }
         thd->state = thread_state::destroy;
         delete_thread(thd);
@@ -855,6 +853,11 @@ void befor_run_process(thread_start_func start_func, process_args_t *args, u64 n
     info->userland_entry = entry;
     info->userland_stack_offset = size + base_bytes;
     info->args = nullptr;
+    // An exec replaces the address space and must let the new runtime build a
+    // fresh TLS/TCB.  Do not pass an uninitialised pointer through
+    // before_user_thread(), which would install arbitrary FS base state in a
+    // forked child and make the first userland call fail nondeterministically.
+    info->tcb = nullptr;
 
     start_func(info);
 }
@@ -945,25 +948,9 @@ process_args_t *copy_args(const char *path, const char *const argv[], const char
     return ret;
 }
 
-void copy_fd(handle_t<fs::vfs::file> file, process_t *new_proc, process_t *old_proc, flag_t flags)
+void copy_fd(process_t *new_proc, process_t *old_proc, flag_t flags)
 {
     kassert(new_proc != old_proc, "2 parameter processes assert failed");
-    auto root = fs::vfs::global_root;
-
-    if (unlikely(flags & create_process_flags::no_shared_root))
-        new_proc->bootstrap_root_directory = handle_t<fs::vfs::native_directory>::make(root, root);
-    else
-        new_proc->bootstrap_root_directory = old_proc->bootstrap_root_directory;
-
-    if (unlikely(flags & create_process_flags::no_shared_work_dir))
-    {
-        const auto current_root =
-            new_proc->bootstrap_root_directory ? new_proc->bootstrap_root_directory->root() : root;
-        const auto current = file ? file->get_entry()->get_parent() : current_root;
-        new_proc->bootstrap_current_directory = handle_t<fs::vfs::native_directory>::make(current_root, current);
-    }
-    else
-        new_proc->bootstrap_current_directory = old_proc->bootstrap_current_directory;
 
     auto copy_console = [](resource_table_t &source, resource_table_t &destination, na_handle_t source_handle,
                            na_handle_t &destination_handle) {
@@ -987,8 +974,8 @@ void copy_fd(handle_t<fs::vfs::file> file, process_t *new_proc, process_t *old_p
                      new_proc->console_err_handle);
 }
 
-process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
-                          const char *const args[], const char *const envp[], flag_t flags)
+process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
+                          thread_start_func start_func, const char *const args[], const char *const envp[], flag_t flags)
 {
     auto process = new_process();
     if (!process)
@@ -1001,24 +988,22 @@ process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread
         process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
-    process->file = file;
     set_process_name(*process, path);
 
-    copy_fd(file, process, current_process(), flags);
+    copy_fd(process, current_process(), flags);
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &paging = mm_info->paging();
-    // read file header 128 bytes
+    // read ELF header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
-    const auto header_read = file->pread(0, header, 128, 0);
-    if (header_read != 128)
-        KLOG_WARN("read ELF header for {} returned {} file size {}", path, header_read, file->size());
     bin_handle::execute_info exec_info;
-    if (flags & create_process_flags::binary_file)
-    {
-        bin_handle::load_bin(header, &file, mm_info, &exec_info);
-    }
-    else if (!bin_handle::load(header, &file, mm_info, &exec_info))
+    bool loaded = false;
+    u64 header_read = 0;
+    const auto header_status = object->read(0, header, 128, header_read);
+    if (header_status != NA_STATUS_OK || header_read != 128)
+        KLOG_WARN("read ELF header for {} returned {} object size {}", path, header_read, object->size());
+    loaded = bin_handle::load(header, object, backing, mm_info, &exec_info);
+    if (!loaded)
     {
         memory::KernelCommonAllocatorV->deallocate(header);
         KLOG_WARN("Can't load execute file for {}.", path);
@@ -1089,8 +1074,6 @@ void abort_unstarted_process(process_t *process)
         return;
 
     process->resource.clear();
-    process->bootstrap_root_directory.reset();
-    process->bootstrap_current_directory.reset();
     if (process->main_thread != nullptr)
     {
         process->main_thread->state = thread_state::destroy;
@@ -1115,7 +1098,7 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
         process->signal_pack.inherit_mask_from(parent->signal_pack);
         move_process_session_unlocked(process, parent->session_id, parent->process_group_id);
     }
-    copy_fd(nullptr, process, current_process(), flags);
+    copy_fd(process, current_process(), flags);
 
     /// create thread
     thread_t *thd = new_thread(process);
@@ -1161,8 +1144,6 @@ int fork()
         delete_process(process);
         return -1;
     }
-    process->bootstrap_root_directory = parent->bootstrap_root_directory;
-    process->bootstrap_current_directory = parent->bootstrap_current_directory;
     process->console_in_handle = parent->console_in_handle;
     process->console_out_handle = parent->console_out_handle;
     process->console_err_handle = parent->console_err_handle;
@@ -1205,39 +1186,62 @@ int fork()
     return thd->process->pid;
 }
 
-int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func, char *const argv[],
-           char *const envp[])
+int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
+           thread_start_func start_func, char *const argv[], char *const envp[])
 {
-    // KLOG_INFO("exec {}", path);
     auto thd = current();
     auto process = thd->process;
     set_process_name(*process, path);
     auto process_args = copy_args(path, argv, envp);
-    // KLOG_INFO("process {} execve with {}", process->pid, path);
+    if (process_args == nullptr)
+        return ENOMEM;
 
-    auto mm_info = (mm_info_t *)process->mm_info;
-    auto new_mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
+    // The address space is process-wide. Refuse an in-place exec while a
+    // sibling user thread is live; replacing mm_info underneath it would
+    // leave the sibling executing on freed stacks and mappings.
     {
-        uctx::UninterruptibleContext ctx;
-        process->mm_info = new_mm_info;
-        new_mm_info->paging().map_kernel_space();
-        new_mm_info->paging().load();
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        for (auto *candidate : *(thread_list_t *)process->thread_list)
+        {
+            if (candidate != thd && candidate->state != thread_state::destroy)
+            {
+                memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+                memory::Delete(memory::KernelCommonAllocatorV, process_args);
+                return EBUSY;
+            }
+        }
     }
-    process->file = file;
 
-    memory::Delete(mm_info_t_allocator, mm_info);
-    mm_info = new_mm_info;
+    auto *old_mm_info = (mm_info_t *)process->mm_info;
+    auto new_mm_info = memory::New<mm_info_t>(mm_info_t_allocator);
+    if (new_mm_info == nullptr)
+    {
+        memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+        memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        return ENOMEM;
+    }
+    new_mm_info->paging().map_kernel_space();
 
-    // read file header 128 bytes
+    // read ELF header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
-    file->pread(0, header, 128, 0);
+    if (header == nullptr)
+    {
+        memory::Delete(mm_info_t_allocator, new_mm_info);
+        memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+        memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        return ENOMEM;
+    }
     bin_handle::execute_info exec_info;
-    if (!bin_handle::load(header, &file, mm_info, &exec_info))
+    u64 header_read = 0;
+    const auto header_status = object->read(0, header, 128, header_read);
+    if (header_status != NA_STATUS_OK || header_read != 128 ||
+        !bin_handle::load(header, object, backing, new_mm_info, &exec_info))
     {
         memory::KernelCommonAllocatorV->deallocate(header);
         KLOG_INFO("Can't load execute file.");
         memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
         memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        memory::Delete(mm_info_t_allocator, new_mm_info);
         return ENOEXEC;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
@@ -1246,6 +1250,17 @@ int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func sta
     process_args->program_header_count = exec_info.program_header_count;
     process_args->base_address = exec_info.base_address;
     process_args->hwcap = exec_info.hwcap;
+    {
+        uctx::UninterruptibleContext ctx;
+        process->mm_info = new_mm_info;
+        new_mm_info->paging().load();
+    }
+    memory::Delete(mm_info_t_allocator, old_mm_info);
+    // enter_userland() does not return, so C++ destructors for locals on this
+    // syscall stack are never run. Drop the temporary source references here;
+    // PT_LOAD mappings already own the backing references they require.
+    object.reset();
+    backing.reset();
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
 
@@ -1279,6 +1294,12 @@ struct process_data_t
 {
     thread_t *thd;
 };
+
+bool claim_thread_exit(thread_t *thd)
+{
+    const auto previous = thd->attributes.fetch_or(thread_attributes::exit_pending, std::memory_order_acq_rel);
+    return (previous & thread_attributes::exit_pending) == 0;
+}
 
 void exit_process_inner(thread_t *thd);
 namespace
@@ -1337,7 +1358,15 @@ void exit_process_inner(thread_t *thd)
 {
     if (thd->state != thread_state::destroy)
     {
+        if (!claim_thread_exit(thd))
+            return;
         process_data_t *data = memory::New<process_data_t>(memory::KernelCommonAllocatorV);
+        if (data == nullptr)
+        {
+            thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
+            KLOG_WARN("unable to allocate process-exit cleanup for pid {} tid {}", thd->process->pid, thd->tid);
+            return;
+        }
         data->thd = thd;
 
         scheduler::remove(
@@ -1347,6 +1376,7 @@ void exit_process_inner(thread_t *thd)
                 auto process = dt->thd->process;
 
                 dt->thd->state = thread_state::destroy;
+                dt->thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
                 dt->thd->wait_queue.do_wake_up();
                 delete_thread(dt->thd);
 
@@ -1717,12 +1747,20 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
 void exit_thread(thread_t *thd, i64 ret)
 {
     KLOG_DEBUG("exit thread {} pid {} code {}", thd->tid, thd->process->pid, ret);
+    if (!claim_thread_exit(thd))
+        return;
     struct data_t
     {
         thread_t *thd;
         i64 ret;
     };
     data_t *data = memory::New<data_t>(memory::KernelCommonAllocatorV);
+    if (data == nullptr)
+    {
+        thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
+        KLOG_WARN("unable to allocate thread-exit cleanup for pid {} tid {}", thd->process->pid, thd->tid);
+        return;
+    }
     data->thd = thd;
     data->ret = ret;
     scheduler::remove(
@@ -1730,17 +1768,18 @@ void exit_thread(thread_t *thd, i64 ret)
         [](u64 data) {
             auto *dt = reinterpret_cast<data_t *>(data);
             auto *process = dt->thd->process;
-            if (!(dt->thd->attributes & thread_attributes::main) &&
-                process->mm_info != memory::kernel_vm_info && dt->thd->user_stack_bottom != nullptr &&
-                dt->thd->user_stack_top != nullptr && dt->thd->user_stack_top > dt->thd->user_stack_bottom)
+            if (!(dt->thd->attributes & thread_attributes::main) && process->mm_info != memory::kernel_vm_info &&
+                dt->thd->user_stack_bottom != nullptr && dt->thd->user_stack_top != nullptr &&
+                dt->thd->user_stack_top > dt->thd->user_stack_bottom)
             {
                 auto *mm_info = reinterpret_cast<mm_info_t *>(process->mm_info);
-                (void)mm_info->umap_file(reinterpret_cast<u64>(dt->thd->user_stack_bottom),
-                                         reinterpret_cast<u64>(dt->thd->user_stack_top) -
-                                             reinterpret_cast<u64>(dt->thd->user_stack_bottom));
+                (void)mm_info->unmap(reinterpret_cast<u64>(dt->thd->user_stack_bottom),
+                                     reinterpret_cast<u64>(dt->thd->user_stack_top) -
+                                         reinterpret_cast<u64>(dt->thd->user_stack_bottom));
             }
             dt->thd->user_stack_top = (void *)dt->ret;
             dt->thd->state = thread_state::destroy;
+            dt->thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
             if (dt->thd->attributes & thread_attributes::detached)
             {
                 delete_thread(dt->thd);
@@ -2307,8 +2346,7 @@ ExportC void userland_return()
     // away through scheduler::remove(), but this guard also covers the case
     // where scheduling returned without changing the current context.
     auto thd = current();
-    if (thd != nullptr && thd->state == thread_state::running &&
-        !(thd->attributes & thread_attributes::block_to_stop))
+    if (thd != nullptr && thd->state == thread_state::running && !(thd->attributes & thread_attributes::block_to_stop))
         return;
 
     for (;;)

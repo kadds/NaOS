@@ -1,100 +1,87 @@
 #!/usr/bin/env python3
-# Genarates ksybs file
-# ksybs format
-# | magic  | version | symbols count | symbol1 | symbol2 | symbolx... | detail0 | detail1 | detailx |
-# each of symbols format
-# | address | detail offset in file |
-# each of details 
-# | type | symbol name |
+"""Generate the optional userland/debug ksybs symbol file."""
 
+from __future__ import annotations
+
+import argparse
+import datetime
 import os
 import struct
-from mod import set_self_dir, run_shell
-import argparse
 import traceback
-import datetime
+from pathlib import Path
 
-cache_file_name = "ksybs_cache.log"
-
-def gen_symbols(file, target_file, force):
-    try:
-        os.makedirs(os.path.dirname(os.path.realpath(target_file)))
-    except FileExistsError:
-        pass
-
-    if os.path.exists(cache_file_name) and not force:
-        cache_file = open(cache_file_name, "r")
-        cache_line = cache_file.readlines()
-        if len(cache_line) == 1:
-            line = cache_line[0].split("?")
-            filename = line[0].strip()
-            if len(line) > 1 and filename == file:
-                time = line[1].strip()
-                if time == datetime.datetime.fromtimestamp(
-                        os.path.getmtime(file)).strftime("%Y-%m-%d %H:%M:%S.%f"):
-                    print("ksybs is cached. do nothing.")
-                    cache_file.close()
-                    return None
-
-        cache_file.close()
-
-    smps = run_shell("nm \"" + file +
-                     "\" -C | sort | uniq", None, False)
-    lines = smps.splitlines(False)
-    output = open(target_file, 'wb')
-    output.write(struct.pack("Q", 0xF0EAEACC))  # magic
-    output.write(struct.pack("Q", 1))  # version
-    output.write(struct.pack("Q", len(lines)))  # list count
-
-    print("revice %d symbols" % len(lines))
-    offset = 0
-    list = []
-    for line in lines:
-        if line.strip() == '':
-            continue
-        v = line.strip().split(" ")
-        addr = v[0].strip()
-        name = " ".join(v[2:])
-        type_name = v[1].strip()
-        try:
-            addrint = int(addr, 16)
-        except Exception as e:
-            raise Exception(line + ' ', e)
-
-        output.write(struct.pack("Q", addrint))
-        output.write(struct.pack("Q", offset))
-        list.append((name,  offset, type_name))
-        offset += len(name.encode("utf-8")) + 2
-
-    for it in list:
-        output.write(struct.pack("c", it[2].encode("utf-8")))  # type
-        output.write(struct.pack(str(len(it[0]) + 1) + "s",
-                                 it[0].encode('utf-8')))  # name
-
-    output.close()
-
-    cache_file = open(cache_file_name, "w")
-    cache_file.write(file + "?" + datetime.datetime.fromtimestamp(
-        os.path.getmtime(file)).strftime("%Y-%m-%d %H:%M:%S.%f"))
-    cache_file.close()
-
-    print("make %s success" % (os.path.realpath(target_file)))
+from build_paths import build_paths, resolve_build_directory
+from mod import run_shell
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description='symbol tools: generate kernel debug file (ksybs)')
-    parser.add_argument(
-        "-f", "--force",  action='store_true', help="force generation")
-    parser.add_argument("-o", "--output", type=str,
-                        default="../build/bin/rfsroot/data/ksybs", help="output ksybs file")
-    parser.add_argument("-i", "--input", type=str,
-                        default="../build/debug/system/kernel.dbg", help="kernel file with debug info")
+CACHE_FILE_NAME = ".ksybs_cache.log"
+
+
+def gen_symbols(source_file: str, target_file: str, force: bool) -> None:
+    target = Path(target_file).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    cache_path = target.parent / CACHE_FILE_NAME
+
+    if cache_path.exists() and not force:
+        cache_line = cache_path.read_text(encoding="utf-8").strip().split("?", 1)
+        source_timestamp = datetime.datetime.fromtimestamp(os.path.getmtime(source_file)).strftime(
+            "%Y-%m-%d %H:%M:%S.%f"
+        )
+        if len(cache_line) == 2 and cache_line[0].strip() == source_file and cache_line[1].strip() == source_timestamp:
+            print("ksybs is cached. do nothing.")
+            return
+
+    symbols = run_shell(f'nm "{source_file}" -C | sort | uniq', None, False).splitlines(False)
+    with target.open("wb") as output:
+        output.write(struct.pack("Q", 0xF0EAEACC))
+        output.write(struct.pack("Q", 1))
+        output.write(struct.pack("Q", len(symbols)))
+
+        entries = []
+        offset = 0
+        for line in symbols:
+            if not line.strip():
+                continue
+            values = line.strip().split(" ")
+            address = int(values[0].strip(), 16)
+            name = " ".join(values[2:])
+            type_name = values[1].strip()
+            output.write(struct.pack("Q", address))
+            output.write(struct.pack("Q", offset))
+            entries.append((name, offset, type_name))
+            offset += len(name.encode("utf-8")) + 2
+
+        for name, _, type_name in entries:
+            output.write(struct.pack("c", type_name.encode("utf-8")))
+            output.write(struct.pack(f"{len(name) + 1}s", name.encode("utf-8")))
+
+    cache_path.write_text(
+        source_file
+        + "?"
+        + datetime.datetime.fromtimestamp(os.path.getmtime(source_file)).strftime("%Y-%m-%d %H:%M:%S.%f"),
+        encoding="utf-8",
+    )
+    print(f"make {target} success")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="generate optional ksybs debug data")
+    parser.add_argument("--build-dir")
+    parser.add_argument("-f", "--force", action="store_true")
+    parser.add_argument("-o", "--output")
+    parser.add_argument("-i", "--input")
     args = parser.parse_args()
     try:
-        set_self_dir()
-        gen_symbols(args.input, args.output, args.force)
+        paths = build_paths(resolve_build_directory(args.build_dir))
+        source_file = args.input or str(paths.debug_dir / "system" / "kernel.dbg")
+        target_file = args.output or str(paths.rootfs_dir / "data" / "ksybs")
+        gen_symbols(source_file, target_file, args.force)
     except Exception:
         traceback.print_exc()
         parser.print_help()
-        exit(-1)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

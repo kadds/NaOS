@@ -2,7 +2,6 @@
 file(GLOB_RECURSE DIR_SRCS CONFIGURE_DEPENDS *.cc *.cpp *.CC *.CPP)
 file(GLOB_RECURSE DIR_SRCS_S CONFIGURE_DEPENDS *.S)
 
-
 SET(DIR_ALL ${DIR_SRCS} ${DIR_SRCS_S})
 
 set(KERNEL_CXX_FLAGS "-mno-red-zone -fvisibility-inlines-hidden \
@@ -23,6 +22,7 @@ target_include_directories(kernel PRIVATE
     ${PROJECT_SOURCE_DIR}/naos/include
 )
 target_link_libraries(kernel freelibcxx)
+target_link_libraries(kernel naos_ipc_core)
 target_link_libraries(kernel acpica)
 
 set(KERNEL_LINK_TAG "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")
@@ -37,4 +37,9 @@ add_custom_command(TARGET kernel
     POST_BUILD
     COMMAND ${UTIL_EXTRA} ${Target} ${To} i386:x86-64
 )
-add_custom_target(make-kernel-symbol ALL COMMAND python ${UTIL_MKSYMBOL} DEPENDS kernel)
+add_custom_target(make-kernel-symbol ALL
+    COMMAND ${Python3_EXECUTABLE} ${UTIL_MKSYMBOL}
+            --build-dir ${CMAKE_BINARY_DIR}
+            --input ${DEBUG_OUTPUT_DIRECTORY}/system/kernel.dbg
+            --output ${ROOT_FS_DIR}/data/ksybs
+    DEPENDS kernel)

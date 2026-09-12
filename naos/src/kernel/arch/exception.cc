@@ -191,7 +191,10 @@ ExportC _ctx_interrupt_ void entry_page_fault(regs_t *regs)
     u64 cr2;
     __asm__ __volatile__("movq %%cr2, %0	\n\t" : "=r"(cr2) : :);
 
-    // KLOG_DEBUG("page fault at {}. ", (void *)cr2);
+    (void)regs;
+    (void)cr2;
+    // Page-fault details are emitted only by the VM handler when a mapping
+    // cannot be resolved; normal demand paging must stay quiet here.
 }
 
 ExportC _ctx_interrupt_ void entry_x87_FPU_error(regs_t *regs) { KLOG_DEBUG("X87 fpu error. "); }

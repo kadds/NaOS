@@ -54,38 +54,61 @@ file(MAKE_DIRECTORY ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR})
 set(NAOS_SYSTEM_IDL_STAMP ${CMAKE_CURRENT_BINARY_DIR}/system-idl.stamp)
 file(GLOB NAOS_NAOIDL_TEMPLATES CONFIGURE_DEPENDS
     ${NAOS_IDL_DIR}/templates/cpp/naoidl/*.htt)
-set(NAOS_SYSTEM_IDL_SOURCES
-    ${NAOS_SYSTEM_IDL_DIR}/directory.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/file.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/input_event_source.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/memory_object.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/process.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/shared_ring.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/service_directory.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/stream.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_driver_control.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_driver_factory.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_job_control.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_manager.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_master.naidl
-    ${NAOS_SYSTEM_IDL_DIR}/terminal_slave.naidl
+file(GLOB NAOS_SYSTEM_IDL_SOURCES CONFIGURE_DEPENDS
+    ${NAOS_SYSTEM_IDL_DIR}/*.naidl)
+file(GLOB NAOS_SYSTEM_IDL_FRAGMENT_SOURCES CONFIGURE_DEPENDS
+    ${NAOS_SYSTEM_IDL_DIR}/fragments/*.naidl)
+
+# Internal VFS protocols (NamespaceBinding / MountControl / MutationTicket):
+# generated like the system schemas but into a separate output directory.
+# These are NOT application SDK headers; only vfsd/workers/kernel consume
+# them, and the Rust bindings deliberately never discover this directory.
+set(NAOS_INTERNAL_IDL_DIR ${NAOS_IDL_DIR}/internal)
+set(NAOS_INTERNAL_GENERATED_DIR ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR}/naos/generated/internal)
+set(NAOS_INTERNAL_GENERATED_INDEX ${NAOS_SYSTEM_GENERATED_INCLUDE_DIR}/naos/generated/internal_uapi.h)
+set(NAOS_INTERNAL_IDL_STAMP ${CMAKE_CURRENT_BINARY_DIR}/internal-idl.stamp)
+file(GLOB NAOS_INTERNAL_IDL_SOURCES CONFIGURE_DEPENDS
+    ${NAOS_INTERNAL_IDL_DIR}/*.naidl)
+file(GLOB NAOS_INTERNAL_IDL_FRAGMENT_SOURCES CONFIGURE_DEPENDS
+    ${NAOS_INTERNAL_IDL_DIR}/fragments/*.naidl)
+set(NAOS_INTERNAL_IDL_GENERATE_COMMANDS)
+foreach(NAOS_INTERNAL_IDL_SOURCE IN LISTS NAOS_INTERNAL_IDL_SOURCES)
+    list(APPEND NAOS_INTERNAL_IDL_GENERATE_COMMANDS
+        COMMAND ${Python3_EXECUTABLE} ${NAOS_IDL_COMPILER} generate
+                ${NAOS_INTERNAL_IDL_SOURCE} ${NAOS_INTERNAL_GENERATED_DIR})
+endforeach()
+add_custom_command(
+    OUTPUT ${NAOS_INTERNAL_IDL_STAMP}
+    COMMAND ${Python3_EXECUTABLE} ${NAOS_IDL_COMPILER} check-collisions
+            ${NAOS_INTERNAL_IDL_SOURCES}
+    ${NAOS_INTERNAL_IDL_GENERATE_COMMANDS}
+    COMMAND ${Python3_EXECUTABLE} ${NAOS_IDL_COMPILER} generate-index
+            ${NAOS_INTERNAL_IDL_DIR} ${NAOS_INTERNAL_GENERATED_INDEX} --include-subdir internal
+    COMMAND ${CMAKE_COMMAND} -E touch ${NAOS_INTERNAL_IDL_STAMP}
+    DEPENDS ${NAOS_INTERNAL_IDL_SOURCES} ${NAOS_INTERNAL_IDL_FRAGMENT_SOURCES}
+            ${NAOS_IDL_COMPILER} ${NAOS_NAOIDL_TEMPLATES}
+    VERBATIM
 )
+add_custom_target(naos_internal_idl DEPENDS ${NAOS_INTERNAL_IDL_STAMP})
+# System IDL revisions are generated directly from the current schemas. Do not
+# compare them against stale build-local manifests or retain removed wire
+# fields solely for an obsolete baseline.
 add_custom_command(
     OUTPUT ${NAOS_SYSTEM_IDL_STAMP}
-    COMMAND ${Python3_EXECUTABLE} ${NAOS_IDL_COMPILER} check-system
-            ${NAOS_SYSTEM_IDL_DIR} ${NAOS_SYSTEM_GENERATED_DIR} --allow-missing
     COMMAND ${Python3_EXECUTABLE} ${NAOS_IDL_COMPILER} generate-system
             ${NAOS_SYSTEM_IDL_DIR} ${NAOS_SYSTEM_GENERATED_DIR} ${NAOS_SYSTEM_GENERATED_INDEX}
             ${NAOS_SYSTEM_IDL_STAMP}
-    DEPENDS ${NAOS_SYSTEM_IDL_SOURCES} ${NAOS_IDL_COMPILER} ${NAOS_NAOIDL_TEMPLATES}
+    DEPENDS ${NAOS_SYSTEM_IDL_SOURCES} ${NAOS_SYSTEM_IDL_FRAGMENT_SOURCES}
+            ${NAOS_IDL_COMPILER} ${NAOS_NAOIDL_TEMPLATES}
     VERBATIM
 )
 add_custom_target(naos_system_idl DEPENDS ${NAOS_SYSTEM_IDL_STAMP})
 
 add_subdirectory(freelibcxx)
+add_subdirectory(libipc)
 add_subdirectory(libc)
 add_subdirectory(src/acpica)
 
 add_subdirectory(src/kernel)
-add_dependencies(kernel naos_system_idl)
+add_dependencies(kernel naos_system_idl naos_internal_idl)
 add_subdirectory(src/usr)

@@ -292,7 +292,7 @@ phy_addr_t get_local_apic_base()
         if (header->Type == ACPI_MADT_TYPE_LOCAL_APIC_OVERRIDE)
         {
             ACPI_MADT_LOCAL_APIC_OVERRIDE *lapic = reinterpret_cast<ACPI_MADT_LOCAL_APIC_OVERRIDE *>(header);
-            KLOG_DEBUG("find local apic address override {}", log::hex(lapic->Address));
+            KLOG_INFO("find local apic address override {}", log::hex(lapic->Address));
             return phy_addr_t::from(lapic->Address);
         }
 

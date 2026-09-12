@@ -66,6 +66,18 @@ bool reschedule_task_push(thread_t *task, u32 cpuid)
     return true;
 }
 
+void cancel_reschedule(thread_t *task)
+{
+    reschedule_lock.lock();
+    if (thread_to_reschedule == task)
+    {
+        thread_to_reschedule = nullptr;
+        reschedule_ready.store(true, std::memory_order_release);
+        task->attributes &= ~(thread_attributes::on_migrate);
+    }
+    reschedule_lock.unlock();
+}
+
 void init()
 {
     if (cpu::current().is_bsp())
@@ -112,11 +124,14 @@ struct update_state_ipi_param
     thread_t *thread;
     thread_state state;
     bool wait_for_completion;
+    std::atomic_uint32_t *wake_reference;
     std::atomic_bool completed{false};
-    update_state_ipi_param(thread_t *thread, thread_state state, bool wait_for_completion)
+    update_state_ipi_param(thread_t *thread, thread_state state, bool wait_for_completion,
+                           std::atomic_uint32_t *wake_reference = nullptr)
         : thread(thread)
         , state(state)
         , wait_for_completion(wait_for_completion)
+        , wake_reference(wake_reference)
     {
     }
 };
@@ -125,6 +140,14 @@ void update_state_ipi(u64 data)
 {
     update_state_ipi_param *p = reinterpret_cast<update_state_ipi_param *>(data);
     p->thread->scheduler->update_state(p->thread, p->state);
+    // A wake-up must also make the CPU that owns the target reconsider its
+    // current thread.  Merely inserting the target into the run queue leaves
+    // the current thread running until the next scheduler tick, which turns
+    // a same-CPU IPC round trip into a tick-sized delay.
+    if (p->thread != current() && p->state == thread_state::ready)
+        current()->attributes |= thread_attributes::need_schedule;
+    if (p->wake_reference != nullptr)
+        p->wake_reference->fetch_sub(1, std::memory_order_release);
     if (p->wait_for_completion)
         p->completed.store(true, std::memory_order_release);
     else
@@ -142,6 +165,30 @@ void update_state(thread_t *thread, thread_state state)
         auto *param = memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state, false);
         SMP::call_cpu(thread->cpuid, update_state_ipi, (u64)param);
     }
+}
+
+void update_state_async(thread_t *thread, thread_state state, std::atomic_uint32_t *wake_reference)
+{
+    if (thread->cpuid == cpu::current().id())
+    {
+        thread->scheduler->update_state(thread, state);
+        if (thread != current() && state == thread_state::ready)
+            current()->attributes |= thread_attributes::need_schedule;
+        if (wake_reference != nullptr)
+            wake_reference->fetch_sub(1, std::memory_order_release);
+        return;
+    }
+
+    auto *param =
+        memory::New<update_state_ipi_param>(memory::KernelCommonAllocatorV, thread, state, false, wake_reference);
+    if (param == nullptr)
+    {
+        update_state_sync(thread, state);
+        if (wake_reference != nullptr)
+            wake_reference->fetch_sub(1, std::memory_order_release);
+        return;
+    }
+    SMP::call_cpu(thread->cpuid, update_state_ipi, (u64)param);
 }
 
 void update_state_sync(thread_t *thread, thread_state state)
@@ -187,11 +234,15 @@ void remove(thread_t *thread, remove_func func, u64 user_data)
 
     if (thread->cpuid == cpu::current().id())
     {
-        auto &lock = cpu::current().get_microtask_lock();
         cpu::next_schedule_microtask_data_t data;
         data.data = user_data;
         data.func = func;
-        uctx::RawSpinLockUninterruptibleContext icu(lock);
+        // The queue belongs to this CPU. Interrupt exclusion is sufficient to
+        // serialize it with scheduler::schedule(); taking a second spinlock
+        // here can self-deadlock when a nested scheduling path observes the
+        // same CPU queue.
+        uctx::UninterruptibleController icu;
+        icu.begin();
         thread->scheduler->update_state(thread, thread_state::stop);
         cpu::current().get_microtask_queue().push_back(data);
     }
@@ -213,8 +264,7 @@ void schedule()
     }
     task::disable_preempt();
 
-    const bool current_blocked = current() != nullptr &&
-                                 (current()->attributes & thread_attributes::block_to_stop);
+    const bool current_blocked = current() != nullptr && (current()->attributes & thread_attributes::block_to_stop);
     if (current_blocked)
     {
         // A blocking wait/exit has already removed the current normal task
@@ -228,8 +278,10 @@ void schedule()
     {
         normal_schedulers->schedule();
     }
-    auto &lock = cpu::current().get_microtask_lock();
-    uctx::RawSpinLockUninterruptibleController icu(lock);
+    // This is a per-CPU queue.  No other CPU can access it, and interrupt
+    // exclusion prevents an IPI/interrupt on this CPU from interleaving with
+    // the queue mutation.
+    uctx::UninterruptibleController icu;
     icu.begin();
     auto &cpu = cpu::current();
     auto &q = cpu.get_microtask_queue();
@@ -247,6 +299,11 @@ void schedule()
 
 void timer_tick(timeclock::microsecond_t) noexcept
 {
+    // Automatic migration currently has to remain opt-in until the scheduler
+    // can transfer a sleeping thread and its wait-queue ownership atomically.
+    // Keeping runnable threads on their creation CPU preserves wakeup
+    // locality and avoids losing a cross-CPU waiter during early boot.
+    constexpr bool automatic_migration_enabled = false;
     (void)timer::schedule_after(5000, timer::timer_handler::bind<&timer_tick>());
     thread_t *thd = current();
 
@@ -263,7 +320,7 @@ void timer_tick(timeclock::microsecond_t) noexcept
         normal_schedulers->schedule_tick();
     }
 
-    if (!migrate_pre_check())
+    if (!automatic_migration_enabled || !migrate_pre_check())
     {
         return;
     }
@@ -291,9 +348,12 @@ void timer_tick(timeclock::microsecond_t) noexcept
         {
             if (reschedule_task_push(task, targe_cpu->id()))
             {
-                real_time_schedulers->commit_migrate(task);
-                SMP::reschedule_cpu(targe_cpu->id());
-                return;
+                if (real_time_schedulers->commit_migrate(task))
+                {
+                    SMP::reschedule_cpu(targe_cpu->id());
+                    return;
+                }
+                cancel_reschedule(task);
             }
         }
 
@@ -302,8 +362,10 @@ void timer_tick(timeclock::microsecond_t) noexcept
         {
             if (reschedule_task_push(task, targe_cpu->id()))
             {
-                normal_schedulers->commit_migrate(task);
-                SMP::reschedule_cpu(targe_cpu->id());
+                if (normal_schedulers->commit_migrate(task))
+                    SMP::reschedule_cpu(targe_cpu->id());
+                else
+                    cancel_reschedule(task);
             }
         }
     }

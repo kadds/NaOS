@@ -4,7 +4,6 @@
 #include "freelibcxx/allocator.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/common.hpp"
-#include "kernel/fs/vfs/native_directory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/time.hpp"
 #include "lock.hpp"
@@ -12,11 +11,12 @@
 #include "signal.hpp"
 #include "types.hpp"
 #include "wait.hpp"
-#include <atomic>
-namespace fs::vfs
+#include <utility>
+namespace naos::data_plane
 {
-class file;
-}
+class memory_object;
+} // namespace naos::data_plane
+
 namespace task::scheduler
 {
 class scheduler;
@@ -77,24 +77,21 @@ struct process_t
     process_id parent_pid;     ///< The parent process id
     void *mm_info;             ///< Memory map infomation
     resource_table_t resource; ///< Resource table
-    /// Kernel-owned bootstrap seeds for the native root/cwd capabilities.
-    /// They are object references, not user-visible handle numbers and are
-    /// never used by a legacy path syscall.  The process runtime owns the
-    /// actual capabilities returned by bootstrap.
-    handle_t<fs::vfs::native_directory> bootstrap_root_directory;
-    handle_t<fs::vfs::native_directory> bootstrap_current_directory;
     /// Explicit bootstrap console capabilities; there is no fd-number keyed
-    /// kernel object table anymore.
+    /// kernel object table.
     na_handle_t console_in_handle = NA_HANDLE_INVALID;
     na_handle_t console_out_handle = NA_HANDLE_INVALID;
     na_handle_t console_err_handle = NA_HANDLE_INVALID;
-    /// Capabilities provisioned by the parent for the process bootstrap
-    /// contract. Their meanings are carried by the capability kind rather
-    /// than by process-specific fields.
-    uint32_t bootstrap_capability_count = 0;
-    na_bootstrap_capability_t bootstrap_capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES]{};
     /// A native child consumes this endpoint exactly once during startup.
     na_handle_t bootstrap_channel_handle = NA_HANDLE_INVALID;
+    /// Handles carried across an in-place exec.  The old image has already
+    /// consumed its bootstrap channel, so the new image receives the
+    /// namespace directly from the retained resource table on its first
+    /// bootstrap call.
+    na_handle_t exec_root_directory = NA_HANDLE_INVALID;
+    na_handle_t exec_current_directory = NA_HANDLE_INVALID;
+    na_handle_t exec_service_directory = NA_HANDLE_INVALID;
+    std::atomic_bool exec_bootstrap_pending{false};
     std::atomic_bool bootstrap_consumed{false};
     std::atomic_bool main_thread_started{false};
     void *thread_id_gen;
@@ -115,7 +112,6 @@ struct process_t
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
     void *schedule_data;
-    handle_t<fs::vfs::file> file;
     signal_pack_t signal_pack;
 
     /// Session and process-group membership used by job control.
@@ -179,6 +175,7 @@ enum attributes : flag_t
     real_time = 32,
     on_migrate = 128,
     job_control_stopped = 256,
+    exit_pending = 512,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -269,6 +266,9 @@ inline constexpr u64 cpumask_none = 0xFFFFFFFFFFFFFFFF;
 
 void init();
 bool has_init();
+/// Refresh the current user address space's shared kernel mappings after a
+/// kernel vmalloc/vfree operation updates the canonical kernel page table.
+void sync_current_kernel_space();
 void start_task_idle();
 void switch_thread(thread_t *old, thread_t *new_task);
 
@@ -345,7 +345,8 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
 
 process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
 
-process_t *create_process(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func,
+process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
+                          thread_start_func start_func,
                           const char *const args[], const char *const envp[], flag_t flags);
 
 /// Publish a process created with create_process_flags::deferred_start.
@@ -358,12 +359,12 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
 
 int fork();
 
-int execve(handle_t<fs::vfs::file> file, const char *path, thread_start_func start_func, char *const argv[],
-           char *const envp[]);
-
-void do_sleep(const timeclock::time &time);
+int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
+           thread_start_func start_func, char *const argv[], char *const envp[]);
 
 NoReturn void do_exit(i64 value);
+
+void do_sleep(const timeclock::time &time);
 
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid);
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,

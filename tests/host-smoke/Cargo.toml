@@ -1,0 +1,19 @@
+[package]
+name = "naos-host-smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "naos-host-smoke"
+path = "src/main.rs"
+
+[dependencies]
+naos-idl = { path = "../../naos/src/usr/rust/naos-idl", features = ["alloc"] }
+naos-sys = { path = "../../naos/src/usr/rust/naos-sys" }
+servicekit = { path = "../../naos/src/usr/rust/servicekit" }
+tokio = { version = "1.47", default-features = false, features = [
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }

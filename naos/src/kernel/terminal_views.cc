@@ -1,9 +1,26 @@
 #include "kernel/terminal_views.hpp"
 
+#include "kernel/errno.hpp"
+#include "kernel/terminal.hpp"
 #include "kernel/task.hpp"
 
 namespace dev::tty
 {
+i64 console_stream::read(byte *data, u64 size)
+{
+    (void)data;
+    (void)size;
+    return 0;
+}
+
+i64 console_stream::write(const byte *data, u64 size)
+{
+    if (data == nullptr)
+        return -EINVAL;
+    term::write_to(freelibcxx::const_string_view(reinterpret_cast<const char *>(data), size), terminal_index_);
+    return static_cast<i64>(size);
+}
+
 void terminal_driver_control::on_capability_acquire(capability::location where)
 {
     (void)where;

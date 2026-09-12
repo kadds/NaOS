@@ -212,6 +212,7 @@ enum
     override = 1,
     cow = 2,
     copy_all = 4,
+    shared_kernel = 8,
 };
 }
 
@@ -294,7 +295,14 @@ class page_table_t
 
     void map_kernel_space();
 
-    void unmap(void *virt_start, size_t pages);
+    /// Remove `pages` mappings starting at `virt_start`.
+    ///
+    /// `release_frames` controls whether a mapped leaf frame that belongs to
+    /// the kernel page allocator is returned to it.  Mappings that were
+    /// faulted onto storage owned by another object (a memory object's shared
+    /// page cache) must pass false: the frame outlives the mapping and would
+    /// otherwise be freed twice.
+    void unmap(void *virt_start, size_t pages, bool release_frames = true);
 
     bool has_flags(void *virt_start, u64 flags = flags::present);
 

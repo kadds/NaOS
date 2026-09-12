@@ -7,17 +7,18 @@
 #include <cstring>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/fb.h>
 #include <poll.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <sys/mman.h>
 #include <termios.h>
 #include <time.h>
 #include <unistd.h>
+#include <utility>
 
 #include <naos/abi.h>
+#include <naos/generated/system/Framebuffer.hpp>
+#include <naos/generated/system/Framebuffer_client.hpp>
 #include <naos/generated/system/InputEventSource.hpp>
 #include <naos/generated/system/InputEventSource_client.hpp>
 #include <naos/generated/system/TerminalManager.hpp>
@@ -32,8 +33,7 @@
 
 [[gnu::weak]] void *__dso_handle;
 
-extern "C" int naos_take_input_event_source(na_handle_t *handle);
-extern "C" int naos_take_console_frontend(na_handle_t *handle);
+extern "C" int naos_resolve_input_event_source(na_handle_t *handle);
 extern "C" int ioctl(int fd, unsigned long request, ...);
 
 namespace
@@ -46,8 +46,21 @@ std::uint64_t monotonic_millis()
     return static_cast<std::uint64_t>(now.tv_sec) * 1000 + static_cast<std::uint64_t>(now.tv_nsec) / 1'000'000;
 }
 
-na_handle_t console_frontend = NA_HANDLE_INVALID;
 na_handle_t input_event_source = NA_HANDLE_INVALID;
+
+struct framebuffer_state
+{
+    nao::memory_object memory;
+    nao::mapped_memory mapping;
+    naos::system::Framebuffer::FramebufferInfo info{};
+
+    void reset()
+    {
+        mapping.reset();
+        memory = {};
+        info = {};
+    }
+};
 
 naoidl::native_transport make_transport()
 {
@@ -67,8 +80,7 @@ naoidl::native_transport make_transport()
 
 int wait_invocation(na_handle_t invocation)
 {
-    na_wait_item_t item{invocation, NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
-    const auto status = _na_handle_wait_many(&item, 1, nullptr);
+    const auto status = nao::event_loop::wait_invocation(invocation);
     return status == NA_STATUS_OK ? 0 : static_cast<int>(status);
 }
 
@@ -87,6 +99,79 @@ void close_result_resources(na_handle_t *resources, std::uint64_t count)
     }
 }
 
+int acquire_framebuffer(framebuffer_state &state)
+{
+    state.reset();
+    na_handle_t service = NA_HANDLE_INVALID;
+    int error = naos_service_resolve(NAOS_SERVICE_FRAMEBUFFER, &service);
+    if (error != 0 || service == NA_HANDLE_INVALID)
+        return error != 0 ? error : EIO;
+
+    auto transport = make_transport();
+    auto client = naos::system::Framebuffer::FramebufferClient(transport.async(), service);
+    naos::system::Framebuffer::get_request request{};
+    na_handle_t invocation = NA_HANDLE_INVALID;
+    std::uint8_t wire[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
+    auto status = client.submit_get(request, nullptr, 0, &invocation, wire, sizeof(wire));
+    if (status != NA_STATUS_OK)
+    {
+        (void)naos_handle_close(service);
+        return static_cast<int>(status);
+    }
+    error = wait_invocation(invocation);
+    if (error != 0)
+    {
+        (void)_na_invocation_cancel(invocation);
+        (void)naos_handle_close(invocation);
+        (void)naos_handle_close(service);
+        return error;
+    }
+
+    naos::system::Framebuffer::get_response response{};
+    na_handle_t resources[NA_CHANNEL_MAX_RESOURCES]{ };
+    na_result_frame_t result{};
+    status = client.take_get(invocation, response, wire, sizeof(wire), resources, NA_CHANNEL_MAX_RESOURCES, result);
+    (void)naos_handle_close(invocation);
+    (void)naos_handle_close(service);
+    if (status != NA_STATUS_OK)
+    {
+        close_result_resources(resources, result.actual_resources);
+        return static_cast<int>(status);
+    }
+    if (const int result_error = invocation_error(result); result_error != 0)
+    {
+        close_result_resources(resources, result.actual_resources);
+        return result_error;
+    }
+    if (result.actual_resources != 1 || response.framebuffer.value >= result.actual_resources)
+    {
+        close_result_resources(resources, result.actual_resources);
+        return EIO;
+    }
+
+    const auto info = response.info;
+    const std::uint64_t visible_bytes = info.pitch * info.height;
+    if (info.bpp != 32 || info.width < 8 || info.height < 16 || info.pitch < info.width * sizeof(std::uint32_t) ||
+        info.smem_bytes < visible_bytes || info.smem_bytes == 0 || (info.smem_bytes & 4095) != 0)
+    {
+        close_result_resources(resources, result.actual_resources);
+        return ENOTSUP;
+    }
+
+    const na_handle_t object = resources[response.framebuffer.value];
+    resources[response.framebuffer.value] = NA_HANDLE_INVALID;
+    close_result_resources(resources, result.actual_resources);
+    state.memory = nao::memory_object(nao::handle(object));
+    state.mapping = state.memory.map(info.smem_bytes);
+    if (!state.mapping)
+    {
+        state.reset();
+        return EIO;
+    }
+    state.info = info;
+    return 0;
+}
+
 int connect_master(na_handle_t &master)
 {
     na_handle_t manager = NA_HANDLE_INVALID;
@@ -101,22 +186,8 @@ int connect_master(na_handle_t &master)
     std::uint8_t wire[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
     naos::system::TerminalManager::open_console_master_request request{};
     request.mode = 1 | 2;
-    if (console_frontend == NA_HANDLE_INVALID &&
-        (naos_take_console_frontend(&console_frontend) != 0 || console_frontend == NA_HANDLE_INVALID))
-    {
-        (void)naos_handle_close(manager);
-        return EACCES;
-    }
-    const na_handle_t frontend = console_frontend;
-    request.frontend.value = 0;
-    na_resource_disposition_t frontend_resource{};
-    frontend_resource.handle = frontend;
-    frontend_resource.operation = NA_RESOURCE_DUPLICATE;
-    frontend_resource.rights = NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT;
-    frontend_resource.scope = NA_SCOPE_NONE;
-
     na_handle_t invocation = NA_HANDLE_INVALID;
-    auto status = client.submit_open_console_master(request, &frontend_resource, 1, &invocation, wire, sizeof(wire));
+    auto status = client.submit_open_console_master(request, nullptr, 0, &invocation, wire, sizeof(wire));
     if (status != NA_STATUS_OK)
     {
         (void)naos_handle_close(manager);
@@ -167,6 +238,39 @@ int connect_master(na_handle_t &master)
     return 0;
 }
 
+// The console master owns one bulk region per outstanding request: ttyd maps
+// the region for the duration of an invocation, so a per-call scratch buffer
+// would only add copies the wire no longer needs (C2).
+struct master_bulk_region
+{
+    nao::memory_object object;
+    nao::mapped_memory mapping;
+
+    bool ensure(std::size_t bytes)
+    {
+        if (bytes == 0)
+            return false;
+        if (mapping && mapping.size() >= bytes)
+            return true;
+        mapping.reset();
+        object = nao::memory_object();
+        na_handle_t handle = NA_HANDLE_INVALID;
+        if (_na_memory_create(bytes, 0, &handle) != NA_STATUS_OK)
+            return false;
+        object = nao::memory_object(nao::handle(handle));
+        mapping = object.map(bytes);
+        if (!mapping)
+        {
+            object = nao::memory_object();
+            return false;
+        }
+        return true;
+    }
+
+    std::uint8_t *data() { return static_cast<std::uint8_t *>(mapping.data()); }
+    na_handle_t handle() const { return object.get(); }
+};
+
 enum class master_async_kind : std::uint8_t
 {
     none,
@@ -183,6 +287,7 @@ struct master_async_request
     std::uint8_t wire[4096]{};
     std::size_t requested = 0;
     std::uint64_t generation = 0;
+    master_bulk_region region{};
 };
 
 constexpr std::uint64_t terminal_readable = 0x001;
@@ -193,23 +298,36 @@ void close_master_async_request(master_async_request &request)
 {
     if (request.invocation != NA_HANDLE_INVALID)
         (void)naos_handle_close(request.invocation);
-    request = {};
+    // `wire` and `region` are per-request scratch that is reused across
+    // requests, so only the invocation state is cleared here.
+    request.kind = master_async_kind::none;
+    request.invocation = NA_HANDLE_INVALID;
+    request.requested = 0;
+    request.generation = 0;
 }
 
 int submit_master_read(na_handle_t master, master_async_request &request)
 {
     if (request.kind != master_async_kind::none)
         return EBUSY;
+    constexpr std::size_t read_bytes = 1024;
+    if (!request.region.ensure(read_bytes))
+        return ENOMEM;
     auto transport = make_transport();
     auto client = naos::system::TerminalMaster::TerminalMasterClient(transport.async(), master);
     naos::system::TerminalMaster::read_request message{};
-    message.size = 1024;
+    message.size = read_bytes;
     // Let ttyd retain this invocation while output is unavailable.  A
     // non-blocking EAGAIN is represented as a failed RPC by the generic
     // server dispatcher, which would close the terminal endpoint.
     message.flags = 0;
-    const auto status =
-        client.submit_read(message, nullptr, 0, &request.invocation, request.wire, sizeof(request.wire));
+    message.buffer.value = 0;
+    na_resource_disposition_t resource{};
+    resource.handle = request.region.handle();
+    resource.operation = NA_RESOURCE_DUPLICATE;
+    resource.scope = NA_SCOPE_MEMORY_OBJECT;
+    const auto status = client.submit_read(message, &resource, 1, &request.invocation, request.wire,
+                                           sizeof(request.wire));
     if (status != NA_STATUS_OK)
     {
         request.invocation = NA_HANDLE_INVALID;
@@ -244,6 +362,9 @@ int submit_master_write(na_handle_t master, master_async_request &request, const
 {
     if (request.kind != master_async_kind::none || size == 0 || size > sizeof(request.wire) / 2)
         return EINVAL;
+    if (!request.region.ensure(sizeof(request.wire) / 2))
+        return ENOMEM;
+    std::memcpy(request.region.data(), data, size);
     auto transport = make_transport();
     auto client = naos::system::TerminalMaster::TerminalMasterClient(transport.async(), master);
     naos::system::TerminalMaster::write_request message{};
@@ -252,9 +373,13 @@ int submit_master_write(na_handle_t master, master_async_request &request, const
     // using non-blocking EAGAIN here would make the server dispatcher close
     // the otherwise healthy endpoint.
     message.flags = 0;
-    message.data = {data, static_cast<std::uint32_t>(size)};
+    message.buffer.value = 0;
+    na_resource_disposition_t resource{};
+    resource.handle = request.region.handle();
+    resource.operation = NA_RESOURCE_DUPLICATE;
+    resource.scope = NA_SCOPE_MEMORY_OBJECT;
     const auto status =
-        client.submit_write(message, nullptr, 0, &request.invocation, request.wire, sizeof(request.wire));
+        client.submit_write(message, &resource, 1, &request.invocation, request.wire, sizeof(request.wire));
     if (status != NA_STATUS_OK)
     {
         if (status == NA_STATUS_WOULD_BLOCK)
@@ -332,15 +457,15 @@ int complete_master_read(na_handle_t master, master_async_request &request, std:
         close_master_async_request(request);
         return error;
     }
-    if (response.data.size > capacity)
+    if (response.count > capacity || response.count > request.region.mapping.size())
     {
         close_master_async_request(request);
         return EOVERFLOW;
     }
-    // Generated decoders borrow inline bytes from request.wire. Copy them
-    // before close_master_async_request() clears that storage.
-    std::memcpy(buffer, response.data.data, response.data.size);
-    read = response.data.size;
+    // The service wrote the payload into the region this request owns; the
+    // region stays mapped until the client copies the bytes out.
+    std::memcpy(buffer, request.region.data(), static_cast<std::size_t>(response.count));
+    read = static_cast<std::size_t>(response.count);
     close_master_async_request(request);
     readable = read != 0;
     return 0;
@@ -422,7 +547,7 @@ int subscribe_input(na_handle_t &receiver)
 {
     if (input_event_source == NA_HANDLE_INVALID)
     {
-        const int error = naos_take_input_event_source(&input_event_source);
+        const int error = naos_resolve_input_event_source(&input_event_source);
         if (error != 0)
             return error;
     }
@@ -831,51 +956,22 @@ int main(int argc, char **argv)
     int master_fd = -1;
     if (argc > 1)
         master_fd = atoi(argv[1]);
-    int fb_fd = open("/dev/fb0", O_RDWR | O_EXCL);
-    if (fb_fd < 0)
+    framebuffer_state framebuffer;
+    const int framebuffer_error = acquire_framebuffer(framebuffer);
+    if (framebuffer_error != 0)
     {
-        std::printf("consoled: cannot open /dev/fb0\n");
-        char message[96]{};
-        snprintf(message, sizeof(message), "consoled: fb open failed errno=%d\n", errno);
+        char message[128]{};
+        snprintf(message, sizeof(message), "consoled: framebuffer service unavailable (%d)\n", framebuffer_error);
+        std::printf("%s", message);
         _s_log(message);
         return 1;
     }
-    fb_fix_screeninfo fix{};
-    fb_var_screeninfo var{};
-    if (ioctl(fb_fd, FBIOGET_FSCREENINFO, &fix) != 0 || ioctl(fb_fd, FBIOGET_VSCREENINFO, &var) != 0)
-    {
-        std::printf("consoled: cannot query framebuffer\n");
-        close(fb_fd);
-        return 1;
-    }
-    if (var.bits_per_pixel != 32 || fix.line_length < var.xres * sizeof(std::uint32_t) || var.yres < 16 || var.xres < 8)
-    {
-        _s_log("consoled: unsupported framebuffer layout\n");
-        close(fb_fd);
-        return 1;
-    }
-    const std::uint64_t visible_frame_bytes = static_cast<std::uint64_t>(fix.line_length) * var.yres;
-    if (fix.smem_len < visible_frame_bytes)
-    {
-        _s_log("consoled: framebuffer memory is smaller than visible frame\n");
-        close(fb_fd);
-        return 1;
-    }
-    constexpr std::uint64_t page_size = 4096;
-    std::uint64_t mapped_bytes =
-        (static_cast<std::uint64_t>(fix.smem_len) + page_size - 1) & ~(page_size - 1);
-    auto *scanout =
-        static_cast<std::uint32_t *>(mmap(nullptr, mapped_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0));
-    if (scanout == MAP_FAILED)
-    {
-        std::printf("consoled: cannot map framebuffer\n");
-        _s_log("consoled: mmap failed\n");
-        close(fb_fd);
-        return 1;
-    }
-    int rows = static_cast<int>(var.yres / 16);
-    int cols = static_cast<int>(var.xres / 8);
-    int pitch_pixels = static_cast<int>(fix.line_length / 4);
+    auto *scanout = static_cast<std::uint32_t *>(framebuffer.mapping.data());
+    auto info = framebuffer.info;
+    _s_log("consoled: framebuffer service connected\n");
+    int rows = static_cast<int>(info.height / 16);
+    int cols = static_cast<int>(info.width / 8);
+    int pitch_pixels = static_cast<int>(info.pitch / sizeof(std::uint32_t));
     auto *backbuffer =
         static_cast<std::uint32_t *>(calloc(static_cast<std::size_t>(rows * 16) * pitch_pixels, sizeof(std::uint32_t)));
     if (backbuffer == nullptr)
@@ -951,12 +1047,12 @@ int main(int argc, char **argv)
     struct winsize ws{};
     ws.ws_row = static_cast<unsigned short>(rows);
     ws.ws_col = static_cast<unsigned short>(cols);
-    ws.ws_xpixel = static_cast<unsigned short>(var.xres);
-    ws.ws_ypixel = static_cast<unsigned short>(var.yres);
+    ws.ws_xpixel = static_cast<unsigned short>(info.width);
+    ws.ws_ypixel = static_cast<unsigned short>(info.height);
     if (master_fd >= 0)
         (void)ioctl(master_fd, TIOCSWINSZ, &ws);
     else
-        (void)master_set_winsize(master, rows, cols, var.xres, var.yres);
+        (void)master_set_winsize(master, rows, cols, info.width, info.height);
 
     na_handle_t input_receiver = NA_HANDLE_INVALID;
     std::uint64_t input_retry_after = 0;
@@ -983,16 +1079,8 @@ int main(int argc, char **argv)
     auto disable_framebuffer = [&]() {
         if (!framebuffer_enabled)
             return;
-        if (scanout != nullptr && scanout != MAP_FAILED)
-        {
-            (void)munmap(scanout, mapped_bytes);
-            scanout = nullptr;
-        }
-        if (fb_fd >= 0)
-        {
-            close(fb_fd);
-            fb_fd = -1;
-        }
+        framebuffer.reset();
+        scanout = nullptr;
         framebuffer_enabled = false;
         _s_log("consoled: framebuffer disabled\n");
     };
@@ -1000,48 +1088,18 @@ int main(int argc, char **argv)
     auto enable_framebuffer = [&]() -> bool {
         if (framebuffer_enabled)
             return true;
-
-        const int new_fb_fd = open("/dev/fb0", O_RDWR | O_EXCL);
-        if (new_fb_fd < 0)
+        framebuffer_state replacement;
+        if (acquire_framebuffer(replacement) != 0)
         {
-            _s_log("consoled: framebuffer enable open failed\n");
+            _s_log("consoled: framebuffer service enable failed\n");
             return false;
         }
-        fb_fix_screeninfo new_fix{};
-        fb_var_screeninfo new_var{};
-        if (ioctl(new_fb_fd, FBIOGET_FSCREENINFO, &new_fix) != 0 ||
-            ioctl(new_fb_fd, FBIOGET_VSCREENINFO, &new_var) != 0 || new_var.bits_per_pixel != 32 ||
-            new_fix.line_length < new_var.xres * sizeof(std::uint32_t) || new_var.yres < 16 || new_var.xres < 8)
-        {
-            close(new_fb_fd);
-            _s_log("consoled: framebuffer enable query failed\n");
-            return false;
-        }
-
-        const std::uint64_t new_visible_frame_bytes =
-            static_cast<std::uint64_t>(new_fix.line_length) * new_var.yres;
-        if (new_fix.smem_len < new_visible_frame_bytes)
-        {
-            close(new_fb_fd);
-            _s_log("consoled: framebuffer memory is smaller than visible frame\n");
-            return false;
-        }
-        const std::uint64_t new_mapped_bytes =
-            (static_cast<std::uint64_t>(new_fix.smem_len) + page_size - 1) & ~(page_size - 1);
-        auto *new_scanout = static_cast<std::uint32_t *>(
-            mmap(nullptr, new_mapped_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, new_fb_fd, 0));
-        if (new_scanout == MAP_FAILED)
-        {
-            close(new_fb_fd);
-            _s_log("consoled: framebuffer enable mmap failed\n");
-            return false;
-        }
-
-        const int new_rows = static_cast<int>(new_var.yres / 16);
-        const int new_cols = static_cast<int>(new_var.xres / 8);
-        const int new_pitch_pixels = static_cast<int>(new_fix.line_length / sizeof(std::uint32_t));
+        const auto new_info = replacement.info;
+        const int new_rows = static_cast<int>(new_info.height / 16);
+        const int new_cols = static_cast<int>(new_info.width / 8);
+        const int new_pitch_pixels = static_cast<int>(new_info.pitch / sizeof(std::uint32_t));
         const bool geometry_changed = new_rows != rows || new_cols != cols || new_pitch_pixels != pitch_pixels ||
-                                      new_var.xres != var.xres || new_var.yres != var.yres;
+                                      new_info.width != info.width || new_info.height != info.height;
         auto *new_backbuffer = backbuffer;
         if (geometry_changed)
         {
@@ -1049,8 +1107,7 @@ int main(int argc, char **argv)
                 calloc(static_cast<std::size_t>(new_rows * 16) * new_pitch_pixels, sizeof(std::uint32_t)));
             if (new_backbuffer == nullptr)
             {
-                (void)munmap(new_scanout, new_mapped_bytes);
-                close(new_fb_fd);
+                replacement.reset();
                 _s_log("consoled: framebuffer enable backbuffer failed\n");
                 return false;
             }
@@ -1069,22 +1126,20 @@ int main(int argc, char **argv)
             cols = new_cols;
             pitch_pixels = new_pitch_pixels;
         }
-        fb_fd = new_fb_fd;
-        scanout = new_scanout;
-        mapped_bytes = new_mapped_bytes;
-        fix = new_fix;
-        var = new_var;
+        framebuffer = std::move(replacement);
+        scanout = static_cast<std::uint32_t *>(framebuffer.mapping.data());
+        info = framebuffer.info;
         framebuffer_enabled = true;
 
         struct winsize enable_ws{};
         enable_ws.ws_row = static_cast<unsigned short>(rows);
         enable_ws.ws_col = static_cast<unsigned short>(cols);
-        enable_ws.ws_xpixel = static_cast<unsigned short>(var.xres);
-        enable_ws.ws_ypixel = static_cast<unsigned short>(var.yres);
+        enable_ws.ws_xpixel = static_cast<unsigned short>(info.width);
+        enable_ws.ws_ypixel = static_cast<unsigned short>(info.height);
         if (master_fd >= 0)
             (void)ioctl(master_fd, TIOCSWINSZ, &enable_ws);
         else
-            (void)master_set_winsize(master, rows, cols, var.xres, var.yres);
+            (void)master_set_winsize(master, rows, cols, info.width, info.height);
 
         add_damage(render_state, {0, rows, 0, cols});
         vterm_screen_flush_damage(screen);
@@ -1120,95 +1175,6 @@ int main(int argc, char **argv)
                 input_retry_delay = input_retry_delay < 5000 ? input_retry_delay * 2 : 5000;
             }
         }
-        struct timespec resize_now{};
-        if (framebuffer_enabled && fb_fd >= 0 && clock_gettime(CLOCK_MONOTONIC, &resize_now) == 0)
-        {
-            static struct timespec last_resize_check{};
-            const int64_t elapsed_us = (resize_now.tv_sec - last_resize_check.tv_sec) * 1000000 +
-                                       (resize_now.tv_nsec - last_resize_check.tv_nsec) / 1000;
-            if ((last_resize_check.tv_sec == 0 && last_resize_check.tv_nsec == 0) || elapsed_us >= 2000000)
-            {
-                last_resize_check = resize_now;
-                fb_var_screeninfo current_var{};
-                fb_fix_screeninfo current_fix{};
-                if (ioctl(fb_fd, FBIOGET_VSCREENINFO, &current_var) == 0 &&
-                    ioctl(fb_fd, FBIOGET_FSCREENINFO, &current_fix) == 0)
-                {
-                    const int current_rows = static_cast<int>(current_var.yres / 16);
-                    const int current_cols = static_cast<int>(current_var.xres / 8);
-                    const int current_pitch = static_cast<int>(current_fix.line_length / sizeof(std::uint32_t));
-                    const bool changed = current_rows != rows || current_cols != cols ||
-                                         current_pitch != pitch_pixels || current_var.xres != var.xres ||
-                                         current_var.yres != var.yres;
-                    if (changed && current_var.bits_per_pixel == 32 && current_var.xres >= 8 &&
-                        current_var.yres >= 16 && current_fix.line_length >= current_var.xres * sizeof(std::uint32_t))
-                    {
-                        const std::uint64_t current_visible_frame_bytes =
-                            static_cast<std::uint64_t>(current_fix.line_length) * current_var.yres;
-                        if (current_fix.smem_len < current_visible_frame_bytes)
-                        {
-                            _s_log("consoled: framebuffer memory is smaller than visible frame\n");
-                            continue;
-                        }
-                        const std::uint64_t current_mapped_bytes =
-                            (static_cast<std::uint64_t>(current_fix.smem_len) + page_size - 1) & ~(page_size - 1);
-                        auto *new_backbuffer = static_cast<std::uint32_t *>(
-                            calloc(static_cast<std::size_t>(current_rows * 16) * current_pitch, sizeof(std::uint32_t)));
-                        if (new_backbuffer == nullptr)
-                        {
-                            _s_log("consoled: resize backbuffer allocation failed\n");
-                        }
-                        else
-                        {
-                            auto *new_scanout = scanout;
-                            if (current_mapped_bytes != mapped_bytes)
-                            {
-                                new_scanout = static_cast<std::uint32_t *>(
-                                    mmap(nullptr, current_mapped_bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd, 0));
-                            }
-                            if (new_scanout == MAP_FAILED)
-                            {
-                                free(new_backbuffer);
-                                _s_log("consoled: resize framebuffer mapping failed\n");
-                                continue;
-                            }
-                            if (new_scanout != scanout)
-                                (void)munmap(scanout, mapped_bytes);
-                            free(backbuffer);
-                            backbuffer = new_backbuffer;
-                            scanout = new_scanout;
-                            mapped_bytes = current_mapped_bytes;
-                            fix = current_fix;
-                            var = current_var;
-                            rows = current_rows;
-                            cols = current_cols;
-                            pitch_pixels = current_pitch;
-                            render_state.rows = rows;
-                            render_state.cols = cols;
-                            render_state.pitch_pixels = pitch_pixels;
-                            render_state.backbuffer = backbuffer;
-                            vterm_set_size(vt, current_rows, current_cols);
-                            vterm_screen_flush_damage(screen);
-                            struct winsize resize_ws{};
-                            resize_ws.ws_row = static_cast<unsigned short>(current_rows);
-                            resize_ws.ws_col = static_cast<unsigned short>(current_cols);
-                            resize_ws.ws_xpixel = static_cast<unsigned short>(current_var.xres);
-                            resize_ws.ws_ypixel = static_cast<unsigned short>(current_var.yres);
-                            if (master_fd >= 0)
-                                (void)ioctl(master_fd, TIOCSWINSZ, &resize_ws);
-                            else
-                                (void)master_set_winsize(master, current_rows, current_cols, current_var.xres,
-                                                         current_var.yres);
-                            add_damage(render_state, {0, rows, 0, cols});
-                            if (framebuffer_enabled)
-                                render_damage(screen, render_state, scanout);
-                            _s_log("consoled: framebuffer resize applied\n");
-                        }
-                    }
-                }
-            }
-        }
-
         if (master_fd < 0)
         {
             if (master_read_request.kind == master_async_kind::none &&
@@ -1234,26 +1200,45 @@ int main(int argc, char **argv)
 
         constexpr std::uint64_t invalid_wait_index = static_cast<std::uint64_t>(-1);
         render_terminal_if_due();
-        na_wait_item_t wait_items[4]{};
+        na_handle_t wait_handles[4]{};
+        na_epoll_event_t wait_registrations[4]{};
+        na_epoll_event_t returned_events[4]{};
         uint64_t wait_count = 0;
+        const auto append_wait = [&](na_handle_t handle, uint64_t events) -> uint64_t {
+            if (handle == NA_HANDLE_INVALID || events == 0)
+                return invalid_wait_index;
+            for (uint64_t index = 0; index < wait_count; index++)
+            {
+                if (wait_handles[index] == handle)
+                {
+                    wait_registrations[index].events |= events;
+                    return index;
+                }
+            }
+            if (wait_count == 4)
+                return invalid_wait_index;
+            const auto index = wait_count++;
+            wait_handles[index] = handle;
+            wait_registrations[index] = {events, index};
+            return index;
+        };
         const uint64_t master_read_wait_index =
             master_fd < 0 && master_read_request.kind != master_async_kind::none ? wait_count : invalid_wait_index;
         if (master_read_wait_index != invalid_wait_index)
-            wait_items[wait_count++] = {master_read_request.invocation, NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
+            (void)append_wait(master_read_request.invocation, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         const uint64_t master_write_wait_index =
             master_fd < 0 && master_write_request.kind != master_async_kind::none ? wait_count : invalid_wait_index;
         if (master_write_wait_index != invalid_wait_index)
-            wait_items[wait_count++] = {master_write_request.invocation, NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED,
-                                        0};
+            (void)append_wait(master_write_request.invocation, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         const uint64_t master_write_retry_index =
             master_fd < 0 && master_write_request.kind == master_async_kind::none && pending_master_output_size != 0
                 ? wait_count
                 : invalid_wait_index;
         if (master_write_retry_index != invalid_wait_index)
-            wait_items[wait_count++] = {master, NA_SIGNAL_WRITABLE | NA_SIGNAL_PEER_CLOSED, 0};
+            (void)append_wait(master, NA_EPOLL_EVENT_WRITABLE | NA_EPOLL_EVENT_HANGUP);
         const uint64_t input_wait_index = input_receiver != NA_HANDLE_INVALID ? wait_count : invalid_wait_index;
         if (input_receiver != NA_HANDLE_INVALID)
-            wait_items[wait_count++] = {input_receiver, NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED, 0};
+            (void)append_wait(input_receiver, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         if (wait_count == 0)
         {
             _s_log("consoled: no wait handles\n");
@@ -1290,7 +1275,26 @@ int main(int argc, char **argv)
                 deadline.tv_nsec = static_cast<long>((terminal_render_batch.due_ms % 1000) * 1'000'000);
             }
         }
-        const auto wait_status = loop.wait(wait_items, wait_count, &deadline);
+        na_handle_t epoll = NA_HANDLE_INVALID;
+        if (loop.create(epoll) != NA_STATUS_OK)
+            break;
+        bool epoll_ready = true;
+        for (uint64_t index = 0; index < wait_count; index++)
+        {
+            if (loop.control(epoll, NA_EPOLL_CTL_ADD, wait_handles[index], &wait_registrations[index]) != NA_STATUS_OK)
+            {
+                epoll_ready = false;
+                break;
+            }
+        }
+        if (!epoll_ready)
+        {
+            (void)naos_handle_close(epoll);
+            break;
+        }
+        uint64_t returned_count = 0;
+        const auto wait_status = loop.wait(epoll, returned_events, 4, returned_count, &deadline);
+        (void)naos_handle_close(epoll);
         if (wait_status == NA_STATUS_WAIT_TIMED_OUT)
             continue;
         if (wait_status != NA_STATUS_OK)
@@ -1300,8 +1304,14 @@ int main(int argc, char **argv)
             _s_log(message);
             break;
         }
+        uint64_t observed[4]{};
+        for (uint64_t index = 0; index < returned_count; index++)
+        {
+            if (returned_events[index].data < wait_count)
+                observed[returned_events[index].data] |= returned_events[index].events;
+        }
         if (master_write_retry_index != invalid_wait_index &&
-            (wait_items[master_write_retry_index].observed & NA_SIGNAL_PEER_CLOSED) != 0)
+            (observed[master_write_retry_index] & NA_EPOLL_EVENT_HANGUP) != 0)
         {
             _s_log("consoled: master endpoint closed\n");
             goto shutdown;
@@ -1309,7 +1319,7 @@ int main(int argc, char **argv)
 
         std::uint8_t buffer[1024]{};
         if (master_read_wait_index != invalid_wait_index &&
-            (wait_items[master_read_wait_index].observed & (NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED)) != 0)
+            (observed[master_read_wait_index] & (NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP)) != 0)
         {
             const auto kind = master_read_request.kind;
             std::size_t read_size = 0;
@@ -1352,7 +1362,7 @@ int main(int argc, char **argv)
         }
 
         if (master_write_wait_index != invalid_wait_index &&
-            (wait_items[master_write_wait_index].observed & (NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED)) != 0)
+            (observed[master_write_wait_index] & (NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP)) != 0)
         {
             const auto kind = master_write_request.kind;
             std::size_t written = 0;
@@ -1412,9 +1422,9 @@ int main(int argc, char **argv)
         }
 
         if (input_wait_index == invalid_wait_index ||
-            (wait_items[input_wait_index].observed & (NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED)) == 0)
+            (observed[input_wait_index] & (NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP)) == 0)
             continue;
-        if ((wait_items[input_wait_index].observed & NA_SIGNAL_PEER_CLOSED) != 0)
+        if ((observed[input_wait_index] & NA_EPOLL_EVENT_HANGUP) != 0)
         {
             (void)naos_handle_close(input_receiver);
             input_receiver = NA_HANDLE_INVALID;
@@ -1513,18 +1523,13 @@ shutdown:
     close_master_async_request(master_read_request);
     close_master_async_request(master_write_request);
     free(backbuffer);
-    if (scanout != nullptr && scanout != MAP_FAILED)
-        (void)munmap(scanout, mapped_bytes);
-    if (fb_fd >= 0)
-        close(fb_fd);
+    framebuffer.reset();
     if (master_fd >= 0)
         close(master_fd);
     else
         (void)naos_handle_close(master);
     if (input_receiver != NA_HANDLE_INVALID)
         (void)naos_handle_close(input_receiver);
-    if (console_frontend != NA_HANDLE_INVALID)
-        (void)naos_handle_close(console_frontend);
     if (input_event_source != NA_HANDLE_INVALID)
         (void)naos_handle_close(input_event_source);
     std::printf("consoled: rendered\n");

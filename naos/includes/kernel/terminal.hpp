@@ -964,6 +964,8 @@ void init();
 terminal_manager *get_terms();
 fb::framebuffer_backend *get_framebuffer_backend();
 void set_framebuffer_user_writer(bool active);
+bool try_acquire_framebuffer_user_writer();
+void release_framebuffer_user_writer();
 bool framebuffer_user_enabled();
 
 void write_to(freelibcxx::const_string_view sv, int index);

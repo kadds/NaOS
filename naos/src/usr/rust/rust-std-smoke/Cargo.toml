@@ -11,6 +11,14 @@ test = false
 bench = false
 
 [dependencies]
+byteorder = "1.5"
 naos-idl = { path = "../naos-idl" }
 naos-sys = { path = "../naos-sys" }
-naos-runtime = { path = "../naos-runtime", features = ["alloc", "entry"] }
+servicekit = { path = "../servicekit" }
+tokio = { version = "1.47", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }

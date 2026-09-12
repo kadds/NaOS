@@ -82,8 +82,9 @@ ttyd -> TerminalMaster.read -> libvterm screen/damage -> fixed 8x16 glyphs -> mm
 `U+0020..U+007E`；其余 codepoint 使用固定 replacement glyph。首期不依赖 FreeType、HarfBuzz、fontconfig 或外部字体
 加载。
 
-runtime `/dev/fb0` 只有一个 user writer。`consoled` 通过启动时收到的
-`NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND` capability 获得 framebuffer writer 权限；普通终端子进程不会继承该 capability。
+runtime `/dev/fb0` 只有一个 user writer。`consoled` 通过
+`naos://service/console/0` ServiceDirectory service 获得 framebuffer writer
+权限；普通终端子进程不会继承该 service authority。
 kernel normal log 不与 `consoled` 并发写 framebuffer；panic 路径先停止其他
 CPU 和 user execution，再由 kernel emergency terminal 直接接管 framebuffer。kernel emergency terminal 不等待
 `consoled`，也不依赖 libvterm、allocator、VFS 或用户态服务。

@@ -53,7 +53,10 @@ go_to_amd64:
     // rep stosd
     rep stosl
     movl $0x90000, %edi
-    // 2MB * 512 page
+    // Map the full default 128 MiB guest while Multiboot constructs the
+    // kernel arguments.  Named boot modules include the prepared root image,
+    // so the old 20-page (40 MiB) temporary map could fault before serial
+    // logging even began.
     // PML4T[0] -> 0x91000
     movl $0x91003, (%edi)
     addl $0x1000, %edi
@@ -61,7 +64,7 @@ go_to_amd64:
     movl $0x92003, (%edi)
     addl $0x1000, %edi
 
-    movl $20, %ecx
+    movl $64, %ecx
     movl $0x83, %eax
 loop_start:
     movl %eax, (%edi)

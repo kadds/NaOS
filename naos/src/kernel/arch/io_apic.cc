@@ -181,7 +181,7 @@ void io_init()
         u8 version = (io_map.io_read_register_32(0x1)) & 0xFF;
         rte++;
 
-        KLOG_DEBUG("IO APIC {} base {} id {} version {} RTE count {}", i, log::hex(io_map.base_address()()), id,
+        KLOG_INFO("IO APIC {} base {} id {} version {} RTE count {}", i, log::hex(io_map.base_address()()), id,
                    version, rte);
         if (rte == 1)
         {
@@ -198,7 +198,7 @@ void io_init()
     {
         for (auto &override_irq : ACPI::get_override_irq_list())
         {
-            KLOG_DEBUG("IRQ override from {} to {} bus {} flags {}", override_irq.irq_source, override_irq.gsi,
+            KLOG_INFO("IRQ override from {} to {} bus {} flags {}", override_irq.irq_source, override_irq.gsi,
                        override_irq.bus, override_irq.flags);
             io_entry *entry = nullptr;
             if (override_irq.irq_source == 0)

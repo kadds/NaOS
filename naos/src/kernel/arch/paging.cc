@@ -77,14 +77,31 @@ template <typename PageTable, typename PageEntry>
     requires page_table<PageTable>
 bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
 {
+    if (actions & action_flags::shared_kernel)
+    {
+        // Kernel virtual mappings are intentionally visible in every address
+        // space.  COW-cloning a lower kernel table would make a later vmalloc
+        // invisible to the currently running user process.
+        entry.set_flags(entry.flags() | flags);
+        return false;
+    }
     auto readonly_flags = flags & ~flags::writable;
     if (readonly_flags == flags && !(actions & action_flags::copy_all))
     {
         // nothing to share
         return false;
     }
-    uctx::RawSpinLockUninterruptibleContext icu(share_spin);
     auto &next = entry.next();
+    if (memory::global_zones->get_page_reference(&next) == 1)
+    {
+        entry.set_flags(flags);
+        return false;
+    }
+
+    // Most mappings are private to one address space. Avoid taking the
+    // global sharing lock for that common case; it is only needed while
+    // cloning a page-table node that is actually shared.
+    uctx::RawSpinLockUninterruptibleContext icu(share_spin);
     if (memory::global_zones->get_page_reference(&next) == 1)
     {
         entry.set_flags(flags);
@@ -94,7 +111,17 @@ bool share_page_entry(PageTable &base, PageEntry &entry, u64 flags, u64 actions)
     using NextPageTable = std::remove_reference_t<decltype(entry.next())>;
 
     int old_counter = page_table2page(next)->page_table_counter();
-    kassert(counter(next) == old_counter, "counter not match {} != {}", counter(next), old_counter);
+    const int observed_counter = counter(next);
+    if (old_counter != observed_counter)
+    {
+        // Kernel page-table entries are shared with every user address space.
+        // A stale cached child count must not turn a harmless first mapping
+        // into a kernel panic (and, worse, make the copy loop omit entries).
+        // Reconcile from the authoritative present-bit scan before cloning.
+        KLOG_WARN("reconciling page-table counter {} -> {}", old_counter, observed_counter);
+        old_counter = observed_counter;
+        page_table2page(next)->set_page_table_counter(static_cast<u16>(observed_counter));
+    }
 
     auto p = new_page_table<NextPageTable>();
 
@@ -568,19 +595,26 @@ void page_table_t::prepare_kernel_space()
 
 void page_table_t::map_kernel_space()
 {
-    page_table_t p(current());
+    // Always copy from the canonical kernel page table.  Using CR3 here is
+    // incorrect when a user process is currently running: a vmalloc update
+    // would copy that process's already-stale kernel half back over itself.
+    if (memory::kernel_vm_info == nullptr || &memory::kernel_vm_info->paging() == this)
+        return;
+    auto &kernel_paging = memory::kernel_vm_info->paging();
     for (int pml4e_index = 256; pml4e_index < 512; pml4e_index++)
     {
-        auto &src = (*p.base_)[pml4e_index];
+        auto &src = (*kernel_paging.base_)[pml4e_index];
+        auto &dst = (*base_)[pml4e_index];
+        const bool was_present = dst.is_present();
         (*base_)[pml4e_index] = src;
-        if (src.is_present())
+        if (src.is_present() && !was_present)
         {
             page_table2page(*base_)->add_page_table_counter();
         }
     }
 }
 
-void page_table_t::unmap(void *virt_start, size_t pages)
+void page_table_t::unmap(void *virt_start, size_t pages, bool release_frames)
 {
     auto p = reinterpret_cast<uintptr_t>(virt_start);
     if (p & (frame_size::size_4kb - 1))
@@ -668,14 +702,29 @@ void page_table_t::unmap(void *virt_start, size_t pages)
             pte = &(*pde)[pte_index];
             if (pte->is_present())
             {
-                ensure(pml4e_index, pdpe_index, pde_index, pte->flags(),
-                       action_flags::cow | action_flags::override | action_flags::copy_all);
+                // An upper-level x86 page-table entry may be writable even
+                // when this leaf is read-only; the leaf is the authority for
+                // the actual access.  Preserve that invariant while making
+                // the path private for removal.  Reusing a read-only leaf's
+                // flags here would clear the shared user PML4 writable bit
+                // and make an unrelated stack page fault with PRESENT|WRITE.
+                u64 ancestor_flags = pte->flags();
+                if (pml4e_index < 256)
+                    ancestor_flags |= flags::writable;
+                const bool shared_path = memory::global_zones->get_page_reference(pml4e->get_addr()) > 1 ||
+                                          memory::global_zones->get_page_reference(pdpe->get_addr()) > 1 ||
+                                          memory::global_zones->get_page_reference(pde->get_addr()) > 1;
+                if (shared_path)
+                {
+                    ensure(pml4e_index, pdpe_index, pde_index, ancestor_flags,
+                           action_flags::cow | action_flags::override | action_flags::copy_all);
 
-                pml4e = &(*base_)[pml4e_index];
-                pdpe = &(*pml4e)[pdpe_index];
-                pde = &(*pdpe)[pde_index];
-                pte = &(*pde)[pte_index];
-                need_check = true;
+                    pml4e = &(*base_)[pml4e_index];
+                    pdpe = &(*pml4e)[pdpe_index];
+                    pde = &(*pdpe)[pde_index];
+                    pte = &(*pde)[pte_index];
+                    need_check = true;
+                }
 
                 auto addr = to_virt_addr(index_t::from_pack(pml4e_index, pdpe_index, pde_index, pte_index));
                 kassert(memory::global_zones->get_page_reference(pml4e->get_addr()) == 1,
@@ -687,7 +736,7 @@ void page_table_t::unmap(void *virt_start, size_t pages)
                         log::hex(addr));
 
                 const phy_addr_t leaf_physical = memory::va2pa(pte->get_addr());
-                if (memory::global_zones->which(leaf_physical) != nullptr)
+                if (release_frames && memory::global_zones->which(leaf_physical) != nullptr)
                     memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
                 pte->set_flags(0);
 
@@ -764,6 +813,11 @@ bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
 
     if (entry.is_present())
     {
+        if (actions & action_flags::shared_kernel)
+        {
+            entry.set_flags(entry.flags() | flags);
+            return false;
+        }
         if ((entry.flags() | flags) != entry.flags() && actions & (action_flags::cow | action_flags::override))
         {
             flags |= entry.flags();
@@ -779,8 +833,9 @@ bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
         entry.set_next(p);
         entry.set_flags(flags);
 
-        kassert(counter(base) == page_table2page(base)->page_table_counter(), "counter not match {} != {}",
-                counter(base), page_table2page(base)->page_table_counter());
+        const auto observed_counter = counter(base);
+        if (observed_counter != page_table2page(base)->page_table_counter())
+            page_table2page(base)->set_page_table_counter(static_cast<u16>(observed_counter));
     }
 
     return true;
@@ -788,18 +843,24 @@ bool ensure_single(PageTable &base, int index, u64 flags, u64 actions)
 
 void page_table_t::ensure(int pml4e_index, int pdpe_index, int pde_index, u64 flags, u64 actions)
 {
+    if (pml4e_index >= 256)
+        actions |= action_flags::shared_kernel;
     ensure(pml4e_index, pdpe_index, flags, actions);
     ensure_single((*base_)[pml4e_index][pdpe_index].next(), pde_index, flags, actions);
 }
 
 void page_table_t::ensure(int pml4e_index, int pdpe_index, u64 flags, u64 actions)
 {
+    if (pml4e_index >= 256)
+        actions |= action_flags::shared_kernel;
     ensure(pml4e_index, flags, actions);
     ensure_single((*base_)[pml4e_index].next(), pdpe_index, flags, actions);
 }
 
 void page_table_t::ensure(int pml4e_index, u64 flags, u64 actions)
 {
+    if (pml4e_index >= 256)
+        actions |= action_flags::shared_kernel;
     ensure_single(*base_, pml4e_index, flags, actions);
 }
 

@@ -7,7 +7,6 @@
 #include "kernel/clock.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/common.hpp"
-#include "kernel/dev/framebuffer.hpp"
 #include "kernel/framebuffer.hpp"
 #include "kernel/input_event_source.hpp"
 #include "kernel/kernel.hpp"
@@ -581,8 +580,7 @@ void terminal_manager::force_framebuffer_handoff(timeclock::microsecond_t expira
         pending = pending_switch_ == kernel_console_index && framebuffer_handoff_watcher_ != timer::invalid_watcher_id;
         framebuffer_handoff_watcher_ = timer::invalid_watcher_id;
     }
-    if (pending && framebuffer_user_writer.load(std::memory_order_acquire))
-        (void)dev::framebuffer::force_user_offline();
+    (void)pending;
 }
 
 void terminal_manager::flush_active_terminal()
@@ -636,6 +634,23 @@ void set_framebuffer_user_writer(bool active)
             manager->framebuffer_writer_released();
     }
 }
+
+bool try_acquire_framebuffer_user_writer()
+{
+    if (!framebuffer_user_enabled_state.load(std::memory_order_acquire))
+        return false;
+    bool expected = false;
+    if (!framebuffer_user_writer.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+        return false;
+    if (!framebuffer_user_enabled_state.load(std::memory_order_acquire))
+    {
+        set_framebuffer_user_writer(false);
+        return false;
+    }
+    return true;
+}
+
+void release_framebuffer_user_writer() { set_framebuffer_user_writer(false); }
 
 bool framebuffer_user_enabled() { return framebuffer_user_enabled_state.load(std::memory_order_acquire); }
 

@@ -24,11 +24,16 @@ typedef uint64_t na_handle_t;
 #define NA_CAPABILITY_MAX_PER_PROCESS ((uint64_t)4096)
 #define NA_MEMORY_OBJECT_MAX_BYTES ((uint64_t)(16 << 20))
 #define NA_MEMORY_MAP_MAX_BYTES ((uint64_t)(1ULL << 30))
-#define NA_SHARED_RING_MAX_SLOTS ((uint64_t)256)
-#define NA_SHARED_RING_MAX_SLOT_BYTES ((uint64_t)65536)
-#define NA_SHARED_RING_MAX_BYTES ((uint64_t)(4 << 20))
 #define NA_PROTOCOL_METHOD_BITMAP_WORDS 4
 #define NA_PROTOCOL_MAX_METHOD_ID ((uint64_t)(NA_PROTOCOL_METHOD_BITMAP_WORDS * 64))
+
+/* getrandom() flags. Hardware random sources are always non-blocking, so the
+ * standard blocking/source flags do not change the hardware source. The
+ * NaOS extension forces the use of RDSEED instead of the default fallback. */
+#define NA_GETRANDOM_FLAG_NONBLOCK ((uint32_t)0x0001)
+#define NA_GETRANDOM_FLAG_RANDOM ((uint32_t)0x0002)
+#define NA_GETRANDOM_FLAG_INSECURE ((uint32_t)0x0004)
+#define NA_GETRANDOM_FLAG_RDSEED ((uint32_t)0x0008)
 
 /* Static TLS/TCB contract shared by native language runtimes. The kernel
  * stores the pointer in FS.base; it does not interpret the TLS image or the
@@ -94,6 +99,25 @@ enum
     NA_SIGNAL_CANCEL_REQUESTED = ((na_signal_t)1 << 5),
 };
 
+/* Capability epoll operations and readiness bits.  epoll_wait is a kernel
+ * event queue operation; it does not expose a user-provided wait set. */
+enum
+{
+    NA_EPOLL_CTL_ADD = 1,
+    NA_EPOLL_CTL_MOD = 2,
+    NA_EPOLL_CTL_DEL = 3,
+};
+
+enum
+{
+    NA_EPOLL_EVENT_READABLE = ((uint64_t)1 << 0),
+    NA_EPOLL_EVENT_WRITABLE = ((uint64_t)1 << 1),
+    NA_EPOLL_EVENT_ERROR = ((uint64_t)1 << 2),
+    NA_EPOLL_EVENT_HANGUP = ((uint64_t)1 << 3),
+    /* Registration flag, analogous to Linux EPOLLET. */
+    NA_EPOLL_EVENT_EDGE_TRIGGERED = ((uint64_t)1 << 32),
+};
+
 /* InputEventSource kinds.  Keyboard press/release events use the first two
  * values; the remaining values are kernel-to-frontend control notifications
  * carried on the same single-owner input channel. */
@@ -115,7 +139,7 @@ enum
     /* ServiceDirectory registry operations are deliberately separate from
      * public resolve/connect/list access. */
     NA_SERVICE_DIRECTORY_RIGHT_ADMIN = ((uint64_t)1 << 1),
-    /* Permit registry mutations only below naos://system/. */
+    /* Permit registry mutations only below the system/service namespaces. */
     NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER = ((uint64_t)1 << 3),
     /* Terminal protocol method rights.  They are checked by the invocation
      * layer against the generated per-method descriptor metadata. */
@@ -125,6 +149,10 @@ enum
     NA_TERMINAL_RIGHT_WATCH = ((uint64_t)1 << 11),
     NA_TERMINAL_RIGHT_ADMIN = ((uint64_t)1 << 12),
     NA_DISPLAY_RIGHT_WRITER = ((uint64_t)1 << 3),
+    /* VFS / block device stack named rights (bits 13..26, frozen by
+     * doc/VFS_BLOCK_DEVICE_ADR.md §6) live in the IDL layer now: declared
+     * per-protocol in idl/system + idl/internal and emitted as NA_*_RIGHT_*
+     * macros by idl/naoidl.py into the generated protocol headers. */
 };
 
 enum
@@ -143,7 +171,7 @@ enum
     NA_BINDING_INVOCATION = 5,
     NA_BINDING_RESPONDER = 6,
     NA_BINDING_MEMORY_OBJECT = 7,
-    NA_BINDING_SHARED_RING = 8,
+    NA_BINDING_EPOLL = 8,
 };
 
 enum
@@ -224,14 +252,6 @@ enum
     NA_MEMORY_RIGHT_WRITE = ((uint64_t)1 << 1),
     NA_MEMORY_RIGHT_MAP = ((uint64_t)1 << 2),
     NA_MEMORY_RIGHT_INFO = ((uint64_t)1 << 3),
-    NA_RING_RIGHT_PUSH = ((uint64_t)1 << 0),
-    NA_RING_RIGHT_POP = ((uint64_t)1 << 1),
-    NA_RING_RIGHT_INFO = ((uint64_t)1 << 2),
-};
-
-enum
-{
-    NA_RING_FLAG_NONBLOCK = ((uint32_t)1 << 0),
 };
 
 /* Canonical File/Stream request flags.  POSIX O_NONBLOCK is translated by
@@ -246,6 +266,9 @@ enum
 enum
 {
     NA_DIRECTORY_OPEN_FLAG_CHROOT = ((uint64_t)1 << 63),
+    /* Path-form queries only: skip the final symlink component
+     * (POSIX lstat semantics); frozen by USERSPACE_FILESYSTEM_ADR §5.3.6. */
+    NA_DIRECTORY_LOOKUP_FLAG_NOFOLLOW = ((uint64_t)1 << 0),
 };
 
 typedef struct na_handle_restriction
@@ -257,6 +280,11 @@ typedef struct na_handle_restriction
     uint64_t features;
     na_meta_rights_t meta_rights;
     uint64_t protocol_rights;
+    /* For a MemoryObject, attenuate the source view by this relative range.
+     * The resulting capability refers to the same storage identity and owns
+     * no pages of its own. */
+    uint64_t view_offset;
+    uint64_t view_length;
 } na_handle_restriction_t;
 
 enum
@@ -266,6 +294,7 @@ enum
     NA_RESTRICTION_FEATURES = ((uint32_t)1 << 2),
     NA_RESTRICTION_META_RIGHTS = ((uint32_t)1 << 3),
     NA_RESTRICTION_PROTOCOL_RIGHTS = ((uint32_t)1 << 4),
+    NA_RESTRICTION_RANGE = ((uint32_t)1 << 5),
 };
 
 typedef struct na_handle_info
@@ -281,7 +310,15 @@ typedef struct na_handle_info
     uint64_t generation;
     uint64_t object_state;
     na_uuid_t protocol_uuid;
-    uint64_t reserved0;
+    /* Stable opaque identity of the underlying capability object. The value
+     * is not a handle and remains unchanged across MOVE/DUPLICATE transfers.
+     * It must not encode a kernel address. */
+    uint64_t object_id;
+    /* Bounded view into the object identified by object_id. Offsets are
+     * absolute within that storage identity; operations on the capability
+     * use offsets relative to this view. */
+    uint64_t view_offset;
+    uint64_t view_length;
 } na_handle_info_t;
 
 typedef struct na_protocol_descriptor
@@ -372,29 +409,6 @@ typedef struct na_fail_frame
     int64_t protocol_error;
 } na_fail_frame_t;
 
-#define NA_BOOTSTRAP_MAX_CAPABILITIES ((uint32_t)8)
-
-enum
-{
-    NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY = 1,
-    NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND = 2,
-    NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE = 3,
-};
-
-/* A capability attached to a child startup contract.  The message form
- * stores a resource-table index; the frame form stores the received handle. */
-typedef struct na_bootstrap_capability_ref
-{
-    uint32_t kind;
-    uint32_t resource;
-} na_bootstrap_capability_ref_t;
-
-typedef struct na_bootstrap_capability
-{
-    uint32_t kind;
-    na_handle_t handle;
-} na_bootstrap_capability_t;
-
 typedef struct na_bootstrap_frame
 {
     uint32_t struct_size;
@@ -405,10 +419,7 @@ typedef struct na_bootstrap_frame
     na_handle_t stdin_stream;
     na_handle_t stdout_stream;
     na_handle_t stderr_stream;
-    uint32_t capability_count;
-    uint32_t reserved0;
-    na_bootstrap_capability_t capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES];
-    uint64_t reserved1;
+    uint64_t reserved0;
 } na_bootstrap_frame_t;
 
 /* A forked child may replace its terminal endpoint bindings before exec().
@@ -416,11 +427,20 @@ typedef struct na_bootstrap_frame
  * consuming the process bootstrap contract. */
 #define NA_BOOTSTRAP_FLAG_REBIND_CONSOLE ((uint32_t)1u)
 
-#define NA_BOOTSTRAP_MESSAGE_VERSION ((uint32_t)4)
+/* Early-service bootstrap omits the root/cwd resource slots and reuses
+ * SERVICE_DIRECTORY plus STDIN/STDOUT/STDERR; the kernel-enforced minimum
+ * resource count follows this branch. See USERSPACE_FILESYSTEM_ADR §5.3.5. */
+#define NA_BOOTSTRAP_FLAG_EARLY_SERVICE ((uint32_t)2u)
+
+#define NA_BOOTSTRAP_MESSAGE_VERSION ((uint32_t)5)
 #define NA_BOOTSTRAP_RESOURCE_COUNT ((uint32_t)6)
+#define NA_BOOTSTRAP_RESOURCE_NONE ((uint32_t)UINT32_MAX)
 /* root, current directory, service directory and at least one stdio resource.
  * stdin/stdout/stderr may refer to that same terminal binding. */
 #define NA_BOOTSTRAP_MIN_RESOURCE_COUNT ((uint32_t)4)
+/* service directory and three stdio streams. Kernel-owned authorities are
+ * acquired through ServiceDirectory rather than this startup contract. */
+#define NA_BOOTSTRAP_EARLY_MIN_RESOURCE_COUNT ((uint32_t)4)
 
 enum
 {
@@ -432,11 +452,10 @@ enum
     NA_BOOTSTRAP_RESOURCE_STDERR = 5,
 };
 
-/* The child bootstrap message carries the standard namespace/stdio resource
- * indices and a typed list of additional capabilities. The stdio fields may
- * alias one transferred terminal resource so dup-style sharing survives
- * spawn. argc/envc are advisory startup metadata and are not used to
- * authorize capabilities. */
+/* The child bootstrap message carries only the standard namespace/stdio
+ * resource indices. The stdio fields may alias one transferred terminal
+ * resource so dup-style sharing survives spawn. argc/envc are advisory
+ * startup metadata. Kernel-owned authorities are discovered by URI. */
 typedef struct na_bootstrap_message
 {
     uint32_t struct_size;
@@ -449,13 +468,10 @@ typedef struct na_bootstrap_message
     uint32_t stdin_stream;
     uint32_t stdout_stream;
     uint32_t stderr_stream;
-    uint32_t capability_count;
-    uint32_t reserved1;
-    na_bootstrap_capability_ref_t capabilities[NA_BOOTSTRAP_MAX_CAPABILITIES];
     uint64_t argc;
     uint64_t envc;
-    uint64_t reserved2;
-    uint64_t reserved3;
+    uint64_t reserved0;
+    uint64_t reserved1;
 } na_bootstrap_message_t;
 
 /* A kernel-authorized locator for the current process' controlling terminal.
@@ -481,6 +497,10 @@ typedef struct na_process_exec_frame
     uint64_t envp;
     uint64_t reserved0;
     uint64_t reserved1;
+    /* Namespace capabilities to re-bootstrap after replacing the image. */
+    na_handle_t root_directory;
+    na_handle_t current_directory;
+    na_handle_t service_directory;
 } na_process_exec_frame_t;
 
 /* Create a new process whose initial capability table is populated only by
@@ -570,6 +590,8 @@ typedef struct na_memory_map_frame
     uint64_t offset;
     uint64_t length;
     uint64_t address;
+    /* Output: logical bytes begin at this offset within the page-rounded VMA. */
+    uint64_t data_offset;
     uint64_t reserved0;
     uint64_t reserved1;
 } na_memory_map_frame_t;
@@ -584,12 +606,11 @@ typedef struct na_memory_unmap_frame
     uint64_t reserved1;
 } na_memory_unmap_frame_t;
 
-typedef struct na_wait_item
+typedef struct na_epoll_event
 {
-    na_handle_t handle;
-    na_signal_t signals;
-    na_signal_t observed;
-} na_wait_item_t;
+    uint64_t events;
+    uint64_t data;
+} na_epoll_event_t;
 
 /* Create a pair of native file capabilities for the POSIX pipe wrapper. */
 typedef struct na_pipe_create_frame
@@ -623,27 +644,36 @@ enum
     NA_SYSCALL_CHANNEL_SEND = 19,
     NA_SYSCALL_CHANNEL_RECEIVE = 20,
     NA_SYSCALL_CHANNEL_DISCARD = 21,
-    NA_SYSCALL_HANDLE_WAIT_MANY = 22,
-    NA_SYSCALL_HANDLE_DUPLICATE = 23,
-    NA_SYSCALL_HANDLE_RESTRICT = 24,
-    NA_SYSCALL_HANDLE_GET_INFO = 25,
-    NA_SYSCALL_PROTOCOL_DESCRIPTOR_CREATE = 26,
-    NA_SYSCALL_PROTOCOL_ENDPOINT_CREATE = 27,
-    NA_SYSCALL_INVOKE_SUBMIT = 28,
-    NA_SYSCALL_INVOKE_SEND_ONEWAY = 29,
-    NA_SYSCALL_INVOCATION_CANCEL = 30,
-    NA_SYSCALL_INVOCATION_TAKE_RESULT = 31,
-    NA_SYSCALL_RESPONDER_REPLY = 32,
-    NA_SYSCALL_RESPONDER_FAIL = 33,
-    NA_SYSCALL_BOOTSTRAP = 34,
-    NA_SYSCALL_TTY_CONTROL_ACQUIRE = 35,
-    NA_SYSCALL_MEMORY_MAP = 36,
-    NA_SYSCALL_MEMORY_UNMAP = 37,
-    NA_SYSCALL_PROCESS_EXEC = 38,
-    NA_SYSCALL_PROCESS_HANDLE_OPEN = 39,
-    NA_SYSCALL_PROCESS_SPAWN = 40,
-    NA_SYSCALL_PIPE_CREATE = 41,
-    NA_SYSCALL_COUNT = 42,
+    NA_SYSCALL_EPOLL_CREATE = 22,
+    NA_SYSCALL_EPOLL_CTL = 23,
+    NA_SYSCALL_EPOLL_WAIT = 24,
+    NA_SYSCALL_HANDLE_DUPLICATE = 25,
+    NA_SYSCALL_HANDLE_RESTRICT = 26,
+    NA_SYSCALL_HANDLE_GET_INFO = 27,
+    NA_SYSCALL_PROTOCOL_DESCRIPTOR_CREATE = 28,
+    NA_SYSCALL_PROTOCOL_ENDPOINT_CREATE = 29,
+    NA_SYSCALL_INVOKE_SUBMIT = 30,
+    NA_SYSCALL_INVOKE_SEND_ONEWAY = 31,
+    NA_SYSCALL_INVOCATION_CANCEL = 32,
+    NA_SYSCALL_INVOCATION_TAKE_RESULT = 33,
+    NA_SYSCALL_RESPONDER_REPLY = 34,
+    NA_SYSCALL_RESPONDER_FAIL = 35,
+    NA_SYSCALL_BOOTSTRAP = 36,
+    NA_SYSCALL_TTY_CONTROL_ACQUIRE = 37,
+    NA_SYSCALL_MEMORY_MAP = 38,
+    NA_SYSCALL_MEMORY_UNMAP = 39,
+    NA_SYSCALL_PROCESS_EXEC = 40,
+    NA_SYSCALL_PROCESS_HANDLE_OPEN = 41,
+    NA_SYSCALL_PROCESS_SPAWN = 42,
+    NA_SYSCALL_PIPE_CREATE = 43,
+    /* Create a MemoryObject; executables travel as MEMORY_OBJECT handles
+     * in exec/spawn frames (USERSPACE_FILESYSTEM_ADR §5.3.2/.3). */
+    NA_SYSCALL_MEMORY_CREATE = 44,
+    /* Fill a user buffer with hardware-generated random bytes. */
+    NA_SYSCALL_GETRANDOM = 45,
+    /* Power off the platform through ACPI S5. */
+    NA_SYSCALL_POWER_OFF = 46,
+    NA_SYSCALL_COUNT = 47,
 };
 
 #ifdef __cplusplus

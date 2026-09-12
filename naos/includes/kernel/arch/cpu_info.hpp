@@ -34,6 +34,10 @@ enum class feature
     xsave,
     osxsave,
     avx,
+    erms,
+    fsrm,
+    rdseed,
+    rdrand,
 
     crystal_frequency,
     tsc_frequency,
@@ -42,9 +46,44 @@ enum class feature
     bus_frequency,
 };
 
+/// Convert CPUID.15H's ratio to an exact integer Hertz value without 32-bit
+/// overflow. A zero result means that the leaf did not provide a usable ratio.
+constexpr u64 tsc_frequency_from_cpuid15(u32 denominator, u32 numerator, u32 crystal_frequency_hz) noexcept
+{
+    if (denominator == 0 || numerator == 0 || crystal_frequency_hz == 0)
+        return 0;
+    return static_cast<u64>(crystal_frequency_hz) * numerator / denominator;
+}
+
+/// Raw CPUID.15H TSC/Crystal Clock Information.
+struct tsc_cpuid15_info
+{
+    bool leaf_available = false;
+    u32 denominator = 0;
+    u32 numerator = 0;
+    u32 crystal_frequency_hz = 0;
+
+    constexpr bool has_frequency() const noexcept
+    {
+        return leaf_available && denominator != 0 && numerator != 0 && crystal_frequency_hz != 0;
+    }
+
+    constexpr u64 frequency_hz() const noexcept
+    {
+        return tsc_frequency_from_cpuid15(denominator, numerator, crystal_frequency_hz);
+    }
+};
+
 void init();
 /// check if has the feature
 bool has_feature(feature f);
+
+tsc_cpuid15_info get_tsc_cpuid15_info();
+
+/// Try to read one hardware-random word. The functions return false when the
+/// instruction is unavailable or its entropy source is temporarily empty.
+bool try_rdseed(u64 &value);
+bool try_rdrand(u64 &value);
 
 /// get the feature value
 u64 get_feature(feature f);

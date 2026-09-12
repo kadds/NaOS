@@ -60,42 +60,21 @@ void test_rejects_unknown_version_and_flags()
     REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT));
 }
 
-void test_optional_capabilities_are_distinct_resources()
+void test_early_service_message_allows_service_discovery()
 {
     auto message = valid_message();
-    message.capability_count = 2;
-    message.resource_count += message.capability_count;
-    message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_TERMINAL_DRIVER_FACTORY, NA_BOOTSTRAP_RESOURCE_COUNT};
-    message.capabilities[1] = {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, NA_BOOTSTRAP_RESOURCE_COUNT + 1};
-    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+    message.flags = NA_BOOTSTRAP_FLAG_EARLY_SERVICE;
+    message.resource_count = NA_BOOTSTRAP_EARLY_MIN_RESOURCE_COUNT;
+    message.root_directory = NA_BOOTSTRAP_RESOURCE_NONE;
+    message.current_directory = NA_BOOTSTRAP_RESOURCE_NONE;
+    message.service_directory = 0;
+    message.stdin_stream = 1;
+    message.stdout_stream = 2;
+    message.stderr_stream = 3;
+    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_EARLY_MIN_RESOURCE_COUNT));
 
-    message.capabilities[1].resource = message.capabilities[0].resource;
-    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
-
-    message.capabilities[1].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
-    message.capabilities[1].kind = message.capabilities[0].kind;
-    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
-
-    message.capabilities[1].kind = NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND;
-    message.capabilities[1].resource = message.stdin_stream;
-    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
-}
-
-void test_optional_capability_index_must_be_in_range()
-{
-    auto message = valid_message();
-    message.resource_count++;
-    message.capability_count = 1;
-    message.capabilities[0] = {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE, NA_BOOTSTRAP_RESOURCE_COUNT};
-    REQUIRE(naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
-
-    message.capabilities[0].resource = NA_BOOTSTRAP_RESOURCE_COUNT + 1;
-    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 1));
-
-    message = valid_message();
-    message.resource_count += 2;
-    message.capability_count = NA_BOOTSTRAP_MAX_CAPABILITIES + 1;
-    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_RESOURCE_COUNT + 2));
+    message.root_directory = 0;
+    REQUIRE(!naos::bootstrap::valid_message(message, NA_BOOTSTRAP_EARLY_MIN_RESOURCE_COUNT));
 }
 } // namespace
 
@@ -104,6 +83,5 @@ TEST_CASE("bootstrap message contract", "[bootstrap]")
     test_valid_message();
     test_allows_shared_stdio_binding_and_rejects_bad_resources();
     test_rejects_unknown_version_and_flags();
-    test_optional_capabilities_are_distinct_resources();
-    test_optional_capability_index_must_be_in_range();
+    test_early_service_message_allows_service_discovery();
 }

@@ -1,9 +1,7 @@
 #include "kernel/task.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/errno.hpp"
-#include "kernel/fs/vfs/file.hpp"
-#include "kernel/fs/vfs/vfs.hpp"
-#include "kernel/ipc/channel.hpp"
+#include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/syscall.hpp"
 #include "kernel/time.hpp"
@@ -11,8 +9,9 @@
 #include "kernel/usercopy.hpp"
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
+#include "naos/generated/system/Directory.hpp"
 #include "naos/generated/system/Process.hpp"
-#include "naos/generated/system/Stream.hpp"
+#include "naos/generated/system/ServiceDirectory.hpp"
 #include "naos/generated/system_uapi.h"
 #include <atomic>
 #include <limits>
@@ -27,23 +26,23 @@ na_status_t native_status_from_errno(i64 error)
 {
     switch (error)
     {
-    case 0:
-        return NA_STATUS_OK;
-    case EFAULT:
-        return NA_STATUS_FAULT;
-    case EINVAL:
-        return NA_STATUS_INVALID_ARGUMENT;
-    case EBADF:
-    case ECHILD:
-        return NA_STATUS_INVALID_HANDLE;
-    case ENOMEM:
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    case ENOEXEC:
-        return NA_STATUS_NOT_SUPPORTED;
-    case EIO:
-        return NA_STATUS_IO_ERROR;
-    default:
-        return NA_STATUS_IO_ERROR;
+        case 0:
+            return NA_STATUS_OK;
+        case EFAULT:
+            return NA_STATUS_FAULT;
+        case EINVAL:
+            return NA_STATUS_INVALID_ARGUMENT;
+        case EBADF:
+        case ECHILD:
+            return NA_STATUS_INVALID_HANDLE;
+        case ENOMEM:
+            return NA_STATUS_RESOURCE_EXHAUSTED;
+        case ENOEXEC:
+            return NA_STATUS_NOT_SUPPORTED;
+        case EIO:
+            return NA_STATUS_IO_ERROR;
+        default:
+            return NA_STATUS_IO_ERROR;
     }
 }
 
@@ -54,6 +53,28 @@ int validate_tcb_address(void *pointer)
     if (!is_user_space_range(pointer, sizeof(void *)))
         return EPARAM;
     return 0;
+}
+
+bool valid_exec_directory(task::resource_table_t &resources, na_handle_t handle)
+{
+    capability::entry entry;
+    if (!resources.lookup_native(handle, entry) || !entry.object)
+        return false;
+    return entry.meta.binding == NA_BINDING_CLIENT_END && entry.meta.scope == NA_SCOPE_DIRECTORY &&
+           entry.meta.revision == naos::system::Directory::revision &&
+           memcmp(entry.meta.protocol_uuid.bytes, naos::system::Directory::protocol_uuid.bytes,
+                  sizeof(entry.meta.protocol_uuid.bytes)) == 0;
+}
+
+bool valid_exec_service_directory(task::resource_table_t &resources, na_handle_t handle)
+{
+    capability::entry entry;
+    if (!resources.lookup_native(handle, entry) || !entry.object)
+        return false;
+    return entry.meta.binding == NA_BINDING_KERNEL_VIEW && entry.meta.scope == NA_SCOPE_SERVICE_DIRECTORY &&
+           entry.meta.revision == naos::system::ServiceDirectory::revision &&
+           memcmp(entry.meta.protocol_uuid.bytes, naos::system::ServiceDirectory::protocol_uuid.bytes,
+                  sizeof(entry.meta.protocol_uuid.bytes)) == 0;
 }
 } // namespace
 
@@ -66,12 +87,19 @@ enum futex_op
 struct futex_bucket
 {
     task::wait_queue_t waiters;
-    std::atomic_uint64_t generation{0};
+};
+
+struct futex_timeout
+{
+    futex_bucket &bucket;
+    task::process_t *process;
+    const int *pointer;
+    std::atomic_bool &timed_out;
 
     void wake(timeclock::microsecond_t) noexcept
     {
-        generation.fetch_add(1, std::memory_order_release);
-        waiters.do_wake_up();
+        timed_out.store(true, std::memory_order_release);
+        bucket.waiters.do_wake_up_matching(process, pointer);
     }
 };
 
@@ -89,9 +117,9 @@ futex_bucket *ensure_futex_buckets()
     buckets = futex_buckets.load(std::memory_order_relaxed);
     if (buckets == nullptr)
     {
-        // A bucket owns a wait queue and the complete table is larger than
-        // the fixed kmalloc slab limit. Keep this long-lived table in the
-        // virtual allocator; wait-queue nodes still use the common allocator.
+        // wait_queue_t is larger than the fixed common allocator's largest
+        // slab. Keep this long-lived table in the virtual allocator; the
+        // wait-list nodes still use their normal bounded allocation path.
         buckets = memory::NewArray<futex_bucket>(memory::KernelVirtualAllocatorV, futex_bucket_count);
         futex_buckets.store(buckets, std::memory_order_release);
     }
@@ -115,13 +143,12 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
     if (buckets == nullptr)
         return EFAILED;
     auto &bucket = bucket_for(buckets, ptr);
+    auto *process = task::current_process();
+    if (process == nullptr)
+        return EFAILED;
     if (op == futex_op::futex_wait)
     {
         int observed = 0;
-        if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
-            return EFAULT;
-        if (observed != val)
-            return EAGAIN;
 
         timeclock::time relative(0, 0);
         bool has_timeout = timeout != nullptr;
@@ -131,8 +158,10 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
         if (has_timeout && (relative.tv_sec < 0 || relative.tv_nsec < 0 || relative.tv_nsec >= 1000000000))
             return EPARAM;
 
-        const auto generation = bucket.generation.load(std::memory_order_acquire);
+        std::atomic_uint64_t wake_sequence{0};
+        std::atomic_bool timed_out{false};
         timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
+        futex_timeout timeout_wakeup{bucket, process, ptr, timed_out};
         if (has_timeout)
         {
             const auto seconds = static_cast<u64>(relative.tv_sec);
@@ -145,34 +174,42 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
             if (duration > std::numeric_limits<u64>::max() - now)
                 return EOVERFLOW;
             if (duration == 0)
-                return ETIMEDOUT;
+            {
+                if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
+                    return EFAULT;
+                return observed == val ? ETIMEDOUT : EAGAIN;
+            }
             deadline_watcher =
-                timer::schedule_at(now + duration, timer::timer_handler::bind<&futex_bucket::wake>(bucket));
+                timer::schedule_at(now + duration, timer::timer_handler::bind<&futex_timeout::wake>(timeout_wakeup));
             if (deadline_watcher == timer::invalid_watcher_id)
                 return EFAILED;
         }
 
-        bucket.waiters.do_wait([&bucket, generation, ptr, val] {
-            int current = 0;
-            if (naos::usercopy::copy_from(&current, reinterpret_cast<u64>(ptr), sizeof(current)) != NA_STATUS_OK)
-                return true;
-            return bucket.generation.load(std::memory_order_acquire) != generation || current != val;
-        });
+        bucket.waiters.do_wait(
+            [&timed_out, &wake_sequence, ptr, val] {
+                int current = 0;
+                if (naos::usercopy::copy_from(&current, reinterpret_cast<u64>(ptr), sizeof(current)) != NA_STATUS_OK)
+                    return true;
+                return timed_out.load(std::memory_order_acquire) ||
+                       wake_sequence.load(std::memory_order_acquire) != 0 || current != val;
+            },
+            process, ptr, &wake_sequence, true);
         if (deadline_watcher != timer::invalid_watcher_id)
             (void)timer::cancel(deadline_watcher);
 
         if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
             return EFAULT;
-        if (observed == val && bucket.generation.load(std::memory_order_acquire) == generation)
-            return has_timeout ? ETIMEDOUT : EAGAIN;
+        if (observed != val)
+            return EAGAIN;
+        if (observed == val && timed_out.load(std::memory_order_acquire))
+            return ETIMEDOUT;
         return 0;
     }
     else if (op == futex_op::futex_wake)
     {
-        bucket.generation.fetch_add(1, std::memory_order_release);
         if (val <= 0)
             return 0;
-        return static_cast<int>(bucket.waiters.do_wake_up(static_cast<u64>(val)));
+        return static_cast<int>(bucket.waiters.do_wake_up_matching(process, ptr, static_cast<u64>(val)));
     }
     return EPARAM;
 }
@@ -497,19 +534,65 @@ na_status_t process_exec(const na_process_exec_frame_t *frame)
         return NA_STATUS_FAULT;
 
     auto *process = task::current_process();
+    if (process == nullptr)
+        return NA_STATUS_INVALID_HANDLE;
+    const bool has_exec_namespace = values.root_directory != NA_HANDLE_INVALID ||
+                                    values.current_directory != NA_HANDLE_INVALID ||
+                                    values.service_directory != NA_HANDLE_INVALID;
+    if (has_exec_namespace &&
+        (values.root_directory == NA_HANDLE_INVALID || values.current_directory == NA_HANDLE_INVALID ||
+         values.service_directory == NA_HANDLE_INVALID ||
+         !valid_exec_directory(process->resource, values.root_directory) ||
+         !valid_exec_directory(process->resource, values.current_directory) ||
+         !valid_exec_service_directory(process->resource, values.service_directory)))
+        return NA_STATUS_INVALID_ARGUMENT;
+
+    // An in-place exec has no bootstrap channel left to consume. Preserve the
+    // caller's namespace handles in the kernel until the new image's startup
+    // code asks for bootstrap again.
+    auto arm_exec_bootstrap = [&] {
+        if (!has_exec_namespace)
+            return;
+        process->exec_root_directory = values.root_directory;
+        process->exec_current_directory = values.current_directory;
+        process->exec_service_directory = values.service_directory;
+        process->exec_bootstrap_pending.store(true, std::memory_order_release);
+    };
+    auto clear_exec_bootstrap_on_failure = [&] {
+        if (!has_exec_namespace)
+            return;
+        process->exec_bootstrap_pending.store(false, std::memory_order_release);
+        process->exec_root_directory = NA_HANDLE_INVALID;
+        process->exec_current_directory = NA_HANDLE_INVALID;
+        process->exec_service_directory = NA_HANDLE_INVALID;
+    };
     capability::entry entry;
     if (process == nullptr || !process->resource.lookup_native(values.executable, entry) || !entry.object)
         return NA_STATUS_INVALID_HANDLE;
-    if (entry.meta.binding != NA_BINDING_KERNEL_VIEW)
-        return NA_STATUS_WRONG_BINDING;
-    if (entry.meta.scope != NA_SCOPE_FILE)
-        return NA_STATUS_WRONG_SCOPE;
-    if (entry.object->get<fs::vfs::file>() == nullptr)
-        return NA_STATUS_WRONG_BINDING;
+    if (entry.meta.binding == NA_BINDING_MEMORY_OBJECT)
+    {
+        // Executables may travel as MemoryObjects (USERSPACE_FILESYSTEM_ADR
+        // §5.3.3). Loading reads the image and privately maps its segments,
+        // so both READ and MAP are mandatory; WRITE is not.
+        if (entry.meta.scope != NA_SCOPE_MEMORY_OBJECT)
+            return NA_STATUS_WRONG_SCOPE;
+        const auto required = NA_MEMORY_RIGHT_READ | NA_MEMORY_RIGHT_MAP;
+        if ((entry.meta.protocol_rights & required) != required)
+            return NA_STATUS_ACCESS_DENIED;
+        auto *memory_object = entry.object->get<naos::data_plane::memory_object>();
+        if (memory_object == nullptr)
+            return NA_STATUS_WRONG_BINDING;
 
-    handle_t<fs::vfs::file> file(entry.object.get_control());
-    process->resource.close_native(values.executable);
-    return native_status_from_errno(task::execve(std::move(file), path, before_user_thread, argv, envp));
+        handle_t<naos::data_plane::memory_object> object(entry.object.get_control());
+        khandle backing = entry.object;
+        arm_exec_bootstrap();
+        const auto result = task::execve(std::move(object), std::move(backing), path, before_user_thread, argv, envp);
+        if (result == 0)
+            process->resource.close_native(values.executable);
+        clear_exec_bootstrap_on_failure();
+        return native_status_from_errno(result);
+    }
+    return NA_STATUS_WRONG_BINDING;
 }
 
 na_status_t process_spawn(const na_process_spawn_frame_t *frame)
@@ -521,9 +604,9 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
     const auto copy_status = naos::usercopy::copy_versioned(values, frame);
     if (copy_status != NA_STATUS_OK)
         return copy_status;
-    if (values.struct_size < sizeof(values) ||
-        (values.flags & ~NA_PROCESS_SPAWN_DEFERRED_START) != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
-        values.executable == NA_HANDLE_INVALID || values.bootstrap_endpoint == NA_HANDLE_INVALID || values.process == 0)
+    if (values.struct_size < sizeof(values) || (values.flags & ~NA_PROCESS_SPAWN_DEFERRED_START) != 0 ||
+        values.reserved0 != 0 || values.reserved1 != 0 || values.executable == NA_HANDLE_INVALID ||
+        values.bootstrap_endpoint == NA_HANDLE_INVALID || values.process == 0)
         return NA_STATUS_INVALID_ARGUMENT;
 
     const auto path = reinterpret_cast<const char *>(values.path);
@@ -544,11 +627,21 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
         !parent->resource.lookup_native(values.bootstrap_endpoint, endpoint_entry) || !executable_entry.object ||
         !endpoint_entry.object)
         return NA_STATUS_INVALID_HANDLE;
-    if (executable_entry.meta.binding != NA_BINDING_KERNEL_VIEW ||
-        executable_entry.object->get<fs::vfs::file>() == nullptr)
+    const bool memory_object_executable = executable_entry.meta.binding == NA_BINDING_MEMORY_OBJECT;
+    if (!memory_object_executable)
         return NA_STATUS_WRONG_BINDING;
-    if (executable_entry.meta.scope != NA_SCOPE_FILE)
-        return NA_STATUS_WRONG_SCOPE;
+    if (memory_object_executable)
+    {
+        // Same admission contract as process_exec: READ to parse the image,
+        // MAP because loading privately maps its PT_LOAD segments.
+        if (executable_entry.meta.scope != NA_SCOPE_MEMORY_OBJECT)
+            return NA_STATUS_WRONG_SCOPE;
+        const auto required = NA_MEMORY_RIGHT_READ | NA_MEMORY_RIGHT_MAP;
+        if ((executable_entry.meta.protocol_rights & required) != required)
+            return NA_STATUS_ACCESS_DENIED;
+        if (executable_entry.object->get<naos::data_plane::memory_object>() == nullptr)
+            return NA_STATUS_WRONG_BINDING;
+    }
     if (endpoint_entry.meta.binding != NA_BINDING_RAW_CHANNEL_END)
         return NA_STATUS_WRONG_BINDING;
 
@@ -566,22 +659,24 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
         return restore_status == NA_STATUS_OK ? failure : restore_status;
     };
 
-    auto *file_object = records[0].resource.object()->get<fs::vfs::file>();
-    if (file_object == nullptr)
-        return restore(NA_STATUS_WRONG_BINDING);
-    handle_t<fs::vfs::file> file(records[0].resource.object().get_control());
     const auto child_flags = task::create_process_flags::deferred_start | task::create_process_flags::no_shared_root |
                              task::create_process_flags::no_shared_work_dir |
                              task::create_process_flags::no_shared_files | task::create_process_flags::no_shared_stdin |
                              task::create_process_flags::no_shared_stdout |
                              task::create_process_flags::no_shared_stderror;
-    auto *child =
-        task::create_process(std::move(file), path, before_user_thread, reinterpret_cast<const char *const *>(argv),
-                             reinterpret_cast<const char *const *>(envp), child_flags);
+
+    task::process_t *child = nullptr;
+    if (memory_object_executable)
+    {
+        handle_t<naos::data_plane::memory_object> object(records[0].resource.object().get_control());
+        khandle backing = records[0].resource.object();
+        child = task::create_process(std::move(object), std::move(backing), path, before_user_thread,
+                                     reinterpret_cast<const char *const *>(argv),
+                                     reinterpret_cast<const char *const *>(envp), child_flags);
+    }
+
     if (child == nullptr)
         return restore(NA_STATUS_RESOURCE_EXHAUSTED);
-    child->bootstrap_root_directory.reset();
-    child->bootstrap_current_directory.reset();
     child->console_in_handle = NA_HANDLE_INVALID;
     child->console_out_handle = NA_HANDLE_INVALID;
     child->console_err_handle = NA_HANDLE_INVALID;
@@ -638,40 +733,7 @@ na_status_t pipe_create(na_pipe_create_frame_t *frame)
 {
     if (frame == nullptr || !is_user_space_range(frame, sizeof(*frame)))
         return NA_STATUS_FAULT;
-
-    auto file = fs::vfs::open_pipe();
-    if (!file)
-        return NA_STATUS_IO_ERROR;
-
-    capability::metadata metadata;
-    metadata.binding = NA_BINDING_KERNEL_VIEW;
-    metadata.protocol_uuid = naos::system::Stream::protocol_uuid;
-    metadata.scope = NA_SCOPE_STREAM;
-    metadata.revision = 1;
-    metadata.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
-    metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
-
-    auto &resources = task::current_process()->resource;
-    khandle read_object = file;
-    khandle write_object = file;
-    const auto read_handle = resources.install_native(std::move(read_object), metadata);
-    const auto write_handle = resources.install_native(std::move(write_object), metadata);
-    if (read_handle == NA_HANDLE_INVALID || write_handle == NA_HANDLE_INVALID)
-    {
-        resources.close_native(read_handle);
-        resources.close_native(write_handle);
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    }
-
-    na_pipe_create_frame_t values{read_handle, write_handle};
-    const auto status = naos::usercopy::copy_to(reinterpret_cast<u64>(frame), &values, sizeof(values));
-    if (status != NA_STATUS_OK)
-    {
-        resources.close_native(read_handle);
-        resources.close_native(write_handle);
-        return status;
-    }
-    return NA_STATUS_OK;
+    return NA_STATUS_NOT_SUPPORTED;
 }
 
 BEGIN_SYSCALL

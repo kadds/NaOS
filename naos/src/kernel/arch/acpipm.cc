@@ -55,7 +55,7 @@ void clock_event::init(u64 hz)
     // load base
     auto info_opt = arch::ACPI::get_acpipm_base();
     auto info = info_opt.value();
-    KLOG_DEBUG("acpipm base {} new base {}", log::hex(info.block_base), log::hex(info.xblock_base));
+    KLOG_INFO("acpipm base {} new base {}", log::hex(info.block_base), log::hex(info.xblock_base));
 
     if (info.bit32mode)
     {

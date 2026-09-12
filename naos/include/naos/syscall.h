@@ -60,6 +60,7 @@ int _s_clone(void *entry, void *arg, void *tcb);
 int _s_yield(void);
 bool _s_brk(uint64_t ptr);
 uint64_t _s_sbrk(int64_t offset);
+int _s_getrandom(void *buffer, uint64_t length, uint32_t flags);
 
 /* Native capability and invocation syscall wrappers. Every native syscall
  * returns na_status_t; successful output values use frames or out parameters. */
@@ -68,7 +69,11 @@ na_status_t _na_channel_create(const na_channel_options_t *options, na_handle_t 
 na_status_t _na_channel_send(na_handle_t endpoint, const na_channel_send_frame_t *frame);
 na_status_t _na_channel_receive(na_handle_t endpoint, na_channel_receive_frame_t *frame);
 na_status_t _na_channel_discard(na_handle_t endpoint);
-na_status_t _na_handle_wait_many(na_wait_item_t *items, uint64_t count, const struct timespec *deadline);
+na_status_t _na_epoll_create(na_handle_t *result);
+na_status_t _na_epoll_ctl(na_handle_t epoll, uint32_t operation, na_handle_t target,
+                          const na_epoll_event_t *event);
+na_status_t _na_epoll_wait(na_handle_t epoll, na_epoll_event_t *events, uint64_t capacity, uint64_t *actual,
+                           const struct timespec *deadline);
 na_status_t _na_handle_duplicate(na_handle_t source, na_meta_rights_t rights, na_handle_t *result);
 na_status_t _na_handle_restrict(na_handle_t source, const na_handle_restriction_t *restriction, na_handle_t *result);
 na_status_t _na_handle_get_info(na_handle_t handle, na_handle_info_t *result);
@@ -88,6 +93,10 @@ na_status_t _na_process_exec(const na_process_exec_frame_t *frame);
 na_status_t _na_process_handle_open(int64_t pid, na_handle_t *result);
 na_status_t _na_process_spawn(const na_process_spawn_frame_t *frame);
 na_status_t _na_pipe_create(na_pipe_create_frame_t *frame);
+na_status_t _na_memory_create(uint64_t size, uint64_t flags, na_handle_t *result);
+/* Power off the platform. Only an opt-in smoke runner calls this: normal
+   init supervision never powers the machine down on its own. */
+na_status_t _na_power_off(void);
 
 #ifdef __cplusplus
 }

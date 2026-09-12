@@ -27,7 +27,7 @@
 
 [[gnu::weak]] void *__dso_handle;
 
-extern "C" int naos_take_terminal_driver_factory(na_handle_t *handle);
+extern "C" int naos_resolve_terminal_driver_factory(na_handle_t *handle);
 
 namespace
 {
@@ -139,6 +139,17 @@ struct binding
     uint64_t open_description = invalid_open_description;
 };
 
+/// A mapping of the region a bulk request names in its `buffer` slot.  The
+/// mapped window starts at view offset zero. The kernel maps page-rounded
+/// storage and this helper applies the logical view pointer delta.
+struct request_mapping
+{
+    std::uint64_t address = 0;
+    std::uint64_t mapped_length = 0;
+    std::uint8_t *data = nullptr;
+    std::uint64_t length = 0;
+};
+
 struct pending_read
 {
     na_handle_t endpoint = NA_HANDLE_INVALID;
@@ -148,6 +159,9 @@ struct pending_read
     uint64_t deadline_ms = 0;
     bool timer_started = false;
     bool nonblock = false;
+    // The deferred reply writes the terminal bytes straight into the caller's
+    // region, so the mapping is held for as long as the invocation is pending.
+    request_mapping region{};
 };
 
 struct pending_write
@@ -359,6 +373,54 @@ terminal_open_description *find_open_description(service_state &state, uint64_t 
     if (id == invalid_open_description || id >= max_endpoints || !state.open_descriptions[id].allocated)
         return nullptr;
     return &state.open_descriptions[id];
+}
+
+na_handle_t request_resource(const request_context &context, const naoidl::resource_index &index)
+{
+    if (context.request_resources == nullptr || index.value >= context.request_resource_count)
+        return NA_HANDLE_INVALID;
+    return context.request_resources[index.value];
+}
+
+bool map_request_region(na_handle_t object, std::uint64_t offset, std::uint64_t length, std::uint32_t flags,
+                        request_mapping &mapping)
+{
+    mapping = {};
+    if (object == NA_HANDLE_INVALID || length == 0)
+        return false;
+    constexpr std::uint64_t page_bytes = 4096;
+    na_handle_info_t info{};
+    info.struct_size = sizeof(info);
+    if (_na_handle_get_info(object, &info) != NA_STATUS_OK || info.view_offset > UINT64_MAX - offset)
+        return false;
+    const std::uint64_t delta = (info.view_offset + offset) & (page_bytes - 1);
+    if (length > NA_MEMORY_MAP_MAX_BYTES - delta)
+        return false;
+    na_memory_map_frame_t frame{};
+    frame.struct_size = sizeof(frame);
+    frame.flags = flags;
+    frame.object = object;
+    frame.offset = offset;
+    frame.length = length;
+    if (_na_memory_map(&frame) != NA_STATUS_OK || frame.address == 0)
+        return false;
+    mapping.address = frame.address;
+    mapping.mapped_length = (length + delta + page_bytes - 1) & ~(page_bytes - 1);
+    mapping.data = reinterpret_cast<std::uint8_t *>(frame.address + delta);
+    mapping.length = length;
+    return true;
+}
+
+void unmap_request_region(request_mapping &mapping)
+{
+    if (mapping.address == 0)
+        return;
+    na_memory_unmap_frame_t frame{};
+    frame.struct_size = sizeof(frame);
+    frame.address = mapping.address;
+    frame.length = mapping.mapped_length;
+    (void)_na_memory_unmap(&frame);
+    mapping = {};
 }
 
 uint64_t allocate_open_description(service_state &state, uint64_t pair_id, bool master, uint64_t mode)
@@ -1001,6 +1063,7 @@ void drop_pending_reads(service_state &state, na_handle_t endpoint)
             i++;
             continue;
         }
+        unmap_request_region(pending.region);
         (void)naos_handle_close(pending.responder);
         pending = state.pending_reads[--state.pending_read_count];
     }
@@ -1825,23 +1888,29 @@ bool responder_cancelled_or_closed(na_handle_t responder)
 
 void mark_pending(request_context &context) { context.outcome = naoidl::dispatch_outcome::pending; }
 
+/// Takes ownership of `region` on success: the deferred reply writes into it
+/// and the mapping is released when the pending read completes or is dropped.
+/// On failure the caller still owns the mapping.
 bool add_pending_read(service_state &state, na_handle_t endpoint, na_handle_t responder, std::size_t size, bool master,
-                      bool nonblock = false)
+                      bool nonblock, request_mapping region)
 {
     if (state.pending_read_count >= max_endpoints)
     {
         state.quota_rejections++;
         return false;
     }
-    uint64_t per_binding = 0;
+    // A pending read holds a mapping of the caller's region until it replies.
+    // Admitting a second read for the same terminal would install a second
+    // mapping for one endpoint and interleave two consumers of the same
+    // output queue, so the later request is refused instead.
     for (uint64_t i = 0; i < state.pending_read_count; i++)
-        per_binding += state.pending_reads[i].endpoint == endpoint;
-    if (per_binding >= max_pending_per_binding)
     {
+        if (state.pending_reads[i].endpoint != endpoint)
+            continue;
         state.quota_rejections++;
         return false;
     }
-    pending_read pending{endpoint, responder, size, master, 0, false, nonblock};
+    pending_read pending{endpoint, responder, size, master, 0, false, nonblock, region};
     auto *binding = find_binding(state, endpoint);
     auto *pair = binding == nullptr ? nullptr : find_pair(state, binding->pair_id);
     if (pair != nullptr && !master)
@@ -1864,8 +1933,7 @@ void flush_pending_reads(service_state &state)
 {
     if (state.pending_read_count == 0)
         return;
-    std::uint8_t wire[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
-    std::uint8_t data[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
+    std::uint8_t wire[256]{};
     const auto now = monotonic_millis();
     uint64_t i = 0;
     while (i < state.pending_read_count)
@@ -1873,6 +1941,7 @@ void flush_pending_reads(service_state &state)
         auto &pending = state.pending_reads[i];
         if (responder_cancelled_or_closed(pending.responder))
         {
+            unmap_request_region(pending.region);
             (void)naos_handle_close(pending.responder);
             pending = state.pending_reads[--state.pending_read_count];
             continue;
@@ -1881,21 +1950,22 @@ void flush_pending_reads(service_state &state)
         auto *pair = binding == nullptr ? nullptr : find_pair(state, binding->pair_id);
         if (pair == nullptr)
         {
+            unmap_request_region(pending.region);
             (void)naos_handle_close(pending.responder);
             pending = state.pending_reads[--state.pending_read_count];
             continue;
         }
 
         std::size_t read = 0;
-        const std::size_t want =
-            pending.size > NA_CHANNEL_MAX_MESSAGE_BYTES ? NA_CHANNEL_MAX_MESSAGE_BYTES : pending.size;
+        const std::size_t want = pending.size;
         const bool timeout_expired = pending.deadline_ms != 0 && now >= pending.deadline_ms;
-        const int result = pending.master ? pair->core.read_output(data, want, true, &read)
-                                          : pair->core.read_input(data, want, true, &read, timeout_expired);
+        const int result = pending.master ? pair->core.read_output(pending.region.data, want, true, &read)
+                                          : pair->core.read_input(pending.region.data, want, true, &read, timeout_expired);
         if (result == -EAGAIN)
         {
             if (pending.nonblock)
             {
+                unmap_request_region(pending.region);
                 reject_responder(pending.responder, terminal_error_reason(result));
                 pending = state.pending_reads[--state.pending_read_count];
                 continue;
@@ -1918,6 +1988,7 @@ void flush_pending_reads(service_state &state)
         }
         if (result < 0)
         {
+            unmap_request_region(pending.region);
             reject_responder(pending.responder, terminal_error_reason(result));
             pending = state.pending_reads[--state.pending_read_count];
             continue;
@@ -1928,15 +1999,18 @@ void flush_pending_reads(service_state &state)
         if (pending.master)
         {
             naos::system::TerminalMaster::read_response response{};
-            response.data = {data, static_cast<std::uint32_t>(read)};
+            response.count = read;
             encoded = naos::system::TerminalMaster::encode_read_response(wire, sizeof(wire), response, written);
         }
         else
         {
             naos::system::TerminalSlave::read_response response{};
-            response.data = {data, static_cast<std::uint32_t>(read)};
+            response.count = read;
             encoded = naos::system::TerminalSlave::encode_read_response(wire, sizeof(wire), response, written);
         }
+        // The caller's region carries the payload now; release the mapping
+        // before the reply completes the invocation.
+        unmap_request_region(pending.region);
         na_reply_frame_t reply_frame{};
         reply_frame.struct_size = sizeof(reply_frame);
         reply_frame.bytes = written == 0 ? 0 : reinterpret_cast<std::uint64_t>(wire);
@@ -2158,16 +2232,7 @@ class terminal_manager_handler
     bool open_console_master(const naos::system::TerminalManager::open_console_master_request &request,
                              naos::system::TerminalManager::open_console_master_response &response)
     {
-        if (context_.request_resource_count != 1 || request.frontend.value != 0 ||
-            context_.request_resources == nullptr)
-            return false;
-        na_handle_info_t frontend_info{};
-        frontend_info.struct_size = sizeof(frontend_info);
-        if (_na_handle_get_info(context_.request_resources[0], &frontend_info) != NA_STATUS_OK ||
-            frontend_info.binding != NA_BINDING_KERNEL_VIEW ||
-            (frontend_info.meta_rights & (NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT)) !=
-                (NA_RIGHT_TRANSFER | NA_RIGHT_INSPECT) ||
-            (frontend_info.scope != NA_SCOPE_NONE) || (frontend_info.protocol_rights & NA_DISPLAY_RIGHT_WRITER) == 0)
+        if (context_.request_resource_count != 0)
             return false;
         if (!valid_terminal_mode(request.mode) || state_.endpoint_count >= max_endpoints ||
             state_.binding_count >= max_endpoints)
@@ -2373,34 +2438,47 @@ class terminal_master_handler
             return false;
         }
         auto *pair = find_pair(state_, binding->pair_id);
-        const std::size_t want =
-            request.size > NA_CHANNEL_MAX_MESSAGE_BYTES ? NA_CHANNEL_MAX_MESSAGE_BYTES : request.size;
+        if (request.size == 0)
+        {
+            response.count = 0;
+            return true;
+        }
+        const std::size_t want = static_cast<std::size_t>(request.size);
         std::size_t read = 0;
         const auto *description = find_open_description(state_, binding->open_description);
         const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
-        const auto result = pair->core.read_output(response_buffer_, want, nonblock, &read);
+        request_mapping region{};
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
+                                NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_SHARED, region))
+        {
+            reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
+            return false;
+        }
+        const auto result = pair->core.read_output(region.data, want, nonblock, &read);
         if (result == -EAGAIN)
         {
             if (nonblock)
             {
+                unmap_request_region(region);
                 reject_responder(context_, terminal_error_reason(result));
                 return false;
             }
-            if (!add_pending_read(state_, endpoint_, context_.responder, want, true))
+            if (!add_pending_read(state_, endpoint_, context_.responder, want, true, false, region))
+            {
+                unmap_request_region(region);
                 reject_responder(context_);
+            }
             else
                 mark_pending(context_);
             return false;
         }
+        unmap_request_region(region);
         if (result < 0)
         {
             reject_responder(context_, terminal_error_reason(result));
             return false;
         }
-        // The generated dispatcher encodes the response after this handler
-        // returns. Keep the bytes in handler-owned storage until that encode
-        // completes; a function-local buffer would already be dead here.
-        response.data = {response_buffer_, static_cast<std::uint32_t>(read)};
+        response.count = read;
         flush_pending_writes(state_);
         flush_pending_attributes(state_);
         return true;
@@ -2416,38 +2494,51 @@ class terminal_master_handler
             return false;
         }
         auto *pair = find_pair(state_, binding->pair_id);
-        const auto *description = find_open_description(state_, binding->open_description);
-        const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
-        if (request.data.size == 0)
+        if (request.size == 0)
         {
             response.count = 0;
             return true;
         }
+        const auto *description = find_open_description(state_, binding->open_description);
+        const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
+        request_mapping region{};
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
+                                NA_MEMORY_MAP_READ, region))
+        {
+            reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
+            return false;
+        }
 
+        const std::size_t size = static_cast<std::size_t>(request.size);
         std::uint8_t *owned = nullptr;
         if (!nonblock)
         {
-            owned = static_cast<std::uint8_t *>(malloc(request.data.size));
+            // The input queue may accept only a prefix and the remainder is
+            // completed by a later dispatch, so the bytes are copied out of
+            // the caller's region before it is unmapped.
+            owned = static_cast<std::uint8_t *>(malloc(size));
             if (owned == nullptr)
             {
+                unmap_request_region(region);
                 reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE);
                 return false;
             }
-            std::memcpy(owned, request.data.data, request.data.size);
+            std::memcpy(owned, region.data, size);
         }
         std::size_t written = 0;
-        const auto result =
-            pair->core.receive_input(nonblock ? request.data.data : owned, request.data.size, true, &written);
+        const auto result = pair->core.receive_input(nonblock ? region.data : owned, size, true, &written);
         if (result < 0 && (result != -EAGAIN || written == 0) && nonblock)
         {
+            unmap_request_region(region);
             reject_responder(context_, terminal_error_reason(result));
             return false;
         }
-        if (!nonblock && written < request.data.size)
+        if (!nonblock && written < size)
         {
             if (result < 0 && result != -EAGAIN)
             {
                 free(owned);
+                unmap_request_region(region);
                 if (written != 0)
                 {
                     response.count = written;
@@ -2457,11 +2548,12 @@ class terminal_master_handler
                 reject_responder(context_, terminal_error_reason(result));
                 return false;
             }
-            if (!add_pending_write(state_, endpoint_, context_.responder, owned, request.data.size, written, true))
+            if (!add_pending_write(state_, endpoint_, context_.responder, owned, size, written, true))
             {
                 // The prefix was already committed to the PTY.  Returning a
                 // short count is the only lossless result when the bounded
                 // pending queue cannot accept the remainder.
+                unmap_request_region(region);
                 if (written != 0)
                 {
                     response.count = written;
@@ -2472,10 +2564,12 @@ class terminal_master_handler
                 return false;
             }
             mark_pending(context_);
+            unmap_request_region(region);
             flush_pending_reads(state_);
             return false;
         }
         free(owned);
+        unmap_request_region(region);
         response.count = written;
         flush_pending_reads(state_);
         flush_pending_writes(state_);
@@ -2765,7 +2859,6 @@ class terminal_master_handler
     na_handle_t endpoint_;
     request_context context_{};
     na_handle_t transaction_endpoint_ = NA_HANDLE_INVALID;
-    std::uint8_t response_buffer_[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
 };
 
 class terminal_slave_handler
@@ -2804,17 +2897,24 @@ class terminal_slave_handler
             reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE);
             return false;
         }
-        const std::size_t want =
-            request.size > NA_CHANNEL_MAX_MESSAGE_BYTES ? NA_CHANNEL_MAX_MESSAGE_BYTES : request.size;
-        const auto *description = find_open_description(state_, binding->open_description);
-        const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
-        if (want == 0)
+        if (request.size == 0)
         {
-            response.data = {};
+            response.count = 0;
             return true;
         }
-        if (!add_pending_read(state_, endpoint_, context_.responder, want, false, nonblock))
+        const std::size_t want = static_cast<std::size_t>(request.size);
+        const auto *description = find_open_description(state_, binding->open_description);
+        const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
+        request_mapping region{};
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
+                                NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_SHARED, region))
         {
+            reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
+            return false;
+        }
+        if (!add_pending_read(state_, endpoint_, context_.responder, want, false, nonblock, region))
+        {
+            unmap_request_region(region);
             reject_responder(context_);
             return false;
         }
@@ -2834,19 +2934,31 @@ class terminal_slave_handler
         }
         const auto *description = find_open_description(state_, binding->open_description);
         const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
-        if (request.data.size == 0)
+        if (request.size == 0)
         {
             response.count = 0;
             return true;
         }
-        auto *owned = static_cast<std::uint8_t *>(malloc(request.data.size));
+        request_mapping region{};
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
+                                NA_MEMORY_MAP_READ, region))
+        {
+            reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
+            return false;
+        }
+        const std::size_t size = static_cast<std::size_t>(request.size);
+        // The output queue may accept only a prefix, so the bytes are copied
+        // out of the caller's region before it is unmapped.
+        auto *owned = static_cast<std::uint8_t *>(malloc(size));
         if (owned == nullptr)
         {
+            unmap_request_region(region);
             reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE);
             return false;
         }
-        std::memcpy(owned, request.data.data, request.data.size);
-        if (!add_pending_write(state_, endpoint_, context_.responder, owned, request.data.size, 0, false, nonblock))
+        std::memcpy(owned, region.data, size);
+        unmap_request_region(region);
+        if (!add_pending_write(state_, endpoint_, context_.responder, owned, size, 0, false, nonblock))
         {
             reject_responder(context_);
             return false;
@@ -3215,7 +3327,7 @@ int main()
     nao::event_loop loop;
     state.master_descriptor = master_descriptor;
     state.slave_descriptor = slave_descriptor;
-    const int factory_error = naos_take_terminal_driver_factory(&state.factory_handle);
+    const int factory_error = naos_resolve_terminal_driver_factory(&state.factory_handle);
     if (factory_error != 0)
     {
         (void)naos_handle_close(slave_descriptor);
@@ -3249,7 +3361,9 @@ int main()
 
     _s_log("ttyd: factory ready\n");
 
-    static na_wait_item_t wait_items[max_wait_items]{};
+    static na_handle_t wait_handles[max_wait_items]{};
+    static na_epoll_event_t wait_registrations[max_wait_items]{};
+    static na_epoll_event_t returned_events[max_wait_items]{};
     auto *request_bytes = static_cast<std::uint8_t *>(malloc(NA_CHANNEL_MAX_MESSAGE_BYTES));
     auto *response_bytes = static_cast<std::uint8_t *>(malloc(NA_CHANNEL_MAX_MESSAGE_BYTES));
     auto *request_resources = static_cast<na_handle_t *>(malloc(sizeof(na_handle_t) * NA_CHANNEL_MAX_RESOURCES));
@@ -3265,6 +3379,24 @@ int main()
         flush_pending_locator_opens(state);
         flush_driver_actions(state);
         uint64_t wait_count = 0;
+        const auto append_wait = [&](na_handle_t handle, uint64_t events) {
+            if (handle == NA_HANDLE_INVALID || events == 0)
+                return;
+            for (uint64_t index = 0; index < wait_count; index++)
+            {
+                if (wait_handles[index] == handle)
+                {
+                    wait_registrations[index].events |= events;
+                    return;
+                }
+            }
+            if (wait_count < max_wait_items)
+            {
+                wait_handles[wait_count] = handle;
+                wait_registrations[wait_count] = {events, wait_count};
+                wait_count++;
+            }
+        };
         for (uint64_t i = 0; i < state.endpoint_count;)
         {
             na_handle_info_t info{};
@@ -3274,33 +3406,32 @@ int main()
                 remove_endpoint(state, state.endpoints[i]);
                 continue;
             }
-            const na_signal_t endpoint_signals = endpoint_has_pending_write(state, state.endpoints[i])
-                                                     ? NA_SIGNAL_PEER_CLOSED
-                                                     : NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED;
-            wait_items[wait_count++] = {state.endpoints[i], endpoint_signals, 0};
+            const uint64_t endpoint_events = endpoint_has_pending_write(state, state.endpoints[i])
+                                                 ? NA_EPOLL_EVENT_HANGUP
+                                                 : NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP;
+            append_wait(state.endpoints[i], endpoint_events);
             i++;
         }
         for (uint64_t i = 0; i < state.pair_count && wait_count < max_wait_items; i++)
         {
             const auto invocation = state.pairs[i].active_driver_invocation;
             if (state.pairs[i].allocated && invocation != NA_HANDLE_INVALID)
-                wait_items[wait_count++] = {invocation, NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
+                append_wait(invocation, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         }
         for (uint64_t i = 0; i < max_pairs && wait_count < max_wait_items; i++)
         {
             if (state.pending_creates[i].active)
-                wait_items[wait_count++] = {state.pending_creates[i].invocation,
-                                            NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
+                append_wait(state.pending_creates[i].invocation,
+                            NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         }
         for (uint64_t i = 0; i < max_pairs && wait_count < max_wait_items; i++)
         {
             if (state.pending_locator_opens[i].active)
-                wait_items[wait_count++] = {state.pending_locator_opens[i].invocation,
-                                            NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED, 0};
+                append_wait(state.pending_locator_opens[i].invocation,
+                            NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         }
         const auto append_responder_wait = [&](na_handle_t responder) {
-            if (responder != NA_HANDLE_INVALID && wait_count < max_wait_items)
-                wait_items[wait_count++] = {responder, NA_SIGNAL_CANCEL_REQUESTED | NA_SIGNAL_PEER_CLOSED, 0};
+            append_wait(responder, NA_EPOLL_EVENT_ERROR | NA_EPOLL_EVENT_HANGUP);
         };
         for (uint64_t i = 0; i < state.pending_read_count; i++)
             append_responder_wait(state.pending_reads[i].responder);
@@ -3328,25 +3459,46 @@ int main()
         }
         if (wait_count == 0)
             break;
+        na_handle_t epoll = NA_HANDLE_INVALID;
+        if (loop.create(epoll) != NA_STATUS_OK)
+            continue;
+        bool epoll_ready = true;
+        for (uint64_t index = 0; index < wait_count; index++)
+        {
+            if (loop.control(epoll, NA_EPOLL_CTL_ADD, wait_handles[index], &wait_registrations[index]) != NA_STATUS_OK)
+            {
+                epoll_ready = false;
+                break;
+            }
+        }
+        if (!epoll_ready)
+        {
+            (void)naos_handle_close(epoll);
+            continue;
+        }
         struct timespec deadline{};
-        const auto wait_status =
-            loop.wait(wait_items, wait_count, next_read_deadline(state, deadline) ? &deadline : nullptr);
+        uint64_t returned_count = 0;
+        const auto wait_status = loop.wait(epoll, returned_events, wait_count, returned_count,
+                                           next_read_deadline(state, deadline) ? &deadline : nullptr);
+        (void)naos_handle_close(epoll);
         if (wait_status != NA_STATUS_OK && wait_status != NA_STATUS_WAIT_TIMED_OUT)
             continue;
 
-        for (uint64_t i = 0; i < wait_count; i++)
+        for (uint64_t i = 0; i < returned_count; i++)
         {
-            if (is_pending_responder(state, wait_items[i].handle))
+            const uint64_t wait_index = returned_events[i].data;
+            if (wait_index >= wait_count)
                 continue;
-            if ((wait_items[i].observed & (NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED)) == 0)
+            const auto endpoint = wait_handles[wait_index];
+            const auto observed = returned_events[i].events;
+            if (is_pending_responder(state, endpoint))
+                continue;
+            if ((observed & (NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP)) == 0)
             {
                 // Driver invocations are harvested by flush_driver_actions;
-                // they are included in wait_items only to wake the loop.
-                if ((wait_items[i].observed & (NA_SIGNAL_COMPLETED | NA_SIGNAL_PEER_CLOSED)) != 0)
-                    continue;
+                // they are included in the epoll set only to wake the loop.
                 continue;
             }
-            const auto endpoint = wait_items[i].handle;
 
             bool is_driver_invocation = false;
             bool is_pending_create = false;
@@ -3382,7 +3534,7 @@ int main()
 
             if (endpoint == state.listener_endpoint)
             {
-                if ((wait_items[i].observed & NA_SIGNAL_PEER_CLOSED) != 0)
+                if ((observed & NA_EPOLL_EVENT_HANGUP) != 0)
                 {
                     _s_log("ttyd: listener peer closed; exiting for supervision\n");
                     (void)naos_handle_close(endpoint);

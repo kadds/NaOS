@@ -1,0 +1,11 @@
+[package]
+name = "naos-ipc-core-sys"
+version = "0.1.0"
+edition = "2024"
+publish = false
+links = "naos_ipc_core"
+build = "build.rs"
+
+[lib]
+name = "naos_ipc_core_sys"
+path = "src/lib.rs"

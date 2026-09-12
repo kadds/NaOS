@@ -95,9 +95,10 @@ bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
 
     // The read lock is deliberately the callback quiescence barrier: a
     // registration reset takes the write lock and therefore cannot return
-    // until this interrupt has left the handler.  Handlers must not reset
-    // their own registration recursively.
-    uctx::RawReadLockContext icu(locked_list.lock);
+    // until this interrupt has left the handler.  Keep interrupts disabled
+    // while holding it; otherwise a nested handler on this CPU can recurse
+    // into registration teardown and wait forever on its own read lock.
+    uctx::RawReadLockUninterruptibleContext icu(locked_list.lock);
     bool ok = false;
     for (auto &it : *locked_list.list)
     {

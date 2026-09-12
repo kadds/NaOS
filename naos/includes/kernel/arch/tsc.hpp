@@ -9,9 +9,9 @@ namespace arch::TSC
 class clock_source : public ::timeclock::clock_source
 {
   private:
-    u64 tsc_tick_second_;
-    u64 begin_tsc_;
-    bool builtin_freq_;
+    u64 tsc_tick_second_ = 0;
+    u64 begin_tsc_ = 0;
+    bool builtin_freq_ = false;
 
   public:
     clock_source()

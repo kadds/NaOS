@@ -81,7 +81,7 @@ void clock_event::init(u64 hz)
     // set counter
     counter_ = freq / hz;
 
-    KLOG_DEBUG("HPET timers {} rev id {} id {} bit64 {} freq {}MHZ periodic {} set counter {}", timers, rev_id, id,
+    KLOG_INFO("HPET timers {} rev id {} id {} bit64 {} freq {}MHZ periodic {} set counter {}", timers, rev_id, id,
                bit64mode, freq / 1000'000UL, mode_periodic_, counter_);
 
     this->freq_ = freq;

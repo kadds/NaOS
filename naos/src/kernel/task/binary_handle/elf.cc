@@ -4,243 +4,148 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
 #include "kernel/cpu.hpp"
-#include "kernel/fs/vfs/file.hpp"
 #include "kernel/log.hpp"
+#include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
+#include "kernel/task/binary_handle/elf_format.hpp"
 #include <cstdint>
-#include <type_traits>
+#include <utility>
 
 KLOG_MODULE(task);
 namespace bin_handle
 {
+namespace
+{
 
-namespace elf_type
+using elf_format::elf_header_64;
+using elf_format::program_64;
+
+/// Byte source plus mapping strategy for one executable image.
+class exec_image
 {
-enum : u16
-{
-    none = 0,
-    rel = 1,
-    exec = 2,
-    dyn = 3,
-    core = 4,
-    num = 5,
+  public:
+    virtual ~exec_image() = default;
+    /// Read up to count bytes at offset; returns the number of bytes read.
+    virtual u64 read(u64 offset, byte *buffer, u64 count) = 0;
+    /// Map [start, start + map_length) backed by data_length image bytes.
+    virtual const memory::vm::vm_t *map(u64 start, u64 object_offset, u64 data_length, u64 map_length,
+                                        flag_t flags) = 0;
 };
-} // namespace elf_type
 
-namespace elf_machine
+class object_image final : public exec_image
 {
-enum : u16
-{
-    none,
-    m32,
-    sparc,
-    i386,
-    m68k,
-    m88k,
-    reserved,
-    i860,
-    mips,
-    s370
-};
-} // namespace elf_machine
-
-struct elf_header_64
-{
-    unsigned char ident[16];
-    /// elf_type
-    u16 type;
-    u16 machine;
-    u32 version;
-    /// execute the entry point
-    u64 entry;
-    /// program header table offset
-    u64 phoff;
-    /// section header table offset
-    u64 shoff;
-    /// eflags
-    u32 flags;
-    /// header size. For 64-bit is 64
-    u16 ehsize;
-    /// the size of each entry in the program header table.
-    u16 phentsize;
-    u16 phnum;
-    ///  a section header's size in bytes
-    u16 shentsize;
-    u16 shnum;
-    /// section header string table index.
-    u16 shstrndx;
-
-} PackStruct;
-
-namespace section_type
-{
-enum : u32
-{
-    null,
-    progbits,
-    symtab,
-    strtag,
-    rela,
-    hash,
-    dynamic,
-    note,
-    nobits,
-    rel,
-    shitib, ///< revesered
-    dynsym,
-};
-} // namespace section_type
-
-namespace program_type
-{
-enum : u32
-{
-    // The array element is unused; other members' values are undefined. This type lets the program header table have
-    // ignored entries.
-    null,
-    // The array element specifies a loadable segment, described by p_filesz and p_memsz. The bytes from the file are
-    // mapped to the beginning of the memory segment. If the segment's memory size (p_memsz) is larger than the file
-    // size (p_filesz), the ``extra'' bytes are defined to hold the value 0 and to follow the segment's initialized
-    // area. The file size may not be larger than the memory size. Loadable segment entries in the program header table
-    // appear in ascending order, sorted on the p_vaddr member.
-    load,
-    // The array element specifies dynamic linking information.
-    dynamic,
-    // The array element specifies the location and size of a null-terminated path name to invoke as an interpreter.
-    // This segment type is meaningful only for executable files (though it may occur for shared objects); it may not
-    // occur more than once in a file. If it is present, it must precede any loadable segment entry.
-    interp,
-    // The array element specifies the location and size of auxiliary information.
-    note,
-    // This segment type is reserved but has unspecified semantics. Programs that contain an array element of this type
-    // do not conform to the ABI.
-    shlib,
-    // The array element, if present, specifies the location and size of the program header table itself, both in the
-    // file and in the memory image of the program. This segment type may not occur more than once in a file. Moreover,
-    // it may occur only if the program header table is part of the memory image of the program. If it is present, it
-    // must precede any loadable segment entry.
-    phdr,
-    // The array element specifies the Thread-Local Storage template. Implementations need not support this program
-    // table entry.
-    tls,
-    gnu_eh_frame = 0x6474e550,
-    gnu_stack,
-    gnu_relro,
-};
-} // namespace program_type
-
-struct section_64
-{
-    u32 name_index;
-    u32 type;
-    u64 flags;
-    u64 addr;
-    u64 offset;
-    u64 size;
-    u32 link;
-    u32 info;
-    u64 align;
-    u64 entsize;
-} PackStruct;
-
-struct program_64
-{
-    // This member tells what kind of segment this array element describes or how to interpret the array element's
-    // information
-    u32 type;
-    // This member gives flags relevant to the segment.
-    u32 flags;
-    // This member gives the offset from the beginning of the file at which the first byte of the segment resides.
-    u64 offset;
-    // This member gives the virtual address at which the first byte of the segment resides in memory.
-    u64 vaddr;
-    // On systems for which physical addressing is relevant, this member is reserved for the segment's physical address.
-    // Because System V ignores physical addressing for application programs, this member has unspecified contents for
-    // executable files and shared objects.
-    u64 paddr;
-    // This member gives the number of bytes in the file image of the segment; it may be zero.
-    u64 file_size;
-    // This member gives the number of bytes in the memory image of the segment; it may be zero.
-    u64 mm_size;
-    // As ``Program Loading'' describes in this chapter of the processor supplement, loadable process segments must have
-    // congruent values for p_vaddr and p_offset, modulo the page size. This member gives the value to which the
-    // segments are aligned in memory and in the file. Values 0 and 1 mean no alignment is required. Otherwise, p_align
-    // should be a positive, integral power of 2, and p_vaddr should equal p_offset, modulo p_align.
-    u64 align;
-} PackStruct;
-
-bool is_little_endian()
-{
-    u32 data = 0x12345678;
-    return (*(u8 *)&data) == 0x78;
-}
-
-bool is_valid(elf_header_64 *elf)
-{
-    if (elf->ident[0] == 0x7f)
+  public:
+    object_image(const handle_t<naos::data_plane::memory_object> &object, const khandle &backing,
+                 memory::vm::info_t *info)
+        : object_(object)
+        , backing_(backing)
+        , info_(info)
     {
-        if (elf->ident[1] == 'E' && elf->ident[2] == 'L' && elf->ident[3] == 'F')
-        {
-            if (elf->ident[4] == 2 && elf->ident[5] == ((u8)!is_little_endian() + 1))
-            {
-                if (elf->ident[6] == 1)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    return false;
-}
-
-program_64 *load_segment(elf_header_64 *elf_header, fs::vfs::file *file)
-{
-    // less than 64Kib
-    u64 len = elf_header->phnum * sizeof(program_64);
-    u64 start = elf_header->phoff;
-    byte *p = (byte *)memory::MemoryAllocatorV->allocate(len, alignof(program_64));
-    if (!p)
-        return (program_64 *)p;
-    file->pread(start, p, len, 0);
-    return reinterpret_cast<program_64 *>(p);
-}
-
-/// TODO: release memory resource
-bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
-{
-    elf_header_64 *elf = reinterpret_cast<elf_header_64 *>(header);
-    if (!is_valid(elf))
-    {
-        KLOG_WARN("invalid ELF ident {:x} {:x} {:x} {:x} class {} data {} version {}", elf->ident[0], elf->ident[1],
-                  elf->ident[2], elf->ident[3], elf->ident[4], elf->ident[5], elf->ident[6]);
-        return false;
-    }
-    if (elf->shentsize != sizeof(section_64) || elf->phentsize != sizeof(program_64))
-    {
-        KLOG_WARN("invalid ELF sizes shentsize {}/{} phentsize {}/{}", elf->shentsize, sizeof(section_64), elf->phentsize,
-                  sizeof(program_64));
-        return false;
     }
 
-    auto &vma = new_mm_info->vma();
+    u64 read(u64 offset, byte *buffer, u64 count) override
+    {
+        u64 actual = 0;
+        return object_->read(offset, buffer, count, actual) == NA_STATUS_OK ? actual : 0;
+    }
+
+    const memory::vm::vm_t *map(u64 start, u64 object_offset, u64 data_length, u64 map_length, flag_t flags) override
+    {
+        // Every mapping holds its own reference on the backing capability so
+        // the creator may drop its handle immediately after spawn.
+        return info_->map_memory_object(start, backing_, &object_, object_offset, 0, data_length, map_length, flags);
+    }
+
+  private:
+    handle_t<naos::data_plane::memory_object> object_;
+    khandle backing_;
+    memory::vm::info_t *info_;
+};
+
+flag_t paging_flags_of(u32 p_flags)
+{
     using namespace memory::vm;
-    using namespace arch::task;
+    flag_t flag = flags::user_mode;
+    if (p_flags & 1)
+        flag |= flags::executeable;
+    if (p_flags & 2)
+        flag |= flags::writeable;
+    if (p_flags & 4)
+        flag |= flags::readable;
+    return flag;
+}
 
-    program_64 *program = load_segment(elf, file);
-    void *program_ptr = program;
-    if (program == nullptr)
+const char *admission_status_name(elf_format::status status)
+{
+    switch (status)
     {
+        case elf_format::status::ok:
+            break;
+        case elf_format::status::bad_ident:
+            return "invalid ident";
+        case elf_format::status::bad_entry_sizes:
+            return "invalid shentsize/phentsize";
+        case elf_format::status::bad_program_table:
+            return "invalid program header extent";
+        case elf_format::status::bad_segment_offset:
+            return "segment offset misaligned";
+        case elf_format::status::segment_out_of_range:
+            return "segment outside user range";
+        case elf_format::status::bad_segment_order:
+            return "overlapping segments cannot merge";
+    }
+    return "unknown";
+}
+
+/// Shared ELF loading for every byte source. Returns false on any admission
+/// failure; nothing is mapped until the first successful segment mapping.
+bool load_common(const byte *header, exec_image &image, memory::vm::info_t *new_mm_info, execute_info *info)
+{
+    auto &vma = new_mm_info->vma();
+    const auto *elf = reinterpret_cast<const elf_header_64 *>(header);
+
+    auto admission = elf_format::status::ok;
+    if (!elf_format::is_valid(*elf))
+        admission = elf_format::status::bad_ident;
+    else if (!elf_format::valid_entry_sizes(*elf))
+        admission = elf_format::status::bad_entry_sizes;
+    if (admission != elf_format::status::ok)
+    {
+        KLOG_WARN("invalid ELF {}: {:x} {:x} {:x} {:x}", admission_status_name(admission), elf->ident[0], elf->ident[1],
+                  elf->ident[2], elf->ident[3]);
         return false;
     }
 
-    program_64 *program_last = program + elf->phnum;
-    u64 loaded_max_address = 0;
-    const u64 program_header_size = static_cast<u64>(elf->phentsize) * elf->phnum;
+    const u64 program_table_bytes = static_cast<u64>(elf->phentsize) * elf->phnum;
+    auto *programs =
+        static_cast<program_64 *>(memory::MemoryAllocatorV->allocate(program_table_bytes, alignof(program_64)));
+    if (programs == nullptr)
+        return false;
+    if (image.read(elf->phoff, reinterpret_cast<byte *>(programs), program_table_bytes) != program_table_bytes)
+    {
+        memory::MemoryAllocatorV->deallocate(programs);
+        return false;
+    }
 
-    info->program_header = nullptr;
+    elf_format::range_vector_t ranges(memory::KernelCommonAllocatorV);
+    ranges.ensure(8);
+    u64 loaded_max_address = 0;
+    u64 program_header_vaddr = 0;
+    bool program_header_found = false;
+    const auto range_status =
+        elf_format::build_load_ranges(*elf, programs, ranges, loaded_max_address, &program_header_vaddr,
+                                      &program_header_found, memory::page_size, memory::user_mmap_top_address);
+    if (range_status != elf_format::status::ok)
+    {
+        KLOG_WARN("ELF program headers rejected: {}", admission_status_name(range_status));
+        memory::MemoryAllocatorV->deallocate(programs);
+        return false;
+    }
+
+    info->program_header = program_header_found ? reinterpret_cast<void *>(program_header_vaddr) : nullptr;
     info->program_header_entry_size = elf->phentsize;
     info->program_header_count = elf->phnum;
     // NaOS currently loads the executable at its linked address and does not
@@ -248,179 +153,22 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
     info->base_address = 0;
     info->hwcap = 0;
 
-    struct map_info
+    bool mapped_all = true;
+    for (const auto &item : ranges)
     {
-        u64 start;       // alignment offset
-        u64 end;         // alignment offset
-        u64 file_offset; // file offset on 'start' address
-        u64 file_length;
-        u64 flags;
-
-        void move_start(i64 offset)
-        {
-            start += offset;
-            file_offset += offset;
-        }
-
-        void move_end(i64 offset) { end += offset; }
-    };
-    freelibcxx::vector<map_info> mmap_programs(memory::KernelCommonAllocatorV);
-    mmap_programs.ensure(8);
-
-    while (program != program_last)
-    {
-        if (program->type == program_type::load)
-        {
-            const u64 program_file_end = program->offset + program->file_size;
-            const u64 program_header_end = elf->phoff + program_header_size;
-            if (info->program_header == nullptr && program_header_end >= elf->phoff && elf->phoff >= program->offset &&
-                program_header_end <= program_file_end)
-            {
-                info->program_header = reinterpret_cast<void *>(program->vaddr + (elf->phoff - program->offset));
-            }
-
-            flag_t flag = flags::user_mode;
-            if (program->flags & 1)
-            {
-                flag |= flags::executeable;
-            }
-            if (program->flags & 2)
-            {
-                flag |= flags::writeable;
-            }
-            if (program->flags & 4)
-            {
-                flag |= flags::readable;
-            }
-
-            u64 start = program->vaddr & ~(memory::page_size - 1);
-            u64 align_offset = program->vaddr - start;
-
-            if (program->offset < align_offset)
-            {
-                KLOG_WARN("program offset {} align offset {}", log::hex(program->offset), log::hex(align_offset));
-                return false;
-            }
-
-            u64 offset = program->offset - align_offset;
-
-            if (start >= memory::user_mmap_top_address || offset >= memory::user_mmap_top_address)
-            {
-                KLOG_WARN("map {} fail", log::hex(start));
-                return false;
-            }
-
-            u64 mm_size = program->mm_size + align_offset;
-            u64 fsize = program->file_size + align_offset;
-            u64 end = (start + mm_size + memory::page_size - 1) & ~(memory::page_size - 1);
-            if (loaded_max_address < end)
-                loaded_max_address = end;
-
-            mmap_programs.push_back(map_info{start, end, offset, fsize, flag});
-        }
-        else if (program->type == program_type::interp)
-        {
-        }
-        program++;
-    }
-
-    // merge it
-    for (int i = 0; mmap_programs.size() > 0 && i < (int)mmap_programs.size() - 1; i++)
-    {
-        auto &cur = mmap_programs[i];
-        auto &next = mmap_programs[i + 1];
-        if (cur.end > next.start)
-        {
-            i64 oversize = cur.end - next.start;
-            if (cur.start > next.start)
-            {
-                KLOG_WARN("map address {}>{}", log::hex(cur.start), log::hex(next.start));
-                return false;
-            }
-            if (cur.end > next.end)
-            {
-                KLOG_WARN("map address {}>{}", log::hex(cur.end), log::hex(next.end));
-                return false;
-            }
-            if ((i64)cur.start - (i64)cur.file_offset != (i64)next.start - (i64)next.file_offset)
-            {
-                KLOG_WARN("map address can't merge {} {}", log::hex(cur.start), log::hex(next.start));
-                return false;
-            }
-            if (cur.flags & ~next.flags)
-            {
-                if (next.flags & ~cur.flags)
-                {
-                    // insert new mmap range
-                    u64 start = next.start;
-                    u64 file_offset = next.file_offset;
-                    u64 end = cur.end;
-                    u64 flags = cur.flags | next.flags;
-                    cur.move_end(-oversize);
-                    cur.file_length = freelibcxx::max(cur.file_length - oversize, cur.end - cur.start);
-
-                    next.move_start(oversize);
-                    next.file_length -= oversize;
-
-                    mmap_programs.insert_at(i + 1, map_info{start, end, file_offset, (u64)oversize, flags});
-                    // skip new mmap item
-                    i++;
-                }
-                else
-                {
-                    next.move_start(oversize);
-                    cur.file_length -= oversize;
-                }
-            }
-            else
-            {
-                if (next.flags & ~cur.flags)
-                {
-                    cur.move_end(-oversize);
-                    cur.file_length = freelibcxx::min(cur.file_length - oversize, cur.end - cur.start);
-                }
-                else
-                {
-                    // safe to merge
-                    cur.move_end(next.end - cur.end);
-                    cur.file_length = next.file_offset + next.file_length - cur.file_offset;
-
-                    mmap_programs.remove_at(i + 1);
-                }
-            }
-        }
-    }
-
-    char flag_str[8];
-    for (auto &item : mmap_programs)
-    {
-        char *flag_ptr = flag_str;
-        if (item.flags & flags::readable)
-        {
-            *flag_ptr++ = 'r';
-        }
-        if (item.flags & flags::writeable)
-        {
-            *flag_ptr++ = 'w';
-        }
-        if (item.flags & flags::executeable)
-        {
-            *flag_ptr++ = 'x';
-        }
-        *flag_ptr = 0;
-
-        // KLOG_DEBUG("map {}-{} mm size {}", log::hex(item.start), log::hex(item.end),
-        //              log::hex(item.end - item.start), " off ", log::hex(item.file_offset), " file_size ",
-        //              log::hex(item.file_length), " flags ", flag_str);
-        auto vm = new_mm_info->map_file(item.start, file, item.file_offset, item.file_length, item.end - item.start,
-                                        item.flags);
+        if (!mapped_all)
+            break;
+        auto vm = image.map(item.start, item.object_offset, item.data_length, item.map_length(),
+                            paging_flags_of(item.p_flags));
         if (vm == nullptr)
         {
-            KLOG_WARN("map file {}-{} fail", log::hex(item.start), log::hex(item.end));
-            return false;
+            KLOG_WARN("map {}-{} fail", log::hex(item.start), log::hex(item.end));
+            mapped_all = false;
         }
-
     }
+    memory::MemoryAllocatorV->deallocate(programs);
+    if (!mapped_all)
+        return false;
 
     if (loaded_max_address == 0)
     {
@@ -441,22 +189,26 @@ bool elf_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new
                                          memory::vm::flags::expand | memory::vm::flags::user_mode,
                                      memory::vm::page_fault_method::common, 0);
 
-    // KLOG_DEBUG("map stack {}-{}", log::hex(stack_vm->start), log::hex(stack_vm->end));
-
     if (stack_vm == nullptr)
     {
         KLOG_WARN("empty start_vm");
         return false;
     }
-    // KLOG_INFO("max load {} brk {} stack {}", log::hex(loaded_max_address), log::hex(brk_beg),
-    //             log::hex(stack_vm->end), "-", log::hex(stack_vm->start));
 
     info->stack_top = (void *)stack_vm->end;
     info->stack_bottom = (void *)stack_vm->start;
     info->entry_start_address = (void *)elf->entry;
-    memory::MemoryAllocatorV->deallocate(program_ptr);
 
     return true;
+}
+
+} // namespace
+
+bool elf_handle::load(byte *header, const handle_t<naos::data_plane::memory_object> &object, const khandle &backing,
+                      memory::vm::info_t *new_mm_info, execute_info *info)
+{
+    object_image image(object, backing, new_mm_info);
+    return load_common(header, image, new_mm_info, info);
 }
 
 } // namespace bin_handle

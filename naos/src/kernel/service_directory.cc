@@ -5,6 +5,7 @@
 #include "kernel/ipc/invocation.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/task.hpp"
 #include "kernel/ucontext.hpp"
 
 namespace service
@@ -12,6 +13,21 @@ namespace service
 namespace
 {
 handle_control *global_service_directory_control = nullptr;
+
+bool connect_allowed(const char *uri, u64 uri_size, process_id listener_owner, const task::process_t *caller)
+{
+    constexpr char vfs_admin[] = "naos://service/fs/vfs/0/admin";
+    constexpr u64 vfs_admin_size = sizeof(vfs_admin) - 1;
+    if (uri_size != vfs_admin_size || memcmp(uri, vfs_admin, vfs_admin_size) != 0)
+        return true;
+
+    // The admin listener is a private control plane.  Its authority is
+    // published by vfsd and only its explicitly spawned rootfs worker may
+    // acquire a mount capability.  A ServiceDirectory locator alone is not an
+    // ACL and must never widen this decision.
+    return caller != nullptr && listener_owner != 0 && caller->parent_pid == listener_owner &&
+           strcmp(caller->name, "exfatd") == 0;
+}
 } // namespace
 
 void release_table_root(khandle &value);
@@ -28,14 +44,14 @@ void set_global_service_directory(handle_t<directory> directory)
     global_service_directory_control = control;
 }
 
-void register_kernel_service(const char *uri, u64 uri_size, khandle object, capability::metadata meta, bool one_shot)
+i64 register_kernel_service(const char *uri, u64 uri_size, khandle object, capability::metadata meta, bool one_shot)
 {
     auto directory = get_global_service_directory();
     if (!directory)
-        return;
+        return ENOENT;
     capability::transferred_resource resource(object, meta);
     capability::transfer_record record(NA_HANDLE_INVALID, true, std::move(resource));
-    (void)directory->register_service(uri, uri_size, record, one_shot);
+    return directory->register_service(uri, uri_size, record, one_shot);
 }
 
 directory::directory()
@@ -88,7 +104,7 @@ bool directory::valid_uri(const char *uri, u64 uri_size)
         const auto value = static_cast<unsigned char>(uri[i]);
         if (value == '/')
         {
-            if (!segment_has_value || segment_is_dot || segment_size == 2)
+            if (!segment_has_value || segment_is_dot)
                 return false;
             segment_has_value = false;
             segment_is_dot = true;
@@ -104,7 +120,7 @@ bool directory::valid_uri(const char *uri, u64 uri_size)
         if (segment_size > 2 || value != '.')
             segment_is_dot = false;
     }
-    return segment_has_value && !segment_is_dot && segment_size != 2;
+    return segment_has_value && !segment_is_dot;
 }
 
 i64 directory::find_locked(const char *uri, u64 uri_size) const
@@ -179,7 +195,7 @@ i64 directory::register_service(const char *uri, u64 uri_size, capability::trans
     bool inserted = false;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
-        if (find_locked(uri, uri_size) >= 0)
+        if (find_locked(uri, uri_size) >= 0 || find_listener_locked(uri, uri_size) >= 0)
             result = EEXIST;
     }
     if (result != 0)
@@ -195,7 +211,7 @@ i64 directory::register_service(const char *uri, u64 uri_size, capability::trans
     }
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
-        if (find_locked(uri, uri_size) >= 0)
+        if (find_locked(uri, uri_size) >= 0 || find_listener_locked(uri, uri_size) >= 0)
             result = EEXIST;
         else
         {
@@ -335,7 +351,7 @@ i64 directory::listen_service(const char *uri, u64 uri_size, khandle send_endpoi
 }
 
 i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &expected_uuid, u64 requested_rights,
-                               u64 requested_revision, u64 requested_features,
+                               u64 requested_revision, u64 requested_features, task::process_t *caller,
                                capability::transferred_resource &client_resource, u64 &selected_revision,
                                u64 &selected_features)
 {
@@ -348,6 +364,7 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
     khandle listener_endpoint;
     khandle listener_descriptor;
     u64 max_pending = 0;
+    process_id listener_owner = 0;
     listener_entry retired(memory::KernelCommonAllocatorV, khandle{}, khandle{}, 0, 0);
     bool stale_listener = false;
     allocation_lock_.lock();
@@ -371,6 +388,7 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
                 listener_endpoint = listener.send_endpoint;
                 listener_descriptor = listener.descriptor;
                 max_pending = listener.max_pending;
+                listener_owner = listener.owner;
             }
         }
     }
@@ -382,6 +400,8 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
         release_listener(retired);
         return ENOENT;
     }
+    if (!connect_allowed(uri, uri_size, listener_owner, caller))
+        return EACCES;
 
     auto send = listener_endpoint.as<naos::ipc::raw_channel_endpoint>();
     auto protocol = listener_descriptor.as<naos::ipc::protocol_descriptor>();
@@ -397,7 +417,11 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
         return ENOTSUP;
     if ((requested_features & ~descriptor.features) != 0)
         return ENOTSUP;
-    const u64 client_protocol_rights = requested_rights == 0 ? descriptor.protocol_rights : requested_rights;
+    // A zero request is the least-privileged connect, not an implicit request
+    // for every method right published by the provider.  Callers that need a
+    // privileged protocol surface must name those rights explicitly and still
+    // pass the URI ACL above.
+    const u64 client_protocol_rights = requested_rights == 0 ? NA_PROTOCOL_RIGHT_INVOKE : requested_rights;
     if ((client_protocol_rights & ~descriptor.protocol_rights) != 0)
         return EACCES;
     khandle client_object;
@@ -426,7 +450,8 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
     capability::transfer_record_list records(memory::KernelCommonAllocatorV);
     records.push_back(capability::transfer_record(
         NA_HANDLE_INVALID, true, capability::transferred_resource(std::move(server_object), server_metadata)));
-    auto *message = memory::New<naos::ipc::channel_message>(memory::KernelCommonAllocatorV, 0, 1);
+    auto *message = memory::New<naos::ipc::channel_message>(memory::KernelCommonAllocatorV,
+                                                            send->state()->core_channel(), 0, 1);
     if (message == nullptr || !message->valid())
     {
         if (message != nullptr)
@@ -483,10 +508,18 @@ i64 directory::unregister_service(const char *uri, u64 uri_size, process_id owne
     return 0;
 }
 
-i64 directory::list_services(u64 offset, u64 requested_bytes, freelibcxx::vector<byte> &records, u64 &next,
-                             u64 &count) const
+i64 directory::list_services(const char *prefix, u64 prefix_size, u64 offset, u64 requested_bytes,
+                             freelibcxx::vector<byte> &records, u64 &next, u64 &count) const
 {
-    if (requested_bytes > NA_CHANNEL_MAX_MESSAGE_BYTES)
+    if ((prefix == nullptr && prefix_size != 0) || prefix_size > 255 ||
+        requested_bytes > NA_CHANNEL_MAX_MESSAGE_BYTES)
+        return EINVAL;
+
+    // A trailing slash is accepted for a subtree prefix, but matching is
+    // always on a URI segment boundary (".../fs" must not match ".../fs2").
+    while (prefix_size != 0 && prefix[prefix_size - 1] == '/')
+        prefix_size--;
+    if (prefix_size != 0 && !valid_uri(prefix, prefix_size))
         return EINVAL;
 
     // Reserve output storage before taking the registry lock. The locked
@@ -495,32 +528,53 @@ i64 directory::list_services(u64 offset, u64 requested_bytes, freelibcxx::vector
     if (records.capacity() < requested_bytes)
         return ENOMEM;
 
-    allocation_lock_.lock();
     i64 result = 0;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
-        if (offset > entries_.size())
-            result = EINVAL;
-        else
-        {
-            records.clear();
-            next = offset;
-            count = 0;
-            const auto entries = entries_.cspan();
-            for (u64 i = offset; i < entries_.size(); i++)
+        records.clear();
+        next = 0;
+        count = 0;
+        u64 matching_index = 0;
+        bool output_full = false;
+        auto append_if_matching = [&](const freelibcxx::string &uri) {
+            if (output_full)
+                return;
+            const bool prefix_matches = prefix_size == 0 ||
+                                         (uri.size() >= prefix_size &&
+                                          memcmp(uri.data(), prefix, static_cast<size_t>(prefix_size)) == 0 &&
+                                          (uri.size() == prefix_size || uri.data()[prefix_size] == '/'));
+            if (!prefix_matches)
+                return;
+            if (matching_index < offset)
             {
-                const auto &uri = entries[i].uri;
-                if (uri.size() + 1 > requested_bytes - records.size())
-                    break;
-                for (u64 j = 0; j < uri.size(); j++)
-                    records.push_back(static_cast<byte>(uri.data()[j]));
-                records.push_back(static_cast<byte>(0));
-                next = i + 1;
-                count++;
+                matching_index++;
+                return;
             }
+            if (uri.size() + 1 > requested_bytes - records.size())
+            {
+                output_full = true;
+                return;
+            }
+            for (u64 j = 0; j < uri.size(); j++)
+                records.push_back(static_cast<byte>(uri.data()[j]));
+            records.push_back(static_cast<byte>(0));
+            matching_index++;
+            next = matching_index;
+            count++;
+        };
+        const auto entries = entries_.cspan();
+        for (u64 i = 0; i < entries_.size() && !output_full; i++)
+        {
+            append_if_matching(entries[i].uri);
         }
+        const auto listeners = listeners_.cspan();
+        for (u64 i = 0; i < listeners_.size() && !output_full; i++)
+        {
+            append_if_matching(listeners[i].uri);
+        }
+        if (offset > matching_index && count == 0)
+            result = EINVAL;
     }
-    allocation_lock_.unlock();
     return result;
 }
 

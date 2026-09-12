@@ -4,8 +4,9 @@ use core::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 
 use naos_idl::echo;
 use naos_idl::stream;
-use naos_runtime::{Bootstrap, InitialStack, ThreadLocal, spawn};
 use naos_sys as sys;
+use servicekit::Channel;
+use servicekit::naos_runtime::{ThreadLocal, spawn};
 
 static THREAD_VALUE: ThreadLocal<u64> = ThreadLocal::new(0);
 static STDOUT_STREAM: AtomicU64 = AtomicU64::new(sys::HANDLE_INVALID);
@@ -21,7 +22,12 @@ unsafe extern "C" {
 static mut COMPILER_TLS_VALUE: u64 = 0x07;
 
 pub fn log(message: &'static [u8]) {
-    unsafe { sys::_s_log(message.as_ptr()) };
+    // `_s_log` prefixes the process name; keep the marker namespace on the
+    // stdout copy only so serial output does not repeat `rust-smoke-suite:`.
+    let native_message = message
+        .strip_prefix(b"rust-smoke-suite: ")
+        .unwrap_or(message);
+    unsafe { sys::_s_log(native_message.as_ptr()) };
     let stream_handle = STDOUT_STREAM.load(Ordering::Relaxed);
     if stream_handle == sys::HANDLE_INVALID {
         return;
@@ -33,59 +39,54 @@ pub fn log(message: &'static [u8]) {
     }
     let endpoint = unsafe { naos_idl::ProtocolClientEndpoint::from_raw(duplicate) };
     let payload = &message[..message.len().saturating_sub(1)];
+    // The smoke writes a diagnostic line, so it owns a region sized exactly to
+    // that line: every migrated Stream.write carries its payload in the
+    // caller's MemoryObject, never inline in the control message.
+    let window = payload.len().max(1);
+    let Ok(region) = servicekit::memory::MemoryObject::new(window) else {
+        return;
+    };
+    if region.map_persistent(window, true).is_err() {
+        return;
+    }
+    if !payload.is_empty() && region.write_region(0, payload).is_err() {
+        return;
+    }
+    // The bootstrap stdout stream is NaOS-only; a plain host has no
+    // capability table to transfer the region through.
+    let Some(owner) = region.native_handle() else {
+        return;
+    };
+    let mut resources = naos_idl::ResourceTable::new();
+    let Ok(buffer) = resources.push_duplicate(owner) else {
+        return;
+    };
     let value = stream::write_request {
         size: payload.len() as u64,
         flags: 0,
-        data: payload,
+        buffer,
     };
-    let mut request_wire = [0_u8; 1024];
-    let Ok(mut invocation) = stream::submit_write(
-        &endpoint,
-        &value,
-        naos_idl::ResourceTable::new(),
-        &mut request_wire,
-        0,
-    ) else {
+    // The request envelope is the generated fixed header; the payload travels
+    // in the region.
+    let mut request_wire = [0_u8; stream::WRITE_REQUEST_HEADER_BYTES];
+    let Ok(mut invocation) =
+        stream::submit_write(&endpoint, &value, resources, &mut request_wire, 0)
+    else {
         return;
     };
-    let mut wait = sys::WaitItem {
-        handle: invocation.get(),
-        signals: sys::SIGNAL_COMPLETED | sys::SIGNAL_PEER_CLOSED,
-        observed: 0,
-    };
-    if unsafe { sys::_na_handle_wait_many(&mut wait, 1, core::ptr::null()) } != sys::STATUS_OK {
+    if !servicekit::wait_for_completion(invocation.get(), u64::MAX) {
         return;
     }
     let mut response_wire = [0_u8; 32];
     let _ = stream::take_write(&mut invocation, &mut response_wire);
 }
 
-fn run_native_smoke(stack: *const InitialStack, bootstrap: *const Bootstrap) -> i64 {
-    if stack.is_null() || bootstrap.is_null() {
-        log(b"rust-smoke-suite: runtime contract invalid\0");
-        return 2;
-    }
-    STDOUT_STREAM.store(
-        unsafe { (*bootstrap).stdout_stream().raw() },
-        Ordering::Relaxed,
-    );
+fn run_native_smoke(context: servicekit::Context) -> i64 {
+    STDOUT_STREAM.store(context.stdout_stream(), Ordering::Relaxed);
 
-    let mut left = sys::HANDLE_INVALID;
-    let mut right = sys::HANDLE_INVALID;
-    let create_status =
-        unsafe { sys::_na_channel_create(core::ptr::null(), &mut left, &mut right) };
-    if create_status != sys::STATUS_OK
-        || left == sys::HANDLE_INVALID
-        || right == sys::HANDLE_INVALID
-    {
+    if Channel::create(None).is_err() {
         log(b"rust-smoke-suite: channel create failed\0");
         return 3;
-    }
-    let left_status = unsafe { sys::_na_handle_close(left) };
-    let right_status = unsafe { sys::_na_handle_close(right) };
-    if left_status != sys::STATUS_OK || right_status != sys::STATUS_OK {
-        log(b"rust-smoke-suite: channel close failed\0");
-        return 4;
     }
     log(b"rust-smoke-suite: native bootstrap ready\0");
     0
@@ -139,7 +140,7 @@ fn run_allocator_smoke() -> i64 {
     unsafe { alloc::alloc::dealloc(zeroed, zero_layout) };
 
     let impossible = Layout::from_size_align(1, sys::MEMORY_MAP_MAX_BYTES as usize).unwrap();
-    if !unsafe { naos_runtime::try_native_alloc(impossible) }.is_null() {
+    if !unsafe { servicekit::naos_runtime::try_native_alloc(impossible) }.is_null() {
         log(b"rust-smoke-suite: OOM guard failed\0");
         return 15;
     }
@@ -212,8 +213,8 @@ extern "C" fn dropped_child(argument: *mut u8) -> i64 {
     0x44
 }
 
-pub fn run(stack: *const InitialStack, bootstrap: *const Bootstrap) -> i64 {
-    if run_native_smoke(stack, bootstrap) != 0 || !THREAD_VALUE.set(0x11) {
+pub fn run(context: servicekit::Context) -> i64 {
+    if run_native_smoke(context) != 0 || !THREAD_VALUE.set(0x11) {
         log(b"rust-smoke-suite: runtime or TLS setup failed\0");
         return 2;
     }

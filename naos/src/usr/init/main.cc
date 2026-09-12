@@ -1,7 +1,6 @@
 #include <abi-bits/ioctls.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <linux/fb.h>
 #include <naos/generated/system/TerminalManager.hpp>
 #include <naos/generated/system/TerminalManager_client.hpp>
 #include <naos/generated/system/TerminalMaster.hpp>
@@ -17,7 +16,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
@@ -26,9 +24,6 @@
 extern char **environ;
 
 extern "C" {
-int naos_take_terminal_driver_factory(na_handle_t *handle);
-int naos_take_console_frontend(na_handle_t *handle);
-int naos_take_input_event_source(na_handle_t *handle);
 int ioctl(int fd, unsigned long request, ...);
 int naos_native_spawn(pid_t *pid, const char *path, char *const argv[], char *const envp[]);
 int naos_native_spawn_stdio(pid_t *pid, const char *path, char *const argv[], char *const envp[], int stdin_fd,
@@ -36,74 +31,34 @@ int naos_native_spawn_stdio(pid_t *pid, const char *path, char *const argv[], ch
 int naos_native_spawn_stdio_deferred(pid_t *pid, na_handle_t *process, const char *path, char *const argv[],
                                      char *const envp[], int stdin_fd, int stdout_fd, int stderr_fd);
 int naos_native_start_process(na_handle_t process);
-int naos_native_spawn_with_terminal_factory(pid_t *pid, const char *path, char *const argv[], char *const envp[],
-                                            na_handle_t factory_handle);
-int naos_native_spawn_with_capabilities(pid_t *pid, const char *path, char *const argv[], char *const envp[],
-                                        const na_bootstrap_capability_t *capabilities, uint32_t capability_count);
-int naos_native_spawn_with_terminal_factory_and_service_manager(pid_t *pid, const char *path, char *const argv[],
-                                                                char *const envp[], na_handle_t factory_handle);
+int naos_native_spawn_stdio_with_service_manager(pid_t *pid, const char *path, char *const argv[], char *const envp[]);
+int naos_native_install_root_namespace();
 }
 
 namespace
 {
 int g_ttyd_pid = -1;
-na_handle_t g_terminal_factory = NA_HANDLE_INVALID;
-na_handle_t g_console_frontend = NA_HANDLE_INVALID;
-na_handle_t g_input_event_source = NA_HANDLE_INVALID;
-
-bool ensure_terminal_factory()
-{
-    if (g_terminal_factory != NA_HANDLE_INVALID)
-        return true;
-    if (naos_take_terminal_driver_factory(&g_terminal_factory) != 0 || g_terminal_factory == NA_HANDLE_INVALID)
-    {
-        _s_log("init: terminal factory resolve failed\n");
-        g_terminal_factory = NA_HANDLE_INVALID;
-        return false;
-    }
-    return true;
-}
-
-bool ensure_input_event_source()
-{
-    if (g_input_event_source != NA_HANDLE_INVALID)
-        return true;
-    if (naos_take_input_event_source(&g_input_event_source) != 0 || g_input_event_source == NA_HANDLE_INVALID)
-    {
-        _s_log("init: input event source capability missing\n");
-        g_input_event_source = NA_HANDLE_INVALID;
-        return false;
-    }
-    return true;
-}
-
-bool ensure_console_frontend()
-{
-    if (g_console_frontend != NA_HANDLE_INVALID)
-        return true;
-    if (naos_take_console_frontend(&g_console_frontend) != 0 || g_console_frontend == NA_HANDLE_INVALID)
-    {
-        _s_log("init: console frontend capability missing\n");
-        g_console_frontend = NA_HANDLE_INVALID;
-        return false;
-    }
-    return true;
-}
 
 bool spawn_ttyd_process(int *pid)
 {
-    if (pid == nullptr || !ensure_terminal_factory())
+    if (pid == nullptr)
         return false;
 
-    const na_handle_t factory_for_child = g_terminal_factory;
-    g_terminal_factory = NA_HANDLE_INVALID;
-
     char *ttyd_argv[] = {const_cast<char *>("ttyd"), nullptr};
-    const int spawn_error = naos_native_spawn_with_terminal_factory_and_service_manager(pid, "/bin/ttyd", ttyd_argv,
-                                                                                        environ, factory_for_child);
+    _s_log("init: spawning ttyd\n");
+    const int spawn_error = naos_native_spawn_stdio_with_service_manager(pid, "/bin/ttyd", ttyd_argv, environ);
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: ttyd spawn returned error=%d pid=%d errno=%d\n", spawn_error, *pid,
+                 errno);
+        _s_log(message);
+    }
     if (spawn_error != 0 || *pid <= 0)
     {
-        _s_log("init: ttyd spawn failed\n");
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: ttyd spawn failed error=%d pid=%d errno=%d\n", spawn_error,
+                 pid != nullptr ? *pid : -1, errno);
+        _s_log(message);
         return false;
     }
     return true;
@@ -127,8 +82,35 @@ bool start_ttyd()
         if (error == 0)
         {
             (void)naos_handle_close(manager);
-            _s_log("init: ttyd ready\n");
-            return true;
+            // Manager registration alone does not guarantee that the first
+            // `/dev/console` open has been materialized by ttyd.  Probe the
+            // terminal endpoint through the normal libc path before handing
+            // it to the shell, otherwise the process bootstrap can race the
+            // manager's first PTY creation and observe EPIPE.
+            // ttyd publishes its listener before its terminal factory answers,
+            // so this is a readiness probe, not a fixed wait.  Poll it on a
+            // short interval: a 1s step costs up to a full second of boot for
+            // nothing once the factory is up, and the probe itself is a cheap
+            // open plus tcgetattr.
+            for (int console_attempt = 0; console_attempt < 400; console_attempt++)
+            {
+                const int console = open("/dev/console", O_RDWR);
+                if (console >= 0)
+                {
+                    struct termios attributes{};
+                    const bool ready = tcgetattr(console, &attributes) == 0;
+                    close(console);
+                    if (ready)
+                    {
+                        _s_log("init: ttyd console ready\n");
+                        _s_log("init: ttyd ready\n");
+                        return true;
+                    }
+                }
+                usleep(5'000);
+            }
+            _s_log("init: ttyd console readiness timed out\n");
+            return false;
         }
         sleep(1);
     }
@@ -147,23 +129,8 @@ bool spawn_consoled_process(pid_t *pid)
 
     char *console_argv[] = {const_cast<char *>("consoled"), nullptr};
     *pid = -1;
-    if (!ensure_input_event_source() || !ensure_console_frontend())
-        return false;
-    na_handle_t writer_for_child = NA_HANDLE_INVALID;
-    if (_na_handle_duplicate(g_console_frontend, 0, &writer_for_child) != NA_STATUS_OK)
-        return false;
-    na_handle_t input_for_child = NA_HANDLE_INVALID;
-    if (_na_handle_duplicate(g_input_event_source, 0, &input_for_child) != NA_STATUS_OK)
-    {
-        (void)_na_handle_close(writer_for_child);
-        return false;
-    }
-    const na_bootstrap_capability_t capabilities[] = {
-        {NA_BOOTSTRAP_CAPABILITY_CONSOLE_FRONTEND, writer_for_child},
-        {NA_BOOTSTRAP_CAPABILITY_INPUT_EVENT_SOURCE, input_for_child},
-    };
-    const int spawn_error = naos_native_spawn_with_capabilities(
-        pid, "/bin/consoled", console_argv, environ, capabilities, sizeof(capabilities) / sizeof(capabilities[0]));
+    const int spawn_error = naos_native_spawn_stdio(pid, "/bin/consoled", console_argv, environ, STDIN_FILENO,
+                                                    STDOUT_FILENO, STDERR_FILENO);
     if (spawn_error != 0 || *pid <= 0)
     {
         _s_log("init: consoled spawn failed\n");
@@ -176,10 +143,17 @@ bool spawn_consoled_process(pid_t *pid)
 
 bool framebuffer_available()
 {
-    const int fd = open("/dev/fb0", O_RDWR | O_EXCL);
-    if (fd < 0)
+    na_handle_t framebuffer = NA_HANDLE_INVALID;
+    const int error = naos_service_resolve(NAOS_SERVICE_FRAMEBUFFER, &framebuffer);
+    if (error != 0 || framebuffer == NA_HANDLE_INVALID)
+    {
+        char message[112]{};
+        snprintf(message, sizeof(message), "init: framebuffer service resolve failed error=%u\n",
+                 static_cast<unsigned>(error));
+        _s_log(message);
         return false;
-    close(fd);
+    }
+    (void)naos_handle_close(framebuffer);
     return true;
 }
 
@@ -194,7 +168,6 @@ bool spawn_user_shell(pid_t *shell, int *slave)
         _s_log("init: user console slave failed\n");
         return false;
     }
-
     char *shell_argv[] = {const_cast<char *>("sh"), const_cast<char *>("-i"), nullptr};
     *shell = -1;
     na_handle_t shell_process = NA_HANDLE_INVALID;
@@ -202,7 +175,10 @@ bool spawn_user_shell(pid_t *shell, int *slave)
                                                              new_slave, new_slave, new_slave);
     if (shell_spawn != 0 || *shell <= 0)
     {
-        _s_log("init: user shell spawn failed\n");
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: user shell spawn failed error=%d pid=%d errno=%d\n", shell_spawn,
+                 shell != nullptr ? *shell : -1, errno);
+        _s_log(message);
         close(new_slave);
         *shell = -1;
         return false;
@@ -287,35 +263,212 @@ bool reap_process(pid_t *pid, const char *name)
     return true;
 }
 
+/// Whether a hook script would actually do anything.
+///
+/// The production image ships an intentionally empty `/etc/init.sh` (a shebang,
+/// comments, and an `exit 0`).  Running it means materialising a whole BusyBox
+/// and paying a process round trip for nothing on every boot, so the script is
+/// inspected first: only a real command justifies starting an interpreter.
+bool script_has_work(const char *script)
+{
+    for (const char *line = script; *line != 0;)
+    {
+        const char *end = line;
+        while (*end != 0 && *end != '\n')
+            end++;
+        const char *cursor = line;
+        while (cursor < end && (*cursor == ' ' || *cursor == '\t'))
+            cursor++;
+        // A blank line, a comment, or a shebang carries no work.
+        if (cursor < end && *cursor != '#')
+        {
+            // `exit` (with or without a status) only ends the script, so a
+            // script whose sole command is an exit is still a no-op.
+            constexpr size_t exit_len = 4;
+            const bool is_exit = static_cast<size_t>(end - cursor) >= exit_len &&
+                                 memcmp(cursor, "exit", exit_len) == 0 &&
+                                 (static_cast<size_t>(end - cursor) == exit_len || cursor[exit_len] == ' ' ||
+                                  cursor[exit_len] == '\t');
+            if (!is_exit)
+                return true;
+        }
+        line = *end == '\n' ? end + 1 : end;
+    }
+    return false;
+}
+
 bool run_optional_init_script()
 {
-    if (access("/etc/init.sh", R_OK) != 0 || access("/bin/sh", X_OK) != 0)
+    _s_log("init: checking optional init hook\n");
+    const int init_script_access = access("/etc/init.sh", R_OK);
+    const int shell_access = access("/bin/sh", X_OK);
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: optional init hook access=%d shell=%d\n", init_script_access,
+                 shell_access);
+        _s_log(message);
+    }
+    if (init_script_access != 0 || shell_access != 0)
         return true;
 
-    char *argv[] = {const_cast<char *>("sh"), const_cast<char *>("/etc/init.sh"), nullptr};
+    constexpr size_t max_script_bytes = 64 * 1024;
+    constexpr size_t max_read_bytes = NA_CHANNEL_MAX_MESSAGE_BYTES - 16;
+    auto *script = static_cast<char *>(malloc(max_script_bytes + 1));
+    if (script == nullptr)
+    {
+        _s_log("init: /etc/init.sh allocation failed\n");
+        return false;
+    }
+    const int script_fd = open("/etc/init.sh", O_RDONLY);
+    if (script_fd < 0)
+    {
+        _s_log("init: /etc/init.sh open failed\n");
+        free(script);
+        return false;
+    }
+    size_t script_bytes = 0;
+    bool script_read_failed = false;
+    while (script_bytes < max_script_bytes)
+    {
+        const size_t request_bytes =
+            (max_script_bytes - script_bytes) < max_read_bytes ? (max_script_bytes - script_bytes) : max_read_bytes;
+        const ssize_t count = read(script_fd, script + script_bytes, request_bytes);
+        if (count < 0)
+        {
+            script_read_failed = true;
+            break;
+        }
+        if (count == 0)
+            break;
+        script_bytes += static_cast<size_t>(count);
+    }
+    if (!script_read_failed && script_bytes == max_script_bytes)
+    {
+        char probe = 0;
+        script_read_failed = read(script_fd, &probe, 1) != 0;
+    }
+    close(script_fd);
+    if (script_read_failed)
+    {
+        char message[112]{};
+        snprintf(message, sizeof(message), "init: /etc/init.sh read failed or too large errno=%d bytes=%u\n", errno,
+                 static_cast<unsigned>(script_bytes));
+        _s_log(message);
+        free(script);
+        return false;
+    }
+    script[script_bytes] = 0;
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: /etc/init.sh loaded bytes=%u\n", static_cast<unsigned>(script_bytes));
+        _s_log(message);
+    }
+
+    // The production hook is intentionally empty.  Starting an interpreter for
+    // it costs a BusyBox materialisation and a process round trip on every
+    // boot, so skip the spawn when the script has no command to run.
+    if (!script_has_work(script))
+    {
+        _s_log("init: /etc/init.sh has no commands; skipping the hook\n");
+        free(script);
+        return true;
+    }
+
+    // Pass the bytes through `sh -c` instead of asking the child shell to
+    // reopen `/etc/init.sh`. The latter can observe the archive entry's
+    // metadata through a cloned Directory endpoint but lose its payload while
+    // the early userland root is still being handed off.
+    char *argv[] = {const_cast<char *>("sh"), const_cast<char *>("-c"), script, const_cast<char *>("/etc/init.sh"),
+                    nullptr};
     pid_t pid = -1;
-    if (naos_native_spawn_stdio(&pid, "/bin/busybox", argv, environ, STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO) != 0 ||
-        pid <= 0)
+    na_handle_t process = NA_HANDLE_INVALID;
+    const int spawn_error = naos_native_spawn_stdio_deferred(&pid, &process, "/bin/busybox", argv, environ,
+                                                             STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO);
+    {
+        char message[112]{};
+        snprintf(message, sizeof(message), "init: optional init hook spawn error=%d pid=%d\n", spawn_error, pid);
+        _s_log(message);
+    }
+    free(script);
+    if (spawn_error != 0 || pid <= 0)
     {
         _s_log("init: /etc/init.sh spawn failed\n");
         return false;
     }
 
-    int status = 0;
-    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
     {
-        _s_log("init: /etc/init.sh failed\n");
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: /etc/init.sh spawned pid=%d\n", pid);
+        _s_log(message);
+    }
+
+    const int start_error = naos_native_start_process(process);
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: optional init hook start error=%d\n", start_error);
+        _s_log(message);
+    }
+    if (start_error != 0)
+    {
+        _s_log("init: /etc/init.sh start failed\n");
+        (void)_na_handle_close(process);
         return false;
     }
-    _s_log("init: /etc/init.sh completed\n");
+
+    int status = 0;
+    const pid_t waited = waitpid(pid, &status, 0);
+    {
+        char message[112]{};
+        snprintf(message, sizeof(message), "init: optional init hook wait pid=%d status=%d\n", waited, status);
+        _s_log(message);
+    }
+    if (waited != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0)
+    {
+        char message[128]{};
+        snprintf(message, sizeof(message), "init: /etc/init.sh failed pid=%d waited=%d status=%d errno=%d\n", pid,
+                 waited, status, errno);
+        _s_log(message);
+        (void)_na_handle_close(process);
+        return false;
+    }
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: /etc/init.sh completed pid=%d status=%d\n", pid, status);
+        _s_log(message);
+    }
+    (void)_na_handle_close(process);
     return true;
 }
 
-void run_user_shell()
+// Exercise one ordinary userland bootstrap before attaching the interactive
+// terminal.  A cold vfsd/ttyd handoff can otherwise make the first deferred
+// shell executable lookup observe a transient peer close; this barrier is a
+// real service readiness check and never runs the smoke suites.
+bool run_startup_barrier()
 {
-    pid_t console = -1;
+    // The readiness being established is "the shell executable can be opened
+    // through the committed root".  Probe exactly that instead of spawning a
+    // throwaway interpreter to discover it: an open plus close exercises the
+    // same lookup the shell bootstrap will perform, and costs no process.
+    for (int attempt = 0; attempt < 10; attempt++)
+    {
+        const int executable = open("/bin/busybox", O_RDONLY);
+        if (executable >= 0)
+        {
+            close(executable);
+            return true;
+        }
+        usleep(20'000);
+    }
+    return false;
+}
+
+void run_user_shell(pid_t initial_console)
+{
+    pid_t console = initial_console;
     pid_t shell = -1;
     int slave = -1;
+    bool framebuffer_notice_logged = false;
 
     _s_log("init: frontend supervision started\n");
     for (;;)
@@ -376,21 +529,26 @@ void run_user_shell()
             slave = -1;
             _s_log("init: user shell restart scheduled\n");
         }
+        bool framebuffer_ready = false;
         if (console <= 0)
         {
-            if (!ensure_console_frontend() || !framebuffer_available())
+            framebuffer_ready = framebuffer_available();
+            if (!framebuffer_ready)
             {
-                // Kernel terminal mode owns the scanout. Wait for the F1
-                // enable transition before starting a new framebuffer frontend.
-                sleep(1);
+                // Framebuffer/DevFS is optional during the VFS migration. A
+                // ttyd-backed shell remains useful without the graphical
+                // consoled frontend; do not spin forever waiting for a display service.
+                if (!framebuffer_notice_logged)
+                {
+                    _s_log("init: framebuffer unavailable; using ttyd-only shell\n");
+                    framebuffer_notice_logged = true;
+                }
+            }
+            else if (!spawn_consoled_process(&console))
+            {
+                sleep(5);
                 continue;
             }
-        }
-
-        if (console <= 0 && !spawn_consoled_process(&console))
-        {
-            sleep(5);
-            continue;
         }
         if (console > 0 && shell <= 0)
         {
@@ -403,7 +561,7 @@ void run_user_shell()
         if (console > 0 && shell <= 0)
             _s_log("init: spawning user shell\n");
 
-        if (shell <= 0 && !spawn_user_shell(&shell, &slave))
+        if (shell <= 0 && (console > 0 || !framebuffer_ready) && !spawn_user_shell(&shell, &slave))
         {
             sleep(5);
             continue;
@@ -416,8 +574,50 @@ void run_user_shell()
 
 extern "C" void main(int argc, char **argv)
 {
+    // init is a fixed early boot module.  It may receive stdio and
+    // ServiceDirectory before the filesystem worker is ready, but it must not
+    // touch a path or spawn a normal service until vfsd has published the
+    // committed root route.
+    _s_log("init: waiting for committed root route\n");
+    const int root_error = naos_native_install_root_namespace();
+    if (root_error != 0)
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: root route unavailable error=%d\n", root_error);
+        _s_log(message);
+        return;
+    }
+    _s_log("init: committed root route ready\n");
+
+    // init owns the first interactive session.  The kernel only permits a
+    // session leader to acquire a controlling terminal; bootstrapping init
+    // can inherit the module launcher's process group, so make the session
+    // explicit before ttyd and the shell are started.  EPERM means the
+    // launcher already made us a session leader and is harmless here.
+    const pid_t session = setsid();
+    if (session < 0 && errno != EPERM)
+    {
+        char message[96]{};
+        snprintf(message, sizeof(message), "init: session setup failed errno=%d\n", errno);
+        _s_log(message);
+    }
+    else
+        _s_log("init: session ready\n");
     if (!start_ttyd())
         return;
+    _s_log("init: ttyd ready; rootfsd ownership remains with vfsd\n");
+
+    // The graphical frontend is independent of the optional init hook and
+    // the ordinary shell readiness barrier. Start it as soon as ttyd is
+    // usable so the kernel VGA console can hand the scanout to consoled
+    // without waiting for another large executable materialization.
+    pid_t initial_console = -1;
+    if (framebuffer_available() && !spawn_consoled_process(&initial_console))
+        _s_log("init: pre-barrier consoled spawn failed; will retry later\n");
     (void)run_optional_init_script();
-    run_user_shell();
+    _s_log("init: running startup barrier\n");
+    if (!run_startup_barrier())
+        _s_log("init: startup barrier failed; continuing with shell supervision\n");
+    _s_log("init: startup barrier returned\n");
+    run_user_shell(initial_console);
 }

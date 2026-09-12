@@ -6,11 +6,6 @@
 #include <atomic>
 #include <type_traits>
 
-namespace fs::vfs
-{
-class file;
-}
-
 namespace log
 {
 enum class level : u8
@@ -103,7 +98,6 @@ const configuration &config();
 void early_init();
 void init();
 void start_workers();
-void set_dmesg_file(fs::vfs::file *file);
 void flush_sinks();
 NoReturn void keep_panic(const regs_t *regs = nullptr);
 

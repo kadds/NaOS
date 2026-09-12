@@ -7,5 +7,7 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
-[dev-dependencies]
+[features]
+linux = []
 
+[dev-dependencies]

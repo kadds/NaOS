@@ -23,7 +23,7 @@ class round_robin_scheduler : public scheduler
 
     thread_t *get_migratable_task(u32 cpuid) override;
 
-    void commit_migrate(thread_t *thd) override;
+    bool commit_migrate(thread_t *thd) override;
 
     void init_cpu() override;
     void destroy_cpu() override;

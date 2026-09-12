@@ -6,15 +6,9 @@
 #include "kernel/common.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/dev/device.hpp"
-#include "kernel/fs/pipefs/pipefs.hpp"
-#include "kernel/fs/rootfs/rootfs.hpp"
-#include "kernel/fs/vfs/defines.hpp"
-#include "kernel/fs/vfs/file.hpp"
-#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/io/io_manager.hpp"
 #include "kernel/irq.hpp"
-#include "kernel/ksybs.hpp"
 #include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
@@ -40,12 +34,12 @@ ExportC Unpaged_Text_Section void bss_init(void *start, void *end)
     u64 *data = reinterpret_cast<u64 *>(start);
     while (num--)
     {
-        *(data) = 0;
+        *data++ = 0;
     }
     char *p = reinterpret_cast<char *>(data);
     while (rest--)
     {
-        *(p) = 0;
+        *p++ = 0;
     }
 }
 
@@ -59,24 +53,6 @@ ExportC Unpaged_Text_Section void _init_unpaged(const kernel_start_args *args)
 }
 
 u64 build_version_timestamp = BUILD_VERSION_TS;
-
-handle_t<fs::vfs::file> *dmesg_file;
-
-void fs_init()
-{
-    // create /var/log/dmesg
-    fs::vfs::mkdir("/var", fs::vfs::global_root, fs::vfs::global_root, 0);
-    fs::vfs::mkdir("/var/log", fs::vfs::global_root, fs::vfs::global_root, 0);
-    auto file = fs::vfs::open("/var/log/dmesg", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write,
-                              fs::path_walk_flags::auto_create_file | fs::path_walk_flags::file);
-    if (!file)
-    {
-        KLOG_PANIC("create dmesg fail failed");
-    }
-
-    dmesg_file = memory::KernelCommonAllocatorV->New<handle_t<fs::vfs::file>>(file);
-    log::set_dmesg_file(dmesg_file->operator->());
-}
 
 NoReturn void kstart_bsp(kernel_start_args *args)
 {
@@ -100,14 +76,8 @@ NoReturn void kstart_bsp(kernel_start_args *args)
     timer::init();
     SMP::init();
 
-    // -----spec routine for bsp----
-    fs::vfs::init();
-    fs::ramfs::init();
-    fs::rootfs::init(memory::pa2va<byte *>(phy_addr_t::from(args->rfsimg_start)), args->rfsimg_size);
-    fs::pipefs::init();
-    ksybs::init();
-
-    fs_init();
+    // Filesystem namespaces and boot archive parsing belong to userland
+    // services.  The kernel only keeps the MemoryObject/ELF loading path.
     term::init();
 
     io::init();

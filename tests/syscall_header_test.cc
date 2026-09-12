@@ -17,8 +17,12 @@ static_assert(
 static_assert(
     std::is_same_v<decltype(&_na_channel_receive), na_status_t (*)(na_handle_t, na_channel_receive_frame_t *)>);
 static_assert(std::is_same_v<decltype(&_na_channel_discard), na_status_t (*)(na_handle_t)>);
-static_assert(std::is_same_v<decltype(&_na_handle_wait_many),
-                             na_status_t (*)(na_wait_item_t *, uint64_t, const struct timespec *)>);
+static_assert(std::is_same_v<decltype(&_na_epoll_create), na_status_t (*)(na_handle_t *)>);
+static_assert(std::is_same_v<decltype(&_na_epoll_ctl),
+                             na_status_t (*)(na_handle_t, uint32_t, na_handle_t, const na_epoll_event_t *)>);
+static_assert(std::is_same_v<decltype(&_na_epoll_wait),
+                             na_status_t (*)(na_handle_t, na_epoll_event_t *, uint64_t, uint64_t *,
+                                             const struct timespec *)>);
 static_assert(
     std::is_same_v<decltype(&_na_handle_duplicate), na_status_t (*)(na_handle_t, na_meta_rights_t, na_handle_t *)>);
 static_assert(std::is_same_v<decltype(&_na_handle_restrict),

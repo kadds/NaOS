@@ -1,4 +1,5 @@
 #include "kernel/resource.hpp"
+#include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/ucontext.hpp"
@@ -243,7 +244,7 @@ na_status_t resource_table_t::restrict_native(na_handle_t source, const na_handl
     result = NA_HANDLE_INVALID;
     source_backup = {};
     constexpr u32 known_flags = NA_RESTRICTION_SCOPE | NA_RESTRICTION_REVISION | NA_RESTRICTION_FEATURES |
-                                NA_RESTRICTION_META_RIGHTS | NA_RESTRICTION_PROTOCOL_RIGHTS;
+                                NA_RESTRICTION_META_RIGHTS | NA_RESTRICTION_PROTOCOL_RIGHTS | NA_RESTRICTION_RANGE;
     if (restriction.struct_size < sizeof(restriction) || (restriction.flags & ~known_flags) != 0)
         return NA_STATUS_INVALID_ARGUMENT;
     uctx::RawWriteLockUninterruptibleContext icu(native_map_lock);
@@ -267,6 +268,20 @@ na_status_t resource_table_t::restrict_native(na_handle_t source, const na_handl
         return NA_STATUS_ACCESS_DENIED;
     if ((restriction.flags & NA_RESTRICTION_FEATURES) != 0 && (restriction.features & ~found->meta.features) != 0)
         return NA_STATUS_ACCESS_DENIED;
+    u64 restricted_view_offset = found->meta.view_offset;
+    u64 restricted_view_length = found->meta.view_length;
+    if ((restriction.flags & NA_RESTRICTION_RANGE) != 0)
+    {
+        if (found->meta.binding != NA_BINDING_MEMORY_OBJECT || found->meta.scope != NA_SCOPE_MEMORY_OBJECT ||
+            found->object->get<naos::data_plane::memory_object>() == nullptr || restriction.view_length == 0 ||
+            restriction.view_offset > found->meta.view_length ||
+            restriction.view_length > found->meta.view_length - restriction.view_offset)
+            return NA_STATUS_INVALID_ARGUMENT;
+        if (found->meta.view_offset > ~u64(0) - restriction.view_offset)
+            return NA_STATUS_INVALID_ARGUMENT;
+        restricted_view_offset = found->meta.view_offset + restriction.view_offset;
+        restricted_view_length = restriction.view_length;
+    }
     auto *source_entry = native_handle_map.get_ptr(source);
     if (source_entry == nullptr)
         return NA_STATUS_INVALID_HANDLE;
@@ -286,6 +301,8 @@ na_status_t resource_table_t::restrict_native(na_handle_t source, const na_handl
         restricted.meta.revision = restriction.revision;
     if ((restriction.flags & NA_RESTRICTION_FEATURES) != 0)
         restricted.meta.features = restriction.features;
+    restricted.meta.view_offset = restricted_view_offset;
+    restricted.meta.view_length = restricted_view_length;
     restricted.generation = handle;
     source_entry->state = capability::entry_state::restricting;
     native_handle_map.insert(handle, std::move(restricted));
@@ -355,6 +372,14 @@ na_status_t resource_table_t::clone_fork_bindings(const resource_table_t &source
             return NA_STATUS_INVALID_ARGUMENT;
 
         auto fork_inheritable = [](const capability::entry &entry) {
+            // A directory capability is a namespace cursor, not a freely
+            // shareable open description. Keep one inherited reference long
+            // enough for the child runtime to call Directory.clone_binding;
+            // the runtime then releases this temporary reference. This also
+            // covers restricted endpoint metadata whose binding is narrowed
+            // during a vfsd handoff.
+            if (entry.meta.scope == NA_SCOPE_DIRECTORY && entry.meta.binding == NA_BINDING_CLIENT_END)
+                return true;
             if (entry.meta.binding != NA_BINDING_KERNEL_VIEW && entry.meta.binding != NA_BINDING_CLIENT_END)
                 return false;
             if ((entry.meta.meta_rights & NA_RIGHT_DUPLICATE) != 0)
@@ -362,9 +387,9 @@ na_status_t resource_table_t::clone_fork_bindings(const resource_table_t &source
 
             // Terminal endpoints are unique while they are live bindings, but
             // fork must retain the original endpoint long enough for the
-            // child runtime to ask ttyd for its post-fork binding.  This is a
-            // narrow fork-only exception; ordinary unique capabilities never
-            // cross a fork boundary.
+            // child runtime to ask ttyd for a fresh binding. This is a narrow
+            // fork-only exception; ordinary unique capabilities never cross a
+            // fork boundary.
             return entry.meta.binding == NA_BINDING_CLIENT_END &&
                    (entry.meta.scope == NA_SCOPE_TERMINAL_MASTER || entry.meta.scope == NA_SCOPE_TERMINAL_SLAVE);
         };

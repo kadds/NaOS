@@ -52,26 +52,34 @@ void Unpaged_Text_Section memcpy_2(void *dst, const void *source, u32 len)
     }
 }
 
-Unpaged_Data_Section(0) static const char rfsimage[] = "";
-
-bool Unpaged_Text_Section find_rfsimage(multiboot_tag *tags, u32 *start, u32 *end)
+/// Single pass over the loader tags building the {token -> range} table of
+/// self-declaring service modules. Unknown tokens are retained so the kernel
+/// can diagnose them without assigning them filesystem semantics.
+u64 Unpaged_Text_Section find_named_modules(multiboot_tag *tags, named_boot_module *modules)
 {
+    u64 count = 0;
     u32 next_size = ((tags->size + 7) & ~7);
     for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + next_size))
     {
-        if (tags->type == MULTIBOOT_TAG_TYPE_MODULE)
+        if (tags->type == MULTIBOOT_TAG_TYPE_MODULE && count < max_named_boot_modules)
         {
             multiboot_tag_module *md = (multiboot_tag_module *)tags;
-            if (strcmp_2((char *)md->cmdline, rfsimage) == 0)
+            if (md->cmdline[0] != '\0')
             {
-                *start = (u64)md->mod_start;
-                *end = (u64)md->mod_end;
-                return true;
+                named_boot_module &entry = modules[count++];
+                u32 i = 0;
+                for (; i < sizeof(entry.name) - 1 && md->cmdline[i] != '\0'; i++)
+                {
+                    entry.name[i] = md->cmdline[i];
+                }
+                entry.name[i] = '\0';
+                entry.start = (u64)md->mod_start;
+                entry.size = (u64)(md->mod_end - md->mod_start);
             }
         }
         next_size = ((tags->size + 7) & ~7);
     }
-    return false;
+    return count;
 }
 
 NoReturn void Unpaged_Text_Section panic()
@@ -187,25 +195,61 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
     u32 start_ptr = (u32)(u64)header;
     max_boot_tag_ptr = (void *)(*(u32 *)header + ((u8 *)header));
     multiboot_tag *tags = (multiboot_tag *)((byte *)header + 8);
-    u32 start, end;
-    if (!find_rfsimage(tags, &start, &end))
-        panic();
-    u32 offset;
-    if (end <= 0x100000) // lower 1MB
+    // One pass builds the {token -> range} table of self-declaring service
+    // modules; launchers later query it by name.
+    // Do not value-initialize this stack buffer here.  The compiler lowers
+    // `T buffer[N] = {}` to a call to the normal memset implementation, which
+    // lives in the high-half kernel text.  At this point Multiboot is still
+    // running with the low identity-only page table, so that call would fetch
+    // from an unmapped high-half address and triple fault.  find_named_modules
+    // initializes every entry that it returns, and entries beyond its count
+    // are never consumed.
+    named_boot_module modules[max_named_boot_modules];
+    const u64 module_count = find_named_modules(tags, modules);
+    // The boot data region (kernel args, relocated modules, boot allocator)
+    // must never overlap any loader-provided module, so placement considers
+    // the union of all module ranges.
+    u32 mod_start = 0xffffffff;
+    u32 mod_end = 0;
+    for (u64 i = 0; i < module_count; i++)
     {
-        if (end >= 0x80000) // page table and stack protection
+        const u32 mstart = (u32)modules[i].start;
+        const u32 mend = (u32)(modules[i].start + modules[i].size);
+        if (mstart < mod_start)
+            mod_start = mstart;
+        if (mend > mod_end)
+            mod_end = mend;
+    }
+    u32 offset;
+    if (mod_end <= 0x100000) // lower 1MB
+    {
+        if (mod_end >= 0x80000) // page table and stack protection
         {
             panic();
         }
         offset = (u64)_bss_end;
     }
-    else if ((u32)(u64)start_ptr < start)
+    else if ((u32)(u64)start_ptr < mod_start)
     {
-        offset = (u64)end;
+        offset = (u64)mod_end;
     }
     else
     {
         offset = (u64)max_boot_tag_ptr;
+    }
+
+    // The boot arguments and the unpaged allocator are written before the
+    // normal memory initializer can relocate modules.  max_boot_tag_ptr is
+    // not necessarily outside the loader-provided modules (GRUB may place
+    // the tags between module payloads), so the old branch above could make
+    // alloca_data() overwrite a module header before it was copied.  Keep
+    // the existing placement when it is already past the module union, but
+    // move the whole boot-data area past that union whenever the candidate
+    // is below it. This is the minimum lifetime guarantee needed by named
+    // boot modules.
+    if (module_count != 0 && offset < mod_end)
+    {
+        offset = (u64)mod_end;
     }
 
     // align 4Kib
@@ -213,15 +257,17 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
     data_offset = offset;
     kernel_start_args *args = (kernel_start_args *)alloca_data(sizeof(kernel_start_args), 8);
 
-    args->rfsimg_start = (u64)start;
-    args->rfsimg_size = end - start;
+    for (u64 i = 0; i < module_count; i++)
+    {
+        args->named_modules[i] = modules[i];
+    }
+    args->named_module_count = module_count;
     args->data_base = offset;
     set_args(args, tags);
 
     args->size_of_struct = sizeof(kernel_start_args);
     args->kernel_base = (u64)base_phy_addr;
     args->kernel_size = (u64)_bss_end - (u64)base_phy_addr;
-
     args->data_size = data_offset - args->data_base;
     _init_unpaged(args);
     args = (kernel_start_args *)((byte *)args + memory::linear_addr_offset);

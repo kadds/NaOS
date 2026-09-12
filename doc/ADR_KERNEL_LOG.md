@@ -138,12 +138,12 @@ kernel_log_sinker=console:on:info:color,serial:on:debug:nocolor,dmesg:on:info:co
 
 - console 和 dmesg 的 `color` 只给 timestamp、`cpu-pid-tid`、level、PID 和 module/process 标识符着色。
 - message 正文不被整行染色，终端当前颜色不会被日志正文改写。
-- serial 默认 `nocolor`，因此 `run/kernel_out.log` 和普通 `cat` 输出保持纯文本；显式配置 `serial:...:color` 时只给头部字段着色。
+- serial 默认 `nocolor`，因此 `<build-dir>/kernel_out.log` 和普通 `cat` 输出保持纯文本；显式配置 `serial:...:color` 时只给头部字段着色。
 - `nocolor` 会移除 message/raw 中已有的 ANSI；颜色从不写入 retention ring，也不发送到默认 emergency serial。
 
 sink 约束：
 
-- `klog_serial` worker 串行写 COM1，对应 QEMU 的 `-serial file:run/kernel_out.log`。
+- `klog_serial` worker 串行写 COM1，对应 QEMU 的 `-serial file:<build-dir>/kernel_out.log`。
 - `klog_console` worker 写 kernel terminal，不与 logger core 锁形成 I/O 依赖。
 - `klog_dmesg` worker 在 task context 写 `/var/log/dmesg`，处理历史 drain、短写和失败重试；dmesg 失败不会递归记录，也不会阻塞其他 sink。
 - emergency sink 独立使用 COM1 和可用的 debugcon/panic console，不依赖普通 worker、heap 或 VFS。
@@ -182,9 +182,9 @@ kernel_log_emergency_serial=on
 ```text
 --wait-gdb       添加 -S，等待 GDB
 --gdb-port PORT  替换默认 TCP 1234 监听端口
---qemu-debug     将 QEMU 内部日志写入 run/qemu.log
+--qemu-debug     将 QEMU 内部日志写入 <build-dir>/qemu.log
 --monitor PATH   创建 QEMU monitor Unix socket
---no-reboot      添加 -no-reboot -no-shutdown
+--no-reboot      添加 -no-reboot
 ```
 
 端口必须在 1–65535 范围内；monitor socket 已存在时拒绝覆盖。默认 QEMU 路径继续使用 `-s` 监听 TCP 1234。
@@ -217,9 +217,9 @@ kernel_log_emergency_serial=on
 ```bash
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
-python3 util/run.py q --iso --no-reboot -c 2
+python3 util/run.py --build-dir build-debug q --iso --no-reboot -c 2
 ```
 
-结果：C++ 构建成功，CTest 25/25 通过；2 CPU QEMU 启动能够进入 user shell，serial 日志显示 early/runtime 日志、进程名来源、字段颜色配置和无 panic 的调度运行。`run/kernel_out.log` 是默认串口文本输出位置。
+结果：C++ 构建成功，CTest 25/25 通过；2 CPU QEMU 启动能够进入 user shell，serial 日志显示 early/runtime 日志、进程名来源、字段颜色配置和无 panic 的调度运行。`build-debug/kernel_out.log` 是该构建的串口文本输出位置。
 
 架构总览中的日志生命周期、record 字段、raw/structured 区别、command line 参数和 QEMU 调试选项与本 ADR 保持一致。

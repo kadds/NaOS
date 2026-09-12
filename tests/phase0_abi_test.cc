@@ -1,3 +1,4 @@
+#include "kernel/arch/cpu_info.hpp"
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
 #include "naos/canonical.hpp"
@@ -13,7 +14,7 @@ namespace
 {
 constexpr bool syscall_numbers_are_dense()
 {
-    constexpr std::array<std::uint32_t, 41> numbers = {
+    constexpr std::array<std::uint32_t, 45> numbers = {
         NA_SYSCALL_LOG,
         NA_SYSCALL_CLOCK_GET,
         NA_SYSCALL_FUTEX,
@@ -35,7 +36,9 @@ constexpr bool syscall_numbers_are_dense()
         NA_SYSCALL_CHANNEL_SEND,
         NA_SYSCALL_CHANNEL_RECEIVE,
         NA_SYSCALL_CHANNEL_DISCARD,
-        NA_SYSCALL_HANDLE_WAIT_MANY,
+        NA_SYSCALL_EPOLL_CREATE,
+        NA_SYSCALL_EPOLL_CTL,
+        NA_SYSCALL_EPOLL_WAIT,
         NA_SYSCALL_HANDLE_DUPLICATE,
         NA_SYSCALL_HANDLE_RESTRICT,
         NA_SYSCALL_HANDLE_GET_INFO,
@@ -55,6 +58,8 @@ constexpr bool syscall_numbers_are_dense()
         NA_SYSCALL_PROCESS_HANDLE_OPEN,
         NA_SYSCALL_PROCESS_SPAWN,
         NA_SYSCALL_PIPE_CREATE,
+        NA_SYSCALL_MEMORY_CREATE,
+        NA_SYSCALL_GETRANDOM,
     };
     for (std::uint32_t index = 0; index < numbers.size(); index++)
     {
@@ -73,9 +78,11 @@ void test_layouts()
     static_assert(sizeof(na_submit_frame_t) == 72);
     static_assert(sizeof(na_channel_receive_frame_t) == 96);
     static_assert(sizeof(na_result_frame_t) == 96);
-    static_assert(sizeof(na_bootstrap_message_t) == 144);
+    static_assert(sizeof(na_bootstrap_message_t) == 72);
     static_assert(sizeof(na_process_spawn_frame_t) == 80);
     static_assert(sizeof(na_fail_frame_t) == 24);
+    static_assert(sizeof(na_memory_map_frame_t) == 72);
+    static_assert(offsetof(na_memory_map_frame_t, data_offset) == 48);
     static_assert(offsetof(na_channel_receive_frame_t, caller_pid) == 88);
     static_assert(offsetof(na_submit_frame_t, method_id) == 8);
     static_assert(offsetof(na_submit_frame_t, resources) == 32);
@@ -84,9 +91,9 @@ void test_layouts()
     static_assert(NA_CHANNEL_MAX_RESOURCES == 64);
     static_assert(NA_HANDLE_INVALID == 0);
     static_assert(NA_SYSCALL_NONE == 0);
-    static_assert(NA_SYSCALL_COUNT == 42);
-    static_assert(NA_SYSCALL_MEMORY_MAP == 36);
-    static_assert(NA_SYSCALL_PROCESS_SPAWN == 40);
+    static_assert(NA_SYSCALL_COUNT == 47);
+    static_assert(NA_SYSCALL_MEMORY_MAP == 38);
+    static_assert(NA_SYSCALL_PROCESS_SPAWN == 42);
     static_assert(syscall_numbers_are_dense());
 }
 
@@ -144,6 +151,17 @@ void test_outcome_errno_mapping()
     result.protocol_error = EINVAL;
     REQUIRE(naos::result_errno(result) == EIO);
 }
+
+void test_tsc_cpuid15_frequency_calculation()
+{
+    static_assert(arch::cpu_info::tsc_frequency_from_cpuid15(1, 100, 24'000'000) == 2'400'000'000ULL);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(1, 100, 24'000'000) == 2'400'000'000ULL);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(3, 125, 24'000'000) == 1'000'000'000ULL);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(1, 192, 25'000'000) == 4'800'000'000ULL);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(0, 100, 24'000'000) == 0);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(1, 0, 24'000'000) == 0);
+    REQUIRE(arch::cpu_info::tsc_frequency_from_cpuid15(1, 100, 0) == 0);
+}
 } // namespace
 
 TEST_CASE("phase 0 ABI contract", "[abi][phase0]")
@@ -152,4 +170,5 @@ TEST_CASE("phase 0 ABI contract", "[abi][phase0]")
     test_canonical_little_endian();
     test_empty_value();
     test_outcome_errno_mapping();
+    test_tsc_cpuid15_frequency_calculation();
 }

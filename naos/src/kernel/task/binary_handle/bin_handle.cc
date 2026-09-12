@@ -1,11 +1,9 @@
 #include "kernel/task/binary_handle/bin_handle.hpp"
 #include "freelibcxx/vector.hpp"
-#include "kernel/arch/paging.hpp"
-#include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
-#include "kernel/mm/vm.hpp"
 #include "kernel/task.hpp"
 #include "kernel/task/binary_handle/elf.hpp"
+
 namespace bin_handle
 {
 struct handle_data
@@ -19,30 +17,15 @@ struct handle_data
     }
 };
 
-bool bin_handle::load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
+bool bin_handle::load(byte *header, const handle_t<naos::data_plane::memory_object> &object, const khandle &backing,
+                      memory::vm::info_t *new_mm_info, execute_info *info)
 {
-    auto &vma = new_mm_info->vma();
-    using namespace memory::vm;
-    using namespace arch::task;
-    auto new_vm = new_mm_info->map_file(memory::user_code_bottom_address, file, 0, file->size(), file->size(),
-                                        memory::vm::flags::readable | memory::vm::flags::writeable |
-                                            memory::vm::flags::executeable | memory::vm::flags::user_mode);
-    if (new_vm == nullptr)
-        return false;
-    info->entry_start_address = (void *)new_vm->start;
-
-    auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
-                                     memory::vm::flags::readable | memory::vm::flags::writeable |
-                                         memory::vm::flags::expand | memory::vm::flags::user_mode,
-                                     memory::vm::page_fault_method::common, 0);
-
-    if (stack_vm == nullptr)
-        return false;
-
-    info->stack_top = (void *)stack_vm->end;
-    info->stack_bottom = (void *)stack_vm->start;
-
-    return true;
+    (void)header;
+    (void)object;
+    (void)backing;
+    (void)new_mm_info;
+    (void)info;
+    return false;
 }
 
 using array_t = freelibcxx::vector<handle_data>;
@@ -72,23 +55,18 @@ bool unregister_handle(handle *handle_class, const char *name)
     return false;
 }
 
-bool load(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
+bool load(byte *header, const handle_t<naos::data_plane::memory_object> &object, const khandle &backing,
+          memory::vm::info_t *new_mm_info, execute_info *info)
 {
     for (auto it = handles->begin(); it != handles->end(); ++it)
     {
-        if (it->handle_ptr->load(header, file, new_mm_info, info))
+        if (it->handle_ptr->load(header, object, backing, new_mm_info, info))
         {
             info->user_data = (u64)it->handle_ptr;
             return true;
         }
     }
     return false;
-}
-
-bool load_bin(byte *header, fs::vfs::file *file, memory::vm::info_t *new_mm_info, execute_info *info)
-{
-    bin_handle_ptr->load(header, file, new_mm_info, info);
-    return true;
 }
 
 } // namespace bin_handle

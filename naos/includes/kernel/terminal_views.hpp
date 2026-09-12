@@ -1,6 +1,7 @@
 #pragma once
 
 #include "freelibcxx/vector.hpp"
+#include "kernel/arch/cpu_info.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/lock.hpp"
@@ -12,6 +13,25 @@
 
 namespace dev::tty
 {
+class console_stream final : public kobject
+{
+  public:
+    static constexpr kobject::type_e type_of() { return kobject::type_e::console_stream; }
+
+    explicit console_stream(int terminal_index)
+        : kobject(kobject::type_e::console_stream)
+        , terminal_index_(terminal_index)
+    {
+    }
+
+    bool capability_is_unique() const override { return false; }
+    i64 read(byte *data, u64 size);
+    i64 write(const byte *data, u64 size);
+
+  private:
+    int terminal_index_;
+};
+
 class terminal_job_control final : public kobject
 {
   public:
@@ -170,41 +190,7 @@ class terminal_driver_factory final : public kobject
 
     static bool entropy_word(u64 &value)
     {
-        u32 eax = 7;
-        u32 ebx = 0;
-        u32 ecx = 0;
-        u32 edx = 0;
-        _cpu_id(&eax, &ebx, &ecx, &edx);
-        if ((ebx & (1U << 18)) != 0)
-        {
-            value = 0;
-            unsigned char valid = 0;
-            for (u32 attempt = 0; attempt < 8; attempt++)
-            {
-                __asm__ __volatile__("rdseed %0; setc %1" : "=r"(value), "=qm"(valid) : : "cc");
-                if (valid != 0)
-                    return true;
-            }
-        }
-
-        eax = 1;
-        ebx = 0;
-        ecx = 0;
-        edx = 0;
-        _cpu_id(&eax, &ebx, &ecx, &edx);
-        if ((ecx & (1U << 30)) != 0)
-        {
-            value = 0;
-            unsigned char valid = 0;
-            for (u32 attempt = 0; attempt < 8; attempt++)
-            {
-                __asm__ __volatile__("rdrand %0; setc %1" : "=r"(value), "=qm"(valid) : : "cc");
-                if (valid != 0)
-                    return true;
-            }
-        }
-
-        return false;
+        return arch::cpu_info::try_rdseed(value) || arch::cpu_info::try_rdrand(value);
     }
 
     lock::spinlock_t lock_;

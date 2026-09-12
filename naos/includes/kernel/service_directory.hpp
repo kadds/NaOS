@@ -7,9 +7,22 @@
 #include "kernel/lock.hpp"
 #include "kernel/mutex.hpp"
 #include "kernel/types.hpp"
+#include "naos/service_directory.hpp"
+
+namespace task
+{
+struct process_t;
+}
 
 namespace service
 {
+
+inline constexpr char terminal_driver_factory_uri[] = NAOS_SERVICE_TERMINAL_DRIVER_FACTORY;
+inline constexpr char input_event_source_uri[] = NAOS_SERVICE_INPUT_EVENT_SOURCE;
+inline constexpr char framebuffer_uri[] = NAOS_SERVICE_FRAMEBUFFER;
+inline constexpr char boot_module_rootfsd_uri[] = NAOS_SERVICE_BOOT_MODULE_ROOTFSD;
+inline constexpr char boot_module_init_uri[] = NAOS_SERVICE_BOOT_MODULE_INIT;
+inline constexpr char boot_root_image_uri[] = NAOS_SERVICE_BOOT_ROOT_IMAGE;
 
 class directory final : public kobject
 {
@@ -30,9 +43,11 @@ class directory final : public kobject
                        process_id owner = 0);
     i64 connect_service(const char *uri, u64 uri_size, const na_uuid_t &expected_uuid, u64 requested_rights,
                         u64 requested_revision, u64 requested_features,
+                        ::task::process_t *caller,
                         capability::transferred_resource &client_resource, u64 &selected_revision,
                         u64 &selected_features);
-    i64 list_services(u64 offset, u64 requested_bytes, freelibcxx::vector<byte> &records, u64 &next, u64 &count) const;
+    i64 list_services(const char *prefix, u64 prefix_size, u64 offset, u64 requested_bytes,
+                      freelibcxx::vector<byte> &records, u64 &next, u64 &count) const;
     void cleanup_owner(process_id owner);
 
   private:
@@ -91,7 +106,7 @@ class directory final : public kobject
 
 handle_t<directory> get_global_service_directory();
 void set_global_service_directory(handle_t<directory> directory);
-void register_kernel_service(const char *uri, u64 uri_size, khandle object, capability::metadata meta,
-                             bool one_shot = false);
+i64 register_kernel_service(const char *uri, u64 uri_size, khandle object, capability::metadata meta,
+                            bool one_shot = false);
 
 } // namespace service

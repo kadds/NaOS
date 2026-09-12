@@ -6,7 +6,6 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
-#include "kernel/fs/vfs/file.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/task.hpp"
@@ -92,7 +91,6 @@ u64 early_slots = early_slot_count;
 std::atomic<u64> total_dropped{0};
 u64 invalid_configuration = 0;
 bool serial_ready = false;
-fs::vfs::file *dmesg_file = nullptr;
 arch::device::com::serial serial_device;
 
 char *emergency_buffer()
@@ -836,18 +834,6 @@ bool write_sink(sink_id sink, const record &item)
     {
         term::write_to_klog(freelibcxx::const_string_view(data, length));
     }
-    else if (dmesg_file != nullptr)
-    {
-        u64 offset = 0;
-        while (offset < length)
-        {
-            const i64 written = dmesg_file->write(reinterpret_cast<const byte *>(data + offset), length - offset, 0);
-            if (written <= 0)
-                return false;
-            offset += static_cast<u64>(written);
-        }
-        return true;
-    }
     else if (sink == sink_id::dmesg)
         return false;
     return true;
@@ -875,7 +861,15 @@ next_result next_for_worker(sink_id sink, u64 &cursor, record &item, u64 &gap_fi
 {
     for (;;)
     {
-        core_lock.lock();
+        if (!core_lock.try_lock())
+        {
+            // Logger workers run in the real-time class.  Spinning here can
+            // starve the same-CPU thread that currently owns the short-lived
+            // commit lock, turning a harmless log burst into a system-wide
+            // boot stall.
+            task::thread_yield();
+            return next_result::none;
+        }
         const u64 committed = committed_sequence.load(std::memory_order_acquire);
         const u64 oldest = oldest_sequence_locked();
         if (oldest == 0 || cursor > committed)
@@ -951,17 +945,7 @@ bool write_gap(sink_id sink, worker_state &worker)
         worker.gap_offset = worker.gap_length;
         return true;
     }
-    if (dmesg_file == nullptr)
-        return false;
-    while (worker.gap_offset < worker.gap_length)
-    {
-        const i64 written = dmesg_file->write(reinterpret_cast<const byte *>(worker.rendered + worker.gap_offset),
-                                              worker.gap_length - worker.gap_offset, 0);
-        if (written <= 0)
-            return false;
-        worker.gap_offset += static_cast<u64>(written);
-    }
-    return true;
+    return false;
 }
 
 bool has_pending(sink_id, const worker_state &worker)
@@ -1122,8 +1106,6 @@ void init()
         record_configuration_warning("using defaults for malformed entries");
 }
 
-void set_dmesg_file(fs::vfs::file *file) { dmesg_file = file; }
-
 void start_workers()
 {
     bool expected = false;
@@ -1134,7 +1116,7 @@ void start_workers()
                                  current_configuration.dmesg};
     for (u8 index = 0; index < static_cast<u8>(sink_id::count); index++)
     {
-        if (!sinks[index].enabled || (index == static_cast<u8>(sink_id::dmesg) && dmesg_file == nullptr))
+        if (!sinks[index].enabled || index == static_cast<u8>(sink_id::dmesg))
             continue;
         workers[index].wait = memory::New<task::wait_queue_t>(memory::KernelCommonAllocatorV);
         if (workers[index].wait == nullptr)

@@ -1,0 +1,29 @@
+[package]
+name = "ramdiskd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "ramdiskd"
+path = "src/lib.rs"
+bench = false
+
+[[bin]]
+name = "ramdiskd"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+naos-sys = { path = "../naos-sys" }
+naos-idl = { path = "../naos-idl", features = ["alloc"] }
+servicekit = { path = "../servicekit" }
+log = { version = "0.4.34", default-features = false }
+tokio = { version = "1.47", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }

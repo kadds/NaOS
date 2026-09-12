@@ -77,7 +77,6 @@ class stack_frame_t
     void *rbp = nullptr;
 
   public:
-    const char *get_frame_name();
 };
 
 int get_stackframes(int skip, stack_frame_t *frames, int count);

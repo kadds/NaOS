@@ -5,8 +5,13 @@ edition = "2024"
 publish = false
 
 [features]
-default = []
+default = ["naos"]
+naos = ["dep:naos-sys"]
+linux = []
 alloc = []
+# In-process fake kernel used by host-side round-trip tests (see
+# `src/loopback.rs`).  Implies `alloc`: the fake kernel keeps queues.
+test-loopback = ["alloc", "naos"]
 
 [dependencies]
-naos-sys = { path = "../naos-sys" }
+naos-sys = { path = "../naos-sys", optional = true }

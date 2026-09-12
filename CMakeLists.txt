@@ -2,6 +2,7 @@ cmake_minimum_required (VERSION 3.9)
 
 project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 enable_testing ()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -29,7 +30,6 @@ set(CMAKE_CXX_FLAGS_RELEASE "-g -Os")
 set(CMAKE_ASM_FLAGS_RELEASE "-g -O2")
 
 # dirs
-set(CMAKE_BINARY_DIR ${PROJECT_SOURCE_DIR}/build)
 set(ROOT_FS_DIR ${CMAKE_BINARY_DIR}/bin/rfsroot)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
@@ -54,7 +54,6 @@ set(UTILDIR ${PROJECT_SOURCE_DIR}/util)
 set(UTIL_EXTRA ${UTILDIR}/extra.sh)
 set(UTIL_STRIP ${UTILDIR}/strip.sh)
 set(UTIL_LN ${UTILDIR}/ln.sh)
-set(UTIL_MKIMG ${UTILDIR}/pack.py)
 set(UTIL_MKSYMBOL ${UTILDIR}/make_symbols.py)
 set(UTIL_BUSYBOX_CONFIG ${UTILDIR}/config_busybox.sh)
 

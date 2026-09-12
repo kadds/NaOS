@@ -6,6 +6,17 @@
 extern "C" {
 #endif
 
+#define NAOS_SERVICE_TERMINAL_DRIVER_FACTORY "naos://service/terminal/driver/0"
+#define NAOS_SERVICE_INPUT_EVENT_SOURCE "naos://service/input/0"
+#define NAOS_SERVICE_FRAMEBUFFER "naos://service/framebuffer/0"
+#define NAOS_SERVICE_VFS "naos://service/fs/vfs/0"
+/* Kernel-published, one-shot executable images for the userland boot
+ * manager.  These are generic boot-module resources; they are not passed as
+ * service-specific bootstrap capabilities. */
+#define NAOS_SERVICE_BOOT_MODULE_ROOTFSD "naos://service/boot/module/rootfsd/0"
+#define NAOS_SERVICE_BOOT_MODULE_INIT "naos://service/boot/module/init/0"
+#define NAOS_SERVICE_BOOT_ROOT_IMAGE "naos://service/boot/root-image/0"
+
 /* Registers and consumes handle on success; the handle remains owned by the caller on failure. */
 int naos_service_register_handle(const char *uri, na_handle_t handle);
 /* Registers a duplicate of fd's native handle, preserving the fd. */

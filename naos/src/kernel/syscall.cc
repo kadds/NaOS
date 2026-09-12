@@ -1,5 +1,4 @@
 #include "kernel/syscall.hpp"
-#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/log.hpp"
 #include "kernel/task.hpp"
 

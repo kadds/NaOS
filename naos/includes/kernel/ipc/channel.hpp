@@ -1,14 +1,15 @@
 #pragma once
 
 #include "freelibcxx/vector.hpp"
+#include "freelibcxx/function_ref.hpp"
 #include "kernel/capability.hpp"
-#include "kernel/ipc/bounded_queue.hpp"
+#include "kernel/ipc/core_lock.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/resource.hpp"
 #include "kernel/time.hpp"
 #include "kernel/wait.hpp"
-#include <atomic>
+#include "naos/ipc_core.h"
 
 namespace naos::ipc
 {
@@ -18,27 +19,23 @@ class channel_state;
 class channel_message
 {
   public:
-    channel_message(u64 byte_count, u64 resource_count);
+    channel_message(naos_ipc_channel_t *channel, u64 byte_count, u64 resource_count);
     ~channel_message();
 
     channel_message(const channel_message &) = delete;
     channel_message &operator=(const channel_message &) = delete;
 
     bool valid() const;
-    bool append(capability::transferred_resource &&resource);
 
-    byte *bytes() { return bytes_; }
-    const byte *bytes() const { return bytes_; }
-    u64 byte_count() const { return byte_count_; }
-    u64 resource_count() const { return resources_.size(); }
-    u64 resource_capacity() const { return resource_capacity_; }
-    capability::transferred_resource &resource(u64 index) { return resources_[index]; }
+    byte *bytes();
+    const byte *bytes() const;
+    u64 byte_count() const;
+    u64 resource_count() const;
+    u64 resource_capacity() const;
+    naos_ipc_message_t *core_message() { return message_; }
 
   private:
-    byte *bytes_;
-    u64 byte_count_;
-    u64 resource_capacity_;
-    freelibcxx::vector<capability::transferred_resource> resources_;
+    naos_ipc_message_t *message_;
 };
 
 class raw_channel_endpoint : public kobject
@@ -87,8 +84,8 @@ class channel_state
     bool commit_receive(u8 side, channel_message *message);
     bool discard(u8 side, channel_message *&message);
 
-    void endpoint_object_created();
-    void endpoint_object_destroyed();
+    void endpoint_object_created(raw_channel_endpoint *endpoint);
+    void endpoint_object_destroyed(raw_channel_endpoint *endpoint);
     void kernel_owner_acquired(u8 side);
     void kernel_owner_released(u8 side);
     void capability_acquired(u8 side, capability::location where);
@@ -99,48 +96,40 @@ class channel_state
     bool has_root() const;
     bool can_reap() const;
     u64 queued_messages(u8 side) const;
-    u64 max_messages() const { return max_messages_; }
+    u64 max_messages() const;
     void collect_reachable_states(freelibcxx::vector<channel_state *> &targets) const;
     void discard_orphan_messages();
-    u64 endpoint_object_count() const { return endpoint_objects_.load(); }
+    u64 endpoint_object_count() const;
+    void notify_readiness();
+    void notify_waiters();
+    task::wait_queue_t &wait_queue() { return wait_queue_; }
+
+    // The orphan collector owns this intrusive registry linkage.  Keeping it
+    // in the state object makes registry insertion/removal allocation-free
+    // while its raw spinlock is held.
+    channel_state *registry_next() const { return registry_next_; }
+    void set_registry_next(channel_state *next) { registry_next_ = next; }
+    bool registry_linked() const { return registry_linked_; }
+    void set_registry_linked(bool linked) { registry_linked_ = linked; }
 
     u8 side_for(const raw_channel_endpoint *endpoint) const;
 
   private:
-    struct queue
-    {
-        queue(channel_message **storage, u64 capacity)
-            : storage(storage)
-            , fifo(storage, capacity)
-            , bytes(0)
-            , resources(0)
-        {
-        }
-
-        ~queue();
-        queue(const queue &) = delete;
-        queue &operator=(const queue &) = delete;
-
-        channel_message **storage;
-        naos::ipc::bounded_queue<channel_message *> fifo;
-        u64 bytes;
-        u64 resources;
-    };
-
-    queue *queues_[2];
-    u64 max_messages_;
-    u64 max_bytes_;
-    u64 max_resources_;
-    mutable lock::spinlock_t lock_;
-    std::atomic_uint64_t owners_[2];
-    std::atomic_uint64_t roots_[2];
-    std::atomic_uint64_t active_operations_;
-    std::atomic_uint64_t active_claims_;
-    std::atomic_uint64_t endpoint_objects_;
-    bool valid_;
+    core_lock core_lock_;
+    naos_ipc_lock_t core_lock_api_;
+    ::lock::spinlock_t lifecycle_lock_;
+    task::wait_queue_t wait_queue_;
+    u64 endpoint_objects_ = 0;
+    raw_channel_endpoint *endpoints_[2] = {};
+    u64 roots_[2] = {};
+    naos_ipc_wait_notifier_t core_notifier_api_;
+    naos_ipc_channel_t *channel_;
+    channel_state *registry_next_ = nullptr;
+    bool registry_linked_ = false;
 
   public:
-    bool valid() const { return valid_; }
+    bool valid() const;
+    naos_ipc_channel_t *core_channel() const { return channel_; }
 };
 
 na_status_t create_raw_channel(khandle &left, khandle &right, const na_channel_options_t *options);
@@ -158,12 +147,11 @@ na_status_t send_raw_channel_kernel(task::resource_table_t &resources, na_handle
                                     u64 byte_count);
 na_status_t send_raw_channel_kernel(const khandle &endpoint, const byte *bytes, u64 byte_count);
 na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t endpoint);
-na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count,
-                      timeclock::microsecond_t deadline);
-na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
-                            timeclock::microsecond_t deadline);
+na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_ref<bool()> condition,
+                               timeclock::microsecond_t deadline);
+na_status_t wait_for_raw_channel(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
+                                 timeclock::microsecond_t deadline);
 
 void collect_orphaned_channels();
-void notify_channel_waiters();
 
 } // namespace naos::ipc

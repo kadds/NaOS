@@ -1,7 +1,6 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/clock.hpp"
 #include "kernel/errno.hpp"
-#include "kernel/fs/vfs/file.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/log.hpp"
 #include "kernel/syscall.hpp"

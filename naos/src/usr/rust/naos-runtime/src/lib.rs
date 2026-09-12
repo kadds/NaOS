@@ -7,6 +7,11 @@ extern crate std;
 extern crate alloc;
 
 #[cfg(feature = "alloc")]
+use core::cell::UnsafeCell;
+#[cfg(feature = "alloc")]
+use core::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(feature = "alloc")]
 mod allocator;
 
 #[cfg(feature = "alloc")]
@@ -14,6 +19,10 @@ mod thread;
 
 #[cfg(feature = "alloc")]
 mod startup;
+
+mod wait;
+
+pub use wait::{ReadyEvent, wait_for_completion, wait_ready};
 
 #[cfg(feature = "alloc")]
 pub use thread::{
@@ -122,6 +131,15 @@ pub unsafe extern "C" fn __naos_runtime_current_tid() -> i64 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __naos_runtime_current_pid() -> i64 {
     unsafe { sys::_s_current_pid() }
+}
+
+/// Fill `buffer` using the kernel's hardware random source. This is the
+/// narrow ABI used by the NaOS `std` PAL; failures stay visible to `std`,
+/// which has no recoverable error path for its random source and aborts.
+#[cfg(all(feature = "alloc", not(test)))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __naos_runtime_getrandom(buffer: *mut u8, length: usize) -> i32 {
+    unsafe { sys::_s_getrandom(buffer, length, 0) }
 }
 
 core::arch::global_asm!(include_str!("memory.S"), options(att_syntax));
@@ -259,20 +277,10 @@ pub struct Bootstrap {
     stdin_stream: BootstrapHandle,
     stdout_stream: BootstrapHandle,
     stderr_stream: BootstrapHandle,
-    capabilities: [BootstrapCapability; sys::MAX_BOOTSTRAP_CAPABILITIES],
-    capability_count: usize,
 }
 
 impl Bootstrap {
     fn from_frame(frame: sys::BootstrapFrame) -> Self {
-        let capability_count = frame.capability_count as usize;
-        let mut capabilities = core::array::from_fn(|_| BootstrapCapability::invalid());
-        for (index, capability) in frame.capabilities[..capability_count].iter().enumerate() {
-            capabilities[index] = BootstrapCapability {
-                kind: capability.kind,
-                handle: unsafe { BootstrapHandle::from_raw(capability.handle) },
-            };
-        }
         Self {
             root_directory: unsafe { BootstrapHandle::from_raw(frame.root_directory) },
             current_directory: unsafe { BootstrapHandle::from_raw(frame.current_directory) },
@@ -280,8 +288,6 @@ impl Bootstrap {
             stdin_stream: unsafe { BootstrapHandle::from_raw(frame.stdin_stream) },
             stdout_stream: unsafe { BootstrapHandle::from_raw(frame.stdout_stream) },
             stderr_stream: unsafe { BootstrapHandle::from_raw(frame.stderr_stream) },
-            capabilities,
-            capability_count,
         }
     }
 
@@ -309,31 +315,22 @@ impl Bootstrap {
         &self.stderr_stream
     }
 
-    pub fn capabilities(&self) -> impl Iterator<Item = &BootstrapCapability> {
-        self.capabilities[..self.capability_count].iter()
-    }
-}
-
-#[repr(C)]
-pub struct BootstrapCapability {
-    kind: u32,
-    handle: BootstrapHandle,
-}
-
-impl BootstrapCapability {
-    fn invalid() -> Self {
-        Self {
-            kind: 0,
-            handle: unsafe { BootstrapHandle::from_raw(sys::HANDLE_INVALID) },
-        }
+    /// MOVEs the root directory handle out of the bootstrap frame, handing
+    /// single ownership to the caller (e.g. `std::os::naos::init_fs`). The
+    /// stored handle becomes invalid so `Drop` never closes it twice.
+    pub fn take_root_directory(&mut self) -> sys::Handle {
+        let handle = core::mem::replace(&mut self.root_directory, unsafe {
+            BootstrapHandle::from_raw(sys::HANDLE_INVALID)
+        });
+        handle.into_raw()
     }
 
-    pub const fn kind(&self) -> u32 {
-        self.kind
-    }
-
-    pub fn handle(&self) -> &BootstrapHandle {
-        &self.handle
+    /// MOVEs the current directory handle out of the bootstrap frame.
+    pub fn take_current_directory(&mut self) -> sys::Handle {
+        let handle = core::mem::replace(&mut self.current_directory, unsafe {
+            BootstrapHandle::from_raw(sys::HANDLE_INVALID)
+        });
+        handle.into_raw()
     }
 }
 
@@ -363,17 +360,93 @@ impl Drop for BootstrapHandle {
     }
 }
 
+#[cfg(feature = "alloc")]
+struct RuntimeContext {
+    stack: InitialStack,
+    bootstrap: Bootstrap,
+}
+
+#[cfg(feature = "alloc")]
+struct RuntimeContextCell {
+    value: UnsafeCell<Option<RuntimeContext>>,
+    borrowed: AtomicBool,
+}
+
+#[cfg(feature = "alloc")]
+unsafe impl Sync for RuntimeContextCell {}
+
+#[cfg(feature = "alloc")]
+static RUNTIME_CONTEXT: RuntimeContextCell = RuntimeContextCell {
+    value: UnsafeCell::new(None),
+    borrowed: AtomicBool::new(false),
+};
+
+#[cfg(feature = "alloc")]
+struct RuntimeContextBorrow<'a> {
+    cell: &'a RuntimeContextCell,
+}
+
+#[cfg(feature = "alloc")]
+impl Drop for RuntimeContextBorrow<'_> {
+    fn drop(&mut self) {
+        self.cell.borrowed.store(false, Ordering::Release);
+    }
+}
+
+/// Run code with the bootstrap frame prepared by the NaOS process entry.
+///
+/// The callback is scoped so the owned bootstrap handles cannot escape the
+/// runtime context or be borrowed concurrently. This is the application-side
+/// equivalent of the arguments a hosted Rust `main` would normally receive.
+#[cfg(feature = "alloc")]
+pub fn with_context<R>(callback: impl FnOnce(&InitialStack, &mut Bootstrap) -> R) -> Option<R> {
+    if RUNTIME_CONTEXT
+        .borrowed
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return None;
+    }
+    let borrow = RuntimeContextBorrow {
+        cell: &RUNTIME_CONTEXT,
+    };
+    let context = unsafe { (*RUNTIME_CONTEXT.value.get()).as_mut() };
+    let Some(context) = context else {
+        drop(borrow);
+        return None;
+    };
+    let result = callback(&context.stack, &mut context.bootstrap);
+    drop(borrow);
+    Some(result)
+}
+
+#[cfg(feature = "alloc")]
+fn install_context(stack: InitialStack, bootstrap: Bootstrap) {
+    unsafe { (*RUNTIME_CONTEXT.value.get()).replace(RuntimeContext { stack, bootstrap }) };
+}
+
+#[cfg(feature = "alloc")]
+fn clear_context() {
+    unsafe { (*RUNTIME_CONTEXT.value.get()).take() };
+}
+
 fn distinct(left: sys::Handle, right: sys::Handle) -> bool {
     left != right
 }
 
 fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
     if frame.struct_size < size_of::<sys::BootstrapFrame>() as u32
-        || frame.flags != 0
         || frame.reserved0 != 0
-        || frame.reserved1 != 0
-        || frame.capability_count as usize > sys::MAX_BOOTSTRAP_CAPABILITIES
+        || frame.reserved0 != 0
     {
+        return false;
+    }
+
+    // Early-service bootstrap (USERSPACE_FILESYSTEM_ADR §5.3.5): the kernel
+    // reports the absent root/cwd slots as invalid handles; everything else
+    // keeps the regular shape.
+    let early_service = frame.flags == sys::BOOTSTRAP_FLAG_EARLY_SERVICE;
+    if frame.flags != 0 && !early_service {
         return false;
     }
 
@@ -382,7 +455,17 @@ fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
         frame.current_directory,
         frame.service_directory,
     ];
-    if directories
+    if early_service {
+        if frame.root_directory != sys::HANDLE_INVALID
+            || frame.current_directory != sys::HANDLE_INVALID
+            || frame.service_directory == sys::HANDLE_INVALID
+            || !distinct(frame.service_directory, frame.stdin_stream)
+            || !distinct(frame.service_directory, frame.stdout_stream)
+            || !distinct(frame.service_directory, frame.stderr_stream)
+        {
+            return false;
+        }
+    } else if directories
         .iter()
         .any(|handle| *handle == sys::HANDLE_INVALID)
         || !distinct(directories[0], directories[1])
@@ -397,34 +480,17 @@ fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
         return false;
     }
 
-    for index in 0..frame.capability_count as usize {
-        let capability = frame.capabilities[index];
-        if capability.kind == 0 || capability.handle == sys::HANDLE_INVALID {
-            return false;
-        }
-        if directories
-            .iter()
-            .any(|handle| *handle == capability.handle)
-        {
-            return false;
-        }
-        if streams.iter().any(|handle| *handle == capability.handle) {
-            return false;
-        }
-        for previous in 0..index {
-            let other = frame.capabilities[previous];
-            if other.kind == capability.kind || other.handle == capability.handle {
-                return false;
-            }
-        }
-    }
     true
 }
 
-pub unsafe fn bootstrap(stack: *const usize) -> Result<(InitialStack, Bootstrap), RuntimeError> {
+unsafe fn bootstrap_with_flags(
+    stack: *const usize,
+    flags: u32,
+) -> Result<(InitialStack, Bootstrap), RuntimeError> {
     let parsed = unsafe { InitialStack::parse(stack) }.map_err(RuntimeError::Stack)?;
     let mut frame = sys::BootstrapFrame {
         struct_size: size_of::<sys::BootstrapFrame>() as u32,
+        flags,
         ..sys::BootstrapFrame::default()
     };
     let status = unsafe { sys::_na_bootstrap(&mut frame) };
@@ -437,10 +503,28 @@ pub unsafe fn bootstrap(stack: *const usize) -> Result<(InitialStack, Bootstrap)
     Ok((parsed, Bootstrap::from_frame(frame)))
 }
 
-unsafe extern "C" {
-    fn naos_app_main(stack: *const InitialStack, bootstrap: *const Bootstrap) -> i64;
+/// Bootstrap both kernel-launched early services and ordinary channel-spawned
+/// children without a per-binary Cargo feature.  The first request is the
+/// normal channel-backed shape; a process with no bootstrap channel receives
+/// STATUS_NOT_SUPPORTED and is then retried with the explicit early-service
+/// flag.  This keeps Cargo feature unification from accidentally making a
+/// channel child issue an early-service request.
+pub unsafe fn bootstrap(stack: *const usize) -> Result<(InitialStack, Bootstrap), RuntimeError> {
+    match unsafe { bootstrap_with_flags(stack, 0) } {
+        Err(RuntimeError::BootstrapStatus(status)) if status == sys::STATUS_NOT_SUPPORTED => unsafe {
+            bootstrap_with_flags(stack, sys::BOOTSTRAP_FLAG_EARLY_SERVICE)
+        },
+        result => result,
+    }
 }
 
+#[cfg(not(test))]
+unsafe extern "C" {
+    #[link_name = "main"]
+    fn rust_main_entry() -> i32;
+}
+
+#[cfg(not(test))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __naos_runtime_start(stack: *const usize) -> ! {
     let status = match unsafe { InitialStack::parse(stack) } {
@@ -470,7 +554,20 @@ pub unsafe extern "C" fn __naos_runtime_start(stack: *const usize) -> ! {
                 }
             }
             match unsafe { bootstrap(stack) } {
-                Ok((_, bootstrap)) => unsafe { naos_app_main(&parsed, &bootstrap) },
+                Ok((parsed, bootstrap)) => {
+                    #[cfg(feature = "alloc")]
+                    {
+                        install_context(parsed, bootstrap);
+                        let status = unsafe { rust_main_entry() } as i64;
+                        clear_context();
+                        status
+                    }
+                    #[cfg(not(feature = "alloc"))]
+                    {
+                        let _ = (parsed, bootstrap);
+                        unsafe { rust_main_entry() as i64 }
+                    }
+                }
                 Err(_) => {
                     unsafe { sys::_s_log(b"naos-runtime: bootstrap failed\0".as_ptr()) };
                     1
@@ -546,10 +643,29 @@ mod tests {
         let mut duplicate = frame;
         duplicate.current_directory = duplicate.root_directory;
         assert!(!validate_bootstrap(&duplicate));
+    }
 
-        let mut capability = frame;
-        capability.capability_count = 1;
-        capability.capabilities[0] = sys::BootstrapCapability { kind: 7, handle: 4 };
-        assert!(!validate_bootstrap(&capability));
+    #[test]
+    fn validates_early_service_bootstrap_shape() {
+        let frame = sys::BootstrapFrame {
+            struct_size: core::mem::size_of::<sys::BootstrapFrame>() as u32,
+            flags: sys::BOOTSTRAP_FLAG_EARLY_SERVICE,
+            service_directory: 3,
+            stdin_stream: 4,
+            stdout_stream: 5,
+            stderr_stream: 6,
+            ..sys::BootstrapFrame::default()
+        };
+        assert!(validate_bootstrap(&frame));
+
+        // Root/cwd slots must stay absent on the early-service branch.
+        let mut seeded_root = frame;
+        seeded_root.root_directory = 1;
+        assert!(!validate_bootstrap(&seeded_root));
+
+        // Unknown flags remain rejected.
+        let mut unknown_flag = frame;
+        unknown_flag.flags = sys::BOOTSTRAP_FLAG_REBIND_CONSOLE;
+        assert!(!validate_bootstrap(&unknown_flag));
     }
 }

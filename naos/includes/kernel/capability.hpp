@@ -33,6 +33,10 @@ struct metadata
     u64 features = 0;
     na_meta_rights_t meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT;
     u64 protocol_rights = 0;
+    /// Absolute byte range within a MemoryObject storage identity. For all
+    /// non-memory capabilities these remain zero.
+    u64 view_offset = 0;
+    u64 view_length = 0;
 };
 
 inline constexpr na_meta_rights_t derive_tty_control_rights(na_meta_rights_t source)

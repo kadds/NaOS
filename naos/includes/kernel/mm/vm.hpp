@@ -12,12 +12,6 @@
 #include "list_node_cache.hpp"
 #include "vm.hpp"
 
-namespace fs::vfs
-{
-class file;
-class pseudo_t;
-} // namespace fs::vfs
-
 namespace naos::data_plane
 {
 class memory_object;
@@ -44,6 +38,7 @@ enum flags : u64
     big_page = 1ul << 17,
     huge_page = 1ul << 18,
     shared = 1ul << 19,
+    memory_object = 1ul << 20,
 };
 }
 
@@ -60,9 +55,7 @@ enum class page_fault_method
     heap_break,
     common,
     common_with_bss,
-    file,
     memory_object,
-    physical,
 };
 
 class vm_allocator
@@ -136,16 +129,18 @@ class info_t
     u64 get_brk();
 
     // mmap virtual address
-    const vm_t *map_file(u64 start, fs::vfs::file *file, u64 file_offset, u64 file_length, u64 mmap_length,
-                         flag_t page_ext_attr);
     const vm_t *map_memory_object(u64 start, khandle backing, naos::data_plane::memory_object *object,
-                                  u64 object_offset, u64 length, flag_t page_ext_attr);
+                                  u64 object_offset, u64 data_offset, u64 data_length, u64 map_length,
+                                  flag_t page_ext_attr);
 
-    bool umap_file(u64 addr, u64 size);
-    void sync_map_file(u64 addr);
+    bool unmap(u64 addr, u64 size);
 
     void share_to(process_id from_id, process_id to_id, info_t *info);
     void remove_fork_disallowed_mappings();
+    /// Re-establish this address space's shared-page memory-object mappings
+    /// after fork() made them read-only/COW.  The frames belong to the
+    /// memory object, so neither process may privatize them.
+    void restore_shared_memory_mappings();
     bool copy_at(u64 vir);
 
     void load() { paging_.load(); }
@@ -159,9 +154,7 @@ class info_t
     bool expand_brk(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_vm(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_bss(u64 alignment_page, u64 access_address, vm_t *item);
-    bool expand_file(u64 alignment_page, u64 access_address, vm_t *item);
     bool expand_memory_object(u64 alignment_page, u64 access_address, vm_t *item);
-    bool expand_physical(u64 alignment_page, u64 access_address, vm_t *item);
     void restore_fork_disallowed_mappings();
 
   private:
@@ -176,58 +169,44 @@ class info_t
 /// map struct
 struct map_t
 {
-    fs::vfs::file *file;
     naos::data_plane::memory_object *memory_object;
     khandle backing;
-    phy_addr_t physical_address;
-    fs::vfs::pseudo_t *pseudo;
     u64 file_offset;
     u64 file_length;
+    /// Logical bytes begin at this offset within the page-rounded VMA.
+    u64 data_offset;
+    u64 data_length;
     u64 mmap_length;
+    bool shared;
+    /// True when this mapping faults onto the object's own page frames instead
+    /// of private COW pages.  Such mappings observe each other's writes
+    /// directly, so they are never written back and never privatized on fork.
+    bool pages_shared;
     info_t *vm_info;
-    map_t(fs::vfs::file *f, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
-        : file(f)
-        , memory_object(nullptr)
-        , backing()
-        , physical_address(nullptr)
-        , pseudo(nullptr)
-        , file_offset(file_offset)
-        , file_length(file_length)
-        , mmap_length(mmap_length)
-        , vm_info(vmi) {};
-    map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 length, info_t *vmi)
-        : file(nullptr)
-        , memory_object(object)
+    map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 data_offset,
+          u64 data_length, u64 map_length, bool shared, info_t *vmi)
+        : memory_object(object)
         , backing(std::move(backing))
-        , physical_address(nullptr)
-        , pseudo(nullptr)
         , file_offset(object_offset)
-        , file_length(length)
-        , mmap_length(length)
-        , vm_info(vmi) {};
-    map_t(phy_addr_t physical_address, u64 file_offset, u64 file_length, u64 mmap_length, info_t *vmi)
-        : file(nullptr)
-        , memory_object(nullptr)
-        , backing()
-        , physical_address(physical_address)
-        , pseudo(nullptr)
-        , file_offset(file_offset)
-        , file_length(file_length)
-        , mmap_length(mmap_length)
+        , file_length(map_length)
+        , data_offset(data_offset)
+        , data_length(data_length)
+        , mmap_length(map_length)
+        , shared(shared)
+        , pages_shared(false)
         , vm_info(vmi) {};
     map_t(const map_t &rhs, info_t *vmi)
-        : file(rhs.file)
-        , memory_object(rhs.memory_object)
+        : memory_object(rhs.memory_object)
         , backing(rhs.backing)
-        , physical_address(rhs.physical_address)
-        , pseudo(rhs.pseudo)
         , file_offset(rhs.file_offset)
         , file_length(rhs.file_length)
+        , data_offset(rhs.data_offset)
+        , data_length(rhs.data_length)
         , mmap_length(rhs.mmap_length)
+        , shared(rhs.shared)
+        , pages_shared(rhs.pages_shared)
         , vm_info(vmi) {};
 };
-
-void sync_map_file(u64 addr);
 
 struct vm_t
 {

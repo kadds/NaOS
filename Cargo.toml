@@ -2,13 +2,25 @@
 resolver = "3"
 members = [
     "naos/src/usr/rust/naos-sys",
+    "naos/src/usr/rust/naos-ipc-core-sys",
     "naos/src/usr/rust/naos-runtime",
     "naos/src/usr/rust/naos-idl",
     "naos/src/usr/rust/rust-tls-probe",
     "naos/src/usr/rust/rust-std-smoke",
+    "naos/src/usr/rust/vfsd",
+    "naos/src/usr/rust/ramdiskd",
+    "naos/src/usr/rust/exfatd",
+    "naos/src/usr/rust/servicekit",
+    "tests/host-smoke",
     "tests/rust-interop-fixture",
 ]
 exclude = ["naos/third_party/rust-naos/src/bootstrap"]
+
+# Tokio's NaOS port uses the same Mio API as Linux, but the selector backend
+# must wait on NaOS capability handles rather than Unix file descriptors.
+[patch.crates-io]
+mio = { path = "naos/third_party/mio" }
+tokio = { path = "naos/third_party/tokio/tokio" }
 
 [profile.dev]
 panic = "abort"

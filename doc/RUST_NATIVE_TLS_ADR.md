@@ -3,7 +3,7 @@
 - 状态：Accepted；Rust-only 与 C++/mlibc 联合 Phase 3 smoke 已实现并通过本地验收；dynamic TLS 与 Rust `std` 仍不在本阶段
 - 日期：2026-08-18
 - 决策者：NaOS kernel / Rust native runtime 维护者
-- 关联：[Rust Native Userland PRD](RUST_NATIVE_USERLAND_PRD.md)、[总体架构](ARCHITECTURE.md)
+- 关联：[Rust Native Userland ADR](RUST_NATIVE_USERLAND_ADR.md)、[总体架构](ARCHITECTURE.md)
 
 ## 1. 背景
 

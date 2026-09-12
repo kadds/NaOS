@@ -150,3 +150,15 @@ bochsout.txt
 !/run/image/mnt/boot/.gitkeep
 !/run/image/mnt/disk/.gitkeep
 build-*/
+
+# Generated test/runtime artifacts. Keep test sources and fixture definitions
+# trackable, but never stage generated payloads or local boot locks.
+**/BIN.DAT
+**/tests/fixtures/*.img
+**/tests/fixtures/*.img.gz
+run/boot.lock
+.pytest_cache/
+**/__pycache__/
+.mypy_cache/
+.ruff_cache/
+tmp_work*.md

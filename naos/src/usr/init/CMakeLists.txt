@@ -25,3 +25,15 @@ add_custom_command(TARGET init
     POST_BUILD
     COMMAND ${UTIL_STRIP} ${Target} ${To} 
 )
+
+# The final boot contract launches init as a fixed Multiboot module.  Keep the
+# ordinary rfsroot copy for the archive transition until the mounted root
+# backend is available, but always produce the module artifact independently.
+set(NAOS_INIT_INSTALL ${CMAKE_BINARY_DIR}/bin/system/init)
+add_custom_command(
+    OUTPUT ${NAOS_INIT_INSTALL}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/bin/system
+    COMMAND ${CMAKE_COMMAND} -E copy ${Target} ${NAOS_INIT_INSTALL}
+    DEPENDS init
+    VERBATIM)
+add_custom_target(init_boot_module ALL DEPENDS ${NAOS_INIT_INSTALL})

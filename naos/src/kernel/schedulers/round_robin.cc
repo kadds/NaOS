@@ -60,7 +60,10 @@ void round_robin_scheduler::remove(thread_t *thread)
         }
         else
         {
-            KLOG_PANIC("Can't find task {} pid: {}", thread->tid, thread->process->pid);
+            // Exit cleanup can run after the scheduler has detached a ready
+            // thread but before its state is marked destroy. Removal is
+            // idempotent: there is no scheduler node left to remove, but the
+            // exit callback still owns schedule_data.
         }
     }
     memory::Delete<>(memory::KernelCommonAllocatorV, (thread_data_rr_t *)thread->schedule_data);
@@ -81,6 +84,13 @@ void round_robin_scheduler::update_state(thread_t *thread, thread_state state)
                 thread->state = state;
                 l->runable_list.remove(it);
                 l->block_threads.push_back(thread);
+                return;
+            }
+            if (thread->attributes & thread_attributes::exit_pending)
+            {
+                // Match the CFS exit path: a thread can be detached from the
+                // scheduler during a handoff before its state becomes destroy.
+                thread->state = state;
                 return;
             }
         }
@@ -251,18 +261,20 @@ thread_t *round_robin_scheduler::get_migratable_task(u32 cpuid)
     return nullptr;
 }
 
-void round_robin_scheduler::commit_migrate(thread_t *thd)
+bool round_robin_scheduler::commit_migrate(thread_t *thd)
 {
     auto l = reinterpret_cast<cpu_task_rr_t *>(cpu::current().get_schedule_data(static_cast<int>(clazz)));
     uctx::UninterruptibleContext icu;
     auto it = l->runable_list.find(thd);
-    kassert(it != l->runable_list.end(), "commit task failed!");
+    if (it == l->runable_list.end())
+        return false;
 
     auto scher_data = (thread_data_rr_t *)thd->schedule_data;
     thd->schedule_data = nullptr;
     memory::Delete<>(memory::KernelCommonAllocatorV, scher_data);
 
     l->runable_list.remove(it);
+    return true;
 }
 
 void round_robin_scheduler::init_cpu()

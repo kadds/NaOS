@@ -10,3 +10,8 @@ done
 
 # Keep the original NaOS shell entry point available for existing scripts.
 ln -sf /bin/nanobox "${r}/nsh"
+
+# Machine teardown is the boot driver's decision, not a test binary's: an
+# opt-in /etc/init.sh runs a smoke and then powers the machine off so a QEMU
+# run ends on the guest's own schedule instead of the launcher's wall clock.
+ln -sf /bin/nanobox "${r}/poweroff"

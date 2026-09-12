@@ -82,9 +82,9 @@ async-first invocation，并由 NaoIDL 固化 protocol 与 wire 事实源。
 | Wire | 所有 transport 共享 canonical little-endian value wire；resource 永远带外传递。 |
 | Binding | `invoke_submit()` 可调用显式 scoped 的 KernelView 或 ClientEnd；binding class 和 transport failure 可观察。 |
 | Remote | Remote capability 由用户态 broker 代理；kernel 不理解 node、网络身份、TLS 或远端 object ID。 |
-| Data plane | 控制消息有界 snapshot copy；大数据使用 MemoryObject、shared ring、stream 或 pager。 |
+| Data plane | 控制消息有界 snapshot copy；大数据使用 MemoryObject、user-space shared-memory ring、stream 或 pager。 |
 | Kernel 边界 | Kernel 长期只保留调度、VM、IPC、capability、interrupt/DMA 等机制；系统策略迁往用户态。 |
-| ABI 发布 | Stable protocol 必须由 NaoIDL codegen、manifest 和 compatibility checker 生成并验证。 |
+| ABI 发布 | Stable protocol 必须由 NaoIDL codegen、manifest 和 generated contract tests 生成并验证。 |
 | Compatibility boundary | Native ABI 不暴露通用 fd/ioctl；POSIX fd 及其 policy 由 mlibc compatibility layer 提供。 |
 
 ## 4. 备选方案
@@ -348,7 +348,7 @@ Native handle layer至少提供：
 | `handle_duplicate` | 要求 DUPLICATE；创建独立 entry，scope/rights 只能削减。 |
 | `handle_restrict` | 消费原 handle 并返回更窄 scope/rights 的新 handle；不产生额外 authority。 |
 | `handle_get_info` | 要求 INSPECT；返回可信 scope、rights、signals 和 object state。 |
-| `handle_wait_many` | 对多个 waitable handles 做 level-triggered wait；deadline为绝对 monotonic `timespec`，传 `nullptr` 表示无限等待。 |
+| `epoll_create` / `epoll_ctl` / `epoll_wait` | 对 waitable handles 建立 readiness 集合；支持 level-triggered 和 edge-triggered 订阅，deadline 为绝对 monotonic `timespec`。 |
 
 Channel endpoint、Invocation 和 Responder 默认没有 DUPLICATE right。它们可以按各自规则通过 MOVE 转移。
 Duplicate/restrict失败时source保持不变；`handle_restrict`只有在新entry可原子发布时才消费旧entry。
@@ -417,6 +417,11 @@ Bootstrap protocol 至少能够传递：
 - 明确授予的其他 application capabilities。
 
 Kernel 不保存 process root、cwd 或全局 `/dev`。这些属于 user runtime 与 service namespace。
+
+常规 bootstrap 的 root/cwd 可以是 `Directory` `CLIENT_END`。kernel 的
+`valid_bootstrap_directory` 只接受 scope 为 Directory、且 protocol UUID 与 revision 都匹配的 endpoint metadata；它不为
+该 endpoint 合成 `native_directory`。这一接受规则与 early-service 例外共同见
+[USERSPACE_FILESYSTEM_ADR §5.5](USERSPACE_FILESYSTEM_ADR.md#55-bootstrap-stdio)。
 
 ### 10.3 用户态 namespace
 
@@ -557,7 +562,21 @@ Signals采用 level-triggered语义：
 | `CANCEL_REQUESTED` | Responder对应 caller发出 best-effort cancellation。 |
 | `OBJECT_REVOKED` | Backing object已撤销。 |
 
-`handle_wait_many` 只观察 signals，不消费 message/result。WRITABLE是提示而非 reservation。
+`epoll_wait` 只观察 signals，不消费 message/result。WRITABLE 是提示而非 reservation；edge-triggered
+订阅由用户态在排空 readiness 后重新挂载。
+
+**就绪传播（W4 实现）**：`epoll_wait` 不扫描全部 registration。每个 target 的
+`notify_readiness()` 沿 watcher 表把 `(sink, token)` 交给 epoll，epoll 以 token 作为
+registration 槽位下标做 O(1) 入队并去重，wait 只弹出已入队的槽位再复核可见事件。因此
+
+- signal 路径无动态分配，且不回调任何 target 方法（只有 epoll 自己入队 + 唤醒等待队列）；
+- epoll 的 `lock_` 从不跨越对象方法调用：`capability_signals()`/`readiness_epoch()`
+  在锁外对快照执行；
+- level-triggered 且仍然可见的槽位保持入队，无需新的通知即可被后续 wait 取回；
+  edge-triggered 槽位没有新事件时不再入队；
+- `kobject::type_e` 不新增条目，userland 仍只有一个 selector（Mio/NaOS backend）。
+
+这是对既有 readiness 机制的实现收敛，不改变信号语义、订阅模型或 syscall 形态。
 
 Native handle没有 blocking/non-blocking mode。需要等待的 wrapper使用显式 deadline；mlibc自行实现 POSIX `O_NONBLOCK`。
 
@@ -872,7 +891,9 @@ handle_close(handle)
 handle_duplicate(handle, restriction)
 handle_restrict(handle, restriction)
 handle_get_info(handle, buffer)
-handle_wait_many(items, deadline_timespec_or_null)
+epoll_create() -> epoll
+epoll_ctl(epoll, ADD|MOD|DEL, target, event)
+epoll_wait(epoll, events, capacity, deadline_timespec_or_null)
 
 channel_create(options) -> raw_endpoint0, raw_endpoint1
 protocol_endpoint_create(protocol_descriptor_handle, negotiation, client_rights) -> client_end, server_end
@@ -966,6 +987,7 @@ Capacity不足或 usercopy fault时 message/result保留。所有 returned handl
 - PEER_CLOSED
 - ALREADY_CONSUMED
 - NOT_SUPPORTED
+- IO_ERROR
 
 Status 数值由公开 UAPI header 定义，并由 ABI tests 锁定；新增或变更数值必须通过 ABI revision 管理。
 
@@ -1067,8 +1089,8 @@ Kernel raw channel不强制用户协议，但 system service generated binding�
 - capability acquisition后，kernel可映射为内部紧凑 scope index。
 
 Compatible revision和features在 connect/acquisition时协商，normal invocation不发送 UUID或version。同一 UUID 的
-revision 只能保持既有 method/field/type/rights contract 并作兼容扩展；compatibility checker 对每个 revision 都执行
-该验证。任何删除、收窄或重解释都必须分配新 UUID，并从 revision 1 开始。
+revision 只能保持既有 method/field/type/rights contract 并作兼容扩展。任何删除、收窄或重解释都必须分配新 UUID，
+并从 revision 1 开始；generator 与 protocol contract tests 只验证当前 schema 的结构和 wire 行为。
 
 ### 18.2 Canonical value rules
 
@@ -1147,33 +1169,10 @@ protocol.naidl
 
 Generated kernel code必须 freestanding、bounded、无异常、无 RTTI、无 host runtime，并且不访问用户地址。
 
-### 18.6 Compatibility checker
-
-Stable manifest必须拒绝：
-
-- Protocol UUID复用或更换既有 identity；
-- Method/field/enum ID复用；
-- 已发布字段重排、删除、类型/offset/alignment变化；
-- Request/response或ownership mode变化；
-- Required rights扩大或安全语义改变；
-- idempotent/concurrent/cancellable/one-way语义改变；
-- Strict/flexible行为不兼容变化；
-- 缩小已发布 bound；
-- 删除 stable method而未 reserve ID；
-- 让旧 client输入获得不同 authority或side effect的变化。
-
-允许：
-
-- 新 UUID定义新 major；
-- 新 ordinal增加 method；
-- Extensible struct尾部追加安全默认字段；
-- Flexible enum/bits增加值；
-- Experimental schema在 stable前调整。
-
-### 18.7 发布纪律
+### 18.6 发布纪律
 
 - Handwritten Test/Echo protocol只用于 experimental mechanism验证。
-- NaoIDL compiler、deterministic codegen和compatibility checker完成前，不发布 stable protocol。
+- NaoIDL compiler、deterministic codegen 和 generated contract tests 完成前，不发布 stable protocol。
 - Stable wire/layout/IDs不得人工在多处重复声明。
 - Compiler只在 host运行，不进入 kernel trusted computing base。
 - Same schema/compiler version必须产生 byte-identical output。
@@ -1189,9 +1188,9 @@ Native ABI不提供任意 `read(handle)` 或 `write(handle)`。操作属于明�
 | Raw IPC datagram | Channel send/receive |
 | 字节流 | Stream capability |
 | 大块共享数据 | MemoryObject |
-| 高频 producer/consumer | Shared ring + signals |
+| 高频 producer/consumer | User-space shared-memory ring + signals |
 | File-backed mmap | MemoryObject + Pager |
-| Readiness | Handle signals + wait_many |
+| Readiness | Handle signals + epoll |
 | Network remote data | Broker-managed local buffer/stream protocol |
 
 POSIX `read(fd)` 由 mlibc fd binding分派。小文件 I/O可以先使用有界 File.Read/Write；高频路径再协商 Stream或

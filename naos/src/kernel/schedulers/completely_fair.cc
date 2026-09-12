@@ -60,6 +60,16 @@ cpu_task_list_cf_t *get_cpu_task_list()
 
 thread_time_cf_t *get_schedule_data(thread_t *thd) { return (thread_time_cf_t *)thd->schedule_data; }
 
+thread_skip_list_t::iterator find_thread(cpu_task_list_cf_t *task_list, thread_t *thread)
+{
+    for (auto it = task_list->runable_list.begin(); it != task_list->runable_list.end(); ++it)
+    {
+        if (it->thread == thread)
+            return it;
+    }
+    return task_list->runable_list.end();
+}
+
 void completely_fair_scheduler::init_cpu()
 {
     auto task_list = memory::New<cpu_task_list_cf_t>(memory::KernelCommonAllocatorV);
@@ -106,14 +116,17 @@ void completely_fair_scheduler::remove(thread_t *thread)
     }
     else
     {
-        auto it = task_list->runable_list.find(cfs_thread_t(thread));
+        auto it = find_thread(task_list, thread);
         if (it != task_list->runable_list.end())
         {
             task_list->runable_list.remove(it);
         }
         else
         {
-            KLOG_PANIC("Can't find task {} pid: {}", thread->tid, thread->process->pid);
+            // Exit cleanup can run after the scheduler has detached a ready
+            // thread but before its state is marked destroy. Removal is
+            // therefore idempotent: there is no scheduler node left to
+            // remove, but the exit callback still owns schedule_data.
         }
     }
 
@@ -170,12 +183,21 @@ void completely_fair_scheduler::update_state(thread_t *thread, thread_state stat
         }
         else if (thread->state == thread_state::ready)
         {
-            auto it = task_list->runable_list.find(cfs_thread_t(thread));
+            auto it = find_thread(task_list, thread);
             if (it != task_list->runable_list.end())
             {
                 thread->state = state;
                 task_list->runable_list.remove(it);
                 task_list->block_list.push_back(thread);
+                return;
+            }
+            if (thread->attributes & thread_attributes::exit_pending)
+            {
+                // An exit callback may race the scheduler handoff after the
+                // thread has left the runnable tree but before its state is
+                // published as destroy. Keep the removal path idempotent;
+                // scheduler::remove will release schedule_data below.
+                thread->state = state;
                 return;
             }
         }
@@ -322,19 +344,21 @@ thread_t *completely_fair_scheduler::get_migratable_task(u32 cpuid)
     return nullptr;
 }
 
-void completely_fair_scheduler::commit_migrate(thread_t *thd)
+bool completely_fair_scheduler::commit_migrate(thread_t *thd)
 {
     auto list = get_cpu_task_list();
     uctx::UninterruptibleContext icu;
 
-    // The source entry is removed before the destination CPU can reset its
-    // vtime during migration, so the ordered lookup key is still valid here.
-    auto it = list->runable_list.find(cfs_thread_t(thd));
-    kassert(it != list->runable_list.end(), "commit task failed!");
+    // vtime is mutable, so locate the entry by thread identity before the
+    // destination CPU is allowed to reset its ordering key.
+    auto it = find_thread(list, thd);
+    if (it == list->runable_list.end())
+        return false;
 
     // don't free scher_data
 
     list->runable_list.remove(it);
+    return true;
 }
 
 completely_fair_scheduler::completely_fair_scheduler()

@@ -21,6 +21,7 @@ TEST_CASE("service directory contract", "[service-directory]")
     REQUIRE(method_list == 4);
     REQUIRE(method_listen == 5);
     REQUIRE(method_connect == 6);
+    REQUIRE(method_list_prefix == 7);
 
     using register_handle_function = int (*)(const char *, na_handle_t);
     static_assert(std::is_same_v<decltype(&naos_service_register_handle), register_handle_function>);
@@ -69,6 +70,35 @@ TEST_CASE("service directory contract", "[service-directory]")
     resolve_response decoded_response{};
     REQUIRE(decode_resolve_response(buffer, written, decoded_response));
     REQUIRE(decoded_response.service.value == 0);
+
+    list_prefix_request list_prefix_value{};
+    list_prefix_value.offset = 0;
+    list_prefix_value.requested_bytes = 1024;
+    list_prefix_value.prefix = {uri, sizeof(uri) - 1};
+    list_prefix_value.buffer.value = 0;
+    REQUIRE(encode_list_prefix_request(buffer, sizeof(buffer), list_prefix_value, written));
+    REQUIRE(written == list_prefix_request_header_bytes + sizeof(uri) - 1);
+    list_prefix_request decoded_list_prefix{};
+    REQUIRE(decode_list_prefix_request(buffer, written, decoded_list_prefix));
+    REQUIRE(decoded_list_prefix.offset == 0);
+    REQUIRE(decoded_list_prefix.requested_bytes == 1024);
+    REQUIRE(decoded_list_prefix.prefix.size == sizeof(uri) - 1);
+    REQUIRE(decoded_list_prefix.buffer.value == 0);
+
+    // The records travel through the caller's region; the response only
+    // reports how many records and bytes the service wrote there.
+    const char record[] = "naos://system/console";
+    list_prefix_response list_prefix_response_value{};
+    list_prefix_response_value.next = 1;
+    list_prefix_response_value.count = 1;
+    list_prefix_response_value.bytes = sizeof(record) - 1;
+    REQUIRE(encode_list_prefix_response(buffer, sizeof(buffer), list_prefix_response_value, written));
+    REQUIRE(written == list_prefix_response_header_bytes);
+    list_prefix_response decoded_list_prefix_response{};
+    REQUIRE(decode_list_prefix_response(buffer, written, decoded_list_prefix_response));
+    REQUIRE(decoded_list_prefix_response.next == 1);
+    REQUIRE(decoded_list_prefix_response.count == 1);
+    REQUIRE(decoded_list_prefix_response.bytes == sizeof(record) - 1);
 
     listen_request listen_value{};
     listen_value.max_pending = 16;

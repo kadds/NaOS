@@ -1,0 +1,41 @@
+[package]
+name = "exfatd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "exfatd"
+path = "src/lib.rs"
+bench = false
+
+[features]
+default = []
+test-loopback = ["naos-idl/test-loopback"]
+
+[[bin]]
+name = "exfatd"
+path = "src/main.rs"
+test = false
+bench = false
+
+# The FAT-family filesystem worker (VFS ADR §13, appendix A "FAT32" column).
+#
+# Use the upstream crate with its standard-library IO adapter. NaOS std is
+# treated as a supported target by the Rust fork, so this needs no NaOS patch.
+[dependencies]
+fatfs = { version = "0.3.6", default-features = false, features = ["std", "alloc"] }
+naos-sys = { path = "../naos-sys" }
+naos-idl = { path = "../naos-idl", features = ["alloc"] }
+servicekit = { path = "../servicekit" }
+log = { version = "0.4.34", default-features = false }
+tokio = { version = "1.47", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+
+[dev-dependencies]
+flate2 = "1"

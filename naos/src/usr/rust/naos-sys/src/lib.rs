@@ -32,7 +32,7 @@ pub const BINDING_KERNEL_VIEW: u32 = 4;
 pub const BINDING_INVOCATION: u32 = 5;
 pub const BINDING_RESPONDER: u32 = 6;
 pub const BINDING_MEMORY_OBJECT: u32 = 7;
-pub const BINDING_SHARED_RING: u32 = 8;
+pub const BINDING_EPOLL: u32 = 8;
 pub const RIGHT_DUPLICATE: u64 = 1 << 0;
 pub const RIGHT_TRANSFER: u64 = 1 << 1;
 pub const RIGHT_WAIT: u64 = 1 << 2;
@@ -43,7 +43,19 @@ pub const SIGNAL_PEER_CLOSED: u64 = 1 << 2;
 pub const SIGNAL_OBJECT_REVOKED: u64 = 1 << 3;
 pub const SIGNAL_COMPLETED: u64 = 1 << 4;
 pub const SIGNAL_CANCEL_REQUESTED: u64 = 1 << 5;
+pub const EPOLL_CTL_ADD: u32 = 1;
+pub const EPOLL_CTL_MOD: u32 = 2;
+pub const EPOLL_CTL_DEL: u32 = 3;
+pub const EPOLL_EVENT_READABLE: u64 = 1 << 0;
+pub const EPOLL_EVENT_WRITABLE: u64 = 1 << 1;
+pub const EPOLL_EVENT_ERROR: u64 = 1 << 2;
+pub const EPOLL_EVENT_HANGUP: u64 = 1 << 3;
+pub const EPOLL_EVENT_EDGE_TRIGGERED: u64 = 1 << 32;
 pub const PROTOCOL_RIGHT_INVOKE: u64 = 1 << 0;
+/// ServiceDirectory protocol rights. Keep these values aligned with
+/// `naos/abi.h`; ADMIN is intentionally not granted to ordinary children.
+pub const SERVICE_DIRECTORY_RIGHT_ADMIN: u64 = 1 << 1;
+pub const SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER: u64 = 1 << 3;
 pub const TERMINAL_RIGHT_READ: u64 = 1 << 8;
 pub const TERMINAL_RIGHT_WRITE: u64 = 1 << 9;
 pub const TERMINAL_RIGHT_CONTROL: u64 = 1 << 10;
@@ -55,12 +67,31 @@ pub const MEMORY_MAP_WRITE: u32 = 1 << 1;
 pub const MEMORY_MAP_EXEC: u32 = 1 << 2;
 pub const MEMORY_MAP_SHARED: u32 = 1 << 3;
 pub const MEMORY_MAP_MAX_BYTES: u64 = 1 << 30;
+pub const MEMORY_RIGHT_READ: u64 = 1 << 0;
+pub const MEMORY_RIGHT_WRITE: u64 = 1 << 1;
+pub const MEMORY_RIGHT_MAP: u64 = 1 << 2;
+pub const MEMORY_RIGHT_INFO: u64 = 1 << 3;
+/// `na_memory_create` flags: only this bit is accepted (abi.h).
+pub const MEMORY_FLAG_READ_ONLY: u32 = 1 << 0;
+/// `na_handle_restriction_t.flags`: attenuate protocol rights and MemoryObject
+/// view ranges.
+pub const RESTRICTION_PROTOCOL_RIGHTS: u32 = 1 << 4;
+pub const RESTRICTION_RANGE: u32 = 1 << 5;
+/// Hard upper bound for one MemoryObject (abi.h NA_MEMORY_OBJECT_MAX_BYTES).
+pub const MEMORY_OBJECT_MAX_BYTES: u64 = 16 << 20;
+pub const GETRANDOM_FLAG_NONBLOCK: u32 = 1 << 0;
+pub const GETRANDOM_FLAG_RANDOM: u32 = 1 << 1;
+pub const GETRANDOM_FLAG_INSECURE: u32 = 1 << 2;
+pub const GETRANDOM_FLAG_RDSEED: u32 = 1 << 3;
 pub const TLS_ABI_VERSION: u32 = 1;
 pub const TLS_MAX_SIZE: usize = 1 << 20;
 pub const TLS_MAX_ALIGN: usize = 1 << 20;
 
-pub const MAX_BOOTSTRAP_CAPABILITIES: usize = 8;
 pub const BOOTSTRAP_FLAG_REBIND_CONSOLE: u32 = 1;
+pub const BOOTSTRAP_FLAG_EARLY_SERVICE: u32 = 2;
+pub const PROCESS_SPAWN_DEFERRED_START: u32 = 1 << 0;
+pub const BOOTSTRAP_RESOURCE_NONE: u32 = u32::MAX;
+pub const BOOTSTRAP_EARLY_MIN_RESOURCE_COUNT: u32 = 4;
 
 pub const SYSCALL_LOG: u64 = 1;
 pub const SYSCALL_EXIT: u64 = 4;
@@ -69,37 +100,33 @@ pub const SYSCALL_CHANNEL_CREATE: u64 = 18;
 pub const SYSCALL_CHANNEL_SEND: u64 = 19;
 pub const SYSCALL_CHANNEL_RECEIVE: u64 = 20;
 pub const SYSCALL_CHANNEL_DISCARD: u64 = 21;
-pub const SYSCALL_HANDLE_WAIT_MANY: u64 = 22;
-pub const SYSCALL_HANDLE_DUPLICATE: u64 = 23;
-pub const SYSCALL_HANDLE_RESTRICT: u64 = 24;
-pub const SYSCALL_HANDLE_GET_INFO: u64 = 25;
-pub const SYSCALL_PROTOCOL_DESCRIPTOR_CREATE: u64 = 26;
-pub const SYSCALL_PROTOCOL_ENDPOINT_CREATE: u64 = 27;
-pub const SYSCALL_INVOKE_SUBMIT: u64 = 28;
-pub const SYSCALL_INVOKE_ONEWAY: u64 = 29;
-pub const SYSCALL_INVOCATION_CANCEL: u64 = 30;
-pub const SYSCALL_INVOCATION_TAKE_RESULT: u64 = 31;
-pub const SYSCALL_RESPONDER_REPLY: u64 = 32;
-pub const SYSCALL_RESPONDER_FAIL: u64 = 33;
-pub const SYSCALL_BOOTSTRAP: u64 = 34;
-pub const SYSCALL_MEMORY_MAP: u64 = 36;
-pub const SYSCALL_MEMORY_UNMAP: u64 = 37;
+pub const SYSCALL_EPOLL_CREATE: u64 = 22;
+pub const SYSCALL_EPOLL_CTL: u64 = 23;
+pub const SYSCALL_EPOLL_WAIT: u64 = 24;
+pub const SYSCALL_HANDLE_DUPLICATE: u64 = 25;
+pub const SYSCALL_HANDLE_RESTRICT: u64 = 26;
+pub const SYSCALL_HANDLE_GET_INFO: u64 = 27;
+pub const SYSCALL_PROTOCOL_DESCRIPTOR_CREATE: u64 = 28;
+pub const SYSCALL_PROTOCOL_ENDPOINT_CREATE: u64 = 29;
+pub const SYSCALL_INVOKE_SUBMIT: u64 = 30;
+pub const SYSCALL_INVOKE_ONEWAY: u64 = 31;
+pub const SYSCALL_INVOCATION_CANCEL: u64 = 32;
+pub const SYSCALL_INVOCATION_TAKE_RESULT: u64 = 33;
+pub const SYSCALL_RESPONDER_REPLY: u64 = 34;
+pub const SYSCALL_RESPONDER_FAIL: u64 = 35;
+pub const SYSCALL_BOOTSTRAP: u64 = 36;
+pub const SYSCALL_MEMORY_MAP: u64 = 38;
+pub const SYSCALL_MEMORY_UNMAP: u64 = 39;
 pub const SYSCALL_FUTEX: u64 = 3;
 pub const SYSCALL_EXIT_THREAD: u64 = 5;
 pub const SYSCALL_SET_TCB: u64 = 11;
 pub const SYSCALL_CLONE: u64 = 13;
+pub const SYSCALL_GETRANDOM: u64 = 45;
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct Uuid {
     pub bytes: [u8; 16],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct BootstrapCapability {
-    pub kind: u32,
-    pub handle: Handle,
 }
 
 #[repr(C)]
@@ -113,10 +140,7 @@ pub struct BootstrapFrame {
     pub stdin_stream: Handle,
     pub stdout_stream: Handle,
     pub stderr_stream: Handle,
-    pub capability_count: u32,
-    pub reserved0: u32,
-    pub capabilities: [BootstrapCapability; MAX_BOOTSTRAP_CAPABILITIES],
-    pub reserved1: u64,
+    pub reserved0: u64,
 }
 
 #[repr(C)]
@@ -128,6 +152,24 @@ pub struct ChannelOptions {
     pub max_bytes: u64,
     pub max_resources: u64,
     pub reserved0: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ProcessSpawnFrame {
+    pub struct_size: u32,
+    pub flags: u32,
+    pub executable: Handle,
+    pub bootstrap_endpoint: Handle,
+    pub path: u64,
+    pub argv: u64,
+    pub envp: u64,
+    /// Output: receives the new process capability handle.
+    pub process: u64,
+    /// Optional output pointer for the child pid (zero to skip).
+    pub pid: u64,
+    pub reserved0: u64,
+    pub reserved1: u64,
 }
 
 #[repr(C)]
@@ -163,10 +205,9 @@ pub struct ChannelReceiveFrame {
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
-pub struct WaitItem {
-    pub handle: Handle,
-    pub signals: u64,
-    pub observed: u64,
+pub struct EpollEvent {
+    pub events: u64,
+    pub data: u64,
 }
 
 #[repr(C)]
@@ -183,7 +224,9 @@ pub struct HandleInfo {
     pub generation: u64,
     pub object_state: u64,
     pub protocol_uuid: Uuid,
-    pub reserved0: u64,
+    pub object_id: u64,
+    pub view_offset: u64,
+    pub view_length: u64,
 }
 
 #[repr(C)]
@@ -196,6 +239,8 @@ pub struct HandleRestriction {
     pub features: u64,
     pub meta_rights: u64,
     pub protocol_rights: u64,
+    pub view_offset: u64,
+    pub view_length: u64,
 }
 
 #[repr(C)]
@@ -334,6 +379,7 @@ pub struct MemoryMapFrame {
     pub offset: u64,
     pub length: u64,
     pub address: u64,
+    pub data_offset: u64,
     pub reserved0: u64,
     pub reserved1: u64,
 }
@@ -368,6 +414,7 @@ unsafe extern "C" {
     pub fn _s_yield() -> i32;
     pub fn _s_tcb_set(pointer: *mut u8) -> i32;
     pub fn _s_clone(entry: *mut u8, argument: *mut u8, tcb: *mut u8) -> i32;
+    pub fn _s_getrandom(buffer: *mut u8, length: usize, flags: u32) -> i32;
 
     pub fn _na_handle_close(handle: Handle) -> Status;
     pub fn _na_channel_create(
@@ -378,7 +425,20 @@ unsafe extern "C" {
     pub fn _na_channel_send(endpoint: Handle, frame: *const ChannelSendFrame) -> Status;
     pub fn _na_channel_receive(endpoint: Handle, frame: *mut ChannelReceiveFrame) -> Status;
     pub fn _na_channel_discard(endpoint: Handle) -> Status;
-    pub fn _na_handle_wait_many(items: *mut WaitItem, count: u64, deadline: *const u8) -> Status;
+    pub fn _na_epoll_create(result: *mut Handle) -> Status;
+    pub fn _na_epoll_ctl(
+        epoll: Handle,
+        operation: u32,
+        target: Handle,
+        event: *const EpollEvent,
+    ) -> Status;
+    pub fn _na_epoll_wait(
+        epoll: Handle,
+        events: *mut EpollEvent,
+        capacity: u64,
+        actual: *mut u64,
+        deadline: *const u8,
+    ) -> Status;
     pub fn _na_handle_duplicate(source: Handle, rights: u64, result: *mut Handle) -> Status;
     pub fn _na_handle_restrict(
         source: Handle,
@@ -406,6 +466,8 @@ unsafe extern "C" {
     pub fn _na_invocation_take_result(invocation: Handle, frame: *mut ResultFrame) -> Status;
     pub fn _na_responder_reply(responder: Handle, frame: *const ReplyFrame) -> Status;
     pub fn _na_responder_fail(responder: Handle, frame: *const FailFrame) -> Status;
+    pub fn _na_memory_create(size: u64, flags: u64, result: *mut Handle) -> Status;
+    pub fn _na_process_spawn(frame: *mut ProcessSpawnFrame) -> Status;
     pub fn _na_bootstrap(frame: *mut BootstrapFrame) -> Status;
     pub fn _na_memory_map(frame: *mut MemoryMapFrame) -> Status;
     pub fn _na_memory_unmap(frame: *mut MemoryUnmapFrame) -> Status;

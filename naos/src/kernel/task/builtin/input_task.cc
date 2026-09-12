@@ -3,8 +3,6 @@
 #include "freelibcxx/string.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/common/cursor/cursor.hpp"
-#include "kernel/fs/vfs/file.hpp"
-#include "kernel/fs/vfs/vfs.hpp"
 #include "kernel/handle.hpp"
 #include "kernel/input/key.hpp"
 #include "kernel/input/terminal_shortcut.hpp"
@@ -94,7 +92,7 @@ void print_keyboard(io::keyboard_result_t &res, io::status_t &status, io::reques
 }
 
 timeclock::microsecond_t last_update_mouse_time;
-void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req, handle_t<fs::vfs::file> f)
+void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::request_t *req)
 {
     if (status.io_is_completion)
     {
@@ -179,10 +177,6 @@ void listen_keyboard()
 io::mouse_request_t mreq;
 void listen_mouse()
 {
-    fs::vfs::create("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::create_flags::chr);
-
-    auto mouse_file = fs::vfs::open("/dev/mouse_input", fs::vfs::global_root, fs::vfs::global_root, fs::mode::write, 0);
-
     current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
         current_mouse_data.down_b = false;
 
@@ -215,7 +209,7 @@ void listen_mouse()
         {
             input_wait_queue.do_wait([] { return mreq.status.io_is_completion.load(); });
         }
-        print_mouse(mreq.result, mreq.status, &mreq, mouse_file);
+        print_mouse(mreq.result, mreq.status, &mreq);
     };
 }
 

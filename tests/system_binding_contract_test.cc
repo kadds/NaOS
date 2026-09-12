@@ -73,7 +73,8 @@ TEST_CASE("system binding contract", "[system-binding]")
     REQUIRE(receive_frame.responder == 123);
 
     auto server = native.responder();
-    REQUIRE(server.validate_resource(server.context, 42, NA_BINDING_NONE, NA_SCOPE_DIRECTORY, NA_RIGHT_TRANSFER));
+    REQUIRE(server.validate_resource(
+        server.context, 42, NA_BINDING_NONE, NA_SCOPE_DIRECTORY, NA_RIGHT_TRANSFER, 0));
     server.close_resource(server.context, 42);
     REQUIRE(state.close_count == 1);
     REQUIRE(state.closed[0] == 42);

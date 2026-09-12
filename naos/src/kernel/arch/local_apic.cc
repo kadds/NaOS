@@ -213,7 +213,7 @@ void local_init()
             local_apic_base_addr = base;
         }
 
-        KLOG_DEBUG("Local APIC base {}", log::hex(local_apic_base_addr()));
+        KLOG_INFO("Local APIC base {}", log::hex(local_apic_base_addr()));
         auto &paging = memory::kernel_vm_info->paging();
         u64 map_base = memory::alloc_io_mmap_address(paging::frame_size::size_2mb, paging::frame_size::size_2mb);
 
@@ -583,7 +583,12 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     }
     // hz = bus_freq / divide * counter
     // counter = bus_freq / divide / hz
-    u32 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_)) / ev->hz_;
+    const u64 requested_hz = ev->hz_;
+    u32 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_)) / requested_hz;
+    if (lapic_counter == 0)
+    {
+        lapic_counter = 1;
+    }
     if (cpu::current().is_bsp())
     {
         KLOG_DEBUG("Local APIC set counter {}", lapic_counter);
@@ -591,10 +596,22 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
 
     ev->counter_ = lapic_counter;
 
-    u64 current_freq = calibrate_apic(cs);
-    KLOG_DEBUG("Local APIC Timer {}HZ", current_freq);
-
-    ev->hz_ = current_freq;
+    // The APIC bus frequency is shared by all processors.  Only the BSP
+    // calibrates it against the platform clock; doing a second calibration on
+    // an AP requires timer interrupts before the AP has entered its normal
+    // scheduling lifecycle and can produce a zero result.  APs only need the
+    // already computed bus frequency and the requested timer rate.
+    if (cpu::current().is_bsp())
+    {
+        const u64 current_freq = calibrate_apic(cs);
+        KLOG_INFO("Local APIC Timer {}HZ", current_freq);
+        ev->hz_ = current_freq != 0 ? current_freq : requested_hz;
+    }
+    else
+    {
+        ev->hz_ = requested_hz;
+        KLOG_INFO("Local APIC Timer {}HZ", requested_hz);
+    }
 }
 
 clock_source *make_clock()

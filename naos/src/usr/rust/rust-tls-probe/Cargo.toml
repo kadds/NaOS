@@ -7,4 +7,7 @@ publish = false
 [lib]
 crate-type = ["staticlib"]
 
+[features]
+linux = []
+
 [dependencies]

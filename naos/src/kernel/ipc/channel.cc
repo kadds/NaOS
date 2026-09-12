@@ -1,8 +1,11 @@
 #include "kernel/ipc/channel.hpp"
+#include "kernel/ipc/epoll.hpp"
 
 #include "kernel/arch/klib.hpp"
+#include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/mutex.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/usercopy.hpp"
@@ -10,103 +13,165 @@
 
 namespace naos::ipc
 {
+KLOG_MODULE(ipc);
 namespace
 {
 lock::spinlock_t registry_lock;
-freelibcxx::linked_list<channel_state *> *registry = nullptr;
-lock::spinlock_t waiters_lock;
-task::wait_queue_t *waiters = nullptr;
-std::atomic_uint64_t wait_generation{0};
+lock::mutex_t registry_collection_lock;
+channel_state *registry = nullptr;
+std::atomic_uint64_t registry_count{0};
 
-std::atomic_uint64_t global_messages{0};
-std::atomic_uint64_t global_bytes{0};
-std::atomic_uint64_t global_resources{0};
+std::atomic<naos_ipc_domain_t *> core_domain{nullptr};
+core_lock core_domain_lock;
 
-bool reserve_counter(std::atomic_uint64_t &counter, u64 amount, u64 limit)
+void *core_control_allocate(void *, std::size_t size, std::size_t alignment)
 {
-    if (amount > limit)
-        return false;
+    return memory::KernelCommonAllocatorV->allocate(size, alignment);
+}
 
-    auto current = counter.load(std::memory_order_acquire);
-    for (;;)
+void core_control_deallocate(void *, void *pointer, std::size_t, std::size_t)
+{
+    if (pointer != nullptr)
+        memory::KernelCommonAllocatorV->deallocate(pointer);
+}
+
+void *core_payload_allocate(void *, std::size_t size, std::size_t alignment)
+{
+    return memory::MemoryAllocatorV->allocate(size, alignment);
+}
+
+void core_payload_deallocate(void *, void *pointer, std::size_t, std::size_t)
+{
+    if (pointer != nullptr)
+        memory::MemoryAllocatorV->deallocate(pointer);
+}
+
+void core_notify(void *context)
+{
+    auto *state = static_cast<channel_state *>(context);
+    if (state != nullptr)
     {
-        if (current > limit - amount)
+        state->notify_readiness();
+        state->notify_waiters();
+    }
+}
+
+naos_ipc_allocator_t core_control_allocator{nullptr, core_control_allocate, core_control_deallocate};
+naos_ipc_allocator_t core_payload_allocator{nullptr, core_payload_allocate, core_payload_deallocate};
+naos_ipc_lock_t core_domain_lock_api{&core_domain_lock, core_lock_acquire, core_lock_release};
+
+naos_ipc_domain_t *get_core_domain()
+{
+    auto *domain = core_domain.load(std::memory_order_acquire);
+    if (domain != nullptr)
+        return domain;
+
+    naos_ipc_domain_config_t config{};
+    config.memory = &core_control_allocator;
+    config.synchronization = &core_domain_lock_api;
+    config.max_messages = NA_CHANNEL_GLOBAL_MAX_MESSAGES;
+    config.max_bytes = NA_CHANNEL_GLOBAL_MAX_BYTES;
+    config.max_resources = NA_CHANNEL_GLOBAL_MAX_RESOURCES;
+    auto *candidate = naos_ipc_domain_create(&config);
+    if (candidate == nullptr)
+        return nullptr;
+    domain = nullptr;
+    if (core_domain.compare_exchange_strong(domain, candidate, std::memory_order_release, std::memory_order_acquire))
+        return candidate;
+    naos_ipc_domain_destroy(candidate);
+    return domain;
+}
+
+struct kernel_resource_holder
+{
+    capability::transferred_resource resource;
+};
+
+void release_kernel_resource(void *, void *value) noexcept
+{
+    auto *holder = static_cast<kernel_resource_holder *>(value);
+    memory::Delete<>(memory::KernelCommonAllocatorV, holder);
+}
+
+void clear_core_resource(naos_ipc_resource_t &resource)
+{
+    resource.context = nullptr;
+    resource.value = nullptr;
+    resource.release = nullptr;
+}
+
+bool make_core_resource_batch(capability::transfer_record_list &records,
+                              freelibcxx::vector<naos_ipc_resource_t> &resources)
+{
+    resources.ensure(records.size());
+    if (records.size() != 0 && resources.data() == nullptr)
+        return false;
+    for (u64 i = 0; i < records.size(); i++)
+    {
+        auto *holder = memory::New<kernel_resource_holder>(memory::KernelCommonAllocatorV);
+        if (holder == nullptr)
+        {
+            for (u64 j = 0; j < resources.size(); j++)
+            {
+                auto *previous = static_cast<kernel_resource_holder *>(resources[j].value);
+                if (previous == nullptr)
+                    continue;
+                clear_core_resource(resources[j]);
+                records[j].resource = std::move(previous->resource);
+                memory::Delete<>(memory::KernelCommonAllocatorV, previous);
+            }
             return false;
-        if (counter.compare_exchange_weak(current, current + amount, std::memory_order_acq_rel))
-            return true;
-    }
-}
-
-void release_counter(std::atomic_uint64_t &counter, u64 amount)
-{
-    counter.fetch_sub(amount, std::memory_order_acq_rel);
-}
-
-bool reserve_global(u64 bytes, u64 resources)
-{
-    if (!reserve_counter(global_messages, 1, NA_CHANNEL_GLOBAL_MAX_MESSAGES))
-        return false;
-    if (!reserve_counter(global_bytes, bytes, NA_CHANNEL_GLOBAL_MAX_BYTES))
-    {
-        release_counter(global_messages, 1);
-        return false;
-    }
-    if (!reserve_counter(global_resources, resources, NA_CHANNEL_GLOBAL_MAX_RESOURCES))
-    {
-        release_counter(global_bytes, bytes);
-        release_counter(global_messages, 1);
-        return false;
+        }
+        holder->resource = std::move(records[i].resource);
+        resources.push_back(naos_ipc_resource_t{nullptr, holder, release_kernel_resource});
     }
     return true;
 }
 
-void release_global(u64 bytes, u64 resources)
+void restore_core_resource_batch(capability::transfer_record_list &records,
+                                 freelibcxx::vector<naos_ipc_resource_t> &resources)
 {
-    release_counter(global_messages, 1);
-    release_counter(global_bytes, bytes);
-    release_counter(global_resources, resources);
-}
-
-channel_message **allocate_queue_storage(u64 capacity)
-{
-    auto **storage = reinterpret_cast<channel_message **>(
-        memory::KernelCommonAllocatorV->allocate(sizeof(channel_message *) * capacity, alignof(channel_message *)));
-    if (storage != nullptr)
-        memset(storage, 0, sizeof(channel_message *) * capacity);
-    return storage;
+    for (u64 i = 0; i < resources.size(); i++)
+    {
+        auto *holder = static_cast<kernel_resource_holder *>(resources[i].value);
+        if (holder == nullptr)
+            continue;
+        clear_core_resource(resources[i]);
+        records[i].resource = std::move(holder->resource);
+        memory::Delete<>(memory::KernelCommonAllocatorV, holder);
+    }
 }
 
 bool register_state(channel_state *state)
 {
     uctx::RawSpinLockUninterruptibleContext icu(registry_lock);
-    if (registry == nullptr)
-    {
-        registry = memory::New<freelibcxx::linked_list<channel_state *>>(memory::KernelCommonAllocatorV,
-                                                                         memory::KernelCommonAllocatorV);
-        if (registry == nullptr)
-            return false;
-    }
-    registry->push_back(state);
+    state->set_registry_next(registry);
+    state->set_registry_linked(true);
+    registry = state;
+    registry_count.fetch_add(1, std::memory_order_release);
     return true;
 }
 
-void unregister_state(channel_state *state)
+void unregister_state_locked(channel_state *state)
 {
-    uctx::RawSpinLockUninterruptibleContext icu(registry_lock);
-    if (registry == nullptr)
+    if (state == nullptr || !state->registry_linked())
         return;
-    auto iterator = registry->begin();
-    while (iterator != registry->end() && *iterator != state)
-        ++iterator;
-    if (iterator != registry->end())
-        registry->remove(iterator);
-}
-
-void ensure_waiters()
-{
-    uctx::RawSpinLockUninterruptibleContext icu(waiters_lock);
-    if (waiters == nullptr)
-        waiters = memory::New<task::wait_queue_t>(memory::KernelCommonAllocatorV);
+    channel_state *previous = nullptr;
+    auto *current = registry;
+    while (current != nullptr && current != state)
+    {
+        previous = current;
+        current = current->registry_next();
+    }
+    if (current != state)
+        return;
+    if (previous != nullptr)
+        previous->set_registry_next(state->registry_next());
+    else
+        registry = state->registry_next();
+    state->set_registry_next(nullptr);
+    state->set_registry_linked(false);
+    registry_count.fetch_sub(1, std::memory_order_release);
 }
 
 na_status_t copy_from_user(void *destination, u64 source, u64 size)
@@ -121,30 +186,6 @@ na_status_t copy_to_user(u64 destination, const void *source, u64 size)
 
 bool valid_struct_size(u32 actual, u64 expected) { return actual >= expected; }
 
-struct wait_request
-{
-    task::resource_table_t *resources;
-    freelibcxx::vector<na_wait_item_t> *items;
-};
-
-bool wait_condition(wait_request *request)
-{
-    for (auto &item : *request->items)
-    {
-        item.observed = request->resources->native_signals(item.handle);
-        if ((item.observed & item.signals) != 0)
-            return true;
-    }
-    return false;
-}
-
-void wait_deadline_wakeup(timeclock::microsecond_t) noexcept
-{
-    wait_generation.fetch_add(1, std::memory_order_acq_rel);
-    if (waiters != nullptr)
-        waiters->do_wake_up();
-}
-
 bool contains_state(const freelibcxx::vector<channel_state *> &states, channel_state *needle, u64 *index = nullptr)
 {
     for (u64 i = 0; i < states.size(); i++)
@@ -158,442 +199,338 @@ bool contains_state(const freelibcxx::vector<channel_state *> &states, channel_s
     }
     return false;
 }
+
+void collect_resource_target(void *context, u64, void *, void *value) noexcept
+{
+    auto *targets = static_cast<freelibcxx::vector<channel_state *> *>(context);
+    auto *holder = static_cast<kernel_resource_holder *>(value);
+    if (holder == nullptr || !holder->resource.valid() || !holder->resource.object()->is<raw_channel_endpoint>())
+        return;
+    auto *endpoint = holder->resource.object()->get<raw_channel_endpoint>();
+    if (endpoint != nullptr)
+        targets->push_back(endpoint->state());
+}
+
+void collect_message_targets(void *context, naos_ipc_message_t *message) noexcept
+{
+    if (message == nullptr)
+        return;
+    naos_ipc_message_visit_resources(message, collect_resource_target, context);
+}
+
+bool take_kernel_resource(channel_message *message, u64 index, capability::transferred_resource &resource)
+{
+    naos_ipc_resource_t core_resource{};
+    const auto status = naos_ipc_message_take_resource(message->core_message(), index, &core_resource);
+    if (status != NA_STATUS_OK || core_resource.value == nullptr)
+    {
+        naos_ipc_resource_reset(&core_resource);
+        return false;
+    }
+    auto *holder = static_cast<kernel_resource_holder *>(core_resource.value);
+    clear_core_resource(core_resource);
+    if (holder == nullptr)
+        return false;
+    resource = std::move(holder->resource);
+    memory::Delete<>(memory::KernelCommonAllocatorV, holder);
+    return resource.valid();
+}
 } // namespace
 
-channel_message::channel_message(u64 byte_count, u64 resource_count)
-    : bytes_(nullptr)
-    , byte_count_(byte_count)
-    , resource_capacity_(resource_count)
-    , resources_(memory::KernelCommonAllocatorV)
+channel_message::channel_message(naos_ipc_channel_t *channel, u64 byte_count, u64 resource_count)
+    : message_(channel == nullptr ? nullptr : naos_ipc_message_create(channel, byte_count, resource_count))
 {
-    if (byte_count != 0)
-    {
-        bytes_ = reinterpret_cast<byte *>(memory::MemoryAllocatorV->allocate(byte_count, alignof(byte)));
-        if (bytes_ != nullptr)
-            memset(bytes_, 0, byte_count);
-    }
-    resources_.ensure(resource_count);
+    if (message_ != nullptr)
+        naos_ipc_message_set_user_context(message_, this);
 }
 
 channel_message::~channel_message()
 {
-    if (bytes_ != nullptr)
-        memory::MemoryAllocatorV->deallocate(bytes_);
+    if (message_ != nullptr)
+        naos_ipc_message_destroy(message_);
 }
 
-bool channel_message::valid() const
+bool channel_message::valid() const { return message_ != nullptr && naos_ipc_message_valid(message_); }
+
+byte *channel_message::bytes()
 {
-    return (byte_count_ == 0 || bytes_ != nullptr) && (resource_capacity_ == 0 || resources_.data() != nullptr);
+    return reinterpret_cast<byte *>(message_ == nullptr ? nullptr : naos_ipc_message_bytes(message_));
 }
 
-bool channel_message::append(capability::transferred_resource &&resource)
+const byte *channel_message::bytes() const
 {
-    if (resources_.size() >= resource_capacity_)
-        return false;
-    resources_.push_back(std::move(resource));
-    return true;
+    return reinterpret_cast<const byte *>(message_ == nullptr ? nullptr : naos_ipc_message_const_bytes(message_));
 }
 
-channel_state::queue::~queue()
+u64 channel_message::byte_count() const { return message_ == nullptr ? 0 : naos_ipc_message_byte_count(message_); }
+
+u64 channel_message::resource_count() const
 {
-    if (storage != nullptr)
-        memory::KernelCommonAllocatorV->deallocate(storage);
+    return message_ == nullptr ? 0 : naos_ipc_message_resource_count(message_);
+}
+
+u64 channel_message::resource_capacity() const
+{
+    return message_ == nullptr ? 0 : naos_ipc_message_resource_capacity(message_);
 }
 
 channel_state::channel_state(u64 max_messages, u64 max_bytes, u64 max_resources)
-    : queues_{nullptr, nullptr}
-    , max_messages_(max_messages)
-    , max_bytes_(max_bytes)
-    , max_resources_(max_resources)
-    , owners_{0, 0}
-    , roots_{0, 0}
-    , active_operations_(0)
-    , active_claims_(0)
-    , endpoint_objects_(0)
-    , valid_(false)
+    : core_lock_()
+    , core_lock_api_{&core_lock_, core_lock_acquire, core_lock_release}
+    , core_notifier_api_{this, core_notify}
+    , channel_(nullptr)
 {
-    queues_[0] =
-        memory::New<queue>(memory::KernelCommonAllocatorV, allocate_queue_storage(max_messages_), max_messages_);
-    queues_[1] =
-        memory::New<queue>(memory::KernelCommonAllocatorV, allocate_queue_storage(max_messages_), max_messages_);
-    valid_ = queues_[0] != nullptr && queues_[1] != nullptr && queues_[0]->storage != nullptr &&
-             queues_[1]->storage != nullptr;
-    if (valid_)
-        valid_ = register_state(this);
+    const auto domain = get_core_domain();
+    if (domain == nullptr)
+        return;
+    naos_ipc_channel_config_t config{};
+    config.owner_domain = domain;
+    config.control_memory = &core_control_allocator;
+    config.payload_memory = &core_payload_allocator;
+    config.synchronization = &core_lock_api_;
+    config.notifier = &core_notifier_api_;
+    config.max_messages = max_messages;
+    config.max_bytes = max_bytes;
+    config.max_resources = max_resources;
+    config.clock = nullptr;
+    config.handles = nullptr;
+    channel_ = naos_ipc_channel_create(&config);
 }
 
 channel_state::~channel_state()
 {
-    for (auto *queue : queues_)
-    {
-        if (queue == nullptr)
-            continue;
-        while (!queue->fifo.empty())
-        {
-            queue->fifo.claim_front();
-            auto *message = queue->fifo.front();
-            queue->fifo.commit_claim();
-            if (message != nullptr)
-            {
-                release_global(message->byte_count(), message->resource_count());
-                memory::Delete<>(memory::KernelCommonAllocatorV, message);
-            }
-        }
-        memory::Delete<>(memory::KernelCommonAllocatorV, queue);
-    }
+    if (channel_ == nullptr)
+        return;
+    discard_orphan_messages();
+    naos_ipc_channel_destroy(channel_);
+    channel_ = nullptr;
 }
+
+bool channel_state::valid() const { return channel_ != nullptr && naos_ipc_channel_valid(channel_); }
 
 na_signal_t channel_state::signals(u8 side) const
 {
-    if (!valid_ || side > 1)
-        return 0;
-    auto &lock = const_cast<lock::spinlock_t &>(lock_);
-    uctx::RawSpinLockUninterruptibleContext icu(lock);
-    const auto &queue = *queues_[side];
-    const auto &send_queue = *queues_[1 - side];
-    const u8 peer = 1 - side;
-    na_signal_t result = 0;
-    if (!queue.fifo.empty())
-        result |= NA_SIGNAL_READABLE;
-    if (owners_[peer].load(std::memory_order_acquire) != 0 && !send_queue.fifo.full() &&
-        send_queue.bytes < max_bytes_ && send_queue.resources < max_resources_)
-        result |= NA_SIGNAL_WRITABLE;
-    if (owners_[peer].load(std::memory_order_acquire) == 0)
-        result |= NA_SIGNAL_PEER_CLOSED;
-    return result;
+    return channel_ == nullptr ? 0 : naos_ipc_channel_signals(channel_, side);
 }
 
 u64 channel_state::queued_messages(u8 side) const
 {
-    if (!valid_ || side > 1)
+    return channel_ == nullptr ? 0 : naos_ipc_channel_queued_messages(channel_, side);
+}
+
+u64 channel_state::max_messages() const { return channel_ == nullptr ? 0 : naos_ipc_channel_max_messages(channel_); }
+
+u64 channel_state::endpoint_object_count() const
+{
+    if (channel_ == nullptr)
         return 0;
-    auto &lock = const_cast<lock::spinlock_t &>(lock_);
-    uctx::RawSpinLockUninterruptibleContext icu(lock);
-    return queues_[side]->fifo.size();
+    uctx::RawSpinLockUninterruptibleContext guard(const_cast<lock::spinlock_t &>(lifecycle_lock_));
+    return endpoint_objects_;
 }
 
 na_status_t channel_state::enqueue(u8 sender, channel_message *message, capability::transfer_record_list &records,
                                    task::resource_table_t &resources)
 {
-    if (!valid_ || sender > 1 || message == nullptr || !message->valid() || records.size() > max_resources_ ||
-        message->resource_count() != 0 || message->resource_capacity() < records.size())
+    if (!valid() || message == nullptr || records.size() > message->resource_capacity())
         return NA_STATUS_INVALID_ARGUMENT;
-    if (message->byte_count() > max_bytes_ || message->resource_count() + records.size() > max_resources_)
-        return NA_STATUS_INVALID_MESSAGE;
-
-    const u8 receiver = 1 - sender;
-    na_status_t result = NA_STATUS_OK;
-    bool restore = false;
+    freelibcxx::vector<naos_ipc_resource_t> core_resources(memory::KernelCommonAllocatorV);
+    if (!make_core_resource_batch(records, core_resources))
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    const auto result = static_cast<na_status_t>(naos_ipc_channel_enqueue(
+        channel_, sender, message->core_message(), core_resources.data(), core_resources.size(), 0));
+    if (result == NA_STATUS_OK)
+        resources.commit_native_batch(records);
+    else
     {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        auto &queue = *queues_[receiver];
-        if (owners_[receiver].load(std::memory_order_acquire) == 0)
-        {
-            result = NA_STATUS_PEER_CLOSED;
-            restore = true;
-        }
-        else if (queue.fifo.full() || queue.bytes > max_bytes_ - message->byte_count() ||
-                 queue.resources > max_resources_ - records.size())
-        {
-            result = NA_STATUS_WOULD_BLOCK;
-            restore = true;
-        }
-        else if (!reserve_global(message->byte_count(), records.size()))
-        {
-            result = NA_STATUS_RESOURCE_EXHAUSTED;
-            restore = true;
-        }
-        else
-        {
-            for (auto &record : records)
-            {
-                if (!message->append(std::move(record.resource)))
-                {
-                    result = NA_STATUS_RESOURCE_EXHAUSTED;
-                    restore = true;
-                    for (u64 i = 0; i < message->resource_count(); i++)
-                    {
-                        if (i < records.size() && !records[i].resource.valid())
-                            records[i].resource = std::move(message->resource(i));
-                    }
-                    release_global(message->byte_count(), records.size());
-                    break;
-                }
-            }
-            if (result == NA_STATUS_OK && !queue.fifo.try_push(message))
-            {
-                result = NA_STATUS_WOULD_BLOCK;
-                restore = true;
-                for (u64 i = 0; i < records.size(); i++)
-                    records[i].resource = std::move(message->resource(i));
-                release_global(message->byte_count(), records.size());
-            }
-            if (result == NA_STATUS_OK)
-            {
-                queue.bytes += message->byte_count();
-                queue.resources += message->resource_count();
-            }
-        }
-    }
-    if (restore)
-    {
+        restore_core_resource_batch(records, core_resources);
         const auto restore_status = resources.restore_native_batch(records);
         if (restore_status != NA_STATUS_OK)
-            result = restore_status;
+            return restore_status;
     }
-    else if (result == NA_STATUS_OK)
-        resources.commit_native_batch(records);
-    if (result == NA_STATUS_OK)
-        notify_channel_waiters();
     return result;
 }
 
 na_status_t channel_state::enqueue_kernel(u8 sender, channel_message *message,
                                           capability::transfer_record_list &records, u64 max_queue_messages)
 {
-    if (!valid_ || sender > 1 || message == nullptr || !message->valid() || records.size() > max_resources_ ||
-        message->resource_count() != 0 || message->resource_capacity() < records.size())
+    if (!valid() || message == nullptr || records.size() > message->resource_capacity())
         return NA_STATUS_INVALID_ARGUMENT;
-    if (message->byte_count() > max_bytes_ || message->resource_count() + records.size() > max_resources_)
-        return NA_STATUS_INVALID_MESSAGE;
-
-    const u8 receiver = 1 - sender;
-    na_status_t result = NA_STATUS_OK;
-    bool failed = false;
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        auto &queue = *queues_[receiver];
-        if (owners_[receiver].load(std::memory_order_acquire) == 0)
-        {
-            result = NA_STATUS_PEER_CLOSED;
-            failed = true;
-        }
-        else if ((max_queue_messages != 0 && queue.fifo.size() >= max_queue_messages) || queue.fifo.full() ||
-                 queue.bytes > max_bytes_ - message->byte_count() ||
-                 queue.resources > max_resources_ - records.size())
-        {
-            result = NA_STATUS_WOULD_BLOCK;
-            failed = true;
-        }
-        else if (!reserve_global(message->byte_count(), records.size()))
-        {
-            result = NA_STATUS_RESOURCE_EXHAUSTED;
-            failed = true;
-        }
-        else
-        {
-            u64 moved = 0;
-            for (auto &record : records)
-            {
-                if (message->append(std::move(record.resource)))
-                {
-                    moved++;
-                    continue;
-                }
-                result = NA_STATUS_RESOURCE_EXHAUSTED;
-                failed = true;
-                break;
-            }
-            if (!failed && !queue.fifo.try_push(message))
-            {
-                result = NA_STATUS_WOULD_BLOCK;
-                failed = true;
-            }
-            if (failed)
-            {
-                for (u64 i = 0; i < moved; i++)
-                    records[i].resource = std::move(message->resource(i));
-                release_global(message->byte_count(), records.size());
-            }
-            else
-            {
-                queue.bytes += message->byte_count();
-                queue.resources += message->resource_count();
-            }
-        }
-    }
-    if (result == NA_STATUS_OK)
-        notify_channel_waiters();
+    freelibcxx::vector<naos_ipc_resource_t> core_resources(memory::KernelCommonAllocatorV);
+    if (!make_core_resource_batch(records, core_resources))
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    const auto result = static_cast<na_status_t>(naos_ipc_channel_enqueue(
+        channel_, sender, message->core_message(), core_resources.data(), core_resources.size(), max_queue_messages));
+    if (result != NA_STATUS_OK)
+        restore_core_resource_batch(records, core_resources);
     return result;
 }
 
 na_status_t channel_state::claim_receive(u8 side, channel_message *&message)
 {
     message = nullptr;
-    if (!valid_ || side > 1)
+    if (!valid() || side > 1)
         return NA_STATUS_INVALID_ARGUMENT;
-    uctx::RawSpinLockUninterruptibleContext icu(lock_);
-    auto &queue = *queues_[side];
-    if (queue.fifo.empty())
-        return owners_[1 - side].load(std::memory_order_acquire) == 0 ? NA_STATUS_PEER_CLOSED : NA_STATUS_WOULD_BLOCK;
-    if (!queue.fifo.claim_front())
-        return NA_STATUS_WOULD_BLOCK;
-    message = queue.fifo.front();
-    active_claims_.fetch_add(1, std::memory_order_acq_rel);
-    return NA_STATUS_OK;
+    naos_ipc_message_t *core_message = nullptr;
+    const auto status = static_cast<na_status_t>(naos_ipc_channel_claim_receive(channel_, side, &core_message));
+    if (status == NA_STATUS_OK)
+        message = static_cast<channel_message *>(naos_ipc_message_user_context(core_message));
+    return status;
 }
 
 bool channel_state::cancel_receive(u8 side, channel_message *message)
 {
-    if (!valid_ || side > 1 || message == nullptr)
+    if (!valid() || side > 1 || message == nullptr)
         return false;
-    bool cancelled = false;
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        auto &queue = *queues_[side];
-        if (!queue.fifo.is_claimed() || queue.fifo.front() != message)
-            return false;
-        queue.fifo.cancel_claim();
-        active_claims_.fetch_sub(1, std::memory_order_acq_rel);
-        cancelled = true;
-    }
-    if (cancelled)
-        notify_channel_waiters();
-    return cancelled;
+    return naos_ipc_channel_cancel_receive(channel_, side, message->core_message()) != 0;
 }
 
 bool channel_state::commit_receive(u8 side, channel_message *message)
 {
-    if (!valid_ || side > 1 || message == nullptr)
+    if (!valid() || side > 1 || message == nullptr)
         return false;
-    bool committed = false;
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        auto &queue = *queues_[side];
-        if (!queue.fifo.is_claimed() || queue.fifo.front() != message)
-            return false;
-        queue.fifo.commit_claim();
-        queue.bytes -= message->byte_count();
-        queue.resources -= message->resource_count();
-        active_claims_.fetch_sub(1, std::memory_order_acq_rel);
-        release_global(message->byte_count(), message->resource_count());
-        committed = true;
-    }
-    if (committed)
-        notify_channel_waiters();
-    return committed;
+    return naos_ipc_channel_commit_receive(channel_, side, message->core_message()) != 0;
 }
 
 bool channel_state::discard(u8 side, channel_message *&message)
 {
     message = nullptr;
-    if (!valid_ || side > 1)
+    if (!valid() || side > 1)
         return false;
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        auto &queue = *queues_[side];
-        if (queue.fifo.empty() || !queue.fifo.claim_front())
-            return false;
-        message = queue.fifo.front();
-        queue.fifo.commit_claim();
-        queue.bytes -= message->byte_count();
-        queue.resources -= message->resource_count();
-        release_global(message->byte_count(), message->resource_count());
-    }
-    notify_channel_waiters();
-    return true;
+    naos_ipc_message_t *core_message = nullptr;
+    if (naos_ipc_channel_discard(channel_, side, &core_message) == 0)
+        return false;
+    message = static_cast<channel_message *>(naos_ipc_message_user_context(core_message));
+    return message != nullptr;
 }
 
-void channel_state::endpoint_object_created() { endpoint_objects_.fetch_add(1, std::memory_order_acq_rel); }
+void channel_state::endpoint_object_created(raw_channel_endpoint *endpoint)
+{
+    if (channel_ == nullptr)
+        return;
+    uctx::RawSpinLockUninterruptibleContext guard(lifecycle_lock_);
+    endpoint_objects_++;
+    if (endpoint != nullptr && endpoint->side() <= 1)
+        endpoints_[endpoint->side()] = endpoint;
+}
 
-void channel_state::endpoint_object_destroyed() { endpoint_objects_.fetch_sub(1, std::memory_order_acq_rel); }
+void channel_state::endpoint_object_destroyed(raw_channel_endpoint *endpoint)
+{
+    if (channel_ == nullptr)
+        return;
+    uctx::RawSpinLockUninterruptibleContext guard(lifecycle_lock_);
+    if (endpoint_objects_ != 0)
+        endpoint_objects_--;
+    if (endpoint != nullptr && endpoint->side() <= 1 && endpoints_[endpoint->side()] == endpoint)
+        endpoints_[endpoint->side()] = nullptr;
+}
+
+void channel_state::notify_readiness()
+{
+    // The lifecycle lock is also the endpoint lifetime pin.  Do not copy raw
+    // pointers out of it: endpoint destruction clears the slot and may free
+    // the object on another CPU immediately after the lock is released.
+    uctx::RawSpinLockUninterruptibleContext guard(lifecycle_lock_);
+    for (auto *endpoint : endpoints_)
+        if (endpoint != nullptr)
+            endpoint->notify_readiness();
+}
+
+void channel_state::notify_waiters() { wait_queue_.do_wake_up(); }
 
 void channel_state::kernel_owner_acquired(u8 side)
 {
     if (side <= 1)
-        owners_[side].fetch_add(1, std::memory_order_acq_rel);
+        naos_ipc_channel_side_reference_acquired(channel_, side);
 }
 
 void channel_state::kernel_owner_released(u8 side)
 {
     if (side <= 1)
-        owners_[side].fetch_sub(1, std::memory_order_acq_rel);
+        naos_ipc_channel_side_reference_released(channel_, side);
 }
 
 void channel_state::capability_acquired(u8 side, capability::location where)
 {
     if (side > 1)
         return;
-    owners_[side].fetch_add(1, std::memory_order_acq_rel);
     if (where == capability::location::table_root)
-        roots_[side].fetch_add(1, std::memory_order_acq_rel);
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lifecycle_lock_);
+        roots_[side]++;
+    }
+    naos_ipc_channel_side_reference_acquired(channel_, side);
 }
 
 void channel_state::capability_released(u8 side, capability::location where)
 {
     if (side > 1)
         return;
-    owners_[side].fetch_sub(1, std::memory_order_acq_rel);
     if (where == capability::location::table_root)
-        roots_[side].fetch_sub(1, std::memory_order_acq_rel);
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lifecycle_lock_);
+        if (roots_[side] != 0)
+            roots_[side]--;
+    }
+    naos_ipc_channel_side_reference_released(channel_, side);
 }
 
-void channel_state::begin_operation() { active_operations_.fetch_add(1, std::memory_order_acq_rel); }
+void channel_state::begin_operation()
+{
+    if (channel_ == nullptr)
+    {
+        KLOG_WARN("channel operation on invalid state {}", log::hex(reinterpret_cast<u64>(this)));
+        return;
+    }
+    naos_ipc_channel_begin_operation(channel_);
+}
 
-void channel_state::end_operation() { active_operations_.fetch_sub(1, std::memory_order_acq_rel); }
+void channel_state::end_operation()
+{
+    if (channel_ != nullptr)
+        naos_ipc_channel_end_operation(channel_);
+}
 
 bool channel_state::has_root() const
 {
-    return roots_[0].load(std::memory_order_acquire) != 0 || roots_[1].load(std::memory_order_acquire) != 0;
+    if (channel_ == nullptr)
+        return false;
+    uctx::RawSpinLockUninterruptibleContext guard(const_cast<lock::spinlock_t &>(lifecycle_lock_));
+    return roots_[0] != 0 || roots_[1] != 0;
 }
 
 bool channel_state::can_reap() const
 {
-    return !has_root() && active_operations_.load(std::memory_order_acquire) == 0 &&
-           active_claims_.load(std::memory_order_acquire) == 0;
+    if (channel_ == nullptr)
+        return false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(const_cast<lock::spinlock_t &>(lifecycle_lock_));
+        if (endpoint_objects_ != 0 || roots_[0] != 0 || roots_[1] != 0)
+            return false;
+    }
+    return naos_ipc_channel_can_reap(channel_);
 }
 
 void channel_state::collect_reachable_states(freelibcxx::vector<channel_state *> &targets) const
 {
-    auto &lock = const_cast<lock::spinlock_t &>(lock_);
-    uctx::RawSpinLockUninterruptibleContext icu(lock);
-    for (auto *queue : queues_)
-    {
-        const u64 count = queue->fifo.size();
-        for (u64 i = 0; i < count; i++)
-        {
-            auto *message = queue->fifo.at(i);
-            if (message == nullptr)
-                continue;
-            for (u64 resource_index = 0; resource_index < message->resource_count(); resource_index++)
-            {
-                auto &resource = message->resource(resource_index);
-                if (!resource.valid() || !resource.object()->is<raw_channel_endpoint>())
-                    continue;
-                auto *endpoint = resource.object()->get<raw_channel_endpoint>();
-                if (endpoint != nullptr)
-                    targets.push_back(endpoint->state());
-            }
-        }
-    }
+    naos_ipc_channel_visit_queued_messages(channel_, collect_message_targets, &targets);
 }
 
 void channel_state::discard_orphan_messages()
 {
-    freelibcxx::vector<channel_message *> discarded(memory::KernelCommonAllocatorV);
-    discarded.ensure(max_messages_ * 2);
-    if (max_messages_ != 0 && discarded.data() == nullptr)
-        return;
+    for (u8 side = 0; side < 2; side++)
     {
-        uctx::RawSpinLockUninterruptibleContext icu(lock_);
-        for (auto *queue : queues_)
+        for (;;)
         {
-            while (!queue->fifo.empty())
-            {
-                if (!queue->fifo.claim_front())
-                    break;
-                auto *message = queue->fifo.front();
-                queue->fifo.commit_claim();
-                queue->bytes -= message->byte_count();
-                queue->resources -= message->resource_count();
-                release_global(message->byte_count(), message->resource_count());
-                discarded.push_back(message);
-            }
+            naos_ipc_message_t *core_message = nullptr;
+            if (naos_ipc_channel_discard(channel_, side, &core_message) == 0)
+                break;
+            auto *message = static_cast<channel_message *>(naos_ipc_message_user_context(core_message));
+            if (message != nullptr)
+                memory::Delete<>(memory::KernelCommonAllocatorV, message);
+            else
+                naos_ipc_message_destroy(core_message);
         }
     }
-    notify_channel_waiters();
-    for (auto *message : discarded)
-        memory::Delete<>(memory::KernelCommonAllocatorV, message);
 }
 
 u8 channel_state::side_for(const raw_channel_endpoint *endpoint) const
@@ -607,13 +544,13 @@ raw_channel_endpoint::raw_channel_endpoint(channel_state *state, u8 side)
     , side_(side)
 {
     if (state_ != nullptr)
-        state_->endpoint_object_created();
+        state_->endpoint_object_created(this);
 }
 
 raw_channel_endpoint::~raw_channel_endpoint()
 {
     if (state_ != nullptr)
-        state_->endpoint_object_destroyed();
+        state_->endpoint_object_destroyed(this);
 }
 
 void raw_channel_endpoint::on_capability_acquire(capability::location where)
@@ -639,13 +576,15 @@ na_signal_t raw_channel_endpoint::capability_signals() const { return state_ == 
 
 void raw_channel_endpoint::begin_operation()
 {
-    if (state_ != nullptr)
+    if (state_ != nullptr && state_->valid())
         state_->begin_operation();
+    else
+        KLOG_WARN("channel endpoint operation on invalid state {}", log::hex(reinterpret_cast<u64>(state_)));
 }
 
 void raw_channel_endpoint::end_operation()
 {
-    if (state_ != nullptr)
+    if (state_ != nullptr && state_->valid())
         state_->end_operation();
 }
 
@@ -672,7 +611,13 @@ na_status_t create_raw_channel_with_options(khandle &left, khandle &right, na_ch
     {
         left_endpoint.reset();
         right_endpoint.reset();
-        unregister_state(state);
+        memory::Delete<>(memory::KernelCommonAllocatorV, state);
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    }
+    if (!register_state(state))
+    {
+        left_endpoint.reset();
+        right_endpoint.reset();
         memory::Delete<>(memory::KernelCommonAllocatorV, state);
         return NA_STATUS_RESOURCE_EXHAUSTED;
     }
@@ -768,8 +713,8 @@ na_status_t send_raw_channel(task::resource_table_t &resources, na_handle_t endp
                                        values.resource_count * sizeof(na_resource_disposition_t)))
         return finish(NA_STATUS_INVALID_ARGUMENT);
 
-    auto *message =
-        memory::New<channel_message>(memory::KernelCommonAllocatorV, values.byte_count, values.resource_count);
+    auto *message = memory::New<channel_message>(memory::KernelCommonAllocatorV, channel->state()->core_channel(),
+                                                 values.byte_count, values.resource_count);
     if (message == nullptr || !message->valid())
     {
         if (message != nullptr)
@@ -836,7 +781,8 @@ na_status_t send_raw_channel_kernel(task::resource_table_t &resources, na_handle
     if (byte_count > NA_CHANNEL_MAX_MESSAGE_BYTES || (byte_count != 0 && bytes == nullptr))
         return finish(NA_STATUS_INVALID_MESSAGE);
 
-    auto *message = memory::New<channel_message>(memory::KernelCommonAllocatorV, byte_count, 0);
+    auto *message =
+        memory::New<channel_message>(memory::KernelCommonAllocatorV, channel->state()->core_channel(), byte_count, 0);
     if (message == nullptr || !message->valid())
     {
         if (message != nullptr)
@@ -869,7 +815,8 @@ na_status_t send_raw_channel_kernel(const khandle &endpoint, const byte *bytes, 
     if (byte_count > NA_CHANNEL_MAX_MESSAGE_BYTES || (byte_count != 0 && bytes == nullptr))
         return finish(NA_STATUS_INVALID_MESSAGE);
 
-    auto *message = memory::New<channel_message>(memory::KernelCommonAllocatorV, byte_count, 0);
+    auto *message =
+        memory::New<channel_message>(memory::KernelCommonAllocatorV, channel->state()->core_channel(), byte_count, 0);
     if (message == nullptr || !message->valid())
     {
         if (message != nullptr)
@@ -984,13 +931,28 @@ na_status_t receive_raw_channel(task::resource_table_t &resources, na_handle_t e
 
     for (u64 i = 0; i < message->resource_count(); i++)
     {
-        status = resources.activate_native(reserved[i], std::move(message->resource(i)));
+        capability::transferred_resource resource;
+        if (!take_kernel_resource(message, i, resource))
+        {
+            for (u64 j = 0; j < i; j++)
+                resources.close_native(reserved[j]);
+            resources.rollback_native(reserved);
+            if (channel->state()->commit_receive(channel->side(), message))
+                memory::Delete<>(memory::KernelCommonAllocatorV, message);
+            else
+                channel->state()->cancel_receive(channel->side(), message);
+            return finish(NA_STATUS_RESOURCE_EXHAUSTED);
+        }
+        status = resources.activate_native(reserved[i], std::move(resource));
         if (status != NA_STATUS_OK)
         {
             for (u64 j = 0; j < i; j++)
                 resources.close_native(reserved[j]);
             resources.rollback_native(reserved);
-            cancel();
+            if (channel->state()->commit_receive(channel->side(), message))
+                memory::Delete<>(memory::KernelCommonAllocatorV, message);
+            else
+                cancel();
             return finish(status);
         }
     }
@@ -1052,14 +1014,30 @@ na_status_t receive_raw_channel_kernel(task::resource_table_t &resources, na_han
 
     for (u64 i = 0; i < message->resource_count(); i++)
     {
-        status = resources.activate_native(handles[i], std::move(message->resource(i)));
+        capability::transferred_resource resource;
+        if (!take_kernel_resource(message, i, resource))
+        {
+            for (u64 j = 0; j < i; j++)
+                resources.close_native(handles[j]);
+            resources.rollback_native(handles);
+            actual_bytes = 0;
+            if (channel->state()->commit_receive(channel->side(), message))
+                memory::Delete<>(memory::KernelCommonAllocatorV, message);
+            else
+                channel->state()->cancel_receive(channel->side(), message);
+            return finish(NA_STATUS_RESOURCE_EXHAUSTED);
+        }
+        status = resources.activate_native(handles[i], std::move(resource));
         if (status != NA_STATUS_OK)
         {
             for (u64 j = 0; j < i; j++)
                 resources.close_native(handles[j]);
             resources.rollback_native(handles);
             actual_bytes = 0;
-            cancel();
+            if (channel->state()->commit_receive(channel->side(), message))
+                memory::Delete<>(memory::KernelCommonAllocatorV, message);
+            else
+                cancel();
             return finish(status);
         }
     }
@@ -1101,79 +1079,57 @@ na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t e
     return NA_STATUS_OK;
 }
 
-na_status_t wait_many(task::resource_table_t &resources, na_wait_item_t *items, u64 count,
-                      timeclock::microsecond_t deadline)
+namespace
 {
-    if (count == 0 || count > NA_CAPABILITY_MAX_PER_PROCESS || items == nullptr ||
-        !is_user_space_range(items, count * sizeof(na_wait_item_t)))
-        return NA_STATUS_INVALID_ARGUMENT;
+struct deadline_wakeup
+{
+    task::wait_queue_t *queue;
 
-    freelibcxx::vector<na_wait_item_t> snapshot(memory::KernelCommonAllocatorV);
-    snapshot.resize(count, na_wait_item_t{});
-    if (snapshot.data() == nullptr)
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    const auto copy_status =
-        naos::usercopy::copy_from(snapshot.data(), reinterpret_cast<u64>(items), count * sizeof(na_wait_item_t));
-    if (copy_status != NA_STATUS_OK)
-        return copy_status;
-    for (auto &item : snapshot)
+    void wake(timeclock::microsecond_t) noexcept
     {
-        capability::entry entry;
-        if (item.signals == 0 || !resources.lookup_native(item.handle, entry))
-            return NA_STATUS_INVALID_HANDLE;
-        if ((entry.meta.meta_rights & NA_RIGHT_WAIT) == 0)
-            return NA_STATUS_ACCESS_DENIED;
+        if (queue != nullptr)
+            queue->do_wake_up();
     }
-    wait_request request{&resources, &snapshot};
-    if (!wait_condition(&request))
+};
+} // namespace
+
+na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_ref<bool()> condition,
+                               timeclock::microsecond_t deadline)
+{
+    if (condition())
+        return NA_STATUS_OK;
+    if (deadline == 0)
+        return NA_STATUS_WOULD_BLOCK;
+
+    timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
+    deadline_wakeup wake{&queue};
+    if (deadline != std::numeric_limits<u64>::max())
     {
-        timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
-        if (deadline == 0)
-            return NA_STATUS_WOULD_BLOCK;
-        if (deadline != std::numeric_limits<u64>::max())
-        {
-            if (timer::get_high_resolution_time() >= deadline)
-                return NA_STATUS_WAIT_TIMED_OUT;
-            ensure_waiters();
-            if (waiters == nullptr)
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-            deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&wait_deadline_wakeup>());
-            for (;;)
-            {
-                const auto generation = wait_generation.load(std::memory_order_acquire);
-                if (wait_condition(&request))
-                    break;
-                if (timer::get_high_resolution_time() >= deadline)
-                    break;
-                waiters->do_wait(
-                    [generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
-            }
-            (void)timer::cancel(deadline_watcher);
-            if (!wait_condition(&request) && timer::get_high_resolution_time() >= deadline)
-                return NA_STATUS_WAIT_TIMED_OUT;
-        }
-        else
-        {
-            ensure_waiters();
-            if (waiters == nullptr)
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-            for (;;)
-            {
-                const auto generation = wait_generation.load(std::memory_order_acquire);
-                if (wait_condition(&request))
-                    break;
-                waiters->do_wait(
-                    [generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
-            }
-        }
+        if (timer::get_high_resolution_time() >= deadline)
+            return NA_STATUS_WAIT_TIMED_OUT;
+        deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&deadline_wakeup::wake>(wake));
     }
-    if (copy_to_user(reinterpret_cast<u64>(items), snapshot.data(), count * sizeof(na_wait_item_t)) != NA_STATUS_OK)
-        return NA_STATUS_FAULT;
+
+    for (;;)
+    {
+        if (condition())
+            break;
+        if (deadline != std::numeric_limits<u64>::max() && timer::get_high_resolution_time() >= deadline)
+        {
+            if (deadline_watcher != timer::invalid_watcher_id)
+                (void)timer::cancel(deadline_watcher);
+            return NA_STATUS_WAIT_TIMED_OUT;
+        }
+        queue.do_wait(condition);
+    }
+
+    if (deadline_watcher != timer::invalid_watcher_id)
+        (void)timer::cancel(deadline_watcher);
     return NA_STATUS_OK;
 }
 
-na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
-                            timeclock::microsecond_t deadline)
+na_status_t wait_for_raw_channel(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
+                                 timeclock::microsecond_t deadline)
 {
     if (handle == NA_HANDLE_INVALID || signals == 0)
         return NA_STATUS_INVALID_ARGUMENT;
@@ -1182,69 +1138,58 @@ na_status_t wait_for_signal(task::resource_table_t &resources, na_handle_t handl
         return NA_STATUS_INVALID_HANDLE;
     if ((entry.meta.meta_rights & NA_RIGHT_WAIT) == 0)
         return NA_STATUS_ACCESS_DENIED;
+    if (entry.meta.binding != NA_BINDING_RAW_CHANNEL_END)
+        return NA_STATUS_WRONG_BINDING;
+    auto *endpoint = entry.object->get<raw_channel_endpoint>();
+    if (endpoint == nullptr || endpoint->state() == nullptr)
+        return NA_STATUS_WRONG_BINDING;
 
-    na_wait_item_t item{handle, signals, 0};
-    freelibcxx::vector<na_wait_item_t> snapshot(memory::KernelCommonAllocatorV);
-    snapshot.push_back(item);
-    if (snapshot.data() == nullptr)
-        return NA_STATUS_RESOURCE_EXHAUSTED;
-    wait_request request{&resources, &snapshot};
-    if (!wait_condition(&request))
-    {
-        timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
-        if (deadline == 0)
-            return NA_STATUS_WOULD_BLOCK;
-        if (deadline != std::numeric_limits<u64>::max())
-        {
-            if (timer::get_high_resolution_time() >= deadline)
-                return NA_STATUS_WAIT_TIMED_OUT;
-            ensure_waiters();
-            if (waiters == nullptr)
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-            deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&wait_deadline_wakeup>());
-        }
-        else
-        {
-            ensure_waiters();
-            if (waiters == nullptr)
-                return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-        for (;;)
-        {
-            const auto generation = wait_generation.load(std::memory_order_acquire);
-            if (wait_condition(&request))
-                break;
-            waiters->do_wait([generation] { return wait_generation.load(std::memory_order_acquire) != generation; });
-        }
-        if (deadline_watcher != timer::invalid_watcher_id)
-            (void)timer::cancel(deadline_watcher);
-        if (!wait_condition(&request) && deadline != std::numeric_limits<u64>::max() &&
-            timer::get_high_resolution_time() >= deadline)
-            return NA_STATUS_WAIT_TIMED_OUT;
-    }
-    return NA_STATUS_OK;
-}
-
-void notify_channel_waiters()
-{
-    wait_generation.fetch_add(1, std::memory_order_acq_rel);
-    if (waiters != nullptr)
-        waiters->do_wake_up();
+    // `entry.object` keeps the endpoint alive while the borrowed state queue
+    // and predicate are used. Closing the table slot concurrently therefore
+    // becomes the normal peer-closed signal instead of invalidating a raw
+    // pointer under the waiter.
+    auto object = entry.object;
+    return wait_for_condition(
+        endpoint->state()->wait_queue(), [&] { return (object->capability_signals() & signals) != 0; }, deadline);
 }
 
 void collect_orphaned_channels()
 {
-    uctx::RawSpinLockUninterruptibleContext registry_icu(registry_lock);
-    if (registry == nullptr || registry->empty())
-        return;
-
+    // Reachability walks and vector growth may allocate and may call into the
+    // channel core.  Serialize collectors, but hold the raw registry lock only
+    // for the bounded pointer snapshot and final unlink phase.
+    registry_collection_lock.lock();
     freelibcxx::vector<channel_state *> states(memory::KernelCommonAllocatorV);
-    for (auto state : *registry)
-        states.push_back(state);
+    for (;;)
+    {
+        states.clear();
+        const u64 expected = registry_count.load(std::memory_order_acquire);
+        states.ensure(expected);
+        if (states.capacity() < expected)
+        {
+            registry_collection_lock.unlock();
+            return;
+        }
+        uctx::RawSpinLockUninterruptibleContext registry_icu(registry_lock);
+        if (registry_count.load(std::memory_order_acquire) > states.capacity())
+            continue;
+        for (auto *state = registry; state != nullptr; state = state->registry_next())
+            states.push_back(state);
+        break;
+    }
+    if (states.empty())
+    {
+        registry_collection_lock.unlock();
+        return;
+    }
+
     freelibcxx::vector<u8> marked(memory::KernelCommonAllocatorV);
     marked.ensure(states.size());
     if (states.size() != 0 && marked.data() == nullptr)
+    {
+        registry_collection_lock.unlock();
         return;
+    }
     for (u64 i = 0; i < states.size(); i++)
         marked.push_back(0);
 
@@ -1281,18 +1226,33 @@ void collect_orphaned_channels()
         if (marked[i] == 0 && states[i]->can_reap())
             states[i]->discard_orphan_messages();
     }
+    freelibcxx::vector<channel_state *> reap(memory::KernelCommonAllocatorV);
+    reap.ensure(states.size());
+    if (reap.capacity() < states.size())
+    {
+        registry_collection_lock.unlock();
+        return;
+    }
     for (u64 i = 0; i < states.size(); i++)
     {
         auto *state = states[i];
-        if (marked[i] != 0 || !state->can_reap() || state->endpoint_object_count() != 0)
-            continue;
-        auto iterator = registry->begin();
-        while (iterator != registry->end() && *iterator != state)
-            ++iterator;
-        if (iterator != registry->end())
-            registry->remove(iterator);
-        memory::Delete<>(memory::KernelCommonAllocatorV, state);
+        if (marked[i] == 0 && state->can_reap() && state->endpoint_object_count() == 0)
+            reap.push_back(state);
     }
+    {
+        uctx::RawSpinLockUninterruptibleContext registry_icu(registry_lock);
+        for (auto *state : reap)
+        {
+            if (state->can_reap() && state->endpoint_object_count() == 0)
+                unregister_state_locked(state);
+        }
+    }
+    for (auto *state : reap)
+    {
+        if (!state->registry_linked())
+            memory::Delete<>(memory::KernelCommonAllocatorV, state);
+    }
+    registry_collection_lock.unlock();
 }
 
 } // namespace naos::ipc

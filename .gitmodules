@@ -22,3 +22,9 @@
 [submodule "naos/third_party/rust-naos"]
 	path = naos/third_party/rust-naos
 	url = https://github.com/kadds/rust.git
+[submodule "naos/third_party/tokio"]
+	path = naos/third_party/tokio
+	url = https://github.com/kadds/tokio.git
+[submodule "naos/third_party/mio"]
+	path = naos/third_party/mio
+	url = https://github.com/kadds/mio.git

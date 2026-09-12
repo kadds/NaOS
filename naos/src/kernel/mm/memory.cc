@@ -15,6 +15,7 @@
 #include "kernel/mm/slab.hpp"
 #include "kernel/mm/vm.hpp"
 #include "kernel/mm/zone.hpp"
+#include "kernel/task.hpp"
 #include "kernel/ucontext.hpp"
 #include <atomic>
 
@@ -192,12 +193,12 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
     memcpy(bootloader_ptr, bootloader, bootloaderlen);
     args->boot_loader_name = reinterpret_cast<u64>(va2pa(bootloader_ptr).get());
 
-    u64 image_size = args->rfsimg_size;
-    auto image_ptr = reinterpret_cast<byte *>(vb.allocate(image_size, 8));
-    auto image_phy_addr = va2pa(image_ptr);
-    memcpy(image_ptr, pa2va(phy_addr_t::from(args->rfsimg_start)), image_size);
-    args->rfsimg_start = reinterpret_cast<u64>(image_phy_addr.get());
-
+    // Named boot modules are already loader-owned physical ranges.  Keep them
+    // in place instead of making a second copy of a prepared root image; the
+    // ranges are explicitly reserved below before the buddy allocator is
+    // handed out.  Their physical addresses remain valid through the fixed
+    // kernel mapping and are wrapped by immutable MemoryObjects by the boot
+    // manager.
     // map the kernel and data
     phy_addr_t start_kernel = align_down(phy_addr_t::from(args->kernel_base), page_size);
     phy_addr_t end_kernel = align_up(phy_addr_t::from(args->kernel_base) + args->kernel_size, page_size);
@@ -229,10 +230,19 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
-        KLOG_INFO("Memory zone index {}, {}-{} num of page {}", zone_id, log::hex(range.beg.get()),
+        KLOG_DEBUG("Memory zone index {}, {}-{} num of page {}", zone_id, log::hex(range.beg.get()),
                   log::hex(range.end.get()), z->total_pages());
     }
     global_zones->tag_alloc(phy_addr_t::from(0x100000), va2pa(end_used_memory_addr));
+    for (u64 i = 0; i < args->named_module_count; i++)
+    {
+        const auto &module = args->named_modules[i];
+        if (module.size == 0)
+            continue;
+        const auto module_start = align_down(phy_addr_t::from(module.start), page_size);
+        const auto module_end = align_up(phy_addr_t::from(module.start + module.size), page_size);
+        global_zones->tag_alloc(module_start, module_end);
+    }
 
     KernelCommonAllocatorV = New<KernelCommonAllocator>(VirtBootAllocatorV);
     KernelVirtualAllocatorV = New<KernelVirtualAllocator>(VirtBootAllocatorV);
@@ -253,9 +263,6 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
 
     KLOG_DEBUG("Kernel(boot data):{}-{}, size:{} -> {}Kib", log::hex(start_data()), log::hex(end_data()),
                (end_data - start_data), (end_data - start_data) >> 10);
-
-    KLOG_DEBUG("Kernel(image data):{}-{}, size:{} -> {}Kib", log::hex(image_phy_addr.get()),
-               log::hex((image_phy_addr + args->rfsimg_size).get()), image_size, image_size >> 10);
 
     KernelBuddyAllocatorV = global_zones;
 
@@ -352,6 +359,7 @@ void *vmalloc(u64 size, u64 align)
         KLOG_PANIC("vmalloc exhausted");
     kernel_vm_info->paging().map(reinterpret_cast<void *>(vm->start), (vm->end - vm->start) / page_size,
                                  arch::paging::flags::writable, 0);
+    task::sync_current_kernel_space();
 
     arch::paging::page_table_t::reload();
     return (void *)vm->start;

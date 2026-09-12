@@ -3,12 +3,13 @@
 #include "freelibcxx/vector.hpp"
 #include "kernel/capability.hpp"
 #include "kernel/ipc/bounded_queue.hpp"
-#include "kernel/ipc/invocation_deadline.hpp"
+#include "kernel/ipc/core_lock.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/resource.hpp"
 #include "kernel/wait.hpp"
 #include "naos/abi.h"
+#include "naos/ipc_core.h"
 #include <atomic>
 
 namespace naos::ipc
@@ -16,6 +17,8 @@ namespace naos::ipc
 
 class protocol_state;
 class invocation_state;
+class protocol_endpoint;
+class invocation_object;
 class responder_object;
 
 class protocol_descriptor final : public kobject
@@ -71,15 +74,6 @@ class protocol_endpoint final : public kobject
     endpoint_role role_;
 };
 
-enum class invocation_phase : u8
-{
-    queued,
-    receiving,
-    dispatched,
-    ready,
-    consumed,
-};
-
 class invocation_state
 {
   public:
@@ -91,8 +85,8 @@ class invocation_state
     invocation_state &operator=(const invocation_state &) = delete;
 
     na_signal_t signals() const;
-    u64 method_id() const { return method_id_; }
-    u64 operation_deadline() const { return operation_deadline_; }
+    u64 method_id() const;
+    u64 operation_deadline() const;
 
     bool begin_receive();
     void rollback_receive();
@@ -112,6 +106,18 @@ class invocation_state
     bool consume_responder();
     bool reserve_result_budget();
 
+    // Adapter callbacks used by the transport-neutral invocation core. They
+    // wake kernel wait queues and perform the protocol-queue removal without
+    // exposing either type to the shared library.
+    void notify_core_waiters();
+    void notify_readiness();
+    void invocation_object_created(invocation_object *object);
+    void invocation_object_destroyed(invocation_object *object);
+    void responder_object_created(responder_object *object);
+    void responder_object_destroyed(responder_object *object);
+    void wake_core_execution();
+    bool remove_queued_from_core();
+
     bool complete_reply(freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
                         i64 protocol_error = 0, task::resource_table_t *source_resources = nullptr);
     bool complete_reply(freelibcxx::vector<byte> &bytes, capability::transfer_record_list &resources,
@@ -127,32 +133,18 @@ class invocation_state
     na_status_t commit_result();
 
   private:
-    void release_result_budget_locked();
-    bool publish_locked(na_execution_outcome_t outcome, na_outcome_reason_t reason, freelibcxx::vector<byte> &&bytes,
-                        capability::transfer_record_list &&resources, i64 protocol_error);
-    bool publish_locked_no_wake(na_execution_outcome_t outcome, na_outcome_reason_t reason,
-                                freelibcxx::vector<byte> &&bytes, capability::transfer_record_list &&resources,
-                                i64 protocol_error);
-
     mutable lock::spinlock_t lock_;
     task::wait_queue_t wait_queue_;
-    invocation_phase phase_;
-    u64 method_id_;
-    u64 operation_deadline_;
-    u64 max_response_bytes_;
-    u64 max_response_resources_;
-    bool result_claimed_;
-    bool responder_alive_;
-    bool client_closed_;
-    bool cancellation_requested_;
-    bool result_budget_reserved_;
     task::wait_queue_t *execution_wait_queue_ = nullptr;
-    na_execution_outcome_t execution_outcome_;
-    na_outcome_reason_t outcome_reason_;
-    i64 protocol_error_;
     handle_t<protocol_state> queue_owner_;
-    freelibcxx::vector<byte> response_bytes_;
-    capability::transfer_record_list response_resources_;
+    core_lock core_lock_;
+    naos_ipc_lock_t core_lock_api_{};
+    naos_ipc_wait_notifier_t core_notifier_api_{};
+    naos_ipc_clock_t core_clock_api_{};
+    naos_ipc_invocation_callbacks_t core_callbacks_{};
+    naos_ipc_invocation_t *core_ = nullptr;
+    invocation_object *invocation_object_ = nullptr;
+    responder_object *responder_object_ = nullptr;
 };
 
 class invocation_object final : public kobject
@@ -217,6 +209,7 @@ struct invocation_request
     freelibcxx::vector<byte> bytes;
     capability::transfer_record_list resources;
     capability::transferred_resource responder;
+    invocation_request *discard_next = nullptr;
 
     invocation_request(freelibcxx::Allocator *allocator, handle_t<invocation_state> state, u64 method_id,
                        u64 operation_deadline, process_id caller_pid)
@@ -252,6 +245,9 @@ class protocol_state
     bool abort_claim(invocation_request *request);
     void endpoint_acquired(endpoint_role role, capability::location where);
     void endpoint_released(endpoint_role role, capability::location where);
+    void endpoint_object_created(protocol_endpoint *endpoint);
+    void endpoint_object_destroyed(protocol_endpoint *endpoint);
+    void notify_readiness();
     void begin_operation();
     void end_operation();
     void close_server_queue();
@@ -287,6 +283,7 @@ class protocol_state
     std::atomic_uint64_t active_claims_;
     bool valid_;
     bool server_closed_;
+    protocol_endpoint *endpoints_[2] = {};
 };
 
 na_status_t create_protocol_descriptor(task::resource_table_t &resources, const na_protocol_descriptor_t *input,
@@ -307,7 +304,6 @@ na_status_t invocation_take_result(task::resource_table_t &resources, na_handle_
 na_status_t responder_reply(task::resource_table_t &resources, na_handle_t responder, const na_reply_frame_t *frame);
 na_status_t responder_fail(task::resource_table_t &resources, na_handle_t responder, const na_fail_frame_t *frame);
 
-void notify_invocation_waiters();
 void init_kernel_dispatch_worker();
 
 } // namespace naos::ipc

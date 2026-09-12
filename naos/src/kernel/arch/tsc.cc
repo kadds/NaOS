@@ -42,19 +42,16 @@ u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
 
 void clock_source::calibrate(::timeclock::clock_source *cs)
 {
-    if (cpu_info::max_basic_cpuid() >= 0x15)
+    const auto cpuid15 = cpu_info::get_tsc_cpuid15_info();
+    if (cpuid15.has_frequency())
     {
-        auto f = cpu_info::get_feature(cpu_info::feature::tsc_frequency);
-        if (f > 0)
-        {
-            const u64 base_hz = 10;
-            KLOG_INFO("TSC builtin frequency {}MHZ", f * base_hz);
-            tsc_tick_second_ = f * base_hz;
-            builtin_freq_ = true;
-            return;
-        }
+        tsc_tick_second_ = cpuid15.frequency_hz();
+        builtin_freq_ = true;
+        KLOG_INFO("TSC frequency source=CPUID.15H ratio {}/{} crystal {}MHz result {}MHz", cpuid15.numerator,
+                  cpuid15.denominator, cpuid15.crystal_frequency_hz / 1'000'000UL, tsc_tick_second_ / 1'000'000UL);
+        return;
     }
-    KLOG_DEBUG("TSC calibrate");
+    KLOG_INFO("TSC frequency source={} calibration (CPUID.15H unavailable or incomplete)", cs->name());
     u64 tsc_freq[test_times];
     u64 total_freq = 0;
     u64 max_freq = 0;
@@ -80,8 +77,8 @@ void clock_source::calibrate(::timeclock::clock_source *cs)
     delta /= test_times;
     const u64 freq = tsc_freq[test_times / 2];
 
-    KLOG_INFO("TSC frequency {}MHZ. delta {} min {}MHZ. max {}MHZ.", freq / 1000'000UL, delta, min_freq / 1000'000UL,
-              max_freq / 1000'000UL);
+    KLOG_INFO("TSC frequency source={} measured {}MHz delta {} min {}MHz max {}MHz", cs->name(), freq / 1'000'000UL,
+              delta, min_freq / 1'000'000UL, max_freq / 1'000'000UL);
 
     tsc_tick_second_ = freq;
 }

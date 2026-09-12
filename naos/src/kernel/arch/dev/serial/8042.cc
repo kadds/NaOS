@@ -291,12 +291,12 @@ void fill_device_type(chip8042_scan_device_info_t &dev)
         if ((dev.id >> 8) == 0xAB)
         {
             dev.clazz = chip8042_device_clazz::keyboard;
-            KLOG_DEBUG("keyboard id {}", log::hex(dev.id));
+            KLOG_INFO("keyboard id {}", log::hex(dev.id));
         }
         else
         {
             dev.clazz = chip8042_device_clazz::mouse;
-            KLOG_DEBUG("mouse id {}", log::hex(dev.id));
+            KLOG_INFO("mouse id {}", log::hex(dev.id));
         }
     }
 }
@@ -748,7 +748,7 @@ bool mouse_driver::setup(::dev::device *dev)
         if (id == 0x3)
         {
             info.id = id;
-            KLOG_DEBUG("mouse extension id {}", log::hex(id));
+            KLOG_INFO("mouse extension id {}", log::hex(id));
             ms_dev->extension_z = true;
             // try to enable 5 buttons
             set_mouse_rate(ms_dev->port_index, 200);
@@ -759,7 +759,7 @@ bool mouse_driver::setup(::dev::device *dev)
             if (id == 0x4)
             {
                 info.id = id;
-                KLOG_DEBUG("mouse extension id {}", log::hex(id));
+                KLOG_INFO("mouse extension id {}", log::hex(id));
                 ms_dev->extension_buttons = true;
             }
         }

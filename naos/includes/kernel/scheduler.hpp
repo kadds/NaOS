@@ -77,7 +77,7 @@ class scheduler
     ///
     /// \param thd task
     ///
-    virtual void commit_migrate(thread_t *thd) = 0;
+    virtual bool commit_migrate(thread_t *thd) = 0;
 
     /// Initialize per cpu data
     virtual void init_cpu() = 0;
@@ -97,6 +97,7 @@ typedef void (*remove_func)(u64 data);
 void add(thread_t *thread, scheduler_class scher);
 void remove(thread_t *thread, remove_func, u64 user_data);
 void update_state(thread_t *thread, thread_state state);
+void update_state_async(thread_t *thread, thread_state state, std::atomic_uint32_t *wake_reference = nullptr);
 void update_state_sync(thread_t *thread, thread_state state);
 bool reschedule_task_push(thread_t *task, u32 cpuid);
 bool reschedule_task_pull(thread_t *task);
