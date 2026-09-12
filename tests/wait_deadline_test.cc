@@ -1,4 +1,5 @@
 #include "kernel/time.hpp"
+#include "kernel/timer.hpp"
 
 #include "catch2_compat.hpp"
 #include <cstdint>
@@ -42,6 +43,8 @@ void test_rejects_deadline_overflow()
     REQUIRE(result == max);
     REQUIRE(!timeclock::try_add_microseconds(max - 1, 2, result));
 }
+
+void test_clock_source_validation_is_bounded() { REQUIRE(timer::source_validation_samples < 1'000'000); }
 } // namespace
 
 TEST_CASE("wait deadline conversion", "[wait][deadline]")
@@ -51,4 +54,5 @@ TEST_CASE("wait deadline conversion", "[wait][deadline]")
     test_rejects_invalid_timespec();
     test_rejects_microsecond_overflow();
     test_rejects_deadline_overflow();
+    test_clock_source_validation_is_bounded();
 }
