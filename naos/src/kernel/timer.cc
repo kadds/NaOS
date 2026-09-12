@@ -137,7 +137,7 @@ bool check_source(timeclock::clock_source *cs)
         cs->get_event()->resume();
     }
     u64 last = cs->current();
-    for (int i = 0; i < 1'000'000; i++)
+    for (u64 i = 0; i < source_validation_samples; i++)
     {
         u64 v = cs->current();
         if (v < last || v > last + 10'000)

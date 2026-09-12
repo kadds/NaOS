@@ -61,7 +61,10 @@ void clock_event::init(u64 hz)
     {
         bit32_mode_ = true;
     }
-    periods_ = (1U << 23) - 1;
+    // ACPIPM fixed events are raised at the bit-23 boundary. Keep only the
+    // low counter bits so adding one period at the event boundary remains
+    // continuous instead of double-counting the high bit.
+    periods_ = 1U << 23;
 
     read_register_ = &read_register_io;
     if (info.block_base == 0)
@@ -118,7 +121,7 @@ void clock_event::resume()
         uctx::UninterruptibleContext icu;
         bool ok = arch::ACPI::register_timer(on_acpipm_event, (u64)this);
         kassert(ok, "enable acpipm fail");
-        init_val_ = read_register_(address_) & 0xFFFFFF;
+        init_val_ = read_register_(address_) & (periods_ - 1);
     }
 }
 
@@ -138,7 +141,7 @@ u64 clock_source::current()
     u64 jiff;
     {
         uctx::UninterruptibleContext icu;
-        val = ev->read_register_(ev->address_) & 0xFFFFFF;
+        val = ev->read_register_(ev->address_) & (ev->periods_ - 1);
         jiff = ev->jiff_;
     }
 

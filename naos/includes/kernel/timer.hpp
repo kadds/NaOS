@@ -9,6 +9,7 @@ namespace timer
 using timer_handler = freelibcxx::delegate<void(timeclock::microsecond_t) noexcept>;
 using watcher_id = u64;
 constexpr watcher_id invalid_watcher_id = 0;
+constexpr u64 source_validation_samples = 10'000;
 void init();
 
 ///
