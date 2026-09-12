@@ -33,6 +33,15 @@ void test_rejects_microsecond_overflow()
     timeclock::microsecond_t result = 0;
     REQUIRE(!timeclock::try_to_microseconds(timeclock::time(std::numeric_limits<std::int64_t>::max(), 0), result));
 }
+
+void test_rejects_deadline_overflow()
+{
+    timeclock::microsecond_t result = 0;
+    const auto max = std::numeric_limits<timeclock::microsecond_t>::max();
+    REQUIRE(timeclock::try_add_microseconds(max - 2, 2, result));
+    REQUIRE(result == max);
+    REQUIRE(!timeclock::try_add_microseconds(max - 1, 2, result));
+}
 } // namespace
 
 TEST_CASE("wait deadline conversion", "[wait][deadline]")
@@ -41,4 +50,5 @@ TEST_CASE("wait deadline conversion", "[wait][deadline]")
     test_truncates_sub_microsecond_precision();
     test_rejects_invalid_timespec();
     test_rejects_microsecond_overflow();
+    test_rejects_deadline_overflow();
 }
