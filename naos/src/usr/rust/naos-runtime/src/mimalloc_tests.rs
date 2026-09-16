@@ -1,0 +1,11 @@
+use core::alloc::GlobalAlloc;
+
+use crate::allocator::MimallocAllocator;
+
+fn assert_global_allocator<T: GlobalAlloc>() {}
+
+#[test]
+fn mimalloc_adapter_implements_global_allocator() {
+    assert_global_allocator::<MimallocAllocator>();
+}
+

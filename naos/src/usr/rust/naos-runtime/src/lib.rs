@@ -14,6 +14,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "alloc")]
 mod allocator;
 
+#[cfg(all(test, feature = "alloc"))]
+mod mimalloc_tests;
+
 #[cfg(feature = "alloc")]
 mod thread;
 
