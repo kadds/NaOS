@@ -98,7 +98,7 @@ struct record_header
 [early] ?-?-? INFO acpi: ACPI tables ready
 ```
 
-头部中的 `cpu-pid-tid` 直接使用短字段表示，不重复输出 `cpu=`、`pid=`、`tid=`。日志头不显示 `seq=`；内部 sequence 仍然存在并参与丢失检测。普通 message 保持原文，换行和控制字符按规范文本规则转义。
+头部中的 `cpu-pid-tid` 直接使用短字段表示，不重复输出 `cpu=`、`pid=`、`tid=`。日志头不显示 `seq=`；内部 sequence 仍然存在并参与丢失检测。普通 message 保持原文，换行保留为实际换行，其他控制字符按规范文本规则转义。
 
 ### 3. userland `_s_log`
 

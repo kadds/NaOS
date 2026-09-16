@@ -6,6 +6,7 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/cpu.hpp"
+#include "kernel/log_format.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/task.hpp"
@@ -383,31 +384,6 @@ void copy_text(char *destination, u64 capacity, const char *source, u64 length, 
     truncated = copied != length;
 }
 
-void append_escaped(freelibcxx::format_detail::writer &output, const char *message, u64 length)
-{
-    static constexpr char hex_digits[] = "0123456789abcdef";
-    for (u64 index = 0; index < length; index++)
-    {
-        const u8 value = static_cast<u8>(message[index]);
-        if (value == '\n')
-            output.put("\\n");
-        else if (value == '\r')
-            output.put("\\r");
-        else if (value == '\t')
-            output.put("\\t");
-        else if (value == 0x1b)
-            output.put("\\x1b");
-        else if (value < 0x20 || value == 0x7f)
-        {
-            output.put("\\x");
-            output.put(hex_digits[value >> 4]);
-            output.put(hex_digits[value & 0xf]);
-        }
-        else
-            output.put(message[index]);
-    }
-}
-
 void build_record(record &result, level severity, module source, const char *file, u32 line, bool raw,
                   const char *message, u64 length)
 {
@@ -453,7 +429,7 @@ void build_record(record &result, level severity, module source, const char *fil
     if (raw)
         output.put(message, length);
     else
-        append_escaped(output, message, length);
+        format::append_escaped(output, message, length);
     result.header.message_length = static_cast<u16>(output.written);
     if (output.truncated)
         result.header.flags |= message_truncated;
@@ -498,7 +474,7 @@ void build_nmi_record(record &result, module source, const char *file, u32 line,
         result.header.flags |= file_truncated;
 
     freelibcxx::format_detail::writer output{freelibcxx::span<char>(result.message, max_message_length)};
-    append_escaped(output, message, length);
+    format::append_escaped(output, message, length);
     result.header.message_length = static_cast<u16>(output.written);
     if (output.truncated)
         result.header.flags |= message_truncated;
@@ -1238,7 +1214,7 @@ void detail::emit_nmi_message(module source, const char *file, u32 line, const c
     char *buffer = nmi_buffers[cpu_id];
     freelibcxx::format_detail::writer output{freelibcxx::span<char>(buffer, max_rendered_record - 1)};
     output.put("[nmi] logger busy: ");
-    append_escaped(output, message, length);
+    format::append_escaped(output, message, length);
     output.put('\n');
     nmi_buffer_lengths[cpu_id].store(static_cast<u16>(output.written), std::memory_order_release);
     nmi_dropped.fetch_add(1, std::memory_order_relaxed);
