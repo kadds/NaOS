@@ -44,6 +44,13 @@ bool intel_cpu = false;
 void trace_debug_info();
 u64 max_basic_cpuid() { return max_basic_number; }
 
+cpuid_result read_cpuid(u32 leaf, u32 subleaf) noexcept
+{
+    cpuid_result result;
+    cpu_id(leaf, subleaf, result.eax, result.ebx, result.ecx, result.edx);
+    return result;
+}
+
 void load_brand_name()
 {
     u32 a, b, c, d;
@@ -170,6 +177,8 @@ bool has_feature(feature f)
         case feature::tsc:
             ret_cpu_feature(0x1, edx, 4);
         case feature::constant_tsc:
+            ret_cpu_feature(0x80000007, edx, 8);
+        case feature::nostop_tsc:
             ret_cpu_feature(0x80000007, edx, 8);
         case feature::sse:
             ret_cpu_feature(0x1, edx, 25);

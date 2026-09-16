@@ -1,285 +1,356 @@
 #include "kernel/timer.hpp"
-#include "freelibcxx/linked_list.hpp"
+
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/arch/acpipm.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/hpet.hpp"
 #include "kernel/arch/io_apic.hpp"
+#include "kernel/arch/kvm_pvclock.hpp"
 #include "kernel/arch/local_apic.hpp"
 #include "kernel/arch/pit.hpp"
-#include "kernel/arch/rtc.hpp"
 #include "kernel/arch/tsc.hpp"
 #include "kernel/clock.hpp"
-#include "kernel/clock/clock_source.hpp"
 #include "kernel/cmdline.hpp"
 #include "kernel/common.hpp"
 #include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/log.hpp"
-#include "kernel/mm/list_node_cache.hpp"
+#include "kernel/mm/new.hpp"
 #include "kernel/ucontext.hpp"
 
 KLOG_MODULE(kernel);
 namespace timer
 {
-
-using clock_source_array_t = freelibcxx::vector<timeclock::clock_source *>;
-
+namespace
+{
 struct watcher_t
 {
     watcher_id id;
-    /// target time microsecond
-    u64 expires;
+    timeclock::nanosecond_t expires_ns;
     timer_handler handler;
 
-    watcher_t(watcher_id id, u64 expires, timer_handler handler)
+    watcher_t(watcher_id id, timeclock::nanosecond_t expires_ns, timer_handler handler)
         : id(id)
-        , expires(expires)
+        , expires_ns(expires_ns)
         , handler(handler)
     {
     }
 
-    bool operator==(const watcher_t &w) const { return id == w.id; }
-    bool operator<(const watcher_t &w) { return expires < w.expires; }
+    bool operator==(const watcher_t &other) const { return id == other.id; }
+    bool operator<(const watcher_t &other) const
+    {
+        return expires_ns != other.expires_ns ? expires_ns < other.expires_ns : id < other.id;
+    }
 };
 
-using watcher_list_t = freelibcxx::linked_list<watcher_t>;
-using tick_list_t = freelibcxx::skip_list<watcher_t>;
+using watcher_list_t = freelibcxx::skip_list<watcher_t>;
 
 struct cpu_timer_t
 {
-    watcher_list_t watcher_list;
-    tick_list_t tick_list;
+    watcher_list_t watchers;
+    u64 deadline_generation = 0;
 
     cpu_timer_t()
-        : watcher_list(memory::KernelCommonAllocatorV)
-        , tick_list(memory::KernelCommonAllocatorV)
+        : watchers(memory::KernelCommonAllocatorV)
     {
     }
 };
 
-timeclock::clock_source *get_clock_source()
+enum class clock_kind : u8
 {
-    if (likely(cpu::has_init()))
-    {
-        return cpu::current().get_clock_source();
-    }
-    return nullptr;
-}
-
-timeclock::clock_event *get_clock_event()
-{
-    if (likely(cpu::has_init()))
-    {
-        return cpu::current().get_clock_event();
-    }
-    return nullptr;
-}
+    none,
+    pvclock,
+    tsc,
+    platform,
+};
 
 cpu_timer_t *timer_queues[arch::cpu::max_cpu_support]{};
 lock::spinlock_t timer_queue_lock;
+lock::spinlock_t timer_spinlock;
+std::atomic_uint64_t next_watcher_id{1};
+irq::registration *tick_registration = nullptr;
+timeclock::event_clock *global_platform_clock = nullptr;
+clock_kind selected_clock_kind = clock_kind::none;
+u64 selected_tsc_frequency_hz = 0;
+std::atomic_uint64_t late_deadlines{0};
+std::atomic_uint64_t ap_registration_failures{0};
+std::atomic_uint64_t stale_interrupts{0};
+std::atomic_uint64_t source_arm_failures{0};
 
-cpu_timer_t *current_timer_queue()
+template <typename Atomic> void increment_saturated(Atomic &counter) noexcept
+{
+    auto old = counter.load(std::memory_order_relaxed);
+    while (old != static_cast<u64>(-1) &&
+           !counter.compare_exchange_weak(old, old + 1, std::memory_order_relaxed, std::memory_order_relaxed))
+    {
+    }
+}
+
+timeclock::event_clock *get_event_clock() noexcept
 {
     if (!cpu::has_init())
         return nullptr;
-    const auto id = cpu::current().id();
+    return cpu::current().get_event_clock();
+}
+
+timeclock::event_source *get_event_source() noexcept
+{
+    if (!cpu::has_init())
+        return nullptr;
+    return cpu::current().get_event_source();
+}
+
+cpu_timer_t *current_timer_queue() noexcept
+{
+    if (!cpu::has_init())
+        return nullptr;
+    const u32 id = cpu::current().id();
     if (id >= arch::cpu::max_cpu_support)
         return nullptr;
     return timer_queues[id];
 }
 
+void rearm_current_cpu_locked(cpu_timer_t &queue) noexcept
+{
+    auto *source = get_event_source();
+    auto *clock = get_event_clock();
+    if (source == nullptr || clock == nullptr)
+        return;
+
+    ++queue.deadline_generation;
+    if (queue.deadline_generation == 0)
+        ++queue.deadline_generation;
+
+    if (queue.watchers.empty())
+    {
+        source->cancel(queue.deadline_generation);
+        return;
+    }
+
+    const auto deadline_ns = queue.watchers.begin()->expires_ns;
+    const auto now_ns = clock->now_ns();
+    // A deadline can become due while waiting for timer_queue_lock.  Keep the
+    // request structurally valid and let the soft timer path perform the
+    // authoritative time-domain check.
+    const timeclock::deadline_request request{now_ns < deadline_ns ? now_ns : deadline_ns, deadline_ns,
+                                              queue.deadline_generation};
+    if (source->arm(request) != timeclock::arm_result::armed)
+        increment_saturated(source_arm_failures);
+}
+
 void on_tick(u64 vector) noexcept
 {
     (void)vector;
-    auto *cpu_timer = current_timer_queue();
-    auto *source = get_clock_source();
-    if (cpu_timer == nullptr || source == nullptr)
-        return;
-    const u64 us = source->current();
-
+    auto *queue = current_timer_queue();
+    auto *clock = get_event_clock();
+    if (queue == nullptr || clock == nullptr)
     {
-        // add to tick list
-        uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-        for (auto &ws : cpu_timer->watcher_list)
-        {
-            cpu_timer->tick_list.insert(ws);
-        }
-        cpu_timer->watcher_list.clear();
+        increment_saturated(stale_interrupts);
+        return;
     }
+
+    if (selected_clock_kind == clock_kind::pvclock &&
+        static_cast<arch::kvm_pvclock::clock *>(clock)->take_retry_warning())
+        KLOG_WARN("KVM pvclock seqlock remained unstable; using cached conversion parameters");
 
     for (;;)
     {
         timer_handler handler;
-        u64 expires = 0;
+        timeclock::nanosecond_t expires_ns = 0;
+        const auto now_ns = clock->now_ns();
         {
             uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-            auto it = cpu_timer->tick_list.begin();
-            if (it == cpu_timer->tick_list.end() || it->expires > us)
-                break;
-
-            handler = it->handler;
-            expires = it->expires;
-            // Remove before invoking the callback so cancellation on another
-            // CPU cannot invalidate the iterator held by this loop.
-            cpu_timer->tick_list.remove(it);
-        }
-        handler(expires);
-    }
-}
-
-bool check_source(timeclock::clock_source *cs)
-{
-    if (cs->get_event())
-    {
-        cs->get_event()->resume();
-    }
-    u64 last = cs->current();
-    for (u64 i = 0; i < source_validation_samples; i++)
-    {
-        u64 v = cs->current();
-        if (v < last || v > last + 10'000)
-        {
-            KLOG_WARN("check clock source {} current {} last {} jiff {} at {}", cs->name(), v, last, cs->jiff(), i);
-            if (cs->get_event())
+            auto it = queue->watchers.begin();
+            if (it == queue->watchers.end() || it->expires_ns > now_ns)
             {
-                cs->get_event()->suspend();
+                rearm_current_cpu_locked(*queue);
+                break;
             }
-            return false;
+            handler = it->handler;
+            expires_ns = it->expires_ns;
+            queue->watchers.remove(it);
+            if (now_ns > expires_ns)
+                increment_saturated(late_deadlines);
         }
-        last = v;
+        // Removing before invoking is what makes cancellation safe when a
+        // callback races with a caller on another CPU.
+        handler(expires_ns / timeclock::nanoseconds_per_microsecond);
     }
-    if (cs->get_event())
-    {
-        cs->get_event()->suspend();
-    }
-    return true;
 }
 
-lock::spinlock_t timer_spinlock;
-timeclock::clock_source *global_source = nullptr;
-std::atomic_uint64_t next_watcher_id{1};
-irq::registration *tick_registration;
+timeclock::event_clock *make_platform_clock() noexcept
+{
+    const bool enable_hpet = cmdline::get_bool("hpet", false);
+    const bool enable_acpipm = cmdline::get_bool("acpipm", true);
+    const bool enable_pit = cmdline::get_bool("pit", true);
+
+    arch::device::PIT::disable_all();
+    if (enable_hpet)
+    {
+        auto *clock = arch::device::HPET::make_event_clock();
+        if (clock != nullptr && clock->start_cpu())
+            return clock;
+    }
+    if (enable_acpipm)
+    {
+        auto *clock = arch::device::ACPI::make_event_clock();
+        if (clock != nullptr && clock->start_cpu())
+            return clock;
+    }
+    if (enable_pit && arch::APIC::exist(arch::APIC::gsi_vector::pit))
+    {
+        auto *clock = arch::device::PIT::make_event_clock();
+        if (clock != nullptr && clock->start_cpu())
+            return clock;
+    }
+    return nullptr;
+}
+
+timeclock::event_clock *select_bsp_clock(arch::kvm_pvclock::policy kvm_policy) noexcept
+{
+    if (kvm_policy != arch::kvm_pvclock::policy::disabled)
+    {
+        const auto features = arch::kvm_pvclock::detect();
+        KLOG_INFO("KVM pvclock probe clocksource2={} stable-bit={} available={}", features.clocksource2,
+                  features.stable_bit, features.available);
+        auto *pvclock = arch::kvm_pvclock::make_event_clock(kvm_policy);
+        if (pvclock != nullptr && pvclock->start_cpu())
+        {
+            selected_clock_kind = clock_kind::pvclock;
+            return pvclock;
+        }
+        if (kvm_policy == arch::kvm_pvclock::policy::required)
+            KLOG_PANIC("kvmclock=on requested, but KVM CLOCKSOURCE2 or the first pvclock sample is unavailable");
+        KLOG_WARN("KVM pvclock unavailable; falling back to a non-PV event clock");
+    }
+    else
+    {
+        KLOG_INFO("kvmclock=off: KVM pvclock probing and MSR registration disabled");
+    }
+
+    auto *tsc = arch::TSC::make_event_clock();
+    if (tsc != nullptr && tsc->start_cpu())
+    {
+        selected_tsc_frequency_hz = static_cast<arch::TSC::clock *>(tsc)->frequency_hz();
+        selected_clock_kind = clock_kind::tsc;
+        return tsc;
+    }
+
+    global_platform_clock = make_platform_clock();
+    if (global_platform_clock == nullptr)
+        KLOG_PANIC("timer is not available: no KVM pvclock, TSC, HPET, ACPI PM, or PIT clock");
+
+    if (tsc != nullptr)
+    {
+        auto *tsc_clock = static_cast<arch::TSC::clock *>(tsc);
+        if (tsc_clock->calibrate(*global_platform_clock) && tsc_clock->start_cpu())
+        {
+            selected_tsc_frequency_hz = tsc_clock->frequency_hz();
+            selected_clock_kind = clock_kind::tsc;
+            return tsc_clock;
+        }
+    }
+    selected_clock_kind = clock_kind::platform;
+    return global_platform_clock;
+}
+
+timeclock::event_clock *select_ap_clock() noexcept
+{
+    switch (selected_clock_kind)
+    {
+        case clock_kind::pvclock: {
+            auto *clock = arch::kvm_pvclock::make_event_clock(arch::kvm_pvclock::policy::required);
+            if (clock != nullptr && clock->start_cpu())
+                return clock;
+            increment_saturated(ap_registration_failures);
+            KLOG_PANIC("AP {} failed to register its KVM pvclock page", cpu::current().id());
+        }
+        case clock_kind::tsc: {
+            auto *clock = arch::TSC::make_event_clock(selected_tsc_frequency_hz);
+            if (clock != nullptr && clock->start_cpu())
+                return clock;
+            increment_saturated(ap_registration_failures);
+            KLOG_PANIC("AP {} failed to start the selected TSC event clock", cpu::current().id());
+        }
+        case clock_kind::platform:
+            return global_platform_clock;
+        case clock_kind::none:
+            break;
+    }
+    return nullptr;
+}
+} // namespace
+
 void init()
 {
-    timer_spinlock.lock();
-    clock_source_array_t clock_sources(memory::KernelCommonAllocatorV);
+    uctx::RawSpinLockUninterruptibleContext timer_guard(timer_spinlock);
+    auto *queue = memory::New<cpu_timer_t>(memory::KernelCommonAllocatorV);
+    if (queue == nullptr)
+        KLOG_PANIC("unable to allocate CPU timer queue");
+    cpu::current().set_timer_queue(queue);
+    timer_queues[cpu::current().id()] = queue;
+
+    timeclock::event_clock *clock = nullptr;
+    if (cpu::current().is_bsp())
     {
-        bool enable_pit = cmdline::get_bool("pit", true);
-        bool enable_hpet = cmdline::get_bool("hpet", false);
-        bool enable_acpipm = cmdline::get_bool("acpipm", true);
-
-        auto cpu_timer = memory::New<cpu_timer_t>(memory::KernelCommonAllocatorV);
-        if (cpu_timer == nullptr)
-            KLOG_PANIC("unable to allocate CPU timer queue");
-        cpu::current().set_timer_queue(cpu_timer);
-        timer_queues[cpu::current().id()] = cpu_timer;
-        arch::device::PIT::disable_all();
-
-        if (enable_hpet && global_source == nullptr)
-        {
-            {
-                uctx::UninterruptibleContext ctx;
-                global_source = arch::device::HPET::make_clock();
-            }
-            if (global_source && !check_source(global_source))
-            {
-                KLOG_WARN("hpet timer is not stable");
-                global_source = nullptr;
-            }
-        }
-
-        if (global_source == nullptr && enable_acpipm)
-        {
-            {
-                uctx::UninterruptibleContext ctx;
-                global_source = arch::device::ACPI::make_clock();
-            }
-            if (global_source && !check_source(global_source))
-            {
-                KLOG_WARN("acpi pm timer is not stable");
-                global_source = nullptr;
-            }
-        }
-
-        if (global_source == nullptr && enable_pit && arch::APIC::exist(arch::APIC::gsi_vector::pit))
-        {
-            {
-                uctx::UninterruptibleContext ctx;
-                global_source = arch::device::PIT::make_clock();
-            }
-            if (global_source && !check_source(global_source))
-            {
-                KLOG_WARN("pit timer is not stable");
-                global_source = nullptr;
-            }
-        }
-
-        if (global_source == nullptr)
-        {
-            KLOG_PANIC("timer is not available");
-        }
-        if (cpu::current().is_bsp())
-        {
-            KLOG_INFO("Use {} as timer", global_source->name());
-        }
-        timeclock::clock_source *tsc, *local_apic;
-        {
-            uctx::UninterruptibleContext ctx;
-            tsc = arch::TSC::make_clock();
-            local_apic = arch::APIC::make_clock();
-        }
-
-        if (tsc != nullptr)
-        {
-            clock_sources.push_back(tsc);
-            cpu::current().set_clock_source(tsc);
-        }
-        else
-        {
-            cpu::current().set_clock_source(local_apic);
-        }
-
-        if (local_apic != nullptr)
-        {
-            clock_sources.push_back(local_apic);
-        }
-
-        // default tsc
-        cpu::current().set_clock_event(local_apic->get_event());
+        auto selection = arch::kvm_pvclock::policy::auto_select;
+        if (auto configured = cmdline::get("kvmclock"); configured.has_value())
+            selection = arch::kvm_pvclock::parse_policy(configured.value().data());
+        clock = select_bsp_clock(selection);
     }
-
-    for (auto cs : clock_sources)
+    else
     {
-        cs->calibrate(global_source);
+        clock = select_ap_clock();
     }
-    // check_source(clock_sources.back());
+    if (clock == nullptr)
+        KLOG_PANIC("CPU {} has no event clock", cpu::current().id());
+    cpu::current().set_event_clock(clock);
 
-    auto ev = cpu::current().get_clock_event();
-    ev->resume();
-    get_clock_source()->reinit();
+    auto *source = arch::APIC::make_event_source();
+    if (source == nullptr || !source->calibrate(*clock) || !source->start_cpu())
+        KLOG_PANIC("CPU {} failed to start Local APIC event source", cpu::current().id());
+    cpu::current().set_event_source(source);
 
     if (cpu::current().is_bsp())
     {
+        KLOG_INFO("event-clock={} event-source={} cross-cpu-monotonic={}", clock->name(), source->name(),
+                  clock->cross_cpu_monotonic());
+        if (selected_clock_kind == clock_kind::pvclock)
+        {
+            const auto health = static_cast<arch::kvm_pvclock::clock *>(clock)->health();
+            KLOG_INFO("pvclock health stable-samples={} seqlock-retries={} cached-fallbacks={} backward-clamps={} "
+                      "invalid-samples={} paused-samples={}",
+                      health.stable_samples, health.seqlock_retries, health.cached_fallbacks, health.backward_clamps,
+                      health.invalid_samples, health.paused_samples);
+        }
+        const auto timer_health = diagnostics();
+        KLOG_INFO(
+            "timer health late-deadlines={} AP-registration-failures={} stale-interrupts={} source-arm-failures={}",
+            timer_health.late_deadlines, timer_health.ap_registration_failures, timer_health.stale_interrupts,
+            timer_health.source_arm_failures);
         timeclock::init();
         timeclock::start_tick();
         tick_registration = memory::New<irq::registration>(memory::KernelCommonAllocatorV);
         *tick_registration = irq::register_soft_handler(irq::soft_vector::timer, irq::soft_handler::bind<&on_tick>());
     }
+    else
+    {
+        KLOG_INFO("AP {} event-clock={} event-source={} registered", cpu::current().id(), clock->name(),
+                  source->name());
+    }
+}
 
-    timer_spinlock.unlock();
+timeclock::nanosecond_t get_high_resolution_time_ns() noexcept
+{
+    auto *clock = get_event_clock();
+    return clock == nullptr ? 0 : clock->now_ns();
 }
 
 timeclock::microsecond_t get_high_resolution_time()
 {
-    auto source = get_clock_source();
-    if (likely(source != nullptr))
-    {
-        return source->current();
-    }
-    return 0;
+    return get_high_resolution_time_ns() / timeclock::nanoseconds_per_microsecond;
 }
 
 void busywait(timeclock::microsecond_t duration)
@@ -288,13 +359,11 @@ void busywait(timeclock::microsecond_t duration)
     timeclock::microsecond_t deadline = 0;
     if (!timeclock::try_add_microseconds(start, duration, deadline))
         return;
-    volatile int v = 0;
+    volatile int value = 0;
     while (get_high_resolution_time() < deadline)
     {
         for (int i = 0; i < 100; i++)
-        {
-            v = v + duration - i;
-        }
+            value = value + static_cast<int>(duration) - i;
     }
 }
 
@@ -302,17 +371,24 @@ watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handl
 {
     if (handler == nullptr)
         return invalid_watcher_id;
-    auto *cpu_timer = current_timer_queue();
-    if (cpu_timer == nullptr)
+    auto *queue = current_timer_queue();
+    if (queue == nullptr)
         return invalid_watcher_id;
-    const auto now = get_high_resolution_time();
-    timeclock::microsecond_t expires = 0;
-    if (!timeclock::try_add_microseconds(now, duration, expires))
+
+    timeclock::nanosecond_t duration_ns = 0;
+    if (!timeclock::try_microseconds_to_nanoseconds(duration, duration_ns))
+        return invalid_watcher_id;
+    const auto now_ns = get_high_resolution_time_ns();
+    timeclock::nanosecond_t expires_ns = 0;
+    if (!timeclock::try_add_nanoseconds(now_ns, duration_ns, expires_ns))
         return invalid_watcher_id;
 
     uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-    const auto id = next_watcher_id.fetch_add(1);
-    cpu_timer->watcher_list.push_back(watcher_t(id, expires, handler));
+    const watcher_id id = next_watcher_id.fetch_add(1, std::memory_order_relaxed);
+    const bool was_earliest = queue->watchers.empty() || expires_ns < queue->watchers.begin()->expires_ns;
+    queue->watchers.insert(id, expires_ns, handler);
+    if (was_earliest)
+        rearm_current_cpu_locked(*queue);
     return id;
 }
 
@@ -320,18 +396,22 @@ watcher_id schedule_at(timeclock::microsecond_t expires_time_point, timer_handle
 {
     if (handler == nullptr)
         return invalid_watcher_id;
-    auto *cpu_timer = current_timer_queue();
-    if (cpu_timer == nullptr)
+    auto *queue = current_timer_queue();
+    if (queue == nullptr)
+        return invalid_watcher_id;
+    timeclock::nanosecond_t expires_ns = 0;
+    if (!timeclock::try_microseconds_to_nanoseconds(expires_time_point, expires_ns))
+        return invalid_watcher_id;
+    if (get_high_resolution_time_ns() >= expires_ns)
         return invalid_watcher_id;
 
-    if (get_high_resolution_time() < expires_time_point)
-    {
-        uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-        const auto id = next_watcher_id.fetch_add(1);
-        cpu_timer->watcher_list.push_back(watcher_t(id, expires_time_point, handler));
-        return id;
-    }
-    return invalid_watcher_id;
+    uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+    const watcher_id id = next_watcher_id.fetch_add(1, std::memory_order_relaxed);
+    const bool was_earliest = queue->watchers.empty() || expires_ns < queue->watchers.begin()->expires_ns;
+    queue->watchers.insert(id, expires_ns, handler);
+    if (was_earliest)
+        rearm_current_cpu_locked(*queue);
+    return id;
 }
 
 bool cancel(watcher_id id)
@@ -339,32 +419,33 @@ bool cancel(watcher_id id)
     if (id == invalid_watcher_id)
         return false;
     uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-    const auto count = cpu::count();
+    const u64 count = cpu::count();
     for (u64 cpu_id = 0; cpu_id < count && cpu_id < arch::cpu::max_cpu_support; cpu_id++)
     {
-        auto *cpu_timer = timer_queues[cpu_id];
-        if (cpu_timer == nullptr)
+        auto *queue = timer_queues[cpu_id];
+        if (queue == nullptr)
             continue;
-
-        for (auto it = cpu_timer->watcher_list.begin(); it != cpu_timer->watcher_list.end(); ++it)
+        for (auto it = queue->watchers.begin(); it != queue->watchers.end(); ++it)
         {
             if (it->id == id)
             {
-                cpu_timer->watcher_list.remove(it);
-                return true;
-            }
-        }
-
-        for (auto it = cpu_timer->tick_list.begin(); it != cpu_timer->tick_list.end(); ++it)
-        {
-            if (it->id == id)
-            {
-                cpu_timer->tick_list.remove(it);
+                const bool was_earliest = it == queue->watchers.begin();
+                queue->watchers.remove(it);
+                // A remote source will ignore the resulting stale interrupt;
+                // the owning CPU will rearm at its next soft timer pass.
+                if (was_earliest && cpu_id == cpu::current().id())
+                    rearm_current_cpu_locked(*queue);
                 return true;
             }
         }
     }
     return false;
+}
+
+diagnostics_snapshot diagnostics() noexcept
+{
+    return {late_deadlines.load(std::memory_order_relaxed), ap_registration_failures.load(std::memory_order_relaxed),
+            stale_interrupts.load(std::memory_order_relaxed), source_arm_failures.load(std::memory_order_relaxed)};
 }
 
 } // namespace timer

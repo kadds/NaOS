@@ -5,6 +5,8 @@ namespace timeclock
 {
 
 constexpr microsecond_t microseconds_per_second = 1'000'000;
+constexpr nanosecond_t nanoseconds_per_microsecond = 1'000;
+constexpr nanosecond_t nanoseconds_per_second = 1'000'000'000;
 
 constexpr bool try_add_microseconds(microsecond_t base, microsecond_t duration, microsecond_t &result)
 {
@@ -12,6 +14,23 @@ constexpr bool try_add_microseconds(microsecond_t base, microsecond_t duration, 
     if (duration > max - base)
         return false;
     result = base + duration;
+    return true;
+}
+
+constexpr bool try_add_nanoseconds(nanosecond_t base, nanosecond_t duration, nanosecond_t &result)
+{
+    const auto max = static_cast<nanosecond_t>(-1);
+    if (duration > max - base)
+        return false;
+    result = base + duration;
+    return true;
+}
+
+constexpr bool try_microseconds_to_nanoseconds(microsecond_t value, nanosecond_t &result)
+{
+    if (value > static_cast<nanosecond_t>(-1) / nanoseconds_per_microsecond)
+        return false;
+    result = value * nanoseconds_per_microsecond;
     return true;
 }
 

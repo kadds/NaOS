@@ -137,6 +137,7 @@ add_naos_catch_test(system_binding_contract_test system_binding_contract_test.cc
 add_naos_catch_test(service_directory_contract_test service_directory_contract_test.cc)
 add_naos_catch_test(signal_policy_test signal_policy_test.cc)
 add_naos_catch_test(wait_deadline_test wait_deadline_test.cc)
+add_naos_catch_test(pvclock_test pvclock_test.cc)
 add_naos_catch_test(
     ttyd_terminal_core_test
     ttyd_terminal_core_test.cc
@@ -253,6 +254,23 @@ add_test(NAME boot_smoke_userland_services
             q --iso -n --no-reboot)
 set_tests_properties(boot_smoke_userland_services PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
 
+# KVM's negotiated clock and the independent Local APIC event source are
+# asserted by the test-owned wrapper.  Keep the generic launcher responsible
+# only for image preparation and QEMU lifecycle.
+if(EXISTS "/dev/kvm")
+    add_test(NAME kvm_pvclock_boot
+        COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/boot_smoke.py
+                --build-dir ${CMAKE_BINARY_DIR}
+                --timeout 90
+                --expect-marker "event-clock=kvm-pvclock"
+                --expect-marker "event-source=local-apic"
+                --expect-marker "vfsd: INFO: ready service="
+                --expect-marker "init: committed root route ready"
+                --expect-marker "init: user shell started"
+                q --iso -n --no-reboot)
+    set_tests_properties(kvm_pvclock_boot PROPERTIES TIMEOUT 180 RUN_SERIAL TRUE)
+endif()
+
 # Exercise the mounted userspace FAT data plane only when a prepared medium is
 # supplied. The default ramdisk is blank by design; this test must not turn a
 # normal boot into an implicit format operation. Enable this test only from a
@@ -318,7 +336,8 @@ add_test(NAME boot_smoke_novfsd
             --build-dir ${CMAKE_BINARY_DIR}
             --timeout 90
             --expect-marker "vfsd boot module missing; kernel VFS fallback disabled"
-            --require-absent vfsd)
+            --require-absent vfsd
+            q --iso -n --no-reboot)
 set_tests_properties(boot_smoke_novfsd PROPERTIES
     SKIP_REGULAR_EXPRESSION "Skipping no-vfsd negative boot"
     TIMEOUT 180

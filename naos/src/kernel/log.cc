@@ -439,7 +439,7 @@ void build_record(record &result, level severity, module source, const char *fil
         }
         else
             result.header.flags |= unknown_context;
-        if (cpu::current().get_clock_source() != nullptr)
+        if (cpu::current().get_event_clock() != nullptr)
             result.header.timestamp = timer::get_high_resolution_time();
         else
             result.header.flags |= early_record;

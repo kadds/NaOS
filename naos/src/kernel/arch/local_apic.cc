@@ -13,6 +13,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/vm.hpp"
+#include "kernel/time/unsigned_math.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
 #include <atomic>
@@ -331,302 +332,169 @@ void local_post_IPI_mask(u64 intr, u64 mask0)
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }
 
-irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
+namespace
 {
-    if (likely(!is_suspend_.load() && id_ == cpu::current().get_apic_id()))
-    {
-        jiff_.fetch_add(1);
-        irq::raise_soft_irq(irq::soft_vector::timer);
-        return irq::request_result::ok;
-    }
-    return irq::request_result::no_handled;
+constexpr u64 default_bus_frequency_hz = 100'000'000;
+constexpr u64 platform_info_msr = 0xCE;
+constexpr u64 calibration_duration_ns = 20'000'000;
+} // namespace
+
+irq::request_result event_source::on_interrupt(const irq::interrupt_info *, u64) noexcept
+{
+    if (!started_.load(std::memory_order_acquire) || cpu_id_ != cpu::current().get_id())
+        return irq::request_result::no_handled;
+
+    if (!armed_.exchange(false, std::memory_order_acq_rel))
+        return irq::request_result::no_handled;
+
+    armed_generation_.store(0, std::memory_order_release);
+    local_disable(lvt_index::timer);
+    program_counter(0);
+    irq::raise_soft_irq(irq::soft_vector::timer);
+    return irq::request_result::ok;
 }
 
-/*
-divide configuration register
-000: Divide by 2
-001: Divide by 4
-010: Divide by 8
-011: Divide by 16
-100: Divide by 32
-101: Divide by 64
-110: Divide by 128
-111: Divide by 1
-*/
-constexpr u8 dv_table[] = {2, 4, 8, 16, 32, 64, 128, 1};
-inline constexpr u8 divide_value(u8 d) { return dv_table[d]; }
-
-void clock_event::init(u64 HZ)
+void event_source::refresh_frequency() noexcept
 {
-    hz_ = HZ;
-    id_ = cpu::current().get_apic_id();
-    counter_ = 5'000'000;
-    const u64 base_hz = 100'000'000UL;
-
-    // auto freq = cpu_info::get_feature(cpu_info::feature::crystal_frequency);
-    if (builtin_local_apic)
+    bus_frequency_ = 0;
+    if (builtin_local_apic && cpu_info::max_basic_cpuid() >= 0x16)
     {
-        // core freq
-        if (cpu_info::max_basic_cpuid() >= 0x16)
-        {
-            auto freq = cpu_info::get_feature(cpu_info::feature::bus_frequency);
-            bus_frequency_ = freq * 1000'000UL;
-        }
+        bus_frequency_ = cpu_info::get_feature(cpu_info::feature::bus_frequency) * 1'000'000ULL;
     }
     else
     {
-        // bus freq
-        auto scale = (_rdmsr(0xCE) & 0xFF00) >> 8; // MSR PlatformInfo
-        if (scale < 100)
-        {
-            bus_frequency_ = scale * base_hz;
-        }
+        const u64 scale = (_rdmsr(platform_info_msr) >> 8) & 0xFF;
+        if (scale != 0 && scale < 100)
+            bus_frequency_ = scale * default_bus_frequency_hz;
     }
+}
 
+void event_source::program_counter(u32 ticks) noexcept
+{
+    uctx::UninterruptibleContext context;
+    write_register(timer_divide_register, divide_);
+    write_register(timer_initial_count_register, ticks);
+}
+
+bool event_source::calibrate_frequency(::timeclock::event_clock &clock) noexcept
+{
+    program_counter(maximum_counter);
+    const u64 start_ns = clock.now_ns();
+    const u32 start_count = read_register(timer_current_count_register);
+    u64 deadline = 0;
+    if (!timeclock::try_add_nanoseconds(start_ns, calibration_duration_ns, deadline))
+    {
+        program_counter(0);
+        return false;
+    }
+    while (clock.now_ns() < deadline)
+        cpu_pause();
+    const u64 elapsed_ns = clock.now_ns() - start_ns;
+    const u32 end_count = read_register(timer_current_count_register);
+    const u64 elapsed_ticks = static_cast<u32>(start_count - end_count);
+    program_counter(0);
+    if (elapsed_ns == 0 || elapsed_ticks == 0)
+        return false;
+
+    u64 frequency = 0;
+    if (!timeclock::unsigned_math::try_mul_div_floor(elapsed_ticks, timeclock::nanoseconds_per_second, elapsed_ns,
+                                                     frequency) ||
+        frequency == 0)
+        return false;
+    bus_frequency_ = frequency;
+    return true;
+}
+
+bool event_source::calibrate(::timeclock::event_clock &reference) noexcept
+{
+    if (started_.load(std::memory_order_acquire))
+        return false;
+    if (bus_frequency_ != 0)
+        return true;
+
+    refresh_frequency();
+    if (bus_frequency_ != 0)
+        return true;
+
+    local_irq_setup(lvt_index::timer, irq::hard_vector::local_apic_timer, 0); // one-shot mode
+    local_disable(lvt_index::timer);
+    return calibrate_frequency(reference);
+}
+
+bool event_source::start_cpu() noexcept
+{
+    if (started_.load(std::memory_order_acquire))
+        return true;
+
+    cpu_id_ = cpu::current().get_id();
     if (bus_frequency_ == 0)
-    {
-        bus_frequency_ = base_hz;
-    }
-    else
-    {
-        builtin_frequency_ = true;
-        KLOG_DEBUG("load builtin bus frequency {}MHZ", bus_frequency_ / 1000'000UL);
-    }
+        refresh_frequency();
+    local_irq_setup(lvt_index::timer, irq::hard_vector::local_apic_timer, 0); // one-shot mode
+    local_disable(lvt_index::timer);
+    if (bus_frequency_ == 0)
+        return false;
 
-    is_suspend_ = false;
-    suspend();
-    local_irq_setup(lvt_index::timer, irq::hard_vector::local_apic_timer, 0);
-    write_register(lvt_index_array[lvt_index::timer], read_register(lvt_index_array[lvt_index::timer]) | (0b01 << 17));
+    program_counter(0);
+    armed_.store(false, std::memory_order_release);
+    armed_generation_.store(0, std::memory_order_release);
+    irq_registration_ = irq::register_handler(irq::hard_vector::local_apic_timer,
+                                              irq::hard_handler::bind<&event_source::on_interrupt>(*this));
+    if (!irq_registration_)
+        return false;
+    started_.store(true, std::memory_order_release);
+    return true;
 }
 
-void clock_event::destroy() {}
-
-void clock_event::suspend()
+void event_source::stop_cpu() noexcept
 {
-    if (!is_suspend_)
-    {
-        is_suspend_ = true;
-        local_disable(lvt_index::timer);
-        {
-            uctx::UninterruptibleContext icu;
-            write_register(timer_initial_count_register, 0xFFFF'FFFF);
-            write_register(timer_divide_register, 0);
-        }
-        irq_registration_.reset();
-    }
+    armed_.store(false, std::memory_order_release);
+    armed_generation_.store(0, std::memory_order_release);
+    generation_.fetch_add(1, std::memory_order_relaxed);
+    if (!started_.load(std::memory_order_acquire) && !irq_registration_)
+        return;
+    local_disable(lvt_index::timer);
+    program_counter(0);
+    irq_registration_.reset();
+    started_.store(false, std::memory_order_release);
 }
 
-void clock_event::resume()
+::timeclock::arm_result event_source::arm(const ::timeclock::deadline_request &request) noexcept
 {
-    if (is_suspend_)
-    {
-        is_suspend_ = false;
-        jiff_ = 0;
-        last_tick_ = 0;
+    if (!started_.load(std::memory_order_acquire) || bus_frequency_ == 0)
+        return ::timeclock::arm_result::unavailable;
+    if (!request.is_valid())
+        return ::timeclock::arm_result::invalid;
 
-        irq_registration_ = irq::register_handler(irq::hard_vector::local_apic_timer,
-                                                  irq::hard_handler::bind<&clock_event::on_interrupt>(*this));
+    const u64 current_generation = generation_.load(std::memory_order_relaxed);
+    if (request.generation <= current_generation)
+        return ::timeclock::arm_result::invalid;
 
-        uctx::UninterruptibleContext icu;
-
-        write_register(timer_initial_count_register, counter_);
-        write_register(timer_divide_register, divide_);
-        write_register(timer_current_count_register, counter_);
-        local_enable(lvt_index::timer);
-    }
+    const auto conversion =
+        timeclock::event_source::convert_deadline(request.delta_ns(), bus_frequency_, maximum_counter);
+    local_disable(lvt_index::timer);
+    program_counter(conversion.ticks);
+    generation_.store(request.generation, std::memory_order_relaxed);
+    armed_generation_.store(request.generation, std::memory_order_release);
+    armed_.store(true, std::memory_order_release);
+    local_enable(lvt_index::timer);
+    return ::timeclock::arm_result::armed;
 }
 
-void clock_source::init() {}
-
-void clock_source::destroy() {}
-
-u64 clock_source::current()
+void event_source::cancel(u64 generation) noexcept
 {
-    clock_event *ev = (clock_event *)event;
-    u64 tick = count();
-    return (tick * 1000'000UL) / ev->bus_frequency_;
+    if (generation == 0 || generation < generation_.load(std::memory_order_relaxed))
+        return;
+
+    generation_.store(generation, std::memory_order_relaxed);
+    armed_generation_.store(0, std::memory_order_release);
+    armed_.store(false, std::memory_order_release);
+    if (!started_.load(std::memory_order_acquire))
+        return;
+
+    local_disable(lvt_index::timer);
+    program_counter(0);
 }
 
-u64 clock_source::count()
-{
-    clock_event *ev = (clock_event *)event;
-    u32 val;
-    u64 jiff;
-    {
-        uctx::UninterruptibleContext icu;
-        val = read_register(timer_current_count_register);
-        jiff = ev->jiff_;
-    }
-    u32 counter = ev->counter_;
-
-    u64 tick = jiff * counter + counter - val;
-    u64 last = ev->last_tick_;
-    if (tick < last)
-    {
-        while (tick < last)
-        {
-            tick += counter;
-        }
-    }
-    ev->last_tick_ = tick;
-    return tick * 2;
-}
-
-u64 clock_source::jiff()
-{
-    clock_event *ev = (clock_event *)event;
-    return ev->jiff_;
-}
-
-// 20ms
-constexpr u64 test_duration_us = 200'000;
-constexpr size_t test_times = 5;
-
-u64 clock_source::calibrate_apic(::timeclock::clock_source *cs)
-{
-    auto from_ev = cs->get_event();
-    from_ev->resume();
-    clock_event *ev = (clock_event *)event;
-    ev->resume();
-
-    u64 t = test_duration_us + cs->current();
-    u64 start_count = count();
-
-    while (cs->current() < t)
-    {
-        cpu_pause();
-    }
-
-    u64 end_count = count();
-    u64 cost = cs->current() - t + test_duration_us;
-
-    from_ev->suspend();
-    ev->suspend();
-
-    return (end_count - start_count) * 1000'000UL / ev->counter_ / cost;
-}
-
-u64 clock_source::calibrate_counter(::timeclock::clock_source *cs)
-{
-    auto from_ev = cs->get_event();
-    from_ev->resume();
-    clock_event *ev = (clock_event *)event;
-    ev->resume();
-
-    u64 t = test_duration_us + cs->current();
-    u64 start_count = count();
-    // u64 tsc = _rdtsc();
-
-    while (cs->current() < t)
-    {
-        cpu_pause();
-    }
-
-    u64 end_count = count();
-    u64 cost = cs->current() - t + test_duration_us;
-
-    from_ev->suspend();
-    ev->suspend();
-    // KLOG_INFO("tsc {} {} {}", (_rdtsc() - tsc) / 100'000UL, end_count - start_count, cost);
-
-    return (end_count - start_count) * 1'000'000UL / cost;
-}
-
-std::atomic_uint64_t lapic_freq = 0;
-
-void clock_source::calibrate(::timeclock::clock_source *cs)
-{
-    clock_event *ev = (clock_event *)event;
-
-    if (lapic_freq == 0)
-    {
-        if (!ev->builtin_frequency_)
-        {
-            u64 apic_freq[test_times];
-            u64 total_freq = 0;
-            u64 max_freq = 0;
-            u64 min_freq = std::numeric_limits<u64>::max();
-            for (auto &freq : apic_freq)
-            {
-                freq = calibrate_counter(cs);
-                total_freq += freq;
-                min_freq = freelibcxx::min(min_freq, freq);
-                max_freq = freelibcxx::max(max_freq, freq);
-            }
-            freelibcxx::sort(apic_freq, apic_freq + test_times);
-
-            const u64 avg_freq = total_freq / test_times;
-
-            const u64 freq = apic_freq[test_times / 2];
-
-            u64 delta = 0;
-            for (auto freq : apic_freq)
-            {
-                i64 d = ((i64)freq - (i64)avg_freq) / 1000'000;
-                delta += d * d;
-            }
-            delta /= test_times;
-            KLOG_INFO("Local APIC bus test frequency {}MHZ. delta {} min {}MHZ. max {}MHZ.", freq / 1000'000UL, delta,
-                      min_freq / 1000'000UL, max_freq / 1000'000UL);
-
-            lapic_freq = freq;
-            ev->bus_frequency_ = freq;
-        }
-        else
-        {
-            lapic_freq = ev->bus_frequency_;
-        }
-    }
-    if (!ev->builtin_frequency_)
-    {
-        ev->bus_frequency_ = lapic_freq;
-    }
-    // hz = bus_freq / divide * counter
-    // counter = bus_freq / divide / hz
-    const u64 requested_hz = ev->hz_;
-    u32 lapic_counter = ev->bus_frequency_ / (divide_value(ev->divide_)) / requested_hz;
-    if (lapic_counter == 0)
-    {
-        lapic_counter = 1;
-    }
-    if (cpu::current().is_bsp())
-    {
-        KLOG_DEBUG("Local APIC set counter {}", lapic_counter);
-    }
-
-    ev->counter_ = lapic_counter;
-
-    // The APIC bus frequency is shared by all processors.  Only the BSP
-    // calibrates it against the platform clock; doing a second calibration on
-    // an AP requires timer interrupts before the AP has entered its normal
-    // scheduling lifecycle and can produce a zero result.  APs only need the
-    // already computed bus frequency and the requested timer rate.
-    if (cpu::current().is_bsp())
-    {
-        const u64 current_freq = calibrate_apic(cs);
-        KLOG_INFO("Local APIC Timer {}HZ", current_freq);
-        ev->hz_ = current_freq != 0 ? current_freq : requested_hz;
-    }
-    else
-    {
-        ev->hz_ = requested_hz;
-        KLOG_INFO("Local APIC Timer {}HZ", requested_hz);
-    }
-}
-
-clock_source *make_clock()
-{
-    clock_source *lt_cs = nullptr;
-    clock_event *lt_ev = nullptr;
-
-    lt_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
-    lt_ev = memory::New<clock_event>(memory::KernelCommonAllocatorV);
-    lt_ev->set_source(lt_cs);
-    lt_cs->set_event(lt_ev);
-    lt_ev->init(1000);
-    lt_cs->init();
-
-    return lt_cs;
-}
+event_source *make_event_source() noexcept { return memory::New<event_source>(memory::KernelCommonAllocatorV); }
 
 } // namespace arch::APIC

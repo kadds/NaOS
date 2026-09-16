@@ -1,103 +1,71 @@
 #include "kernel/arch/tsc.hpp"
-#include "freelibcxx/utils.hpp"
+
 #include "kernel/arch/cpu_info.hpp"
-#include "kernel/arch/hpet.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/arch/pit.hpp"
-#include "kernel/clock/clock_event.hpp"
-#include "kernel/irq.hpp"
-#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
-#include <limits>
-KLOG_MODULE(arch);
+#include "kernel/time/unsigned_math.hpp"
+
 namespace arch::TSC
 {
-void clock_source::init() { begin_tsc_ = _rdtsc(); }
-
-void clock_source::destroy() {}
-
-// 20ms
-constexpr u64 test_duration_us = 20000;
-constexpr size_t test_times = 5;
-
-u64 clock_source::calibrate_tsc(::timeclock::clock_source *cs)
+namespace
 {
-    auto from_ev = cs->get_event();
-    from_ev->resume();
+constexpr u64 calibration_duration_ns = 20'000'000;
+}
 
-    u64 t = test_duration_us + cs->current();
-    u64 start_tsc = _rdtsc();
-
-    while (cs->current() <= t)
+bool clock::start_cpu() noexcept
+{
+    if (tsc_ticks_per_second_ == 0)
     {
+        const auto info = cpu_info::get_tsc_cpuid15_info();
+        if (!info.has_frequency())
+            return false;
+        tsc_ticks_per_second_ = info.frequency_hz();
+    }
+    begin_tsc_ = read_tsc_ordered();
+    cross_cpu_monotonic_ = cpu_info::has_feature(cpu_info::feature::nostop_tsc);
+    return tsc_ticks_per_second_ != 0;
+}
+
+timeclock::nanosecond_t clock::now_ns() noexcept
+{
+    if (tsc_ticks_per_second_ == 0)
+        return 0;
+    const u64 delta = read_tsc_ordered() - begin_tsc_;
+    u64 result = 0;
+    if (!timeclock::unsigned_math::try_mul_div_floor(delta, timeclock::nanoseconds_per_second, tsc_ticks_per_second_,
+                                                     result))
+        return static_cast<u64>(-1);
+    return result;
+}
+
+bool clock::calibrate(timeclock::event_clock &reference) noexcept
+{
+    const u64 start_ns = reference.now_ns();
+    const u64 start_tsc = read_tsc_ordered();
+    u64 deadline = 0;
+    if (!timeclock::try_add_nanoseconds(start_ns, calibration_duration_ns, deadline))
+        return false;
+    while (reference.now_ns() < deadline)
         cpu_pause();
-    }
-    u64 end_tsc = _rdtsc();
-    u64 cost = cs->current() - t + test_duration_us;
 
-    from_ev->suspend();
-
-    return (end_tsc - start_tsc) * 1000'000UL / cost;
+    const u64 elapsed_ns = reference.now_ns() - start_ns;
+    const u64 elapsed_tsc = read_tsc_ordered() - start_tsc;
+    if (elapsed_ns == 0 || elapsed_tsc == 0)
+        return false;
+    u64 frequency = 0;
+    if (!timeclock::unsigned_math::try_mul_div_floor(elapsed_tsc, timeclock::nanoseconds_per_second, elapsed_ns,
+                                                     frequency) ||
+        frequency == 0)
+        return false;
+    tsc_ticks_per_second_ = frequency;
+    return true;
 }
 
-void clock_source::calibrate(::timeclock::clock_source *cs)
+clock *make_event_clock(u64 known_frequency_hz) noexcept
 {
-    const auto cpuid15 = cpu_info::get_tsc_cpuid15_info();
-    if (cpuid15.has_frequency())
-    {
-        tsc_tick_second_ = cpuid15.frequency_hz();
-        builtin_freq_ = true;
-        KLOG_INFO("TSC frequency source=CPUID.15H ratio {}/{} crystal {}MHz result {}MHz", cpuid15.numerator,
-                  cpuid15.denominator, cpuid15.crystal_frequency_hz / 1'000'000UL, tsc_tick_second_ / 1'000'000UL);
-        return;
-    }
-    KLOG_INFO("TSC frequency source={} calibration (CPUID.15H unavailable or incomplete)", cs->name());
-    u64 tsc_freq[test_times];
-    u64 total_freq = 0;
-    u64 max_freq = 0;
-    u64 min_freq = std::numeric_limits<u64>::max();
-
-    for (auto &freq : tsc_freq)
-    {
-        freq = calibrate_tsc(cs);
-
-        total_freq += freq;
-        min_freq = freelibcxx::min(min_freq, freq);
-        max_freq = freelibcxx::max(max_freq, freq);
-    }
-    freelibcxx::sort(tsc_freq, tsc_freq + test_times);
-
-    const u64 avg_freq = total_freq / test_times;
-    u64 delta = 0;
-    for (auto freq : tsc_freq)
-    {
-        i64 d = ((i64)freq - (i64)avg_freq) / 1000'000;
-        delta += d * d;
-    }
-    delta /= test_times;
-    const u64 freq = tsc_freq[test_times / 2];
-
-    KLOG_INFO("TSC frequency source={} measured {}MHz delta {} min {}MHz max {}MHz", cs->name(), freq / 1'000'000UL,
-              delta, min_freq / 1'000'000UL, max_freq / 1'000'000UL);
-
-    tsc_tick_second_ = freq;
-}
-
-u64 clock_source::current() { return (_rdtsc() - begin_tsc_) * 1000'000UL / tsc_tick_second_; }
-
-clock_source *make_clock()
-{
-    if (arch::cpu_info::has_feature(arch::cpu_info::feature::constant_tsc))
-    {
-        auto tsc_cs = memory::New<clock_source>(memory::KernelCommonAllocatorV);
-        tsc_cs->init();
-        return tsc_cs;
-    }
-    else
-    {
-        KLOG_DEBUG("no constant tsc");
-    }
-    return nullptr;
+    if (!cpu_info::has_feature(cpu_info::feature::constant_tsc))
+        return nullptr;
+    return memory::New<clock>(memory::KernelCommonAllocatorV, known_frequency_hz);
 }
 
 } // namespace arch::TSC

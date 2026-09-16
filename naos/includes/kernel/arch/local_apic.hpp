@@ -1,8 +1,6 @@
 #pragma once
-#include "../clock.hpp"
-#include "../clock/clock_event.hpp"
-#include "../clock/clock_source.hpp"
-#include "../types.hpp"
+
+#include "../time/event_source.hpp"
 #include "kernel/common.hpp"
 #include "kernel/irq.hpp"
 #include <atomic>
@@ -39,57 +37,41 @@ void local_post_IPI_mask(u64 intr, u64 mask0);
 
 u64 local_ID();
 
-class clock_source;
-
-class clock_event : public ::timeclock::clock_event
+class event_source final : public ::timeclock::event_source
 {
-  private:
-    friend class clock_source;
-    std::atomic_bool is_suspend_ = false;
-    std::atomic_uint64_t jiff_ = 0;
-    u32 counter_ = 0;
-    static constexpr u32 divide_ = 0;
-    u64 bus_frequency_ = 0;
-    u64 id_ = 0;
-    std::atomic_uint64_t last_tick_ = 0;
+  public:
+    event_source() noexcept = default;
+    ~event_source() override { stop_cpu(); }
 
-    u64 hz_ = 0;
-    bool builtin_frequency_ = false;
-    irq::registration irq_registration_;
+    bool calibrate(::timeclock::event_clock &reference) noexcept override;
+    bool start_cpu() noexcept override;
+    void stop_cpu() noexcept override;
+    ::timeclock::arm_result arm(const ::timeclock::deadline_request &request) noexcept override;
+    void cancel(u64 generation) noexcept override;
+    bool is_armed() const noexcept override { return armed_.load(std::memory_order_acquire); }
+    u64 armed_generation() const noexcept override { return armed_generation_.load(std::memory_order_acquire); }
+    const char *name() const noexcept override { return "local-apic"; }
+
+    u64 bus_frequency_hz() const noexcept { return bus_frequency_; }
+
+  private:
+    static constexpr u32 divide_ = 0;
+    static constexpr u32 maximum_counter = 0xFFFF'FFFF;
 
     irq::request_result on_interrupt(const irq::interrupt_info *, u64) noexcept;
+    void program_counter(u32 ticks) noexcept;
+    void refresh_frequency() noexcept;
+    bool calibrate_frequency(::timeclock::event_clock &clock) noexcept;
 
-  public:
-    clock_event() {}
-    void init(u64 HZ) override;
-    void destroy() override;
-
-    void suspend() override;
-    void resume() override;
-    bool is_valid() override { return true; }
+    u64 bus_frequency_ = 0;
+    u32 cpu_id_ = 0;
+    std::atomic_uint64_t generation_{0};
+    std::atomic_uint64_t armed_generation_{0};
+    std::atomic_bool armed_{false};
+    std::atomic_bool started_{false};
+    irq::registration irq_registration_;
 };
 
-class clock_source : public ::timeclock::clock_source
-{
-  private:
-    friend class clock_event;
+event_source *make_event_source() noexcept;
 
-  public:
-    clock_source()
-        : ::timeclock::clock_source("local_apic")
-    {
-    }
-    void init() override;
-    void destroy() override;
-    u64 current() override;
-    u64 count();
-    u64 jiff() override;
-
-    void calibrate(::timeclock::clock_source *cs) override;
-
-    u64 calibrate_apic(::timeclock::clock_source *cs);
-    u64 calibrate_counter(::timeclock::clock_source *cs);
-};
-
-clock_source *make_clock();
 } // namespace arch::APIC

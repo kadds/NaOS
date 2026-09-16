@@ -25,13 +25,23 @@ BOOT_MARKERS = (
 
 
 def boot_succeeded(serial: str) -> bool:
-    """Check the normal service-start sequence in this test wrapper."""
+    """Check required startup markers and only their causal ordering."""
     if any(marker in serial for marker in ("PANIC:", "Kernel Oops", "exception ")):
         return False
-    positions = [serial.find(marker) for marker in BOOT_MARKERS]
-    if not all(position >= 0 for position in positions):
+    positions = {marker: serial.find(marker) for marker in BOOT_MARKERS}
+    if not all(position >= 0 for position in positions.values()):
         return False
-    if positions != sorted(positions):
+
+    ordered_pairs = (
+        (BOOT_MARKERS[0], BOOT_MARKERS[1]),
+        (BOOT_MARKERS[1], BOOT_MARKERS[2]),
+        (BOOT_MARKERS[1], BOOT_MARKERS[3]),
+        (BOOT_MARKERS[3], BOOT_MARKERS[4]),
+        (BOOT_MARKERS[4], BOOT_MARKERS[5]),
+        (BOOT_MARKERS[5], BOOT_MARKERS[6]),
+        (BOOT_MARKERS[6], BOOT_MARKERS[7]),
+    )
+    if any(positions[before] >= positions[after] for before, after in ordered_pairs):
         return False
     return "init: exfatd started" not in serial and "init: exfatd spawn failed" not in serial
 

@@ -10,8 +10,8 @@ struct thread_t;
 } // namespace task
 namespace timeclock
 {
-class clock_source;
-class clock_event;
+class event_clock;
+class event_source;
 } // namespace timeclock
 
 namespace cpu
@@ -65,8 +65,8 @@ class cpu_data_t
     load_data_t load_data;
     void *timer_queue;
 
-    timeclock::clock_source *clock_source = nullptr;
-    timeclock::clock_event *clock_ev = nullptr;
+    timeclock::event_clock *event_clock = nullptr;
+    timeclock::event_source *event_source = nullptr;
     void *clock_queue = nullptr;
 
     call_cpu_operation_t call_cpu_queue[call_cpu_queue_capacity]{};
@@ -110,11 +110,11 @@ class cpu_data_t
 
     void set_timer_queue(void *timer_queue) { this->timer_queue = timer_queue; }
 
-    void set_clock_source(timeclock::clock_source *cs) { clock_source = cs; }
-    timeclock::clock_source *get_clock_source() { return clock_source; }
+    void set_event_clock(timeclock::event_clock *clock) { event_clock = clock; }
+    timeclock::event_clock *get_event_clock() { return event_clock; }
 
-    void set_clock_event(timeclock::clock_event *ev) { clock_ev = ev; }
-    timeclock::clock_event *get_clock_event() { return clock_ev; }
+    void set_event_source(timeclock::event_source *source) { event_source = source; }
+    timeclock::event_source *get_event_source() { return event_source; }
 
     void *get_clock_queue() { return clock_queue; }
 

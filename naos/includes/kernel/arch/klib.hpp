@@ -60,6 +60,18 @@ inline u64 _rdtsc()
     return ((u64)v0) << 32 | v1;
 }
 
+/// Read the TSC with an explicit ordering contract.  The leading LFENCE
+/// keeps older memory operations before the sample and the trailing LFENCE
+/// keeps later operations after it; callers must not substitute _rdtsc() in
+/// seqlock-based time conversion paths.
+inline u64 read_tsc_ordered()
+{
+    u32 low = 0;
+    u32 high = 0;
+    __asm__ __volatile__("lfence\n\t rdtsc\n\t lfence\n\t" : "=a"(low), "=d"(high) : : "memory");
+    return (static_cast<u64>(high) << 32) | low;
+}
+
 ExportC volatile char _sys_call;
 ExportC volatile char _sys_ret;
 

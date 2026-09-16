@@ -78,6 +78,18 @@ void init();
 /// check if has the feature
 bool has_feature(feature f);
 
+struct cpuid_result
+{
+    u32 eax = 0;
+    u32 ebx = 0;
+    u32 ecx = 0;
+    u32 edx = 0;
+};
+
+/// Read a CPUID leaf through the architecture wrapper.  Keeping this small
+/// value type public makes feature probes injectable in host-side tests.
+cpuid_result read_cpuid(u32 leaf, u32 subleaf = 0) noexcept;
+
 tsc_cpuid15_info get_tsc_cpuid15_info();
 
 /// Try to read one hardware-random word. The functions return false when the

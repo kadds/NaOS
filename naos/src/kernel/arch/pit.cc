@@ -1,170 +1,92 @@
 #include "kernel/arch/pit.hpp"
-#include "kernel/arch/interrupt.hpp"
+
 #include "kernel/arch/io.hpp"
-#include "kernel/arch/io_apic.hpp"
 #include "kernel/arch/klib.hpp"
-#include "kernel/irq.hpp"
-#include "kernel/kernel.hpp"
-#include "kernel/log.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/time/unsigned_math.hpp"
 #include "kernel/ucontext.hpp"
 
-KLOG_MODULE(arch);
 namespace arch::device::PIT
 {
-const io_port channel_0_port = 0x40;
-const io_port channel_2_port = 0x42;
-const io_port command_port = 0x43;
-// rate HZ
-const u32 freq = 1193182;
-
-u16 read()
+namespace
 {
-    io_out8(command_port, 0b1101'0000);
-    io_out8(command_port, 0b0000'0000);
-    u16 count = io_in8(channel_0_port);
-    count |= ((u16)io_in8(channel_0_port)) << 8;
-    return count;
+constexpr io_port channel_0_port = 0x40;
+constexpr io_port command_port = 0x43;
+constexpr u64 input_frequency_hz = 1'193'182;
+constexpr u64 sampling_hz = 1'000;
+
+u16 read_counter() noexcept
+{
+    io_out8(command_port, 0);
+    const u16 low = io_in8(channel_0_port);
+    const u16 high = io_in8(channel_0_port);
+    return static_cast<u16>(low | (high << 8));
 }
+} // namespace
 
-u16 read_counter()
+bool clock::start_cpu() noexcept
 {
-    uctx::UninterruptibleContext icu;
-    u16 val = read();
-    return val;
-}
-
-irq::request_result clock_event::on_interrupt(const irq::interrupt_info *, u64) noexcept
-{
-    if (!is_suspend_.load())
+    if (started_)
+        return true;
+    divisor_ = input_frequency_hz / sampling_hz;
+    if (divisor_ == 0 || divisor_ > 0xFFFF)
+        return false;
     {
-        jiff_.fetch_add(1);
-        update_tsc_ = _rdtsc();
+        uctx::UninterruptibleContext context;
+        io_out8(command_port, 0b0011'0100);
+        io_out8(channel_0_port, static_cast<u8>(divisor_));
+        io_out8(channel_0_port, static_cast<u8>(divisor_ >> 8));
+        last_count_ = read_counter();
     }
-    irq::raise_soft_irq(irq::soft_vector::timer);
-    return irq::request_result::ok;
+    initial_count_ = divisor_ - last_count_;
+    last_tick_ = 0;
+    started_ = true;
+    return true;
 }
 
-void clock_event::init(u64 hz)
+void clock::stop_cpu() noexcept
 {
-    hz_ = hz;
-    is_suspend_ = false;
-    suspend();
-    divisor_ = freq / hz * 2;
-
-    KLOG_DEBUG("PIT timer divisor {} {}hz", divisor_, hz);
+    if (!started_)
+        return;
+    disable_all();
+    started_ = false;
 }
 
-void clock_event::destroy() { divisor_ = 0; }
-
-void clock_event::suspend()
+timeclock::nanosecond_t clock::now_ns() noexcept
 {
-    if (!is_suspend_)
+    if (!started_)
+        return 0;
+    u16 current = 0;
     {
-        is_suspend_ = true;
-        APIC::io_disable(APIC::query_gsi(APIC::gsi_vector::pit));
-        {
-            uctx::UninterruptibleContext icu;
-
-            // io_out8(command_port, 0b00110110);
-            // u32 p = 0xFFFFFFFF;
-            // io_out8(channel_0_port, p & 0xFF);
-            // io_out8(channel_0_port, (p >> 8) & 0xFF);
-        }
-        irq_registration_.reset();
+        uctx::UninterruptibleContext context;
+        current = read_counter();
     }
+
+    // Mode 2 counts down and wraps at the programmed divisor.  Reading the
+    // counter is enough; the event_source is independent of this clock.
+    const u64 elapsed_in_period = divisor_ - current;
+    u64 ticks = elapsed_in_period;
+    if (current > last_count_)
+        last_tick_ += divisor_;
+    ticks += last_tick_;
+    last_count_ = current;
+    if (ticks < initial_count_)
+        return 0;
+    ticks -= initial_count_;
+    u64 ns = 0;
+    if (!timeclock::unsigned_math::try_mul_div_floor(ticks, timeclock::nanoseconds_per_second, input_frequency_hz, ns))
+        return static_cast<u64>(-1);
+    return ns;
 }
 
-void clock_event::resume()
+clock *make_event_clock() noexcept { return memory::New<clock>(memory::KernelCommonAllocatorV); }
+
+void disable_all() noexcept
 {
-    if (is_suspend_)
-    {
-        is_suspend_ = false;
-        jiff_ = 1;
-        last_tick_ = 0;
-
-        irq_registration_ = irq::register_handler(APIC::query_gsi(APIC::gsi_vector::pit) + 0x20,
-                                                  irq::hard_handler::bind<&clock_event::on_interrupt>(*this));
-        {
-            uctx::UninterruptibleContext icu;
-            io_out8(command_port, 0b00110110);
-            io_out8(channel_0_port, divisor_ & 0xFF);
-            io_out8(channel_0_port, (divisor_ >> 8) & 0xFF);
-            io_out8(command_port, 0b00110110);
-
-            init_val_ = divisor_ - read_counter();
-            update_tsc_ = 0;
-        }
-        APIC::io_enable(APIC::query_gsi(APIC::gsi_vector::pit));
-    }
-}
-
-void clock_source::init() {}
-
-void clock_source::destroy() {}
-
-void clock_source::calibrate(::timeclock::clock_source *cs)
-{
-    // nothing to do
-}
-
-u64 clock_source::current()
-{
-    clock_event *ev = (clock_event *)event;
-    u64 val, jiff;
-    {
-        uctx::UninterruptibleContext icu;
-
-        jiff = ev->jiff_.load();
-        val = read_counter();
-    }
-    u64 init_val = ev->init_val_;
-
-    u64 div = ev->divisor_;
-    u64 tick = jiff * div + div - val;
-
-    u64 last = ev->last_tick_;
-    if (tick < last)
-    {
-        while (tick < last)
-        {
-            tick += div;
-        }
-    }
-    ev->last_tick_ = tick;
-
-    return ((tick - init_val) * 1000'000UL) / freq / 2;
-}
-
-u64 clock_source::jiff()
-{
-    clock_event *ev = (clock_event *)event;
-    return ev->jiff_;
-}
-
-clock_source *global_pit_source = nullptr;
-clock_event *global_pit_event = nullptr;
-
-clock_source *make_clock()
-{
-    if (global_pit_source == nullptr)
-    {
-        global_pit_source = memory::New<clock_source>(memory::KernelCommonAllocatorV);
-        global_pit_event = memory::New<clock_event>(memory::KernelCommonAllocatorV);
-        global_pit_source->set_event(global_pit_event);
-        global_pit_event->set_source(global_pit_source);
-        global_pit_event->init(50);
-        global_pit_source->init();
-    }
-    return global_pit_source;
-}
-void disable_all()
-{
-    uctx::UninterruptibleContext icu;
-    io_out8(command_port, 0b00110110);
-    u32 p = 0xFFFFFFFF;
-    io_out8(channel_0_port, p & 0xff);
-    io_out8(channel_0_port, (p >> 8) & 0xff);
+    uctx::UninterruptibleContext context;
+    io_out8(command_port, 0b0011'0100);
+    io_out8(0x40, 0xFF);
+    io_out8(0x40, 0xFF);
 }
 
 } // namespace arch::device::PIT
