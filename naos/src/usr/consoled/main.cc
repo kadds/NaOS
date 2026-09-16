@@ -128,7 +128,7 @@ int acquire_framebuffer(framebuffer_state &state)
     }
 
     naos::system::Framebuffer::get_response response{};
-    na_handle_t resources[NA_CHANNEL_MAX_RESOURCES]{ };
+    na_handle_t resources[NA_CHANNEL_MAX_RESOURCES]{};
     na_result_frame_t result{};
     status = client.take_get(invocation, response, wire, sizeof(wire), resources, NA_CHANNEL_MAX_RESOURCES, result);
     (void)naos_handle_close(invocation);
@@ -252,13 +252,17 @@ struct master_bulk_region
             return false;
         if (mapping && mapping.size() >= bytes)
             return true;
+        constexpr std::size_t page_bytes = 4096;
+        if (bytes > SIZE_MAX - (page_bytes - 1))
+            return false;
+        const std::size_t allocation = (bytes + page_bytes - 1) & ~(page_bytes - 1);
         mapping.reset();
         object = nao::memory_object();
         na_handle_t handle = NA_HANDLE_INVALID;
-        if (_na_memory_create(bytes, 0, &handle) != NA_STATUS_OK)
+        if (_na_memory_create(allocation, 0, &handle) != NA_STATUS_OK)
             return false;
         object = nao::memory_object(nao::handle(handle));
-        mapping = object.map(bytes);
+        mapping = object.map(allocation);
         if (!mapping)
         {
             object = nao::memory_object();
@@ -326,8 +330,8 @@ int submit_master_read(na_handle_t master, master_async_request &request)
     resource.handle = request.region.handle();
     resource.operation = NA_RESOURCE_DUPLICATE;
     resource.scope = NA_SCOPE_MEMORY_OBJECT;
-    const auto status = client.submit_read(message, &resource, 1, &request.invocation, request.wire,
-                                           sizeof(request.wire));
+    const auto status =
+        client.submit_read(message, &resource, 1, &request.invocation, request.wire, sizeof(request.wire));
     if (status != NA_STATUS_OK)
     {
         request.invocation = NA_HANDLE_INVALID;

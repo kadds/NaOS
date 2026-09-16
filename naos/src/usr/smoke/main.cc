@@ -508,15 +508,15 @@ void ttyd_smoke()
         // One reusable region per transfer direction serves every read and
         // write below; it is mapped shared so the service observes the
         // client's stores and the client observes the service's.
-        constexpr std::uint64_t kBulkRegionBytes = 256;
+        constexpr std::uint64_t kBulkRegionAllocationBytes = 4096;
         auto create_region = [&](na_handle_t &object, std::uint8_t *&address) {
-            if (_na_memory_create(kBulkRegionBytes, 0, &object) != NA_STATUS_OK)
+            if (_na_memory_create(kBulkRegionAllocationBytes, 0, &object) != NA_STATUS_OK)
                 return false;
             na_memory_map_frame_t mapping{};
             mapping.struct_size = sizeof(mapping);
             mapping.flags = NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_SHARED;
             mapping.object = object;
-            mapping.length = kBulkRegionBytes;
+            mapping.length = kBulkRegionAllocationBytes;
             if (_na_memory_map(&mapping) != NA_STATUS_OK || mapping.address == 0)
             {
                 (void)_na_handle_close(object);
@@ -533,7 +533,7 @@ void ttyd_smoke()
         auto release_regions = [&]() {
             na_memory_unmap_frame_t unmap{};
             unmap.struct_size = sizeof(unmap);
-            unmap.length = kBulkRegionBytes;
+            unmap.length = kBulkRegionAllocationBytes;
             if (write_bytes != nullptr)
             {
                 unmap.address = reinterpret_cast<std::uint64_t>(write_bytes);

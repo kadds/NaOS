@@ -42,7 +42,9 @@ pub fn log(message: &'static [u8]) {
     // The smoke writes a diagnostic line, so it owns a region sized exactly to
     // that line: every migrated Stream.write carries its payload in the
     // caller's MemoryObject, never inline in the control message.
-    let window = payload.len().max(1);
+    let Ok(window) = servicekit::memory::page_aligned_size(payload.len().max(1)) else {
+        return;
+    };
     let Ok(region) = servicekit::memory::MemoryObject::new(window) else {
         return;
     };

@@ -1959,8 +1959,9 @@ void flush_pending_reads(service_state &state)
         std::size_t read = 0;
         const std::size_t want = pending.size;
         const bool timeout_expired = pending.deadline_ms != 0 && now >= pending.deadline_ms;
-        const int result = pending.master ? pair->core.read_output(pending.region.data, want, true, &read)
-                                          : pair->core.read_input(pending.region.data, want, true, &read, timeout_expired);
+        const int result = pending.master
+                               ? pair->core.read_output(pending.region.data, want, true, &read)
+                               : pair->core.read_input(pending.region.data, want, true, &read, timeout_expired);
         if (result == -EAGAIN)
         {
             if (pending.nonblock)
@@ -2502,8 +2503,8 @@ class terminal_master_handler
         const auto *description = find_open_description(state_, binding->open_description);
         const bool nonblock = description != nullptr && (description->status_flags & terminal_status_nonblock) != 0;
         request_mapping region{};
-        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
-                                NA_MEMORY_MAP_READ, region))
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size, NA_MEMORY_MAP_READ,
+                                region))
         {
             reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
             return false;
@@ -2940,8 +2941,8 @@ class terminal_slave_handler
             return true;
         }
         request_mapping region{};
-        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size,
-                                NA_MEMORY_MAP_READ, region))
+        if (!map_request_region(request_resource(context_, request.buffer), 0, request.size, NA_MEMORY_MAP_READ,
+                                region))
         {
             reject_responder(context_, NA_OUTCOME_REASON_BROKER_FAILURE, -EINVAL);
             return false;
@@ -3421,14 +3422,12 @@ int main()
         for (uint64_t i = 0; i < max_pairs && wait_count < max_wait_items; i++)
         {
             if (state.pending_creates[i].active)
-                append_wait(state.pending_creates[i].invocation,
-                            NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
+                append_wait(state.pending_creates[i].invocation, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         }
         for (uint64_t i = 0; i < max_pairs && wait_count < max_wait_items; i++)
         {
             if (state.pending_locator_opens[i].active)
-                append_wait(state.pending_locator_opens[i].invocation,
-                            NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
+                append_wait(state.pending_locator_opens[i].invocation, NA_EPOLL_EVENT_READABLE | NA_EPOLL_EVENT_HANGUP);
         }
         const auto append_responder_wait = [&](na_handle_t responder) {
             append_wait(responder, NA_EPOLL_EVENT_ERROR | NA_EPOLL_EVENT_HANGUP);

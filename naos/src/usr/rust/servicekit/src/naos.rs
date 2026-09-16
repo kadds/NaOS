@@ -661,6 +661,8 @@ std::thread_local! {
 fn new_listing_region() -> Result<MemoryObject, CallError> {
     let bytes = usize::try_from(SERVICE_DIRECTORY_PAGE_BYTES)
         .map_err(|_| CallError::Status(sys::STATUS_INVALID_ARGUMENT))?;
+    let bytes = crate::memory::page_aligned_size(bytes)
+        .map_err(|_| CallError::Status(sys::STATUS_IO_ERROR))?;
     let region = MemoryObject::new(bytes).map_err(|_| CallError::Status(sys::STATUS_IO_ERROR))?;
     // The directory writes the records, so the mapping must be writable and
     // shared for them to be visible here.

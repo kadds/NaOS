@@ -17,6 +17,19 @@ pub enum MemoryError {
     Unsupported,
 }
 
+/// NaOS shared mappings are page-backed. Callers that retain a mapping across
+/// an IPC transfer must allocate a page-aligned window so the kernel can map
+/// the same backing frames into both address spaces.
+pub const MEMORY_PAGE_SIZE: usize = 4096;
+
+pub fn page_aligned_size(bytes: usize) -> Result<usize, MemoryError> {
+    let bytes = bytes.max(1);
+    bytes
+        .checked_add(MEMORY_PAGE_SIZE - 1)
+        .map(|value| value & !(MEMORY_PAGE_SIZE - 1))
+        .ok_or(MemoryError::InvalidArgument)
+}
+
 /// Direction of a MemoryObject transfer from the client to the service.
 ///
 /// The transport adapters translate this into a NaOS resource transfer or
@@ -309,6 +322,9 @@ mod platform {
         /// buffer, so keeping the mapping avoids a MEMORY_MAP/MEMORY_UNMAP
         /// pair per transfer; the mapping is torn down with the object.
         pub fn map_persistent(&self, length: usize, writable: bool) -> Result<(), MemoryError> {
+            if length == 0 || length % super::MEMORY_PAGE_SIZE != 0 {
+                return Err(MemoryError::InvalidArgument);
+            }
             let flags = if writable {
                 sys::MEMORY_MAP_READ | sys::MEMORY_MAP_WRITE | sys::MEMORY_MAP_SHARED
             } else {
@@ -1067,8 +1083,9 @@ mod region_contract_tests {
     //! by both `memory_transfer` implementations.
 
     use super::{
-        MemoryDirection, MemoryError, RegionDirection, RegionRejection, admit_service_region,
-        check_direction_rights, direction_map_rights, direction_rights,
+        MEMORY_PAGE_SIZE, MemoryDirection, MemoryError, RegionDirection, RegionRejection,
+        admit_service_region, check_direction_rights, direction_map_rights, direction_rights,
+        page_aligned_size,
     };
     use crate::sys;
 
@@ -1079,6 +1096,14 @@ mod region_contract_tests {
     /// the direction a caller uses for a service write.
     fn caller_grants_read() -> u64 {
         direction_rights(MemoryDirection::In) | direction_map_rights()
+    }
+
+    #[test]
+    fn persistent_region_sizes_are_page_aligned() {
+        assert_eq!(page_aligned_size(1), Ok(MEMORY_PAGE_SIZE));
+        assert_eq!(page_aligned_size(MEMORY_PAGE_SIZE), Ok(MEMORY_PAGE_SIZE));
+        assert_eq!(page_aligned_size(MEMORY_PAGE_SIZE + 1), Ok(2 * MEMORY_PAGE_SIZE));
+        assert_eq!(page_aligned_size(usize::MAX), Err(MemoryError::InvalidArgument));
     }
 
     /// Rights a caller grants when data flows *from* the service: the service

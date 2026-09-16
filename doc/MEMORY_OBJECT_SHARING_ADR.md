@@ -86,6 +86,11 @@ offset 向下对齐到页，并在 `MemoryMapFrame.data_offset` 返回 leading o
 覆盖页边界时才使用对象页缓存的直接 alias；因此 unaligned view 仍可用，但不会错误
 地把相邻字节暴露给 client。
 
+需要跨 IPC 长期保留并直接读写的共享窗口必须把 MemoryObject 的分配尺寸和持久映射
+尺寸向上取整到页边界；本次传输的逻辑 size 仍可以是任意字节数。servicekit
+提供 page_aligned_size，NaOS map_persistent 也会拒绝非页对齐长度。短期的非页
+对齐请求映射仍走私有页与 unmap 回写语义，不能当作长期共享窗口使用。
+
 IDL 数据面只传 bounded buffer capability；请求里的 `size` 仅表示本次操作长度。
 这消除了“capability 已经受限但 wire offset 又可自由构造”的重复边界，并使 NaOS
 与 Linux 的 admission/access 检查保持一致。该接口尚未上线，schema revision 已直接

@@ -163,15 +163,17 @@ impl StreamRegion {
     fn acquire(&mut self, bytes: usize) -> Result<&MemoryObject, WriteFailure> {
         let needed = bytes.max(1);
         if self.object.is_none() || self.window < needed {
+            let allocation = crate::memory::page_aligned_size(needed)
+                .map_err(|_| WriteFailure::SubmitFailed(-1))?;
             let object =
-                MemoryObject::new(needed).map_err(|_| WriteFailure::SubmitFailed(-1))?;
+                MemoryObject::new(allocation).map_err(|_| WriteFailure::SubmitFailed(-1))?;
             // The logger writes a whole chunk before each call, so the mapping
             // must be writable and shared for the service to observe it.
             object
-                .map_persistent(needed, true)
+                .map_persistent(allocation, true)
                 .map_err(|_| WriteFailure::SubmitFailed(-1))?;
             self.object = Some(object);
-            self.window = needed;
+            self.window = allocation;
         }
         self.object
             .as_ref()
@@ -201,7 +203,6 @@ impl StreamOps for NativeStreamOps {
         // The window is the chunk itself; the object may be larger from an
         // earlier line, and a window inside the object is all the service
         // needs.
-        let window = data.len().max(1);
         STREAM_REGION.with(|cell| {
             let mut region = cell.borrow_mut();
             let object = region.acquire(data.len())?;

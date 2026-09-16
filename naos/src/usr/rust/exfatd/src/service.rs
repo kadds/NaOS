@@ -216,6 +216,7 @@ impl RemoteBlockIo {
         // The transfer window is bounded by the device's advertised limits, so
         // one region sized to them serves every I/O.
         let window = usize::try_from(info.max_transfer_bytes).map_err(|_| BlockError::OutOfRange)?;
+        let window = servicekit::memory::page_aligned_size(window).map_err(|_| BlockError::OutOfRange)?;
         if window == 0 {
             return Err(BlockError::OutOfRange);
         }
