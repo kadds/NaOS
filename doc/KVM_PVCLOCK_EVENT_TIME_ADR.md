@@ -129,10 +129,12 @@ build 目录的 `kernel_out.log` 中确认：
 还应验证 `kvmclock=off` 的非 PV 启动、无 KVM/TCG 回退，以及 feature 被屏蔽时
 `kvmclock=on` 的可辨识失败路径。
 
-本次提交的验证结果：`cmake --build build-kvm-pvclock -j` 和 pvclock/event-source 单元测试通过；
-KVM boot smoke 已观察到 `event-clock=kvm-pvclock`、`event-source=local-apic` 及前段服务启动日志，
-但随后在 `naos/src/kernel/ipc/epoll.cc:104` 触发 `ready_count_ < size` 断言，未到达剩余 init marker。
-因此本次运行不视为完整 boot acceptance，epoll 集成失败仍需单独处理。
+初始 KVM boot smoke 曾在多个并发 `EPOLL_CTL_ADD` 共同准备 ready ring 容量时触发
+`naos/src/kernel/ipc/epoll.cc:104` 的 `ready_count_ < size` 断言；修复后通过让容量准备与
+registration commit 由同一把分配锁串行化消除了该竞态。修复后的验证结果为：
+`cmake --build build-kvm-pvclock -j`、pvclock/event-source 单元测试和 KVM boot smoke 均通过，
+日志包含 `event-clock=kvm-pvclock`、`event-source=local-apic`、正常服务启动及
+`init: user shell started`。
 
 ## 参考资料
 

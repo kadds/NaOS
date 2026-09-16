@@ -243,6 +243,10 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
     u64 added_token = 0;
     if (operation == NA_EPOLL_CTL_ADD)
     {
+        // Serialize capacity preparation with the registration commit.  If
+        // two ADDs prepared against the same registration count, both could
+        // grow the ring by one and the second commit would enqueue into a
+        // full ring.
         allocation_lock_.lock();
         u64 required_capacity = 0;
         {
@@ -256,9 +260,11 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
         ready_ring_.expand(required_capacity, 0);
         const bool capacity_ready =
             registrations_.capacity() >= required_capacity && ready_ring_.size() >= required_capacity;
-        allocation_lock_.unlock();
         if (!capacity_ready)
+        {
+            allocation_lock_.unlock();
             return NA_STATUS_RESOURCE_EXHAUSTED;
+        }
     }
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
@@ -330,6 +336,8 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
             queue_ready_locked(added_slot);
         }
     }
+    if (operation == NA_EPOLL_CTL_ADD)
+        allocation_lock_.unlock();
     if (result != NA_STATUS_OK)
         return result;
     if (added_target)
