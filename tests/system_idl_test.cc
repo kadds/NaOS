@@ -13,6 +13,7 @@
 #include <naos/generated/system/Process.hpp>
 #include <naos/generated/system/ServiceDirectory.hpp>
 #include <naos/generated/system/Stream.hpp>
+#include <naos/generated/system/SystemMonitor.hpp>
 #include <naos/generated/system/TerminalDriverControl.hpp>
 #include <naos/generated/system/TerminalDriverFactory.hpp>
 #include <naos/generated/system/TerminalJobControl.hpp>
@@ -106,6 +107,10 @@ static_assert(NA_METHOD_PROCESS_GET_PROCESS_GROUP == 6);
 static_assert(NA_METHOD_PROCESS_SET_PROCESS_GROUP == 7);
 static_assert(NA_METHOD_PROCESS_GET_SESSION == 8);
 static_assert(NA_METHOD_PROCESS_GET_CONTROLLING_TERMINAL == 9);
+static_assert(NA_METHOD_PROCESS_GET_STATUS == 11);
+static_assert(NA_SCOPE_SYSTEM_MONITOR == 24);
+static_assert(NA_METHOD_SYSTEM_MONITOR_GET == 1);
+static_assert(NA_METHOD_SYSTEM_MONITOR_LIST_PROCESSES == 2);
 static_assert(NA_METHOD_MEMORY_OBJECT_GET_INFO == 1);
 static_assert(NA_METHOD_MEMORY_OBJECT_READ == 2);
 static_assert(NA_METHOD_MEMORY_OBJECT_WRITE == 3);
@@ -113,6 +118,25 @@ static_assert(NA_METHOD_FRAMEBUFFER_GET == 1);
 
 TEST_CASE("generated system IDL contract", "[system-idl]")
 {
+    naos::system::SystemMonitor::SystemStatus system_status{};
+    system_status.page_size = 4096;
+    system_status.physical_pages = 32768;
+    system_status.usable_pages = 30000;
+    system_status.free_pages = 12000;
+    system_status.reclaimable_pages = 4000;
+    system_status.swap_total_pages = 0;
+    system_status.swap_free_pages = 0;
+    system_status.swap_used_pages = 0;
+    REQUIRE(system_status.flags == 0);
+    REQUIRE(system_status.free_pages + system_status.reclaimable_pages == 16000);
+
+    naos::system::Process::ProcessStatus process_status{};
+    process_status.page_size = system_status.page_size;
+    process_status.virtual_pages = 256;
+    process_status.rss_pages = 64;
+    process_status.shared_pages = 8;
+    REQUIRE(process_status.rss_pages >= process_status.shared_pages);
+
     // Terminal endpoints must carry method-level authority, rather than
     // relying on ttyd's handler to rediscover O_RDONLY/O_WRONLY.  The
     // generated descriptor is the contract consumed by invoke_submit().
