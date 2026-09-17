@@ -2,8 +2,8 @@
 #include "kernel/arch/klib.hpp"
 #include "kernel/dev/framebuffer.hpp"
 #include "kernel/input_event_source.hpp"
-#include "kernel/ipc/invocation.hpp"
 #include "kernel/ipc/epoll.hpp"
+#include "kernel/ipc/invocation.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/service_directory.hpp"
 #include "kernel/syscall.hpp"
@@ -148,7 +148,7 @@ na_status_t handle_restrict(na_handle_t source, const na_handle_restriction_t *r
     auto status = naos::usercopy::copy_versioned(values, restriction);
     if (status != NA_STATUS_OK)
         return status;
-    const u64 restriction_bytes = values.struct_size < sizeof(values) ? values.struct_size : sizeof(values);
+    const u64 restriction_bytes = sizeof(values);
     if (naos::usercopy::ranges_overlap(reinterpret_cast<u64>(restriction), restriction_bytes,
                                        reinterpret_cast<u64>(result), sizeof(*result)))
         return NA_STATUS_INVALID_ARGUMENT;
@@ -281,8 +281,7 @@ na_status_t epoll_create(na_handle_t *result)
     return status;
 }
 
-na_status_t epoll_ctl(na_handle_t epoll_handle, u32 operation, na_handle_t target,
-                      const na_epoll_event_t *event)
+na_status_t epoll_ctl(na_handle_t epoll_handle, u32 operation, na_handle_t target, const na_epoll_event_t *event)
 {
     if (operation != NA_EPOLL_CTL_DEL && (event == nullptr || !is_user_space_range(event, sizeof(*event))))
         return NA_STATUS_FAULT;
@@ -316,7 +315,7 @@ na_status_t epoll_wait(na_handle_t epoll_handle, na_epoll_event_t *events, u64 c
     if (epoll_handle == NA_HANDLE_INVALID)
         return NA_STATUS_INVALID_HANDLE;
     if (naos::usercopy::ranges_overlap(reinterpret_cast<u64>(events), capacity * sizeof(na_epoll_event_t),
-                                        reinterpret_cast<u64>(actual), sizeof(*actual)))
+                                       reinterpret_cast<u64>(actual), sizeof(*actual)))
         return NA_STATUS_INVALID_ARGUMENT;
 
     timeclock::microsecond_t deadline_us = std::numeric_limits<timeclock::microsecond_t>::max();
@@ -348,14 +347,17 @@ na_status_t epoll_wait(na_handle_t epoll_handle, na_epoll_event_t *events, u64 c
     if (naos::usercopy::copy_to(reinterpret_cast<u64>(actual), &count, sizeof(count)) != NA_STATUS_OK)
         return NA_STATUS_FAULT;
     if (!ready.empty() && naos::usercopy::copy_to(reinterpret_cast<u64>(events), ready.data(),
-                                                   ready.size() * sizeof(na_epoll_event_t)) != NA_STATUS_OK)
+                                                  ready.size() * sizeof(na_epoll_event_t)) != NA_STATUS_OK)
         return NA_STATUS_FAULT;
     return status;
 }
 
 na_status_t handle_get_info(na_handle_t handle, na_handle_info_t *output)
 {
-    if (output == nullptr || !is_user_space_range(output, sizeof(*output)))
+    auto status = naos::usercopy::validate_output_versioned(output);
+    if (status != NA_STATUS_OK)
+        return status;
+    if (!is_user_space_range(output, sizeof(*output)))
         return NA_STATUS_FAULT;
     capability::entry entry;
     auto &resources = task::current_process()->resource;
@@ -431,7 +433,7 @@ na_status_t bootstrap(na_bootstrap_frame_t *frame)
     auto status = naos::usercopy::copy_versioned(values, frame);
     if (status != NA_STATUS_OK)
         return status;
-    if (values.struct_size < sizeof(values) || values.reserved0 != 0)
+    if (values.struct_size != sizeof(values) || values.reserved0 != 0)
         return NA_STATUS_INVALID_ARGUMENT;
 
     auto *process = task::current_process();
@@ -583,8 +585,7 @@ na_status_t bootstrap(na_bootstrap_frame_t *frame)
                                                          NA_CHANNEL_MAX_MESSAGE_BYTES, actual_bytes, received);
                 if (status != NA_STATUS_WOULD_BLOCK)
                     break;
-                status = ipc::wait_for_raw_channel(resources, endpoint,
-                                                   NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED,
+                status = ipc::wait_for_raw_channel(resources, endpoint, NA_SIGNAL_READABLE | NA_SIGNAL_PEER_CLOSED,
                                                    std::numeric_limits<u64>::max());
                 if (status != NA_STATUS_OK)
                     break;

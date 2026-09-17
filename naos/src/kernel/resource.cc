@@ -245,7 +245,7 @@ na_status_t resource_table_t::restrict_native(na_handle_t source, const na_handl
     source_backup = {};
     constexpr u32 known_flags = NA_RESTRICTION_SCOPE | NA_RESTRICTION_REVISION | NA_RESTRICTION_FEATURES |
                                 NA_RESTRICTION_META_RIGHTS | NA_RESTRICTION_PROTOCOL_RIGHTS | NA_RESTRICTION_RANGE;
-    if (restriction.struct_size < sizeof(restriction) || (restriction.flags & ~known_flags) != 0)
+    if (restriction.struct_size != sizeof(restriction) || (restriction.flags & ~known_flags) != 0)
         return NA_STATUS_INVALID_ARGUMENT;
     uctx::RawWriteLockUninterruptibleContext icu(native_map_lock);
     auto found = native_handle_map.get(source);

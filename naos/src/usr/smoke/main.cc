@@ -929,6 +929,8 @@ int mobj_share_smoke()
     bool view_edge_private = false;
     bool view_wrote_back = false;
     bool view_nested_rejected = false;
+    bool info_short_size_rejected = false;
+    bool info_extended_size_rejected = false;
     na_handle_t view_source = NA_HANDLE_INVALID;
     na_handle_t view = NA_HANDLE_INVALID;
     if (_na_handle_duplicate(object, 0, &view_source) == NA_STATUS_OK)
@@ -948,6 +950,12 @@ int mobj_share_smoke()
                            _na_handle_get_info(view, &view_info) == NA_STATUS_OK &&
                            object_info.object_id == view_info.object_id && view_info.view_offset == 3 &&
                            view_info.view_length == 17;
+
+            na_handle_info_t malformed_info{};
+            malformed_info.struct_size = sizeof(malformed_info) - sizeof(uint64_t);
+            info_short_size_rejected = _na_handle_get_info(object, &malformed_info) == NA_STATUS_INVALID_ARGUMENT;
+            malformed_info.struct_size = sizeof(malformed_info) + sizeof(uint64_t);
+            info_extended_size_rejected = _na_handle_get_info(object, &malformed_info) == NA_STATUS_INVALID_ARGUMENT;
 
             // Make both sides of the view distinguishable from the logical
             // range.  The mapping must not expose either adjacent byte.
@@ -989,17 +997,18 @@ int mobj_share_smoke()
                 (void)_na_handle_close(widened);
             if (nested_source != NA_HANDLE_INVALID)
                 (void)_na_handle_close(nested_source);
-            view_ok = view_info_ok && view_mapped && view_rejected_tail && view_edge_private && view_wrote_back &&
-                      view_nested_rejected;
+            view_ok = view_info_ok && info_short_size_rejected && info_extended_size_rejected && view_mapped &&
+                      view_rejected_tail && view_edge_private && view_wrote_back && view_nested_rejected;
         }
     }
     if (view != NA_HANDLE_INVALID)
         (void)_na_handle_close(view);
     if (view_source != NA_HANDLE_INVALID)
         (void)_na_handle_close(view_source);
-    smoke_printf("mobj-share: view=%d info=%d mapped=%d tail=%d edges=%d writeback=%d nested=%d\n", view_ok ? 1 : 0,
-                 view_info_ok ? 1 : 0, view_mapped ? 1 : 0, view_rejected_tail ? 1 : 0, view_edge_private ? 1 : 0,
-                 view_wrote_back ? 1 : 0, view_nested_rejected ? 1 : 0);
+    smoke_printf("mobj-share: view=%d info=%d short=%d extended=%d mapped=%d tail=%d edges=%d writeback=%d nested=%d\n",
+                 view_ok ? 1 : 0, view_info_ok ? 1 : 0, info_short_size_rejected ? 1 : 0,
+                 info_extended_size_rejected ? 1 : 0, view_mapped ? 1 : 0, view_rejected_tail ? 1 : 0,
+                 view_edge_private ? 1 : 0, view_wrote_back ? 1 : 0, view_nested_rejected ? 1 : 0);
 
     // A6: the steady state is the same mapping again and again; every round
     // must observe the peer mapping without a page-table update.

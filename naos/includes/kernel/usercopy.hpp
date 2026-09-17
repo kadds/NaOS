@@ -30,7 +30,7 @@ inline bool valid_output_range(u64 address, u64 capacity)
     return capacity == 0 ? address == 0 : is_user_space_range(reinterpret_cast<const void *>(address), capacity);
 }
 
-inline bool valid_struct_size(u32 actual, u64 expected) { return actual >= expected; }
+inline bool valid_struct_size(u32 actual, u64 expected) { return actual == expected; }
 
 // The IPC ABI uses a size-prefixed frame. Read the prefix before copying the
 // complete known version so a short mapping is reported as an ABI error rather
@@ -49,6 +49,22 @@ template <typename T> na_status_t copy_versioned(T &destination, const T *source
 
     destination = {};
     return copy_from(&destination, reinterpret_cast<u64>(source), sizeof(destination));
+}
+
+// Output frames are caller-owned storage, so validate their size prefix before
+// probing or writing the complete kernel version.  Native ABI structs are
+// strict-versioned: a short or extended layout is an invalid argument rather
+// than an invitation to copy only a common prefix.
+template <typename T> na_status_t validate_output_versioned(T *destination)
+{
+    if (destination == nullptr || !is_user_space_range(reinterpret_cast<const void *>(destination), sizeof(u32)))
+        return NA_STATUS_FAULT;
+
+    u32 declared_size = 0;
+    auto status = copy_from(&declared_size, reinterpret_cast<u64>(destination), sizeof(declared_size));
+    if (status != NA_STATUS_OK)
+        return status;
+    return valid_struct_size(declared_size, sizeof(T)) ? NA_STATUS_OK : NA_STATUS_INVALID_ARGUMENT;
 }
 
 inline bool ranges_overlap(u64 first, u64 first_size, u64 second, u64 second_size)

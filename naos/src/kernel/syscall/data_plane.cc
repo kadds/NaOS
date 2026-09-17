@@ -29,7 +29,7 @@ na_status_t memory_map(na_memory_map_frame_t *frame)
     auto status = copy_in(frame, values);
     if (status != NA_STATUS_OK)
         return status;
-    if (values.struct_size < sizeof(values) ||
+    if (values.struct_size != sizeof(values) ||
         values.flags & ~(NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_EXEC | NA_MEMORY_MAP_SHARED) ||
         (values.object == NA_HANDLE_INVALID && values.offset != 0) || values.length == 0 || values.address != 0 ||
         values.data_offset != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
@@ -118,7 +118,7 @@ na_status_t memory_unmap(na_memory_unmap_frame_t *frame)
     auto status = copy_in(frame, values);
     if (status != NA_STATUS_OK)
         return status;
-    if (values.struct_size < sizeof(values) || values.flags != 0 || values.address == 0 || values.length == 0 ||
+    if (values.struct_size != sizeof(values) || values.flags != 0 || values.address == 0 || values.length == 0 ||
         values.reserved0 != 0 || values.reserved1 != 0 || (values.address & (memory::page_size - 1)) != 0 ||
         values.length > NA_MEMORY_MAP_MAX_BYTES)
         return NA_STATUS_INVALID_ARGUMENT;

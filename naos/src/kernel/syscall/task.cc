@@ -606,7 +606,7 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
     const auto copy_status = naos::usercopy::copy_versioned(values, frame);
     if (copy_status != NA_STATUS_OK)
         return copy_status;
-    if (values.struct_size < sizeof(values) ||
+    if (values.struct_size != sizeof(values) ||
         (values.flags & ~(NA_PROCESS_SPAWN_DEFERRED_START | NA_PROCESS_SPAWN_KLOG_STDIO)) != 0 ||
         values.reserved0 != 0 || values.reserved1 != 0 || values.executable == NA_HANDLE_INVALID ||
         values.bootstrap_endpoint == NA_HANDLE_INVALID || values.process == 0)

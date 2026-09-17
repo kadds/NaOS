@@ -101,7 +101,7 @@ mod naos_entry {
     fn run_fs_smoke() {
         use std::fs;
         use std::io::{Read, Seek, SeekFrom, Write};
-        use std::os::naos::fs::{MetadataExt, symlink as naos_symlink};
+        use std::os::naos::fs::symlink as naos_symlink;
 
         marker(b"rust-smoke-suite: std fs start\0");
 
@@ -135,22 +135,15 @@ mod naos_entry {
         assert_eq!(file_meta.len(), 10, "stat size must reflect written bytes");
         marker(b"rust-smoke-suite: std fs write-read-sync ready\0");
 
-        // Symlinks: symlink_metadata reports LNK, read_link returns the target,
-        // plain metadata follows to the regular file.
+        // The boot root is FAT-family storage. Its capability matrix
+        // deliberately rejects symlink/readlink with EOPNOTSUPP; the RAM VFS
+        // backend carries the positive symlink semantics tests.
         let link_path = base.join("hello.lnk");
-        naos_symlink("hello.txt", &link_path).expect("fs symlink");
-        let link_meta = fs::symlink_metadata(&link_path).expect("fs symlink_metadata");
-        assert!(link_meta.is_symlink(), "symlink_metadata must report LNK");
-        assert_eq!(
-            fs::read_link(&link_path).expect("fs read_link"),
-            std::path::Path::new("hello.txt")
-        );
-        assert!(
-            fs::metadata(&link_path)
-                .expect("fs metadata(link)")
-                .is_file()
-        );
-        marker(b"rust-smoke-suite: std fs symlink ready\0");
+        let symlink_error =
+            naos_symlink("hello.txt", &link_path).expect_err("FAT symlink unexpectedly succeeded");
+        assert_eq!(symlink_error.kind(), ErrorKind::Unsupported);
+        assert_eq!(symlink_error.raw_os_error(), Some(-95));
+        marker(b"rust-smoke-suite: std fs symlink unsupported ready\0");
 
         // Rename: source disappears with ENOENT and the negated errno is
         // preserved in raw_os_error.
@@ -160,41 +153,22 @@ mod naos_entry {
         let gone = fs::metadata(&file_path).unwrap_err();
         assert_eq!(gone.kind(), ErrorKind::NotFound, "ENOENT maps to NotFound");
         assert_eq!(gone.raw_os_error(), Some(-2), "raw errno preservation");
-        // Hard link: both names share one inode (nlink >= 2).
+        // FAT-family filesystems likewise have no POSIX hard-link primitive.
         let linked = base.join("linked.txt");
-        fs::hard_link(&renamed, &linked).expect("fs hard_link");
-        let link_count = fs::metadata(&linked)
-            .expect("fs metadata(hardlink)")
-            .nlink();
-        assert!(
-            link_count >= 2,
-            "hard link must raise nlink, got {link_count}"
-        );
-        assert_eq!(
-            fs::metadata(&renamed)
-                .expect("fs metadata(hardlink src)")
-                .ino(),
-            fs::metadata(&linked)
-                .expect("fs metadata(hardlink dst)")
-                .ino(),
-            "hard links must share one inode",
-        );
-        marker(b"rust-smoke-suite: std fs rename-hardlink ready\0");
+        let hard_link_error =
+            fs::hard_link(&renamed, &linked).expect_err("FAT hard link unexpectedly succeeded");
+        assert_eq!(hard_link_error.kind(), ErrorKind::Unsupported);
+        assert_eq!(hard_link_error.raw_os_error(), Some(-95));
+        marker(b"rust-smoke-suite: std fs rename-hardlink unsupported ready\0");
 
         // Directory iteration: cursor-based list with typed entries.
         let mut seen = Vec::new();
         for entry in fs::read_dir(base).expect("fs read_dir") {
             let entry = entry.expect("read_dir entry");
             seen.push(entry.file_name().to_string_lossy().into_owned());
-            let file_type = entry.file_type().expect("entry file type");
-            // The earlier rename intentionally leaves hello.lnk dangling; std's
-            // DirEntry::metadata follows links, so only non-links are expected
-            // to have successful follow-up metadata here.
-            if !file_type.is_symlink() {
-                let _ = entry.metadata().expect("entry metadata").is_file();
-            }
+            let _ = entry.metadata().expect("entry metadata").is_file();
         }
-        for expected in ["hello.lnk", "renamed.txt", "linked.txt"] {
+        for expected in ["renamed.txt"] {
             assert!(
                 seen.iter().any(|name| name == expected),
                 "missing {expected} in {seen:?}"

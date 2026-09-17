@@ -184,7 +184,7 @@ na_status_t copy_to_user(u64 destination, const void *source, u64 size)
     return naos::usercopy::copy_to(destination, source, size);
 }
 
-bool valid_struct_size(u32 actual, u64 expected) { return actual >= expected; }
+bool valid_struct_size(u32 actual, u64 expected) { return actual == expected; }
 
 bool contains_state(const freelibcxx::vector<channel_state *> &states, channel_state *needle, u64 *index = nullptr)
 {
