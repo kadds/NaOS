@@ -121,14 +121,16 @@ void test_reply_ownership_and_capacity()
     dispatch(invocation);
 
     std::atomic_uint released{0};
-    auto *token = static_cast<std::uint64_t *>(std::malloc(sizeof(std::uint64_t)));
-    assert(token != nullptr);
-    *token = 1234;
-    naos_ipc_resource_t resource{&released, token, release_resource};
     constexpr char response[] = "hello";
-    assert(naos_ipc_invocation_complete_reply(invocation, reinterpret_cast<const std::uint8_t *>(response), 5,
-                                              &resource, 1, 9) != 0);
-    assert(!naos_ipc_resource_valid(&resource));
+    {
+        auto *token = static_cast<std::uint64_t *>(std::malloc(sizeof(std::uint64_t)));
+        assert(token != nullptr);
+        *token = 1234;
+        naos_ipc_resource_t resource{&released, token, release_resource};
+        assert(naos_ipc_invocation_complete_reply(invocation, reinterpret_cast<const std::uint8_t *>(response), 5,
+                                                  &resource, 1, 9) != 0);
+        assert(!naos_ipc_resource_valid(&resource));
+    }
     assert((naos_ipc_invocation_signals(invocation) & NAOS_IPC_SIGNAL_COMPLETED) != 0);
 
     naos_ipc_invocation_result_info_t info{};

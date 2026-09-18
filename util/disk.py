@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import posixpath
 import re
 import shlex
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,8 @@ from build_paths import build_paths, resolve_build_directory
 SECTOR_SIZE = 512
 PARTITION_NUMBER = 1
 FSTOOL_INSTALL_HINT = "cargo install --git https://github.com/KarpelesLab/fstool --locked --force fstool"
+GRUB_I386_PC_DIRECTORY = Path("/usr/lib/grub/i386-pc")
+GRUB_CORE_LBA = 1
 
 
 class DiskError(RuntimeError):
@@ -265,6 +269,79 @@ def ensure_directory(image_file: str | Path, guest_path: str) -> None:
         )
         if not directory_exists(image_file, current):
             raise DiskError(f"failed to create directory {current} in {image_path(image_file)}")
+
+
+def install_bios_grub(image_file: str | Path, config: bytes) -> None:
+    """Install a rootless BIOS GRUB loader and its config into p1."""
+    image = image_path(image_file)
+    if not image.is_file():
+        raise DiskError(f"disk image does not exist: {image}")
+    if filesystem_kind(image) not in {"fat32", "vfat", "exfat"}:
+        raise DiskError(f"p1 is not a FAT filesystem in {image}; format it before installing GRUB")
+
+    grub_mkimage = shutil.which("grub-mkimage")
+    if grub_mkimage is None or not GRUB_I386_PC_DIRECTORY.is_dir():
+        raise DiskError("BIOS GRUB tools are unavailable; install grub-pc-bin")
+
+    with tempfile.TemporaryDirectory(prefix="naos-grub-", dir=image.parent) as directory:
+        stage = Path(directory)
+        core_path = stage / "core.img"
+        run(
+            [
+                grub_mkimage,
+                "-O",
+                "i386-pc",
+                "-o",
+                str(core_path),
+                "-p",
+                "(hd0,msdos1)/boot/grub",
+                "biosdisk",
+                "part_msdos",
+                "exfat",
+                "fat",
+                "multiboot2",
+                "configfile",
+                "normal",
+            ]
+        )
+
+        core = bytearray(core_path.read_bytes())
+        core_sectors = math.ceil(len(core) / SECTOR_SIZE)
+        if core_sectors <= 1:
+            raise DiskError("GRUB core image is unexpectedly small")
+        if GRUB_CORE_LBA + core_sectors >= 2048:
+            raise DiskError("GRUB core image does not fit in the post-MBR gap")
+        core.extend(b"\0" * (core_sectors * SECTOR_SIZE - len(core)))
+        core[0x1E8:0x1F4] = b"\0" * 12
+        core[0x1F4:0x200] = struct.pack("<QHH", GRUB_CORE_LBA + 1, core_sectors - 1, 0x820)
+
+        boot = bytearray((GRUB_I386_PC_DIRECTORY / "boot.img").read_bytes())
+        if len(boot) != SECTOR_SIZE:
+            raise DiskError("GRUB boot.img is not one sector")
+        original_mbr = image.read_bytes()[:SECTOR_SIZE]
+        boot[0x5C:0x64] = struct.pack("<Q", GRUB_CORE_LBA)
+        boot[0x64] = 0xFF
+        boot[0x66:0x68] = b"\x90\x90"
+        boot[0x1B8:0x1FE] = original_mbr[0x1B8:0x1FE]
+
+        with image.open("r+b") as destination:
+            destination.seek(GRUB_CORE_LBA * SECTOR_SIZE)
+            destination.write(core)
+            destination.seek(0)
+            destination.write(boot)
+            destination.flush()
+            os.fsync(destination.fileno())
+
+        ensure_directory(image, "/boot/grub/i386-pc")
+        config_path = stage / "grub.cfg"
+        config_path.write_bytes(config)
+        add_file(image, config_path, "/boot/grub/grub.cfg", replace=True)
+
+        # normal.mod loads additional commands and filesystem helpers from
+        # this directory at boot, so retain the complete platform module set.
+        for module in sorted(GRUB_I386_PC_DIRECTORY.iterdir()):
+            if module.is_file():
+                add_file(image, module, f"/boot/grub/i386-pc/{module.name}", replace=True)
 
 
 def entry_exists(image_file: str | Path, guest_path: str) -> bool:

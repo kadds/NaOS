@@ -8,6 +8,25 @@ target_include_directories(naos_ipc_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/naos/include)
 
+# The same transport-neutral sources are linked into the freestanding kernel.
+# Keep that build separate from the hosted test archive so the kernel object
+# files are compiled with its no-red-zone/no-SSE ABI instead of inheriting the
+# hosted compiler defaults.
+add_library(naos_ipc_core_kernel STATIC ${NAOS_IPC_CORE_SOURCES})
+target_include_directories(naos_ipc_core_kernel PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/naos/include)
+target_compile_options(naos_ipc_core_kernel PRIVATE
+    -mno-red-zone
+    -fvisibility-inlines-hidden
+    -Wframe-larger-than=1024
+    -fno-bounds-check
+    -mno-sse
+    -mno-sse2
+    -mno-avx
+    -fno-omit-frame-pointer
+    -mno-omit-leaf-frame-pointer)
+
 find_package(Threads REQUIRED)
 add_executable(naos_ipc_core_test tests/channel_test.cc)
 target_include_directories(naos_ipc_core_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)

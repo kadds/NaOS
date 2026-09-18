@@ -19,6 +19,16 @@ extern vm::info_t *kernel_vm_info;
 void init(kernel_start_args *args, u64 fix_memory_limit);
 void init2();
 void paging();
+struct allocator_status_t
+{
+    u64 physical_pages = 0;
+    u64 usable_pages = 0;
+    u64 reserved_pages = 0;
+    u64 free_pages = 0;
+    u64 available_pages = 0;
+};
+
+allocator_status_t allocator_status();
 u64 get_max_available_memory();
 u64 get_max_maped_memory();
 

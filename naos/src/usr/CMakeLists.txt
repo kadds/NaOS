@@ -9,7 +9,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/busybox-build.cmake)
 add_custom_target(make-rfs-symbol ALL
     COMMAND ${UTIL_LN} ${ROOT_FS_DIR}
     DEPENDS kernel nanobox init ttyd consoled busybox naos_rust_smoke
-            naos_smoke_suite make-kernel-symbol
+            naos_smoke_suite make-kernel-symbol ${UTIL_LN}
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
 
 add_custom_target(update-fake-resource ALL

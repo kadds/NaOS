@@ -7,6 +7,7 @@
 #include "kernel/handle.hpp"
 #include "kernel/ipc/channel.hpp"
 #include "kernel/kobject.hpp"
+#include "kernel/system_status.hpp"
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
@@ -23,8 +24,9 @@
 #include "kernel/time.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
-#include "naos/generated/system/InputEventSource.hpp"
 #include "naos/generated/system/Framebuffer.hpp"
+#include "naos/generated/system/InputEventSource.hpp"
+#include "naos/generated/system/SystemStatus.hpp"
 #include "naos/generated/system/TerminalDriverFactory.hpp"
 #include "naos/generated/system_uapi.h"
 
@@ -145,7 +147,7 @@ inline void delete_kernel_stack(void *p) { memory::KernelBuddyAllocatorV->deallo
 
 namespace
 {
-constexpr u64 process_name_capacity = 12;
+constexpr u64 process_name_capacity = 31;
 
 void set_process_name(process_t &process, const char *path)
 {
@@ -164,6 +166,42 @@ void set_process_name(process_t &process, const char *path)
     const u64 length = strlen(name) < process_name_capacity ? strlen(name) : process_name_capacity;
     memcpy(process.name, name, length);
     process.name[length] = '\0';
+}
+
+bool build_process_command_line(const process_args_t &args, freelibcxx::vector<byte> &command_line)
+{
+    const auto argv = args.argv.cspan();
+    u64 required = 1; // trailing NUL
+    for (u64 index = 0; index < argv.size(); index++)
+    {
+        const auto item = argv[index];
+        const u64 argument_bytes = item.size == 0 ? 0 : static_cast<u64>(item.size - 1);
+        if (required > ~u64(0) - argument_bytes)
+            return false;
+        required += argument_bytes;
+        if (index + 1 < argv.size())
+        {
+            if (required == ~u64(0))
+                return false;
+            required++;
+        }
+    }
+
+    command_line.ensure(required);
+    if (command_line.capacity() < required)
+        return false;
+
+    command_line.clear();
+    for (u64 index = 0; index < argv.size(); index++)
+    {
+        const auto item = argv[index];
+        if (index != 0)
+            command_line.push_back(byte(' '));
+        for (u32 offset = 0; offset + 1 < item.size; offset++)
+            command_line.push_back(args.data_ptr[item.offset + offset]);
+    }
+    command_line.push_back(byte(0));
+    return command_line.size() == required;
 }
 
 capability::metadata stream_capability_metadata()
@@ -418,6 +456,10 @@ inline process_t *copy_process(process_t *p)
     process->attributes.store(p->attributes.load() & ~process_attributes::job_control_cleanup_done);
     process->pid = id;
     memcpy(process->name, p->name, sizeof(process->name));
+    {
+        uctx::RawSpinLockUninterruptibleContext command_line_guard(p->command_line_lock);
+        process->command_line = p->command_line;
+    }
     process->parent_pid = p->pid;
     process->session_id = p->session_id;
     process->process_group_id = p->process_group_id;
@@ -447,7 +489,10 @@ void finalize_process(process_t *p)
 
 void maybe_finalize_process(process_t *p)
 {
-    if (p == nullptr || !p->reap_pending.load() || p->capability_refs.load() != 0)
+    if (p == nullptr || !p->reap_pending.load())
+        return;
+    const auto capability_refs = p->capability_refs.load();
+    if (capability_refs != 0)
         return;
 
     bool expected = false;
@@ -485,6 +530,7 @@ inline thread_t *new_thread(process_t *p)
 
     thread_t *thd = memory::New<thread_t>(thread_t_allocator);
     thd->process = p;
+    memcpy(thd->name, p->name, sizeof(thd->name));
     ((thread_list_t *)p->thread_list)->push_back(thd);
     thd->register_info = arch::task::new_register(p->attributes & process_attributes::userspace);
     thd->tid = id;
@@ -514,6 +560,12 @@ void delete_thread(thread_t *thd)
 
     uctx::RawSpinLockUninterruptibleContext icu(thd->process->thread_list_lock);
 
+    thd->process->statistics.user_time += thd->statistics.user_time;
+    thd->process->statistics.sys_time += thd->statistics.sys_time;
+    thd->process->statistics.iowait_time += thd->statistics.iowait_time;
+    thd->process->statistics.intr_time += thd->statistics.intr_time;
+    thd->process->statistics.soft_intr_time += thd->statistics.soft_intr_time;
+
     using arch::task::register_info_t;
 
     auto thd_list = ((thread_list_t *)thd->process->thread_list);
@@ -528,7 +580,8 @@ void delete_thread(thread_t *thd)
 }
 
 process_t::process_t()
-    : wait_counter(0)
+    : command_line(memory::KernelCommonAllocatorV)
+    , wait_counter(0)
     , wait_claimed(false)
     , child_wait_generation(0)
     , capability_refs(0)
@@ -539,6 +592,60 @@ process_t::process_t()
     , thread_list(nullptr)
     , schedule_data(nullptr)
 {
+}
+
+na_status_t read_process_command_line(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
+                                      u64 &actual_bytes, u64 &required_bytes)
+{
+    actual_bytes = 0;
+    required_bytes = 0;
+    if (process == nullptr || size == 0)
+        return NA_STATUS_INVALID_ARGUMENT;
+
+    uctx::RawSpinLockUninterruptibleContext command_line_guard(process->command_line_lock);
+    required_bytes = process->command_line.size();
+    if (size < required_bytes)
+        return NA_STATUS_BUFFER_TOO_SMALL;
+
+    u64 written = 0;
+    const auto status = buffer.write(0, process->command_line.data(), required_bytes, written);
+    if (status != NA_STATUS_OK)
+        return status;
+    if (written != required_bytes)
+        return NA_STATUS_IO_ERROR;
+    actual_bytes = written;
+    return NA_STATUS_OK;
+}
+
+namespace
+{
+na_status_t write_external_text(naos::data_plane::memory_object &buffer, const char *text, u64 size,
+                                u64 &actual_bytes, u64 &required_bytes)
+{
+    actual_bytes = 0;
+    required_bytes = text == nullptr ? 1 : strlen(text) + 1;
+    if (size == 0)
+        return NA_STATUS_INVALID_ARGUMENT;
+    if (size < required_bytes)
+        return NA_STATUS_BUFFER_TOO_SMALL;
+
+    u64 written = 0;
+    const auto status = buffer.write(0, reinterpret_cast<const byte *>(text), required_bytes, written);
+    if (status != NA_STATUS_OK)
+        return status;
+    if (written != required_bytes)
+        return NA_STATUS_IO_ERROR;
+    actual_bytes = written;
+    return NA_STATUS_OK;
+}
+} // namespace
+
+na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
+                              u64 &actual_bytes, u64 &required_bytes)
+{
+    if (process == nullptr)
+        return NA_STATUS_INVALID_ARGUMENT;
+    return write_external_text(buffer, process->name, size, actual_bytes, required_bytes);
 }
 
 process_object::process_object(process_t *process)
@@ -649,8 +756,8 @@ void init()
         input_meta.protocol_rights =
             NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
         if (service::register_kernel_service(service::input_event_source_uri,
-                                              sizeof(service::input_event_source_uri) - 1,
-                                              handle_t<kobject>(input_handle.get_control()), input_meta) != 0)
+                                             sizeof(service::input_event_source_uri) - 1,
+                                             handle_t<kobject>(input_handle.get_control()), input_meta) != 0)
             KLOG_PANIC("unable to publish input event source service");
         const auto input_event_source_handle =
             init_process->resource.install_native(std::move(input_handle), input_meta);
@@ -664,8 +771,8 @@ void init()
         factory_meta.meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
         factory_meta.protocol_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
         if (service::register_kernel_service(service::terminal_driver_factory_uri,
-                                              sizeof(service::terminal_driver_factory_uri) - 1,
-                                              handle_t<kobject>(factory_handle.get_control()), factory_meta) != 0)
+                                             sizeof(service::terminal_driver_factory_uri) - 1,
+                                             handle_t<kobject>(factory_handle.get_control()), factory_meta) != 0)
             KLOG_PANIC("unable to publish terminal driver factory service");
         const auto terminal_driver_factory_handle =
             init_process->resource.install_native(std::move(factory_handle), factory_meta);
@@ -677,11 +784,10 @@ void init()
         const auto &framebuffer = framebuffer_backend->fb();
         const u64 page_mask = memory::page_size - 1;
         const u64 physical_offset = reinterpret_cast<uintptr_t>(framebuffer.physical_addr()) & page_mask;
-        const auto physical_base = phy_addr_t::from(
-            memory::align_down(framebuffer.physical_addr(), memory::page_size));
+        const auto physical_base = phy_addr_t::from(memory::align_down(framebuffer.physical_addr(), memory::page_size));
         auto *kernel_view = memory::align_down(static_cast<byte *>(framebuffer.ptr), memory::page_size);
-        const u64 framebuffer_bytes = memory::align_up(framebuffer_backend->frame_bytes() + physical_offset,
-                                                       memory::page_size);
+        const u64 framebuffer_bytes =
+            memory::align_up(framebuffer_backend->frame_bytes() + physical_offset, memory::page_size);
         auto framebuffer_handle = handle_t<dev::framebuffer::framebuffer_service>::make(
             physical_base, kernel_view, framebuffer_bytes, framebuffer.width, framebuffer.height, framebuffer.pitch,
             framebuffer.bbp, framebuffer.bbp == 32 ? 0 : 1);
@@ -703,6 +809,25 @@ void init()
         const auto framebuffer_capability =
             init_process->resource.install_native(std::move(framebuffer_handle), framebuffer_meta);
         kassert(framebuffer_capability != NA_HANDLE_INVALID, "unable to install framebuffer capability");
+
+        auto system_status_handle = handle_t<system_status_service::object>::make();
+        kassert(system_status_handle, "unable to create system status service");
+        capability::metadata system_status_meta;
+        system_status_meta.binding = NA_BINDING_KERNEL_VIEW;
+        system_status_meta.protocol_uuid = naos::system::SystemStatus::protocol_uuid;
+        system_status_meta.scope = NA_SCOPE_SYSTEM_STATUS;
+        system_status_meta.revision = naos::system::SystemStatus::revision;
+        system_status_meta.features = naos::system::SystemStatus::features;
+        system_status_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+        system_status_meta.protocol_rights = NA_SYSTEM_STATUS_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
+        if (service::register_kernel_service(service::system_status_uri,
+                                             sizeof(service::system_status_uri) - 1,
+                                             handle_t<kobject>(system_status_handle.get_control()),
+                                             system_status_meta) != 0)
+            KLOG_PANIC("unable to publish system status service");
+        const auto system_status_capability =
+            init_process->resource.install_native(std::move(system_status_handle), system_status_meta);
+        kassert(system_status_capability != NA_HANDLE_INVALID, "unable to install system status capability");
         const auto metadata = stream_capability_metadata();
         init_process->console_in_handle =
             init_process->resource.install_native(khandle(tty0read.get_control()), metadata);
@@ -981,11 +1106,13 @@ void copy_fd(process_t *new_proc, process_t *old_proc, flag_t flags)
 }
 
 process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
-                          thread_start_func start_func, const char *const args[], const char *const envp[], flag_t flags)
+                          thread_start_func start_func, const char *const args[], const char *const envp[],
+                          flag_t flags)
 {
     auto process = new_process();
     if (!process)
         return nullptr;
+
 
     auto *parent = current_process();
     {
@@ -1037,6 +1164,19 @@ process_t *create_process(handle_t<naos::data_plane::memory_object> object, khan
         abort_unstarted_process(process);
         return nullptr;
     }
+    freelibcxx::vector<byte> command_line(memory::KernelCommonAllocatorV);
+    if (!build_process_command_line(*process_args, command_line))
+    {
+        KLOG_WARN("Can't retain process arguments for {}.", path);
+        memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+        memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        abort_unstarted_process(process);
+        return nullptr;
+    }
+    {
+        uctx::RawSpinLockUninterruptibleContext command_line_guard(process->command_line_lock);
+        process->command_line = std::move(command_line);
+    }
     process_args->program_header = exec_info.program_header;
     process_args->program_header_entry_size = exec_info.program_header_entry_size;
     process_args->program_header_count = exec_info.program_header_count;
@@ -1055,6 +1195,7 @@ process_t *create_process(handle_t<naos::data_plane::memory_object> object, khan
         thd->attributes |= thread_attributes::real_time;
     if ((flags & create_process_flags::deferred_start) == 0)
         start_process(process);
+
 
     return process;
 }
@@ -1192,8 +1333,8 @@ int fork()
     return thd->process->pid;
 }
 
-int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
-           thread_start_func start_func, char *const argv[], char *const envp[])
+int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na_handle_t executable_handle,
+           const char *path, thread_start_func start_func, char *const argv[], char *const envp[])
 {
     auto thd = current();
     auto process = thd->process;
@@ -1201,6 +1342,13 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, co
     auto process_args = copy_args(path, argv, envp);
     if (process_args == nullptr)
         return ENOMEM;
+    freelibcxx::vector<byte> command_line(memory::KernelCommonAllocatorV);
+    if (!build_process_command_line(*process_args, command_line))
+    {
+        memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+        memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        return ENOMEM;
+    }
 
     // The address space is process-wide. Refuse an in-place exec while a
     // sibling user thread is live; replacing mm_info underneath it would
@@ -1251,6 +1399,12 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, co
         return ENOEXEC;
     }
     memory::KernelCommonAllocatorV->deallocate(header);
+    {
+        uctx::RawSpinLockUninterruptibleContext command_line_guard(process->command_line_lock);
+        process->command_line = std::move(command_line);
+    }
+    set_process_name(*process, path);
+    memcpy(thd->name, process->name, sizeof(thd->name));
     process_args->program_header = exec_info.program_header;
     process_args->program_header_entry_size = exec_info.program_header_entry_size;
     process_args->program_header_count = exec_info.program_header_count;
@@ -1267,6 +1421,12 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, co
     // PT_LOAD mappings already own the backing references they require.
     object.reset();
     backing.reset();
+    // A successful exec never returns to process_exec(), so its caller cannot
+    // close the source capability after this point.  The new address space
+    // owns the mapping references; the source table entry is no longer part
+    // of the new image and must be released before entering userland.
+    if (executable_handle != NA_HANDLE_INVALID)
+        process->resource.close_native(executable_handle);
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
 
@@ -1555,10 +1715,11 @@ void notify_parent_of_child_state_change(process_t *process)
         parent->child_wait_queue.do_wake_up();
 }
 
-u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
+u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid, statistics_t &statistics)
 {
     ret = static_cast<i64>(na_process_wait_status_exit(static_cast<i64>(process->ret_val)));
     waited_pid = process->pid;
+    statistics = process->statistics;
     if (--process->wait_counter == 0)
     {
         notify_parent_of_child_state_change(process);
@@ -1570,15 +1731,17 @@ u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid)
 
 } // namespace
 
-i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid)
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
+                        statistics_t &statistics)
 {
-    return wait_process_handle(parent, target, flags, ret, waited_pid, nullptr, nullptr);
+    return wait_process_handle(parent, target, flags, ret, waited_pid, statistics, nullptr, nullptr);
 }
 
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
-                        freelibcxx::function_ref<bool()> interrupt,
+                        statistics_t &statistics, freelibcxx::function_ref<bool()> interrupt,
                         freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue)
 {
+    statistics = {};
     if (parent == nullptr || target == nullptr || target->parent_pid != parent->pid || target->reap_pending.load())
         return ECHILD;
 
@@ -1594,7 +1757,7 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
     if (target->attributes.load() & process_attributes::no_thread)
     {
         auto *reserved = reserve_child(parent, target->pid, true);
-        return reserved == target ? static_cast<i64>(reap_waited_child(reserved, ret, waited_pid)) : ECHILD;
+        return reserved == target ? static_cast<i64>(reap_waited_child(reserved, ret, waited_pid, statistics)) : ECHILD;
     }
     if (stopped_unreported())
     {
@@ -1630,7 +1793,7 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
         return EINTR;
     }
     if (reserved->attributes.load() & process_attributes::no_thread)
-        return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
+        return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid, statistics));
     if (stopped_unreported())
     {
         bool expected = false;
@@ -1646,7 +1809,7 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
             return 0;
         }
     }
-    return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid));
+    return static_cast<i64>(reap_waited_child(reserved, ret, waited_pid, statistics));
 }
 
 i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object)
@@ -1665,15 +1828,17 @@ i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object)
     return object ? 0 : EFAILED;
 }
 
-i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid)
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
+                          statistics_t &statistics)
 {
-    return wait_process_children(parent, requested_pid, flags, ret, waited_pid, nullptr, nullptr);
+    return wait_process_children(parent, requested_pid, flags, ret, waited_pid, statistics, nullptr, nullptr);
 }
 
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
-                          freelibcxx::function_ref<bool()> interrupt,
+                          statistics_t &statistics, freelibcxx::function_ref<bool()> interrupt,
                           freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue)
 {
+    statistics = {};
     if (parent == nullptr || global_process_map == nullptr)
         return ECHILD;
 
@@ -1692,7 +1857,7 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
         {
             auto target = reserve_child(parent, requested_pid, true);
             if (target != nullptr)
-                return reap_waited_child(target, ret, waited_pid);
+                return reap_waited_child(target, ret, waited_pid, statistics);
             continue;
         }
         if (selection.stopped_process != nullptr)
@@ -1746,7 +1911,7 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
                 return EINTR;
             }
             if (target->attributes.load() & process_attributes::no_thread)
-                return reap_waited_child(target, ret, waited_pid);
+                return reap_waited_child(target, ret, waited_pid, statistics);
             if (report_stopped_child(target, ret, waited_pid))
                 return 0;
             target->wait_claimed.store(false);
@@ -2303,6 +2468,58 @@ process_t *find_pid(process_id pid)
     return global_process_map->get(pid).value_or(nullptr);
 }
 
+i64 open_process_snapshot(process_id after_pid, u64 limit,
+                          freelibcxx::vector<process_snapshot_entry> &entries, process_id &next_pid)
+{
+    entries.clear();
+    next_pid = 0;
+    if (global_process_map == nullptr || limit == 0 || limit > NA_CHANNEL_MAX_RESOURCES)
+        return EINVAL;
+
+    entries.ensure(limit);
+    if (entries.capacity() < limit)
+        return ENOMEM;
+
+    process_id cursor = after_pid;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
+        while (entries.size() < limit)
+        {
+            process_t *selected = nullptr;
+            for (auto item : *global_process_map)
+            {
+                auto *candidate = item.value;
+                if (candidate == nullptr || candidate->reap_pending.load() || candidate->pid <= cursor)
+                    continue;
+                if (selected == nullptr || candidate->pid < selected->pid)
+                    selected = candidate;
+            }
+            if (selected == nullptr)
+                break;
+
+            auto object = handle_t<process_object>::make(selected);
+            if (!object)
+                return ENOMEM;
+            entries.push_back(process_snapshot_entry{selected->pid, std::move(object)});
+            cursor = selected->pid;
+        }
+
+        if (entries.size() == limit)
+        {
+            for (auto item : *global_process_map)
+            {
+                auto *candidate = item.value;
+                if (candidate != nullptr && !candidate->reap_pending.load() && candidate->pid > cursor)
+                {
+                    next_pid = cursor;
+                    break;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 thread_t *find_tid(process_t *process, thread_id tid)
 {
     uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
@@ -2313,6 +2530,138 @@ thread_t *find_tid(process_t *process, thread_id tid)
             return thd;
     }
     return nullptr;
+}
+
+i64 open_thread_snapshot(process_t *process, thread_id after_tid, u64 limit,
+                         freelibcxx::vector<thread_snapshot_entry> &entries, thread_id &next_tid)
+{
+    entries.clear();
+    next_tid = 0;
+    if (process == nullptr || limit == 0 || limit > NA_CHANNEL_MAX_RESOURCES || process->thread_list == nullptr)
+        return EINVAL;
+    entries.ensure(limit);
+    if (entries.capacity() < limit)
+        return ENOMEM;
+
+    u64 cursor = after_tid;
+    uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+    auto &list = *(thread_list_t *)process->thread_list;
+    while (entries.size() < limit)
+    {
+        thread_t *selected = nullptr;
+        for (auto *candidate : list)
+        {
+            if (candidate != nullptr && candidate->tid > cursor &&
+                (selected == nullptr || candidate->tid < selected->tid))
+                selected = candidate;
+        }
+        if (selected == nullptr)
+            break;
+
+        thread_snapshot_entry snapshot;
+        snapshot.tid = selected->tid;
+        snapshot.state = selected->state;
+        snapshot.attributes = selected->attributes.load();
+        snapshot.cpu_id = selected->cpuid;
+        snapshot.static_priority = selected->static_priority;
+        snapshot.dynamic_priority = selected->dynamic_priority;
+        snapshot.user_time_us = selected->statistics.user_time;
+        snapshot.system_time_us = selected->statistics.sys_time;
+        memcpy(snapshot.name, selected->name, sizeof(snapshot.name));
+        entries.push_back(snapshot);
+        cursor = selected->tid;
+    }
+
+    if (entries.size() == limit)
+    {
+        for (auto *candidate : list)
+        {
+            if (candidate != nullptr && candidate->tid > cursor)
+            {
+                next_tid = cursor;
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+void get_process_memory_accounting(const process_t *process, memory_accounting_t &accounting)
+{
+    accounting = {};
+    if (process == nullptr)
+        return;
+
+    accounting.process_count = 1;
+    if (process->mm_info != nullptr)
+    {
+        const auto vm_status = reinterpret_cast<mm_info_t *>(process->mm_info)->status();
+        accounting.vma_count = vm_status.vma_count;
+        accounting.virtual_pages = vm_status.virtual_pages;
+        accounting.mapped_pages = vm_status.mapped_pages;
+        accounting.rss_pages = vm_status.rss_pages;
+        accounting.private_pages = vm_status.private_pages;
+        accounting.shared_pages = vm_status.shared_pages;
+        accounting.committed_pages = vm_status.committed_pages;
+        accounting.anonymous_pages = vm_status.anonymous_pages;
+        accounting.file_cache_pages = vm_status.file_cache_pages;
+        accounting.page_faults = vm_status.page_faults;
+        accounting.peak_rss_pages = vm_status.peak_rss_pages;
+    }
+
+    auto *mutable_process = const_cast<process_t *>(process);
+    uctx::RawSpinLockUninterruptibleContext guard(mutable_process->thread_list_lock);
+    accounting.user_time_us = process->statistics.user_time;
+    accounting.system_time_us = process->statistics.sys_time;
+    const auto &threads = *(thread_list_t *)process->thread_list;
+    for (auto *thread : threads)
+    {
+        accounting.thread_count++;
+        if (thread->state != thread_state::destroy)
+        {
+            accounting.live_thread_count++;
+            accounting.user_time_us += thread->statistics.user_time;
+            accounting.system_time_us += thread->statistics.sys_time;
+        }
+    }
+    accounting.kernel_stack_pages = accounting.thread_count * (memory::kernel_stack_size / memory::page_size);
+}
+
+void get_system_memory_accounting(memory_accounting_t &accounting)
+{
+    accounting = {};
+    if (global_process_map == nullptr)
+        return;
+
+    uctx::RawSpinLockUninterruptibleContext guard(process_list_lock);
+    for (auto item : *global_process_map)
+    {
+        if (item.value == nullptr)
+            continue;
+
+        memory_accounting_t process_accounting;
+        get_process_memory_accounting(item.value, process_accounting);
+        accounting.process_count += process_accounting.process_count;
+        accounting.thread_count += process_accounting.thread_count;
+        accounting.live_thread_count += process_accounting.live_thread_count;
+        if ((item.value->attributes.load() & process_attributes::userspace) == 0)
+            continue;
+        accounting.vma_count += process_accounting.vma_count;
+        accounting.virtual_pages += process_accounting.virtual_pages;
+        accounting.mapped_pages += process_accounting.mapped_pages;
+        accounting.rss_pages += process_accounting.rss_pages;
+        accounting.private_pages += process_accounting.private_pages;
+        accounting.shared_pages += process_accounting.shared_pages;
+        accounting.committed_pages += process_accounting.committed_pages;
+        accounting.anonymous_pages += process_accounting.anonymous_pages;
+        accounting.file_cache_pages += process_accounting.file_cache_pages;
+        accounting.kernel_stack_pages += process_accounting.kernel_stack_pages;
+        accounting.user_stack_pages += process_accounting.user_stack_pages;
+        accounting.page_faults += process_accounting.page_faults;
+        accounting.peak_rss_pages += process_accounting.peak_rss_pages;
+        accounting.user_time_us += process_accounting.user_time_us;
+        accounting.system_time_us += process_accounting.system_time_us;
+    }
 }
 
 void switch_thread(thread_t *old, thread_t *new_task)

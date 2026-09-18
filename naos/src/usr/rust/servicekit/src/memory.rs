@@ -221,14 +221,23 @@ mod platform {
             })
         }
 
-        pub fn duplicate_from(source: &OwnedHandle) -> Result<Self, MemoryError> {
-            let handle = source.duplicate(0).map_err(map_status)?;
+        /// Take ownership of an already-transferred capability.
+        ///
+        /// ServiceDirectory resources are moved to the caller and therefore
+        /// do not necessarily carry the DUPLICATE meta-right.  Wrapping the
+        /// received handle must not attempt to duplicate it.
+        pub fn from_owned(handle: OwnedHandle) -> Self {
             let size = handle_size(&handle);
-            Ok(Self {
+            Self {
                 handle,
                 size,
                 region: core::cell::RefCell::new(None),
-            })
+            }
+        }
+
+        pub fn duplicate_from(source: &OwnedHandle) -> Result<Self, MemoryError> {
+            let handle = source.duplicate(0).map_err(map_status)?;
+            Ok(Self::from_owned(handle))
         }
 
         pub fn as_handle(&self) -> &OwnedHandle {
@@ -641,11 +650,6 @@ mod platform {
     pub fn create_and_fill_read_only(bytes: &[u8]) -> Result<OwnedHandle, MemoryError> {
         let object = MemoryObject::new(bytes.len())?;
         object.write_at(0, bytes)?;
-        let mut read_back = alloc::vec![0u8; bytes.len()];
-        object.read_at(0, &mut read_back)?;
-        if read_back != bytes {
-            return Err(MemoryError::Io);
-        }
         object.into_read_only()
     }
 

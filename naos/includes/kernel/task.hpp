@@ -68,11 +68,49 @@ enum attributes : flag_t
 };
 } // namespace process_attributes
 
+struct statistics_t
+{
+    // CPU accounting is expressed in monotonic microseconds, matching the
+    // Process wait ABI and POSIX timeval precision.
+    u64 user_time = 0;
+    u64 iowait_time = 0;
+    u64 sys_time = 0;
+    u64 intr_time = 0;
+    u64 soft_intr_time = 0;
+};
+
+struct memory_accounting_t
+{
+    u64 process_count = 0;
+    u64 thread_count = 0;
+    u64 live_thread_count = 0;
+    u64 vma_count = 0;
+    u64 virtual_pages = 0;
+    u64 mapped_pages = 0;
+    u64 rss_pages = 0;
+    u64 private_pages = 0;
+    u64 shared_pages = 0;
+    u64 committed_pages = 0;
+    u64 anonymous_pages = 0;
+    u64 file_cache_pages = 0;
+    u64 kernel_stack_pages = 0;
+    u64 user_stack_pages = 0;
+    u64 page_faults = 0;
+    u64 peak_rss_pages = 0;
+    u64 user_time_us = 0;
+    u64 system_time_us = 0;
+};
+
 /// The process struct
 struct process_t
 {
     process_id pid;
-    char name[13]{};
+    char name[32]{};
+    /// NUL-terminated argv joined with single spaces. This is dynamically
+    /// sized because Process.get_command_line writes into an external
+    /// MemoryObject instead of placing a fixed array in ProcessStatus.
+    freelibcxx::vector<byte> command_line;
+    lock::spinlock_t command_line_lock;
     std::atomic_uint64_t attributes;
     process_id parent_pid;     ///< The parent process id
     void *mm_info;             ///< Memory map infomation
@@ -110,6 +148,7 @@ struct process_t
 
     thread_t *main_thread;
     u64 ret_val;
+    statistics_t statistics{};
 
     lock::spinlock_t thread_list_lock;
     void *thread_list; ///< The threads belong to process
@@ -157,6 +196,12 @@ class process_object final : public kobject
     process_t *process_;
 };
 
+struct process_snapshot_entry
+{
+    process_id pid = 0;
+    khandle object;
+};
+
 enum class thread_state : u8
 {
     ready = 0, ///< Can schedule
@@ -164,6 +209,19 @@ enum class thread_state : u8
     stop,      ///< Can't reschedule
     destroy,
     sched_switch_to_ready, ///< the task is interrupted by realtime task or switch to next scheduler
+};
+
+struct thread_snapshot_entry
+{
+    thread_id tid = 0;
+    thread_state state{};
+    flag_t attributes = 0;
+    u32 cpu_id = 0;
+    u8 static_priority = 0;
+    i8 dynamic_priority = 0;
+    u64 user_time_us = 0;
+    u64 system_time_us = 0;
+    char name[32]{};
 };
 
 namespace thread_attributes
@@ -197,15 +255,6 @@ struct preempt_t
     }
 };
 
-struct statistics_t
-{
-    u64 user_time;
-    u64 iowait_time;
-    u64 sys_time;
-    u64 intr_time;
-    u64 soft_intr_time;
-};
-
 struct cpu_mask_t
 {
     u64 mask;
@@ -225,6 +274,7 @@ struct thread_t
     volatile thread_state state;
     std::atomic_ulong attributes;
     thread_id tid;
+    char name[32]{};
     process_t *process;
     scheduler::scheduler *scheduler;
     void *schedule_data;
@@ -363,19 +413,23 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
 
 int fork();
 
-int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
-           thread_start_func start_func, char *const argv[], char *const envp[]);
+int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na_handle_t executable_handle,
+           const char *path, thread_start_func start_func, char *const argv[], char *const envp[]);
 
 NoReturn void do_exit(i64 value);
 
 bool do_sleep(timeclock::microsecond_t duration);
 
-i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid);
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
+                          statistics_t &statistics);
+i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
+                          statistics_t &statistics,
                           freelibcxx::function_ref<bool()> interrupt,
                           freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
-i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid);
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
+                        statistics_t &statistics);
+i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
+                        statistics_t &statistics,
                         freelibcxx::function_ref<bool()> interrupt,
                         freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
 i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object);
@@ -400,7 +454,23 @@ void stop_process(process_t *process, flag_t flags = 0);
 void continue_process(process_t *process, flag_t flags = 0);
 
 process_t *find_pid(process_id pid);
+/// Open a bounded, PID-ordered snapshot of process capabilities. The returned
+/// objects keep exited processes alive until the caller transfers or drops
+/// them; `next_pid` is zero when the page is complete.
+i64 open_process_snapshot(process_id after_pid, u64 limit,
+                          freelibcxx::vector<process_snapshot_entry> &entries, process_id &next_pid);
+
+i64 open_thread_snapshot(process_t *process, thread_id after_tid, u64 limit,
+                         freelibcxx::vector<thread_snapshot_entry> &entries, thread_id &next_tid);
+
+na_status_t read_process_command_line(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
+                                      u64 &actual_bytes, u64 &required_bytes);
+na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
+                              u64 &actual_bytes, u64 &required_bytes);
 thread_t *find_tid(process_t *process, thread_id tid);
+
+void get_process_memory_accounting(const process_t *process, memory_accounting_t &accounting);
+void get_system_memory_accounting(memory_accounting_t &accounting);
 
 /// Create a new session for a process and make it the session and process-group
 /// leader. Returns a negative kernel errno on failure, or the new session id.

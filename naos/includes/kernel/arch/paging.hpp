@@ -216,6 +216,11 @@ enum
 };
 }
 
+struct user_mapping_statistics
+{
+    u64 mapped_pages = 0;
+};
+
 class page_table_t
 {
     struct index_t
@@ -309,6 +314,10 @@ class page_table_t
     void clone_readonly_to(void *virt_start, size_t pages, page_table_t *to);
 
     freelibcxx::optional<phy_addr_t> get_map(void *virt_start);
+
+    /// Count present user mappings in the range without walking absent
+    /// address-space branches. Aliased physical frames count once per map.
+    user_mapping_statistics user_mappings(u64 start, u64 end);
 
   private:
     void ensure(int pml4e_index, int pdpe_index, int pde_index, u64 flags, u64 actions);

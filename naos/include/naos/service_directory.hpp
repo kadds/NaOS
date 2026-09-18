@@ -16,6 +16,7 @@ extern "C" {
 #define NAOS_SERVICE_BOOT_MODULE_ROOTFSD "naos://service/boot/module/rootfsd/0"
 #define NAOS_SERVICE_BOOT_MODULE_INIT "naos://service/boot/module/init/0"
 #define NAOS_SERVICE_BOOT_ROOT_IMAGE "naos://service/boot/root-image/0"
+#define NAOS_SERVICE_SYSTEM_STATUS "naos://service/system/status/0"
 
 /* Registers and consumes handle on success; the handle remains owned by the caller on failure. */
 int naos_service_register_handle(const char *uri, na_handle_t handle);

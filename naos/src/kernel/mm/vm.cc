@@ -30,6 +30,7 @@ irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *in
     if (thread != nullptr)
     {
         auto info = (info_t *)thread->process->mm_info;
+        info->record_page_fault();
 
         if (is_kernel_space_pointer(extra_data))
         {
@@ -64,6 +65,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
             KLOG_WARN("null pointer access pid {} tid {}", thread->process->pid, thread->tid);
         }
         auto info = (info_t *)thread->process->mm_info;
+        info->record_page_fault();
 
         if (is_kernel_space_pointer(extra_data))
         {
@@ -77,14 +79,21 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
             info = (info_t *)memory::kernel_vm_info;
         }
 
-        auto vm = info->vma().get_vm_area(extra_data);
-        if (vm != nullptr)
+        // Keep the VMA read lock across the lookup and the fault expansion.
+        // get_vm_area() returns a raw node pointer after releasing its lock;
+        // partial unmap can replace that node while expand() is waiting for
+        // paging_spin_, leaving the page-fault path with a stale VMA.
+        uctx::RawReadLockUninterruptibleContext vma_context(info->vma().get_lock());
+        auto &vma_list = info->vma().get_list();
+        vm_t lookup(extra_data, extra_data, 0);
+        auto vm_it = vma_list.upper_find(lookup);
+        if (vm_it != vma_list.end() && vm_it->start <= extra_data && vm_it->end > extra_data)
         {
             // if (vm->flags & flags::cow) {
             //     return irq::request_result::no_handled;
             // }
             u64 alignment_page = memory::align_down(extra_data, page_size);
-            if (!info->expand(vm->method, alignment_page, extra_data, vm))
+            if (!info->expand(vm_it->method, alignment_page, extra_data, &vm_it))
             {
                 return irq::request_result::no_handled;
             }
@@ -95,7 +104,7 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
         {
             KLOG_INFO("vm area not found {} at process {} by {}", log::hex(extra_data), thread->process->pid,
                       log::hex(inter->at));
-            for (auto item : info->vma().get_list())
+            for (auto item : vma_list)
             {
                 KLOG_WARN("{}-{} {}", log::hex(item.start), log::hex(item.end), log::hex(item.flags));
             }
@@ -635,17 +644,21 @@ const vm_t *info_t::map_memory_object(u64 start, khandle backing, naos::data_pla
     const bool shared = (page_ext_attr & flags::shared) != 0;
     // SHARED mappings see each other's writes, so the object's pages must be
     // the mapping target rather than per-process private pages.  The object
-    // commits to page frames once, on the first such mapping.  The mapping
-    // only qualifies when the object's pages cover the entire mapped range;
-    // otherwise the tail has no frame to alias.
+    // commits to page frames once, on the first such mapping.  A logical
+    // object or request may end in the middle of a page; the page cache still
+    // owns that tail frame, while file_length prevents access beyond the
+    // logical extent.
     bool pages_shared = false;
     if (shared)
     {
         const auto publish_status = object->publish_shared_pages();
         if (publish_status != NA_STATUS_OK && publish_status != NA_STATUS_NOT_SUPPORTED)
             return nullptr;
-        pages_shared = data_offset == 0 && data_length == map_length && (map_length & (memory::page_size - 1)) == 0 &&
-                       object->page_backed() && map_length <= object->size() - object_offset;
+        const u64 object_span = object->size() - object_offset;
+        const u64 object_map_length =
+            (object_span + memory::page_size - 1) & ~(memory::page_size - 1);
+        pages_shared = data_offset == 0 && (object_offset & (memory::page_size - 1)) == 0 &&
+                       object->page_backed() && aligned_length <= object_map_length;
     }
     const u64 mapping_flags = flags::lock | flags::user_mode | flags::expand | flags::memory_object | page_ext_attr;
     auto *mapping = memory::KernelCommonAllocatorV->New<map_t>(std::move(backing), object, object_offset, data_offset,
@@ -673,8 +686,62 @@ bool info_t::unmap(u64 addr, u64 size)
     if ((vm->start & (memory::page_size - 1)) != 0 || vm->end <= vm->start ||
         (vm->end - vm->start) % memory::page_size != 0)
         return false;
-    if (size != vm->end - vm->start)
+    const u64 end = addr > std::numeric_limits<u64>::max() - size ? 0 : addr + size;
+    if (end == 0)
         return false;
+    if (size != vm->end - vm->start)
+    {
+        // MemoryObject mappings carry backing metadata and write-back state;
+        // keep their unmap operation whole until the mapping metadata can be
+        // split together with the VMA. Anonymous native mappings are safe to
+        // split and are used by the user-space allocators.
+        if ((vm->flags & flags::memory_object) != 0 || vm->method != page_fault_method::common)
+            return false;
+
+        // Keep the page-table and VMA mutation atomic with respect to page
+        // faults. The VMA remains present while the selected pages are
+        // removed, then is replaced by the surviving left/right ranges.
+        // Match page_fault_present()'s lock order: VMA first, then the page
+        // table. This prevents a page fault from waiting on paging_spin_ while
+        // an unmap waits for the VMA writer lock.
+        uctx::RawWriteLockUninterruptibleContext vma_context(vma_.get_lock());
+        uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+        bool found = false;
+        for (auto &item : vma_.get_list())
+        {
+            if (item.end <= addr || item.start >= end)
+                continue;
+            found = true;
+            if ((item.flags & flags::memory_object) != 0 || item.method != page_fault_method::common)
+                return false;
+        }
+        if (!found)
+            return false;
+
+        paging_.unmap(reinterpret_cast<void *>(addr), size / page_size, true);
+        while (true)
+        {
+            vm_t *overlap = nullptr;
+            for (auto &item : vma_.get_list())
+            {
+                if (item.end > addr && item.start < end)
+                {
+                    overlap = &item;
+                    break;
+                }
+            }
+            if (overlap == nullptr)
+                break;
+            const vm_t original = *overlap;
+            vma_.get_list().remove(*overlap);
+            if (original.start < addr)
+                vma_.get_list().insert(vm_t(original.start, addr, original.flags, original.method, original.user_data));
+            if (end < original.end)
+                vma_.get_list().insert(vm_t(end, original.end, original.flags, original.method, original.user_data));
+        }
+        arch::paging::page_table_t::reload();
+        return true;
+    }
     const u64 vm_start = vm->start;
     const u64 vm_pages = (vm->end - vm->start) / page_size;
     const flag_t vm_flags = vm->flags;
@@ -700,6 +767,50 @@ bool info_t::unmap(u64 addr, u64 size)
 
     arch::paging::page_table_t::reload();
     return true;
+}
+
+bool info_t::decommit(u64 addr, u64 size)
+{
+    if (size == 0 || (addr & (memory::page_size - 1)) != 0 || (size & (memory::page_size - 1)) != 0 ||
+        addr > std::numeric_limits<u64>::max() - size)
+        return false;
+    const u64 end = addr + size;
+
+    // Decommit is deliberately restricted to the anonymous VMA class.  An
+    // object mapping owns its backing/cache independently of this page table;
+    // treating it like anonymous storage would corrupt that ownership model.
+    uctx::RawReadLockUninterruptibleContext vma_context(vma_.get_lock());
+    vm_t lookup(addr, addr, 0);
+    auto item = vma_.get_list().upper_find(lookup);
+    if (item == vma_.get_list().end() || item->start > addr || item->end < end ||
+        item->method != page_fault_method::common || (item->flags & flags::memory_object) != 0)
+        return false;
+
+    // Keep the same VMA -> page-table lock order as page_fault_present().
+    // The VMA remains in place, so a concurrent fault will either see the
+    // old mapping or fault a new zero page after this operation.
+    uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+    paging_.unmap(reinterpret_cast<void *>(addr), size / memory::page_size, true);
+    arch::paging::page_table_t::reload();
+    return true;
+}
+
+bool info_t::commit(u64 addr, u64 size)
+{
+    if (size == 0 || (addr & (memory::page_size - 1)) != 0 || (size & (memory::page_size - 1)) != 0 ||
+        addr > std::numeric_limits<u64>::max() - size)
+        return false;
+    const u64 end = addr + size;
+
+    // There is no VMA mutation here.  The common anonymous fault handler is
+    // already the commit mechanism: an absent page is allocated and zeroed on
+    // first access.  Only accept a range wholly inside one such VMA so the
+    // syscall cannot turn an arbitrary address into a valid mapping.
+    uctx::RawReadLockUninterruptibleContext vma_context(vma_.get_lock());
+    vm_t lookup(addr, addr, 0);
+    auto item = vma_.get_list().upper_find(lookup);
+    return item != vma_.get_list().end() && item->start <= addr && item->end >= end &&
+           item->method == page_fault_method::common && (item->flags & flags::memory_object) == 0;
 }
 
 void info_t::share_to(process_id from_id, process_id to_id, info_t *info)
@@ -805,6 +916,50 @@ bool info_t::copy_at(u64 virt_addr)
         }
     }
     return false;
+}
+
+status_t info_t::status()
+{
+    status_t result{};
+    uctx::RawReadLockUninterruptibleContext vma_guard(vma_.get_lock());
+    uctx::RawSpinLockUninterruptibleContext paging_guard(paging_spin_);
+
+    for (auto &item : vma_.get_list())
+    {
+        if (item.end <= item.start)
+            continue;
+        result.vma_count++;
+        result.virtual_pages += (item.end - item.start) / memory::page_size;
+
+        const u64 mapped = paging_.user_mappings(item.start, item.end).mapped_pages;
+        result.mapped_pages += mapped;
+        if ((item.flags & flags::memory_object) != 0)
+        {
+            auto *mapping = reinterpret_cast<map_t *>(item.user_data);
+            if (mapping != nullptr && mapping->shared)
+            {
+                result.shared_pages += mapped;
+            }
+            else
+            {
+                result.anonymous_pages += mapped;
+            }
+        }
+        else
+        {
+            result.anonymous_pages += mapped;
+        }
+    }
+
+    result.rss_pages = result.mapped_pages;
+    result.private_pages = result.rss_pages > result.shared_pages ? result.rss_pages - result.shared_pages : 0;
+    result.committed_pages = result.rss_pages;
+    result.page_faults = page_faults_.load(std::memory_order_relaxed);
+    const u64 previous_peak = peak_rss_pages_.load(std::memory_order_relaxed);
+    if (result.rss_pages > previous_peak)
+        peak_rss_pages_.store(result.rss_pages, std::memory_order_relaxed);
+    result.peak_rss_pages = result.rss_pages > previous_peak ? result.rss_pages : previous_peak;
+    return result;
 }
 
 } // namespace memory::vm

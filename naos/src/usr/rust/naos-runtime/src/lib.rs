@@ -12,7 +12,7 @@ use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "alloc")]
-mod allocator;
+mod mimalloc;
 
 #[cfg(all(test, feature = "alloc"))]
 mod mimalloc_tests;
@@ -36,7 +36,7 @@ pub use thread::{
 #[cfg(feature = "alloc")]
 #[global_allocator]
 #[cfg(not(test))]
-static NAOS_ALLOCATOR: allocator::NativeAllocator = allocator::NativeAllocator::new();
+static NAOS_ALLOCATOR: mimalloc::MimallocAllocator = mimalloc::MimallocAllocator::new();
 
 #[cfg(all(feature = "alloc", not(test)))]
 use core::alloc::{GlobalAlloc, Layout};

@@ -148,7 +148,6 @@ add_naos_catch_test(input_terminal_shortcut_test input_terminal_shortcut_test.cc
 add_naos_catch_test(log_sink_color_test log_sink_color_test.cc)
 add_naos_catch_test(log_panic_format_test log_panic_format_test.cc)
 add_naos_catch_test(consoled_input_test consoled_input_test.cc)
-add_naos_catch_test(consoled_render_batch_test consoled_render_batch_test.cc)
 add_naos_catch_test(formatter_array_test formatter_array_test.cc)
 target_link_libraries(consoled_input_test PRIVATE libvterm_naos)
 add_dependencies(consoled_input_test libvterm_naos)

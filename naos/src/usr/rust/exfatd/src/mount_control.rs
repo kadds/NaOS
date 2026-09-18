@@ -1817,16 +1817,45 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
             return Err(fail(FsError::new(Errno::EFbig)));
         }
         let length = usize::try_from(metadata.size).map_err(|_| fail(FsError::new(Errno::EFbig)))?;
-        let mut snapshot = vec![0u8; length];
-        let count = self
-            .service
-            .read_at(&description.path, 0, &mut snapshot)
-            .map_err(fail)?;
-        if count != length {
-            return Err(fail(FsError::new(Errno::EIo)));
-        }
-        let object = servicekit::memory::create_and_fill_read_only(&snapshot)
-            .map_err(|_| fail(FsError::new(Errno::EIo)))?;
+        #[cfg(target_os = "naos")]
+        let object = {
+            // Fill the final MemoryObject directly.  The old path held a
+            // complete file snapshot, then a second MemoryObject copy, and
+            // then a read-back verification buffer during every exec.
+            let object = servicekit::memory::MemoryObject::new(length)
+                .map_err(|_| fail(FsError::new(Errno::EIo)))?;
+            let mut mapping = servicekit::memory::map_write(object.as_handle(), length)
+                .map_err(|_| fail(FsError::new(Errno::EIo)))?;
+            let mut offset = 0usize;
+            while offset < length {
+                let end = core::cmp::min(offset.saturating_add(64 * 1024), length);
+                let count = self
+                    .service
+                    .read_at(&description.path, offset as u64, &mut mapping.as_mut_slice()[offset..end])
+                    .map_err(fail)?;
+                if count != end - offset {
+                    return Err(fail(FsError::new(Errno::EIo)));
+                }
+                offset = end;
+            }
+            drop(mapping);
+            object
+                .into_read_only()
+                .map_err(|_| fail(FsError::new(Errno::EIo)))?
+        };
+        #[cfg(not(target_os = "naos"))]
+        let object = {
+            let mut snapshot = vec![0u8; length];
+            let count = self
+                .service
+                .read_at(&description.path, 0, &mut snapshot)
+                .map_err(fail)?;
+            if count != length {
+                return Err(fail(FsError::new(Errno::EIo)));
+            }
+            servicekit::memory::create_and_fill_read_only(&snapshot)
+                .map_err(|_| fail(FsError::new(Errno::EIo)))?
+        };
         let mut resources = ResourceTable::new();
         let slot = resources
             .push_move(object)

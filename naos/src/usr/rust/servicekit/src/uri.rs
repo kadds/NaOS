@@ -14,6 +14,7 @@ pub const BOOT_MODULE_ROOTFSD: &str = "naos://service/boot/module/rootfsd/0";
 pub const BOOT_MODULE_INIT: &str = "naos://service/boot/module/init/0";
 /// Kernel-published one-shot prepared block image consumed by blockd.
 pub const BOOT_ROOT_IMAGE: &str = "naos://service/boot/root-image/0";
+pub const SYSTEM_STATUS: &str = "naos://service/system/status/0";
 /// Kernel-owned terminal-driver factory.
 pub const TERMINAL_DRIVER_FACTORY: &str = "naos://service/terminal/driver/0";
 /// Kernel-owned console frontend capability.

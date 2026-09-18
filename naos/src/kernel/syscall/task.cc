@@ -587,10 +587,14 @@ na_status_t process_exec(const na_process_exec_frame_t *frame)
 
         handle_t<naos::data_plane::memory_object> object(entry.object.get_control());
         khandle backing = entry.object;
+        // Successful exec never unwinds this syscall frame, so the copied
+        // lookup entry would otherwise keep one MemoryObject reference alive
+        // forever. The two explicit handles above now own the references
+        // needed by ELF loading and the VMA mappings.
+        entry.object.reset();
         arm_exec_bootstrap();
-        const auto result = task::execve(std::move(object), std::move(backing), path, before_user_thread, argv, envp);
-        if (result == 0)
-            process->resource.close_native(values.executable);
+        const auto result = task::execve(std::move(object), std::move(backing), values.executable, path,
+                                         before_user_thread, argv, envp);
         clear_exec_bootstrap_on_failure();
         return native_status_from_errno(result);
     }

@@ -1,5 +1,4 @@
 #include "key_input.hpp"
-#include "render_batch.hpp"
 #include "vga_font.hpp"
 
 #include <abi-bits/ioctls.h>
@@ -986,7 +985,6 @@ int main(int argc, char **argv)
     scrollback_store scrollback;
     renderer render_state{rows, cols, pitch_pixels, backbuffer, false, {}, false, {}, &scrollback};
     bool framebuffer_enabled = true;
-    consoled::render_batch terminal_render_batch;
 
     VTerm *vt = vterm_new(rows, cols);
     if (vt == nullptr)
@@ -1009,15 +1007,9 @@ int main(int argc, char **argv)
     add_damage(render_state, {0, rows, 0, cols});
     render_damage(screen, render_state, scanout);
 
-    const auto request_terminal_render = [&]() {
+    const auto render_terminal = [&]() {
         if (framebuffer_enabled)
-            terminal_render_batch.request(monotonic_millis());
-    };
-    const auto render_terminal_if_due = [&]() {
-        if (!framebuffer_enabled || !terminal_render_batch.ready(monotonic_millis()))
-            return;
-        render_damage(screen, render_state, scanout);
-        terminal_render_batch.consume();
+            render_damage(screen, render_state, scanout);
     };
 
     na_handle_t master = NA_HANDLE_INVALID;
@@ -1203,7 +1195,6 @@ int main(int argc, char **argv)
         }
 
         constexpr std::uint64_t invalid_wait_index = static_cast<std::uint64_t>(-1);
-        render_terminal_if_due();
         na_handle_t wait_handles[4]{};
         na_epoll_event_t wait_registrations[4]{};
         na_epoll_event_t returned_events[4]{};
@@ -1269,16 +1260,6 @@ int main(int argc, char **argv)
         }
         else
             deadline.tv_sec += 2;
-        if (terminal_render_batch.pending)
-        {
-            const auto now_ms = monotonic_millis();
-            const auto deadline_ms = static_cast<std::uint64_t>(deadline.tv_sec) * 1000 + deadline.tv_nsec / 1'000'000;
-            if (terminal_render_batch.due_ms > now_ms && terminal_render_batch.due_ms < deadline_ms)
-            {
-                deadline.tv_sec = static_cast<time_t>(terminal_render_batch.due_ms / 1000);
-                deadline.tv_nsec = static_cast<long>((terminal_render_batch.due_ms % 1000) * 1'000'000);
-            }
-        }
         na_handle_t epoll = NA_HANDLE_INVALID;
         if (loop.create(epoll) != NA_STATUS_OK)
             break;
@@ -1351,7 +1332,7 @@ int main(int argc, char **argv)
             {
                 vterm_input_write(vt, reinterpret_cast<const char *>(buffer), read_size);
                 vterm_screen_flush_damage(screen);
-                request_terminal_render();
+                render_terminal();
             }
             if (kind == master_async_kind::read && read_size == 0 && !hangup)
             {
@@ -1414,7 +1395,7 @@ int main(int argc, char **argv)
                     {
                         vterm_input_write(vt, reinterpret_cast<const char *>(buffer), static_cast<std::size_t>(n));
                         vterm_screen_flush_damage(screen);
-                        request_terminal_render();
+                        render_terminal();
                         continue;
                     }
                     if (n < 0 && errno == EAGAIN)

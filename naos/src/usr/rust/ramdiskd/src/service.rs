@@ -14,10 +14,13 @@ use ramdiskd::core::{
     DeviceLease, RamDisk, BLOCK_SIZE, MAX_IN_FLIGHT, MAX_TRANSFER_BLOCKS, RIGHT_BLOCK_DISCARD,
     RIGHT_BLOCK_FLUSH, RIGHT_BLOCK_INSPECT, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
 };
-use servicekit::boot::{self, BootError};
+use servicekit::boot;
+#[cfg(target_os = "linux")]
+use servicekit::boot::BootError;
 use servicekit::server::{Request, Response, ServeHandler, Server, ServerError};
 use servicekit::Context;
 
+#[cfg(target_os = "linux")]
 const DEFAULT_BYTES: usize = 69_632 * 512;
 const WIRE_BYTES: usize = 65_536;
 const ERR_EINVAL: i64 = -22;
@@ -695,6 +698,38 @@ async fn service(context: Context) -> i64 {
     // and the transport refuses beyond it, so a client can size a pipeline
     // against a depth the service will actually honour.
     server.set_max_in_flight(u32::try_from(MAX_IN_FLIGHT).unwrap_or(1));
+    #[cfg(target_os = "naos")]
+    let disk = {
+        let image = match boot::open_module(&context, servicekit::uri::BOOT_ROOT_IMAGE) {
+            Ok(image) => image,
+            Err(error) => {
+                log::error!("prepared root image unavailable: {error:?}");
+                return 1;
+            }
+        };
+        let size = match image.size() {
+            Some(size) => match usize::try_from(size) {
+                Ok(size) => size,
+                Err(_) => {
+                    log::error!("prepared root image size is not representable");
+                    return 1;
+                }
+            },
+            None => {
+                log::error!("prepared root image size is unavailable");
+                return 1;
+            }
+        };
+        match RamDisk::from_memory(image.into_handle(), size, false) {
+            Some(disk) => disk,
+            None => {
+                log::error!("prepared root image is not block-aligned or is empty");
+                return 1;
+            }
+        }
+    };
+
+    #[cfg(target_os = "linux")]
     let disk = match boot::read_module(&context, servicekit::uri::BOOT_ROOT_IMAGE) {
         Ok(image) => match RamDisk::from_bytes(image, false) {
             Some(disk) => disk,

@@ -62,6 +62,21 @@ fn formats_in_memory_volume_and_mounts() {
 }
 
 #[test]
+fn lookup_accepts_dot_paths() {
+    let worker = FatWorker::mount(formatted_device()).unwrap();
+
+    assert_eq!(
+        worker.lookup(".").unwrap().kind,
+        exfatd::worker::NodeKind::Dir
+    );
+    assert_eq!(
+        worker.lookup("./").unwrap().kind,
+        exfatd::worker::NodeKind::Dir
+    );
+    assert!(worker.open_dir_cursor(".").is_ok());
+}
+
+#[test]
 fn create_write_rename_unlink_cycle() {
     let worker = FatWorker::mount(formatted_device()).unwrap();
 

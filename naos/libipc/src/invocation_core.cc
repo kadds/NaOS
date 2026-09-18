@@ -407,14 +407,36 @@ bool invocation::complete_reply(const std::uint8_t *bytes, std::uint64_t byte_co
         return false;
     if (byte_count != 0)
         std::memcpy(copy, bytes, byte_count);
+
+    resource *owned_resources = nullptr;
+    if (resource_count != 0)
+    {
+        owned_resources = static_cast<resource *>(
+            control_allocator_.allocate(sizeof(resource) * resource_count, alignof(resource)));
+        if (owned_resources == nullptr)
+        {
+            if (copy != nullptr)
+                payload_allocator_.deallocate(copy, byte_count, alignof(std::uint8_t));
+            return false;
+        }
+        for (std::size_t index = 0; index < resource_count; index++)
+            new (owned_resources + index) resource(std::move(resources[index]));
+    }
+
     bool published = false;
     {
         lock_guard guard(lock_);
-        published = publish_locked(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, copy, byte_count, resources,
+        published = publish_locked(NA_EXECUTION_NONE, NA_OUTCOME_REASON_NONE, copy, byte_count, owned_resources,
                                    resource_count, protocol_error);
     }
     if (!published)
     {
+        for (std::size_t index = 0; index < resource_count; index++)
+            resources[index] = std::move(owned_resources[index]);
+        for (std::size_t index = 0; index < resource_count; index++)
+            owned_resources[index].~resource();
+        if (owned_resources != nullptr)
+            control_allocator_.deallocate(owned_resources, sizeof(resource) * resource_count, alignof(resource));
         if (copy != nullptr)
             payload_allocator_.deallocate(copy, byte_count, alignof(std::uint8_t));
         return false;

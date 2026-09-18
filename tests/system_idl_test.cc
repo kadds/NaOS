@@ -13,7 +13,7 @@
 #include <naos/generated/system/Process.hpp>
 #include <naos/generated/system/ServiceDirectory.hpp>
 #include <naos/generated/system/Stream.hpp>
-#include <naos/generated/system/SystemMonitor.hpp>
+#include <naos/generated/system/SystemStatus.hpp>
 #include <naos/generated/system/TerminalDriverControl.hpp>
 #include <naos/generated/system/TerminalDriverFactory.hpp>
 #include <naos/generated/system/TerminalJobControl.hpp>
@@ -108,9 +108,12 @@ static_assert(NA_METHOD_PROCESS_SET_PROCESS_GROUP == 7);
 static_assert(NA_METHOD_PROCESS_GET_SESSION == 8);
 static_assert(NA_METHOD_PROCESS_GET_CONTROLLING_TERMINAL == 9);
 static_assert(NA_METHOD_PROCESS_GET_STATUS == 11);
-static_assert(NA_SCOPE_SYSTEM_MONITOR == 24);
-static_assert(NA_METHOD_SYSTEM_MONITOR_GET == 1);
-static_assert(NA_METHOD_SYSTEM_MONITOR_LIST_PROCESSES == 2);
+static_assert(NA_METHOD_PROCESS_GET_COMMAND_LINE == 12);
+static_assert(NA_METHOD_PROCESS_LIST_THREADS == 13);
+static_assert(NA_SCOPE_SYSTEM_STATUS == 24);
+static_assert(NA_METHOD_SYSTEM_STATUS_GET == 1);
+static_assert(NA_METHOD_SYSTEM_STATUS_LIST_PROCESSES == 2);
+static_assert(NA_SYSTEM_STATUS_FLAG_HAS_SWAP == 1);
 static_assert(NA_METHOD_MEMORY_OBJECT_GET_INFO == 1);
 static_assert(NA_METHOD_MEMORY_OBJECT_READ == 2);
 static_assert(NA_METHOD_MEMORY_OBJECT_WRITE == 3);
@@ -118,7 +121,7 @@ static_assert(NA_METHOD_FRAMEBUFFER_GET == 1);
 
 TEST_CASE("generated system IDL contract", "[system-idl]")
 {
-    naos::system::SystemMonitor::SystemStatus system_status{};
+    naos::system::SystemStatus::SystemStatus system_status{};
     system_status.page_size = 4096;
     system_status.physical_pages = 32768;
     system_status.usable_pages = 30000;
@@ -130,12 +133,75 @@ TEST_CASE("generated system IDL contract", "[system-idl]")
     REQUIRE(system_status.flags == 0);
     REQUIRE(system_status.free_pages + system_status.reclaimable_pages == 16000);
 
+    naos::system::SystemStatus::list_processes_response process_page{};
+    process_page.next_after_pid = 0;
+    process_page.processes.count = 1;
+    process_page.processes.data = process_page.processes_storage.data();
+    process_page.processes.data[0].pid = 42;
+    process_page.processes.data[0].process.value = 0;
+    std::uint8_t process_page_wire[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
+    std::uint64_t process_page_written = 0;
+    REQUIRE(naos::system::SystemStatus::encode_list_processes_response(
+        process_page_wire, sizeof(process_page_wire), process_page, process_page_written));
+    naos::system::SystemStatus::list_processes_response decoded_process_page{};
+    REQUIRE(naos::system::SystemStatus::decode_list_processes_response(
+        process_page_wire, process_page_written, decoded_process_page));
+    REQUIRE(decoded_process_page.processes.count == 1);
+    REQUIRE(decoded_process_page.processes.data[0].pid == 42);
+    REQUIRE(decoded_process_page.processes.data[0].process.value == 0);
+
     naos::system::Process::ProcessStatus process_status{};
     process_status.page_size = system_status.page_size;
     process_status.virtual_pages = 256;
     process_status.rss_pages = 64;
     process_status.shared_pages = 8;
     REQUIRE(process_status.rss_pages >= process_status.shared_pages);
+
+    std::uint8_t buffer[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
+    std::uint64_t written = 0;
+
+    naos::system::Process::get_command_line_request command_line_request{};
+    command_line_request.size = 4096;
+    command_line_request.buffer.value = 0;
+    REQUIRE(naos::system::Process::encode_get_command_line_request(
+        buffer, sizeof(buffer), command_line_request, written));
+    naos::system::Process::get_command_line_request decoded_command_line_request{};
+    REQUIRE(naos::system::Process::decode_get_command_line_request(
+        buffer, written, decoded_command_line_request));
+    REQUIRE(decoded_command_line_request.size == 4096);
+    REQUIRE(decoded_command_line_request.buffer.value == 0);
+
+    naos::system::Process::get_command_line_response command_line_response{};
+    command_line_response.actual_bytes = 23;
+    command_line_response.required_bytes = 23;
+    REQUIRE(naos::system::Process::encode_get_command_line_response(
+        buffer, sizeof(buffer), command_line_response, written));
+    naos::system::Process::get_command_line_response decoded_command_line_response{};
+    REQUIRE(naos::system::Process::decode_get_command_line_response(
+        buffer, written, decoded_command_line_response));
+    REQUIRE(decoded_command_line_response.actual_bytes == 23);
+    REQUIRE(decoded_command_line_response.required_bytes == 23);
+
+    naos::system::Process::list_threads_response thread_page{};
+    thread_page.next_after_tid = 0;
+    thread_page.threads.count = 1;
+    thread_page.threads.data = thread_page.threads_storage.data();
+    thread_page.threads.data[0].tid = 7;
+    thread_page.threads.data[0].state = 1;
+    thread_page.threads.data[0].attributes = 16;
+    thread_page.threads.data[0].cpu_id = 0;
+    thread_page.threads.data[0].static_priority = 125;
+    thread_page.threads.data[0].dynamic_priority = -2;
+    thread_page.threads.data[0].user_time_us = 10;
+    thread_page.threads.data[0].system_time_us = 20;
+    REQUIRE(naos::system::Process::encode_list_threads_response(
+        buffer, sizeof(buffer), thread_page, written));
+    naos::system::Process::list_threads_response decoded_thread_page{};
+    REQUIRE(naos::system::Process::decode_list_threads_response(
+        buffer, written, decoded_thread_page));
+    REQUIRE(decoded_thread_page.threads.count == 1);
+    REQUIRE(decoded_thread_page.threads.data[0].tid == 7);
+    REQUIRE(decoded_thread_page.threads.data[0].dynamic_priority == -2);
 
     // Terminal endpoints must carry method-level authority, rather than
     // relying on ttyd's handler to rediscover O_RDONLY/O_WRONLY.  The
@@ -163,6 +229,8 @@ TEST_CASE("generated system IDL contract", "[system-idl]")
                   (NA_PROTOCOL_RIGHT_INVOKE | NA_BLOCK_DEVICE_FACTORY_RIGHT_ACQUIRE));
     static_assert(naos::system::Framebuffer::descriptor.method_rights[0] ==
                   (NA_PROTOCOL_RIGHT_INVOKE | NA_DISPLAY_RIGHT_WRITER));
+    static_assert(naos::system::SystemStatus::descriptor.method_rights[0] ==
+                  (NA_PROTOCOL_RIGHT_INVOKE | NA_SYSTEM_STATUS_RIGHT_INSPECT));
 
     // Generated enum decoders are closed: an unknown wire value must not be
     // interpreted as the first action by a handler switch.
@@ -170,9 +238,6 @@ TEST_CASE("generated system IDL contract", "[system-idl]")
     naos::system::TerminalDriverControl::raise_foreground_request invalid_driver_request{};
     REQUIRE(!naos::system::TerminalDriverControl::decode_raise_foreground_request(
         unknown_driver_action, sizeof(unknown_driver_action), invalid_driver_request));
-
-    std::uint8_t buffer[NA_CHANNEL_MAX_MESSAGE_BYTES]{};
-    std::uint64_t written = 0;
 
     const std::uint8_t payload[] = {1, 2, 3};
     // Stream payloads travel through the caller's MemoryObject region; the
@@ -274,7 +339,7 @@ TEST_CASE("generated system IDL contract", "[system-idl]")
     wait_response.status = -1;
     wait_response.pid = 42;
     REQUIRE(naos::system::Process::encode_wait_response(buffer, sizeof(buffer), wait_response, written));
-    REQUIRE(written == 16);
+    REQUIRE(written == 32);
     naos::system::Process::wait_response decoded_wait{};
     REQUIRE(naos::system::Process::decode_wait_response(buffer, written, decoded_wait));
     REQUIRE(decoded_wait.status == -1);

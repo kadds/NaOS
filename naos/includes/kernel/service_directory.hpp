@@ -23,6 +23,7 @@ inline constexpr char framebuffer_uri[] = NAOS_SERVICE_FRAMEBUFFER;
 inline constexpr char boot_module_rootfsd_uri[] = NAOS_SERVICE_BOOT_MODULE_ROOTFSD;
 inline constexpr char boot_module_init_uri[] = NAOS_SERVICE_BOOT_MODULE_INIT;
 inline constexpr char boot_root_image_uri[] = NAOS_SERVICE_BOOT_ROOT_IMAGE;
+inline constexpr char system_status_uri[] = NAOS_SERVICE_SYSTEM_STATUS;
 
 class directory final : public kobject
 {

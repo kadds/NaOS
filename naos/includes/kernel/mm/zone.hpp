@@ -18,6 +18,7 @@ class zone
     void tag_alloc(phy_addr_t start, phy_addr_t end);
 
     u64 free_pages() const;
+    u64 reserved_pages() const { return reserved_page_count; }
     u64 total_pages() const { return page_count; }
 
     phy_addr_t range_beg() const { return start; }
@@ -42,6 +43,7 @@ class zone
     phy_addr_t end;
 
     u64 page_count;
+    u64 reserved_page_count = 0;
     page *page_array;
     void *impl;
 
@@ -85,6 +87,7 @@ class zones : public freelibcxx::Allocator
     u64 total_pages() const;
 
     u64 free_pages() const;
+    u64 reserved_pages() const;
 
     int high_memory_index() const { return high_memory_index_; }
 

@@ -306,6 +306,18 @@ void timer_tick(timeclock::microsecond_t) noexcept
     constexpr bool automatic_migration_enabled = false;
     (void)timer::schedule_after(5000, timer::timer_handler::bind<&timer_tick>());
     thread_t *thd = current();
+    auto &load = cpu::current().edit_load_data();
+    const auto now = timer::get_high_resolution_time();
+    const auto delta = load.last_account_time == 0 ? 0 : now - load.last_account_time;
+    load.last_account_time = now;
+    if (delta != 0 && thd != nullptr && thd->process != nullptr &&
+        (thd->process->attributes.load() & process_attributes::userspace) != 0)
+    {
+        if (cpu::current().timer_was_kernel_space())
+            thd->statistics.sys_time += delta;
+        else
+            thd->statistics.user_time += delta;
+    }
 
     uctx::UninterruptibleContext icu;
 

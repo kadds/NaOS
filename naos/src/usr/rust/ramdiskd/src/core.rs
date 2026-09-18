@@ -13,6 +13,12 @@ use crate::lease::{ACQUIRE_FLAG_READ_ONLY, LeaseRange};
 use naos_idl::block_device as block_idl;
 use naos_idl::block_device_factory as factory_idl;
 
+#[cfg(target_os = "naos")]
+use naos_idl::OwnedHandle;
+
+#[cfg(target_os = "naos")]
+use servicekit::memory::map_read_at;
+
 pub const BLOCK_SIZE: u64 = 512;
 pub const MAX_TRANSFER_BLOCKS: u64 = 128;
 
@@ -118,6 +124,53 @@ impl BlockStore for RamStore {
     }
 }
 
+/// Read-only view over a kernel-published boot image.
+///
+/// The handle remains the storage owner. Each block request maps only its
+/// bounded transfer window and drops that mapping before returning, so the
+/// block service does not allocate a second resident copy of the complete
+/// root image.
+#[cfg(target_os = "naos")]
+pub struct MemoryStore {
+    handle: OwnedHandle,
+    bytes: usize,
+}
+
+#[cfg(target_os = "naos")]
+impl MemoryStore {
+    fn new(handle: OwnedHandle, bytes: usize) -> Option<Self> {
+        if bytes == 0 || bytes as u64 % BLOCK_SIZE != 0 {
+            return None;
+        }
+        Some(Self { handle, bytes })
+    }
+}
+
+#[cfg(target_os = "naos")]
+impl BlockStore for MemoryStore {
+    fn len(&self) -> usize {
+        self.bytes
+    }
+
+    fn read_at(&self, offset: usize, output: &mut [u8]) -> Result<(), i64> {
+        let end = offset.checked_add(output.len()).ok_or(-22)?;
+        if end > self.bytes {
+            return Err(-22);
+        }
+        let mapping = map_read_at(&self.handle, offset as u64, output.len()).map_err(|_| -5)?;
+        output.copy_from_slice(mapping.as_slice());
+        Ok(())
+    }
+
+    fn write_at(&mut self, _offset: usize, _input: &[u8]) -> Result<(), i64> {
+        Err(-30)
+    }
+
+    fn discard_at(&mut self, _offset: usize, _length: usize) -> Result<(), i64> {
+        Err(-30)
+    }
+}
+
 pub struct RamDisk {
     store: Box<dyn BlockStore>,
     read_only: bool,
@@ -137,6 +190,14 @@ impl RamDisk {
     pub fn from_bytes(bytes: Vec<u8>, read_only: bool) -> Option<Self> {
         Some(Self::with_store(
             Box::new(RamStore::from_bytes(bytes)?),
+            read_only,
+        ))
+    }
+
+    #[cfg(target_os = "naos")]
+    pub fn from_memory(handle: OwnedHandle, bytes: usize, read_only: bool) -> Option<Self> {
+        Some(Self::with_store(
+            Box::new(MemoryStore::new(handle, bytes)?),
             read_only,
         ))
     }

@@ -106,6 +106,14 @@ u64 zones::free_pages() const
     return ret;
 }
 
+u64 zones::reserved_pages() const
+{
+    u64 ret = 0;
+    for (int i = 0; i < active_zones(); i++)
+        ret += zone_array_[i].reserved_pages();
+    return ret;
+}
+
 zone *zones::which(phy_addr_t ptr)
 {
     int i = 0, j = active_zones();
@@ -190,7 +198,9 @@ void zone::tag_alloc(phy_addr_t start, phy_addr_t end)
     auto s = address_to_page(start) - page_array;
     auto e = address_to_page(end) - page_array;
     auto impl = reinterpret_cast<buddy_t *>(impl_ptr_);
+    const u64 free_before = impl->free_pages();
     impl->alloc_at(s, e - s);
+    reserved_page_count += free_before - impl->free_pages();
 }
 
 page *zone::page_end() const { return page_beg() + page_count; }

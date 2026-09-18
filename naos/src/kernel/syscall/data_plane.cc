@@ -29,13 +29,30 @@ na_status_t memory_map(na_memory_map_frame_t *frame)
     auto status = copy_in(frame, values);
     if (status != NA_STATUS_OK)
         return status;
+    constexpr u32 normal_flags = NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_EXEC | NA_MEMORY_MAP_SHARED;
+    constexpr u32 supported_flags = normal_flags | NA_MEMORY_MAP_COMMIT;
     if (values.struct_size != sizeof(values) ||
-        values.flags & ~(NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_EXEC | NA_MEMORY_MAP_SHARED) ||
+        values.flags & ~supported_flags ||
         (values.object == NA_HANDLE_INVALID && values.offset != 0) || values.length == 0 || values.address != 0 ||
         values.data_offset != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
         (values.hint != 0 && (!is_user_space_pointer(values.hint) || (values.hint & (memory::page_size - 1)) != 0)) ||
         values.length > NA_MEMORY_MAP_MAX_BYTES)
         return NA_STATUS_INVALID_ARGUMENT;
+
+    const bool commit = (values.flags & NA_MEMORY_MAP_COMMIT) != 0;
+    if (commit)
+    {
+        if (values.flags != NA_MEMORY_MAP_COMMIT || values.object != NA_HANDLE_INVALID || values.offset != 0 ||
+            values.hint == 0 || (values.length & (memory::page_size - 1)) != 0)
+            return NA_STATUS_INVALID_ARGUMENT;
+        auto *vm_info = reinterpret_cast<memory::vm::info_t *>(task::current_process()->mm_info);
+        if (!vm_info->commit(values.hint, values.length))
+            return NA_STATUS_INVALID_ARGUMENT;
+        values.address = values.hint;
+        status = usercopy::copy_to(reinterpret_cast<u64>(frame), &values, sizeof(values));
+        return status;
+    }
+
     naos::data_plane::memory_object *memory_object = nullptr;
     khandle backing;
     capability::metadata object_meta;
@@ -118,17 +135,23 @@ na_status_t memory_unmap(na_memory_unmap_frame_t *frame)
     auto status = copy_in(frame, values);
     if (status != NA_STATUS_OK)
         return status;
-    if (values.struct_size != sizeof(values) || values.flags != 0 || values.address == 0 || values.length == 0 ||
+    if (values.struct_size != sizeof(values) || values.flags & ~NA_MEMORY_UNMAP_DECOMMIT || values.address == 0 ||
+        values.length == 0 ||
         values.reserved0 != 0 || values.reserved1 != 0 || (values.address & (memory::page_size - 1)) != 0 ||
         values.length > NA_MEMORY_MAP_MAX_BYTES)
+        return NA_STATUS_INVALID_ARGUMENT;
+    const bool decommit = (values.flags & NA_MEMORY_UNMAP_DECOMMIT) != 0;
+    if (decommit && (values.length & (memory::page_size - 1)) != 0)
         return NA_STATUS_INVALID_ARGUMENT;
     const auto rounded = (values.length + memory::page_size - 1) & ~(memory::page_size - 1);
     if (rounded < values.length)
         return NA_STATUS_INVALID_ARGUMENT;
     auto *vm_info = reinterpret_cast<memory::vm::info_t *>(task::current_process()->mm_info);
-    const bool unmapped = vm_info->unmap(values.address, rounded);
+    const bool unmapped = decommit ? vm_info->decommit(values.address, values.length)
+                                   : vm_info->unmap(values.address, rounded);
     if (!unmapped)
-        KLOG_WARN("memory unmap failed pid {} address {} length {}", task::current_process()->pid,
+        KLOG_WARN("memory {} failed pid {} address {} length {}", decommit ? "decommit" : "unmap",
+                  task::current_process()->pid,
                   log::hex(values.address), log::hex(rounded));
     return unmapped ? NA_STATUS_OK : NA_STATUS_INVALID_ARGUMENT;
 }

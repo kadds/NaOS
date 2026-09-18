@@ -581,6 +581,8 @@ enum
     NA_MEMORY_MAP_WRITE = ((uint32_t)1 << 1),
     NA_MEMORY_MAP_EXEC = ((uint32_t)1 << 2),
     NA_MEMORY_MAP_SHARED = ((uint32_t)1 << 3),
+    /* Re-commit pages in an existing anonymous VMA at `hint`. */
+    NA_MEMORY_MAP_COMMIT = ((uint32_t)1 << 4),
 };
 
 typedef struct na_memory_map_frame
@@ -607,6 +609,12 @@ typedef struct na_memory_unmap_frame
     uint64_t reserved0;
     uint64_t reserved1;
 } na_memory_unmap_frame_t;
+
+enum
+{
+    /* Release anonymous physical pages while retaining their VMA. */
+    NA_MEMORY_UNMAP_DECOMMIT = ((uint32_t)1 << 0),
+};
 
 typedef struct na_epoll_event
 {

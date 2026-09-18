@@ -389,6 +389,7 @@ unsafe extern "C" fn thread_entry(raw: *mut u8) -> ! {
     let (allocation_base, allocation_size) = unsafe { tcb_allocation(tcb) };
     unsafe { release_state(state) };
     unsafe {
+        crate::mimalloc::thread_done();
         if !allocation_base.is_null() && allocation_size != 0 {
             unmap(allocation_base, allocation_size);
         }

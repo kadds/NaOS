@@ -175,7 +175,7 @@ fn pseudo_ino(path: &str) -> u64 {
 /// Normalize a POSIX path into a FAT-relative path ("" == root).
 /// A single trailing slash is allowed (POSIX names directories so);
 /// any `.`, `..` or empty interior component is rejected.
-fn normalize(path: &str) -> Result<String, FsError> {
+fn normalize_mutation(path: &str) -> Result<String, FsError> {
     let rel = path.trim_start_matches('/');
     let rel = rel.strip_suffix('/').unwrap_or(rel);
     if rel.is_empty() {
@@ -188,6 +188,29 @@ fn normalize(path: &str) -> Result<String, FsError> {
         return Err(FsError::new(Errno::EInval));
     }
     Ok(rel.to_string())
+}
+
+/// Normalize a lookup path into a FAT-relative path ("" == root).
+///
+/// Lookup operations accept POSIX single-dot components and repeated
+/// separators. Parent traversal remains the namespace router's
+/// responsibility, so double-dot components are still rejected here.
+/// Mutation paths use the stricter normalize_mutation helper.
+fn normalize_lookup(path: &str) -> Result<String, FsError> {
+    let mut normalized = String::new();
+    for component in path.trim_start_matches('/').split('/') {
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            return Err(FsError::new(Errno::EInval));
+        }
+        if !normalized.is_empty() {
+            normalized.push('/');
+        }
+        normalized.push_str(component);
+    }
+    Ok(normalized)
 }
 
 /// Split a normalized relative path into `(parent, final_name)`.
@@ -299,7 +322,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
 
     /// Appendix A row "lookup/read/write/目录游标": lookup.
     pub fn lookup(&self, path: &str) -> Result<NodeStat, FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_lookup(path)?;
         if rel.is_empty() {
             return Ok(NodeStat {
                 ino: pseudo_ino("/"),
@@ -323,7 +346,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
 
     /// Open a directory cursor (appendix A row "目录游标").
     pub fn open_dir_cursor(&self, path: &str) -> Result<DirCursor, FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_lookup(path)?;
         let mut entries = Vec::new();
         let prefix = if rel.is_empty() {
             String::from("/")
@@ -346,7 +369,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
 
     /// Appendix A row "mkdir/rmdir/unlink/rename（同 FS）".
     pub fn mkdir(&self, path: &str) -> Result<(), FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_mutation(path)?;
         if rel.is_empty() {
             return Err(FsError::new(Errno::EExist));
         }
@@ -357,7 +380,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
     }
 
     pub fn rmdir(&self, path: &str) -> Result<(), FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_mutation(path)?;
         if rel.is_empty() {
             return Err(FsError::new(Errno::EInval));
         }
@@ -365,7 +388,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
     }
 
     pub fn unlink(&self, path: &str) -> Result<(), FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_mutation(path)?;
         if rel.is_empty() {
             return Err(FsError::new(Errno::EInval));
         }
@@ -414,8 +437,8 @@ impl<D: BlockClient + Clone> FatWorker<D> {
     /// EXDEV by `vfsd` before any backend is consulted (appendix A rule);
     /// this worker therefore never sees it.
     pub fn rename(&self, old_path: &str, new_path: &str) -> Result<(), FsError> {
-        let src = normalize(old_path)?;
-        let dst = normalize(new_path)?;
+        let src = normalize_mutation(old_path)?;
+        let dst = normalize_mutation(new_path)?;
         if src.is_empty() || dst.is_empty() {
             return Err(FsError::new(Errno::EInval));
         }
@@ -459,7 +482,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
     /// the volume adapter additionally rejects every write at the block
     /// boundary.
     pub fn open_file(&self, path: &str) -> Result<FileHandle<'_, D>, FsError> {
-        let rel = normalize(path)?;
+        let rel = normalize_lookup(path)?;
         if rel.is_empty() {
             return Err(FsError::new(Errno::EIsDir));
         }
@@ -482,7 +505,7 @@ impl<D: BlockClient + Clone> FatWorker<D> {
         if self.read_only {
             return Err(FsError::new(Errno::ERofs));
         }
-        let rel = normalize(path)?;
+        let rel = normalize_mutation(path)?;
         if rel.is_empty() {
             return Err(FsError::new(Errno::EIsDir));
         }

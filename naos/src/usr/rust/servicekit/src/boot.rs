@@ -52,7 +52,7 @@ mod naos_boot {
     use super::{BootError, SpawnError};
     use crate::naos::Channel;
     use crate::server::EndpointResource;
-    use crate::{Context, memory};
+    use crate::{memory, Context};
     use alloc::vec::Vec;
     use core::mem::size_of;
     use naos_idl::process as process_idl;
@@ -60,6 +60,7 @@ mod naos_boot {
     use naos_sys as sys;
 
     const BOOT_MODULE_MAX_BYTES: usize = 64 << 20;
+    const BOOT_MODULE_COPY_CHUNK_BYTES: usize = 1 << 20;
 
     #[repr(C)]
     struct BootstrapMessage {
@@ -81,6 +82,23 @@ mod naos_boot {
 
     const _: () = assert!(size_of::<BootstrapMessage>() == 72);
 
+    /// Open a kernel-published boot module without copying its bytes.
+    ///
+    /// The caller owns the returned capability and may map bounded windows as
+    /// it consumes the module.  This is the path for large data-plane modules
+    /// such as the prepared root image; executable boot modules still use
+    /// `read_module` because their child loader needs an owned byte slice.
+    pub fn open_module(context: &Context, uri: &str) -> Result<memory::MemoryObject, BootError> {
+        let module = crate::naos::resolve_resource(context.service_directory_handle(), uri)
+            .map_err(|_| BootError::Unavailable)?;
+        let object = memory::MemoryObject::from_owned(module);
+        let size = object.size().ok_or(BootError::Invalid)?;
+        if size == 0 || size > BOOT_MODULE_MAX_BYTES as u64 {
+            return Err(BootError::Invalid);
+        }
+        Ok(object)
+    }
+
     /// Read a kernel-published boot module through ServiceDirectory.  The
     /// module is deliberately obtained as a normal MemoryObject resource so
     /// the manager, rather than kernel bootstrap code, controls when the
@@ -90,26 +108,25 @@ mod naos_boot {
     }
 
     fn read_memory_resource(context: &Context, uri: &str) -> Result<Vec<u8>, BootError> {
-        let module = crate::naos::resolve_resource(context.service_directory_handle(), uri)
-            .map_err(|_| BootError::Unavailable)?;
-        let mut low = 1usize;
-        let mut high = BOOT_MODULE_MAX_BYTES;
-        let mut best = 0usize;
-        while low <= high {
-            let middle = low + (high - low) / 2;
-            match crate::memory::map_read(&module, middle) {
-                Ok(_) => {
-                    best = middle;
-                    low = middle.saturating_add(1);
-                }
-                Err(_) => high = middle.saturating_sub(1),
-            }
+        let module = open_module(context, uri)?;
+        let best = usize::try_from(module.size().ok_or(BootError::Invalid)?)
+            .map_err(|_| BootError::Invalid)?;
+        // Boot modules are external MemoryObjects. Their non-page-backed view
+        // is faulted through a temporary shadow page, so mapping the complete
+        // image while copying it into the owning Vec doubles the module's
+        // resident footprint. Keep only a bounded source window faulted at a
+        // time; the destination remains one owned copy for ramdiskd/process
+        // startup, while each source window is unmapped before the next one.
+        let mut image = Vec::with_capacity(best);
+        let mut offset = 0usize;
+        while offset < best {
+            let length = core::cmp::min(BOOT_MODULE_COPY_CHUNK_BYTES, best - offset);
+            let mapping = crate::memory::map_read_at(module.as_handle(), offset as u64, length)
+                .map_err(|_| BootError::Io)?;
+            image.extend_from_slice(mapping.as_slice());
+            offset += length;
         }
-        if best == 0 {
-            return Err(BootError::Invalid);
-        }
-        let mapping = crate::memory::map_read(&module, best).map_err(|_| BootError::Io)?;
-        Ok(mapping.as_slice().to_vec())
+        Ok(image)
     }
 
     fn duplicate(handle: sys::Handle) -> Result<sys::Handle, SpawnError> {
@@ -365,4 +382,4 @@ mod naos_boot {
 }
 
 #[cfg(target_os = "naos")]
-pub use naos_boot::{read_module, spawn_early_service, spawn_init};
+pub use naos_boot::{open_module, read_module, spawn_early_service, spawn_init};

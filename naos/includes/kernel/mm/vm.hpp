@@ -11,6 +11,7 @@
 #include "kernel/types.hpp"
 #include "list_node_cache.hpp"
 #include "vm.hpp"
+#include <atomic>
 
 namespace naos::data_plane
 {
@@ -48,6 +49,21 @@ void listen_page_fault();
 struct vm_t;
 class vm_allocator;
 class info_t;
+
+struct status_t
+{
+    u64 virtual_pages = 0;
+    u64 vma_count = 0;
+    u64 mapped_pages = 0;
+    u64 rss_pages = 0;
+    u64 private_pages = 0;
+    u64 shared_pages = 0;
+    u64 committed_pages = 0;
+    u64 anonymous_pages = 0;
+    u64 file_cache_pages = 0;
+    u64 page_faults = 0;
+    u64 peak_rss_pages = 0;
+};
 
 enum class page_fault_method
 {
@@ -134,6 +150,12 @@ class info_t
                                   flag_t page_ext_attr);
 
     bool unmap(u64 addr, u64 size);
+    /// Release the physical pages in an anonymous VMA without removing the
+    /// VMA.  The next access faults in a fresh zero page.
+    bool decommit(u64 addr, u64 size);
+    /// Validate a previously decommitted anonymous VMA range for recommit.
+    /// Pages remain demand-zero and are materialized by the normal fault path.
+    bool commit(u64 addr, u64 size);
 
     void share_to(process_id from_id, process_id to_id, info_t *info);
     void remove_fork_disallowed_mappings();
@@ -149,6 +171,8 @@ class info_t
     vm_allocator &vma() { return vma_; }
 
     bool expand(page_fault_method method, u64 alignment_page, u64 access_address, vm_t *item);
+    status_t status();
+    void record_page_fault() { page_faults_.fetch_add(1, std::memory_order_relaxed); }
 
   private:
     bool expand_brk(u64 alignment_page, u64 access_address, vm_t *item);
@@ -164,6 +188,8 @@ class info_t
     const vm_t *heap_vm_;
     u64 heap_top_;
     lock::spinlock_t paging_spin_;
+    std::atomic_uint64_t page_faults_{0};
+    std::atomic_uint64_t peak_rss_pages_{0};
 };
 
 /// map struct

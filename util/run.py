@@ -210,15 +210,17 @@ def prepare_iso(paths: BuildPaths, allow_missing: tuple[str, ...] = ()) -> None:
 def prepare_disk_image(paths: BuildPaths) -> None:
     """Refresh /boot directly in the build-local prepared disk image."""
     if not paths.disk_image.is_file():
-        raise FileNotFoundError(
-            f"{paths.disk_image} does not exist; run 'python3 util/disk.py --build-dir "
-            f"{paths.build_dir} create'"
-        )
+        disk.create(paths.disk_image)
+        disk.mkexfat(paths.disk_image)
     disk.mount(paths.disk_image)
     disk.ensure_directory(paths.disk_image, "/boot")
     for source in sorted(paths.system_dir.iterdir()):
         if source.is_file():
             disk.add_file(paths.disk_image, source, f"/boot/{source.name}", replace=True)
+    config = (REPOSITORY_ROOT / "run/iso/boot/grub/grub.cfg").read_text(encoding="utf-8")
+    for source_name in ("kernel", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
+        config = config.replace(f"/{source_name}", f"/boot/{source_name}")
+    disk.install_bios_grub(paths.disk_image, config.encode("utf-8"))
     disk.umount(paths.disk_image)
 
 

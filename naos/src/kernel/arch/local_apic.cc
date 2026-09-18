@@ -8,6 +8,7 @@
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/pit.hpp"
 #include "kernel/cmdline.hpp"
+#include "kernel/cpu.hpp"
 #include "kernel/irq.hpp"
 #include "kernel/log.hpp"
 #include "kernel/mm/memory.hpp"
@@ -339,10 +340,12 @@ constexpr u64 platform_info_msr = 0xCE;
 constexpr u64 calibration_duration_ns = 20'000'000;
 } // namespace
 
-irq::request_result event_source::on_interrupt(const irq::interrupt_info *, u64) noexcept
+irq::request_result event_source::on_interrupt(const irq::interrupt_info *info, u64) noexcept
 {
     if (!started_.load(std::memory_order_acquire) || cpu_id_ != cpu::current().get_id())
         return irq::request_result::no_handled;
+
+    ::cpu::current().set_timer_kernel_space(info != nullptr && info->kernel_space);
 
     if (!armed_.exchange(false, std::memory_order_acq_rel))
         return irq::request_result::no_handled;

@@ -28,3 +28,6 @@
 [submodule "naos/third_party/mio"]
 	path = naos/third_party/mio
 	url = https://github.com/kadds/mio.git
+[submodule "naos/third_party/mimalloc"]
+	path = naos/third_party/mimalloc
+	url = https://github.com/microsoft/mimalloc.git

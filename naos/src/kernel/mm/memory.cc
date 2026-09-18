@@ -297,6 +297,21 @@ u64 get_max_available_memory() { return max_memory_available; }
 
 u64 get_max_maped_memory() { return max_memory_maped; }
 
+allocator_status_t allocator_status()
+{
+    allocator_status_t result{};
+    if (global_zones == nullptr)
+        return result;
+
+    result.physical_pages = (max_memory_maped + page_size - 1) / page_size;
+    result.reserved_pages = global_zones->reserved_pages();
+    const u64 managed_pages = global_zones->total_pages();
+    result.usable_pages = managed_pages > result.reserved_pages ? managed_pages - result.reserved_pages : 0;
+    result.free_pages = global_zones->free_pages();
+    result.available_pages = result.free_pages;
+    return result;
+}
+
 void *kmalloc(u64 size, u64 align)
 {
     if (unlikely(align > size))

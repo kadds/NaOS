@@ -42,6 +42,7 @@ struct load_data_t
 {
     u64 last_sched_time = 0;
     u64 last_tick_time = 0;
+    u64 last_account_time = 0;
     u64 running_task_time = 0;
     u64 schedule_times = 0;
 
@@ -67,6 +68,7 @@ class cpu_data_t
 
     timeclock::event_clock *event_clock = nullptr;
     timeclock::event_source *event_source = nullptr;
+    bool timer_kernel_space = false;
     void *clock_queue = nullptr;
 
     call_cpu_operation_t call_cpu_queue[call_cpu_queue_capacity]{};
@@ -115,6 +117,9 @@ class cpu_data_t
 
     void set_event_source(timeclock::event_source *source) { event_source = source; }
     timeclock::event_source *get_event_source() { return event_source; }
+
+    void set_timer_kernel_space(bool value) { timer_kernel_space = value; }
+    bool timer_was_kernel_space() const { return timer_kernel_space; }
 
     void *get_clock_queue() { return clock_queue; }
 

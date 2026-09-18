@@ -940,6 +940,66 @@ freelibcxx::optional<phy_addr_t> page_table_t::get_map(void *virt_start)
     return pte.get_phy_addr();
 }
 
+user_mapping_statistics page_table_t::user_mappings(u64 start, u64 end)
+{
+    user_mapping_statistics result{};
+    if (start >= end || start >= (1ULL << 47))
+        return result;
+    end = end > (1ULL << 47) ? (1ULL << 47) : end;
+
+    auto overlap_pages = [start, end](u64 base, u64 span) -> u64 {
+        const u64 limit = base + span;
+        const u64 first = start > base ? start : base;
+        const u64 last = end < limit ? end : limit;
+        return last > first ? (last - first) / memory::page_size : 0;
+    };
+
+    for (u64 pml4_index = 0; pml4_index < 256; pml4_index++)
+    {
+        auto &pml4e = (*base_)[pml4_index];
+        const u64 pml4_base = pml4_index << 39;
+        if (!pml4e.is_present() || overlap_pages(pml4_base, 1ULL << 39) == 0)
+            continue;
+
+        auto &pdpt = pml4e.next();
+        for (u64 pdpt_index = 0; pdpt_index < 512; pdpt_index++)
+        {
+            auto &pdpe = pdpt[pdpt_index];
+            const u64 pdpt_base = pml4_base + (pdpt_index << 30);
+            if (!pdpe.is_present() || overlap_pages(pdpt_base, 1ULL << 30) == 0 || !pdpe.is_user_mode())
+                continue;
+            if (pdpe.is_big_page())
+            {
+                result.mapped_pages += overlap_pages(pdpt_base, 1ULL << 30);
+                continue;
+            }
+
+            auto &pdt = pdpe.next();
+            for (u64 pdt_index = 0; pdt_index < 512; pdt_index++)
+            {
+                auto &pde = pdt[pdt_index];
+                const u64 pdt_base = pdpt_base + (pdt_index << 21);
+                if (!pde.is_present() || overlap_pages(pdt_base, 1ULL << 21) == 0 || !pde.is_user_mode())
+                    continue;
+                if (pde.is_big_page())
+                {
+                    result.mapped_pages += overlap_pages(pdt_base, 1ULL << 21);
+                    continue;
+                }
+
+                auto &pt = pde.next();
+                for (u64 pt_index = 0; pt_index < 512; pt_index++)
+                {
+                    auto &pte = pt[pt_index];
+                    if (pte.is_present() && pte.is_user_mode())
+                        result.mapped_pages += overlap_pages(pdt_base + (pt_index << 12), 1ULL << 12);
+                }
+            }
+        }
+    }
+    return result;
+}
+
 void page_table_t::clone_readonly_to(void *virt_start, size_t pages, page_table_t *to)
 {
     auto p = reinterpret_cast<uintptr_t>(virt_start);

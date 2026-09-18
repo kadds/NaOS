@@ -255,14 +255,15 @@ build-debug
 ├── bin # Binary executable files without debug info
 │   ├── rfsroot # root file system image files (the root folder when kernel loading)
 │   └── system
-│       ├── root.img # prepared FAT16 root image (8 KiB clusters)
+│       ├── root.img # prepared FAT16 root image (4 KiB clusters)
 │       └── kernel # kernel binary file
 └── debug # Binary executable files with debug info which can be used by debugger like gdb/lldb ...
 ```
 
 The disk emulator flow refreshes `/boot` directly inside the selected build-local image
-with `fstool`; no host mount or loop device is used. The image must already
-contain a bootable GRUB layout. For the normal ISO flow use `--iso`:
+with `fstool`; no host mount or loop device is used. `run.py q` also installs a
+rootless BIOS GRUB layout into the build-local image and creates a missing image
+as an exFAT disk. For the normal ISO flow use `--iso`:
 ```Bash
 # Run emulator
 python3 util/run.py --build-dir build-debug q --iso

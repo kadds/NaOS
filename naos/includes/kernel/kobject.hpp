@@ -73,6 +73,7 @@ class kobject
         klog_stream,
         framebuffer,
         epoll,
+        system_status,
     };
 
     explicit kobject(type_e ty);

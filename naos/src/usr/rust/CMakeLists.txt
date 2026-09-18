@@ -36,9 +36,65 @@ set(NAOS_RAMDISKD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/ramdiskd)
 set(NAOS_EXFATD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/exfatd)
 set(NAOS_ROOTFSD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/rootfsd)
 set(NAOS_RUST_FORK_DIR ${PROJECT_SOURCE_DIR}/naos/third_party/rust-naos)
+set(NAOS_MIMALLOC_DIR ${PROJECT_SOURCE_DIR}/naos/third_party/mimalloc)
+set(NAOS_MIMALLOC_ARCHIVE ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY}/libnaos_mimalloc.a)
 set(NAOS_RUST_BUILD_HELPER ${PROJECT_SOURCE_DIR}/util/naos_rust_build.py)
 set(NAOS_RUST_FINGERPRINT ${NAOS_RUST_TARGET_DIR}/.naos-rust-input.sha256)
 message(STATUS "Using Rust source submodule ${NAOS_RUST_FORK_DIR}")
+message(STATUS "Using mimalloc source submodule ${NAOS_MIMALLOC_DIR}")
+
+set(NAOS_MIMALLOC_SOURCES
+    ${NAOS_MIMALLOC_DIR}/src/alloc.c
+    ${NAOS_MIMALLOC_DIR}/src/alloc-aligned.c
+    ${NAOS_MIMALLOC_DIR}/src/arena.c
+    ${NAOS_MIMALLOC_DIR}/src/bitmap.c
+    ${NAOS_MIMALLOC_DIR}/src/heap.c
+    ${NAOS_MIMALLOC_DIR}/src/init.c
+    ${NAOS_MIMALLOC_DIR}/src/libc.c
+    ${NAOS_MIMALLOC_DIR}/src/options.c
+    ${NAOS_MIMALLOC_DIR}/src/os.c
+    ${NAOS_MIMALLOC_DIR}/src/page.c
+    ${NAOS_MIMALLOC_DIR}/src/random.c
+    ${NAOS_MIMALLOC_DIR}/src/segment.c
+    ${NAOS_MIMALLOC_DIR}/src/segment-map.c
+    ${NAOS_MIMALLOC_DIR}/src/stats.c
+    ${NAOS_RUST_ROOT}/mimalloc_prim.c
+    ${NAOS_RUST_ROOT}/mimalloc_compat.c)
+
+file(GLOB_RECURSE NAOS_MIMALLOC_HEADERS CONFIGURE_DEPENDS
+    ${NAOS_MIMALLOC_DIR}/include/*
+    ${NAOS_RUST_ROOT}/mimalloc_compat/include/*)
+
+add_library(naos_mimalloc STATIC ${NAOS_MIMALLOC_SOURCES} ${NAOS_MIMALLOC_HEADERS})
+target_include_directories(naos_mimalloc BEFORE PRIVATE
+    ${NAOS_RUST_ROOT}/mimalloc_compat/include
+    ${NAOS_MIMALLOC_DIR}/include
+    ${PROJECT_SOURCE_DIR}/naos/include)
+target_compile_definitions(naos_mimalloc PRIVATE
+    __wasi__
+    MI_NO_GETENV=1
+    MI_DEFAULT_DISALLOW_ARENA_ALLOC=1
+    MI_DEFAULT_ALLOW_LARGE_OS_PAGES=0
+    MI_DEFAULT_RESERVE_HUGE_OS_PAGES=0
+    MI_DEFAULT_RESERVE_OS_MEMORY=0
+    MI_USE_BUILTIN_THREAD_POINTER=1)
+target_compile_options(naos_mimalloc PRIVATE
+    -m64
+    -mcmodel=small
+    -std=c11
+    -ffreestanding
+    -fno-builtin
+    -fno-common
+    -fno-exceptions
+    -fno-pic
+    -fno-stack-protector
+    -fno-asynchronous-unwind-tables
+    -fno-unwind-tables
+    -fvisibility=hidden
+    -ftls-model=local-exec
+    -U__linux__
+    -U_LINUX)
+set_target_properties(naos_mimalloc PROPERTIES ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_ARCHIVE_OUTPUT_DIRECTORY})
 file(GLOB_RECURSE NAOS_RUST_FORK_LIBRARY_SOURCES CONFIGURE_DEPENDS
     ${NAOS_RUST_FORK_DIR}/library/alloc/*
     ${NAOS_RUST_FORK_DIR}/library/backtrace/*
@@ -91,6 +147,8 @@ set(NAOS_RUST_SOURCES
     ${NAOS_IDL_COMPILER}
     ${PROJECT_SOURCE_DIR}/doc/examples/echo.naidl
     ${NAOS_RUST_BUILD_HELPER}
+    ${NAOS_MIMALLOC_SOURCES}
+    ${NAOS_MIMALLOC_HEADERS}
     ${NAOS_RUST_CRATE_MANIFESTS})
 list(APPEND NAOS_RUST_SOURCES
     ${NAOS_RUST_CRATE_SOURCES}
@@ -116,7 +174,7 @@ add_custom_command(
             # The locally built stage1 rustc reports a release channel but
             # must accept -Z build-std flags for the custom target.
             "RUSTC_BOOTSTRAP=1"
-            "RUSTFLAGS=-C link-arg=-Wl,-Map,${NAOS_RUST_MAP} -C link-arg=-Wl,-T,${NAOS_RUST_ROOT}/link.ld"
+            "RUSTFLAGS=-C link-arg=-Wl,-Map,${NAOS_RUST_MAP} -C link-arg=-Wl,-T,${NAOS_RUST_ROOT}/link.ld -C link-arg=${NAOS_MIMALLOC_ARCHIVE}"
             "NAOS_IDL_COMPILER=${NAOS_IDL_COMPILER}"
             "NAOS_PYTHON=${Python3_EXECUTABLE}"
             ${Python3_EXECUTABLE} ${NAOS_RUST_BUILD_HELPER}
@@ -148,7 +206,7 @@ add_custom_command(
             ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/naos-exfatd
     COMMAND ${CMAKE_COMMAND} -E touch ${NAOS_RUST_MAP}
     COMMAND ${CMAKE_COMMAND} -E touch ${NAOS_RUST_BUILD_STAMP}
-    DEPENDS ${NAOS_RUST_SOURCES} ${NAOS_RUST_BUILD_HELPER}
+    DEPENDS ${NAOS_RUST_SOURCES} ${NAOS_RUST_BUILD_HELPER} naos_mimalloc
             ${PROJECT_SOURCE_DIR}/Cargo.lock ${NAOS_RUST_ROOT}/link.ld
     WORKING_DIRECTORY ${NAOS_RUST_ROOT}
     VERBATIM)

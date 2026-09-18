@@ -22,7 +22,7 @@ target_include_directories(kernel PRIVATE
     ${PROJECT_SOURCE_DIR}/naos/include
 )
 target_link_libraries(kernel freelibcxx)
-target_link_libraries(kernel naos_ipc_core)
+target_link_libraries(kernel naos_ipc_core_kernel)
 target_link_libraries(kernel acpica)
 
 set(KERNEL_LINK_TAG "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")

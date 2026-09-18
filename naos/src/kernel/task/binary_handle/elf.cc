@@ -56,6 +56,11 @@ class object_image final : public exec_image
     {
         // Every mapping holds its own reference on the backing capability so
         // the creator may drop its handle immediately after spawn.
+        // Read-only ELF segments can alias the immutable MemoryObject pages;
+        // writable segments remain private and are populated through the
+        // normal fault-and-copy path.
+        if ((flags & memory::vm::flags::writeable) == 0)
+            flags |= memory::vm::flags::shared;
         return info_->map_memory_object(start, backing_, &object_, object_offset, 0, data_length, map_length, flags);
     }
 
