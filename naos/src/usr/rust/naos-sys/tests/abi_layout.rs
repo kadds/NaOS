@@ -21,7 +21,7 @@ fn public_abi_layout_matches_naos_headers() {
     assert_eq!(size_of::<ResultFrame>(), 96);
     assert_eq!(size_of::<ReplyFrame>(), 56);
     assert_eq!(size_of::<FailFrame>(), 24);
-    assert_eq!(size_of::<MemoryMapFrame>(), 72);
+    assert_eq!(size_of::<MemoryMapFrame>(), 80);
     assert_eq!(size_of::<MemoryUnmapFrame>(), 40);
     assert_eq!(size_of::<naos_sys::EpollEvent>(), 16);
 }

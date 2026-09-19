@@ -140,6 +140,7 @@ void main(void *arg)
         is_init = true;
         task::create_kernel_process(builtin::input::main, 0, create_thread_flags::real_time_rr);
         naos::ipc::init_kernel_dispatch_worker();
+        naos::data_plane::init_pager_worker();
 
         // The early service owns the root namespace and spawns init.  Phase 4
         // deliberately has no kernel-rootfs fallback: booting without vfsd

@@ -79,10 +79,10 @@ void test_layouts()
     static_assert(sizeof(na_channel_receive_frame_t) == 96);
     static_assert(sizeof(na_result_frame_t) == 96);
     static_assert(sizeof(na_bootstrap_message_t) == 72);
-    static_assert(sizeof(na_process_spawn_frame_t) == 80);
+    static_assert(sizeof(na_process_spawn_frame_t) == 88);
     static_assert(sizeof(na_fail_frame_t) == 24);
-    static_assert(sizeof(na_memory_map_frame_t) == 72);
-    static_assert(offsetof(na_memory_map_frame_t, data_offset) == 48);
+    static_assert(sizeof(na_memory_map_frame_t) == 80);
+    static_assert(offsetof(na_memory_map_frame_t, data_offset) == 56);
     static_assert(offsetof(na_channel_receive_frame_t, caller_pid) == 88);
     static_assert(offsetof(na_submit_frame_t, method_id) == 8);
     static_assert(offsetof(na_submit_frame_t, resources) == 32);

@@ -241,10 +241,30 @@ bool reap_process(pid_t *pid, const char *name)
 
     int status = 0;
     const pid_t waited = waitpid(*pid, &status, WNOHANG);
+    char message[96]{};
     if (waited == 0 || (waited < 0 && errno == EINTR))
         return false;
 
-    char message[96]{};
+    if (waited < 0)
+    {
+        const int wait_error = errno;
+        errno = 0;
+        const int probe = kill(*pid, 0);
+        const int probe_error = errno;
+        if (probe == 0 || probe_error != ESRCH)
+        {
+            snprintf(message, sizeof(message), "init: %s wait failed errno=%d; process still alive\n", name,
+                     wait_error);
+            printf("%s", message);
+            return false;
+        }
+
+        snprintf(message, sizeof(message), "init: %s disappeared after wait error=%d\n", name, wait_error);
+        printf("%s", message);
+        *pid = -1;
+        return true;
+    }
+
     if (waited == *pid)
     {
         if (WIFEXITED(status))

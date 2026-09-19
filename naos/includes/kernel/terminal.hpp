@@ -958,6 +958,7 @@ class terminal_manager
 
 void early_init(kernel_start_args *args);
 void reset_early_paging();
+void enter_panic_mode();
 void reset_panic_term();
 void init();
 

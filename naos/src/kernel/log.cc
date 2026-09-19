@@ -93,6 +93,7 @@ std::atomic<u64> total_dropped{0};
 u64 invalid_configuration = 0;
 bool serial_ready = false;
 arch::device::com::serial serial_device;
+u64 early_tsc_origin = 0;
 
 char *emergency_buffer()
 {
@@ -103,6 +104,8 @@ char *emergency_buffer()
         cpu_id = 0;
     return emergency_buffers[cpu_id];
 }
+
+u64 early_tsc_timestamp() noexcept { return read_tsc_ordered() - early_tsc_origin; }
 
 u32 current_cpu_id()
 {
@@ -418,10 +421,18 @@ void build_record(record &result, level severity, module source, const char *fil
         if (cpu::current().get_event_clock() != nullptr)
             result.header.timestamp = timer::get_high_resolution_time();
         else
+        {
+            // The event clock is not installed until timer::init(). Preserve
+            // ordering information for the early log instead of discarding
+            // the timestamp entirely. These values are raw TSC ticks and
+            // must not be interpreted as the runtime clock's microseconds.
+            result.header.timestamp = early_tsc_timestamp();
             result.header.flags |= early_record;
+        }
     }
     else
     {
+        result.header.timestamp = early_tsc_timestamp();
         result.header.flags |= early_record | unknown_context;
     }
 
@@ -590,10 +601,12 @@ void console_write_panic(const char *data, u64 length)
 
     static constexpr char red[] = "\x1b[91m";
     static constexpr char reset[] = "\x1b[0m";
+    term::enter_panic_mode();
     term::reset_panic_term();
     term::write_to_klog(freelibcxx::const_string_view(red, sizeof(red) - 1));
     term::write_to_klog(freelibcxx::const_string_view(data, length));
     term::write_to_klog(freelibcxx::const_string_view(reset, sizeof(reset) - 1));
+    term::early_terminal->flush_dirty();
 }
 
 void write_panic(const char *data, u64 length)
@@ -682,12 +695,20 @@ u64 render_record(const record &item, char *buffer, u64 capacity, bool color = f
     {
         if (color)
         {
-            put_colored(output, metadata_color, "[early]", 7);
+            static constexpr char prefix[] = "[";
+            static constexpr char suffix[] = "]";
+            put_colored(output, metadata_color, prefix, sizeof(prefix) - 1);
+            put_colored_integer(output, metadata_color, item.header.timestamp, 12);
+            put_colored(output, metadata_color, suffix, sizeof(suffix) - 1);
             output.put(' ');
             put_colored(output, metadata_color, "?-?-?", 5);
         }
         else
-            output.put("[early] ?-?-?");
+        {
+            output.put('[');
+            append_integer(output, item.header.timestamp, 12);
+            output.put("] ?-?-?");
+        }
     }
     else
     {
@@ -1028,6 +1049,7 @@ const configuration &config() { return current_configuration; }
 
 void early_init()
 {
+    early_tsc_origin = read_tsc_ordered();
     load_configuration();
     char *value = nullptr;
     u64 length = 0;

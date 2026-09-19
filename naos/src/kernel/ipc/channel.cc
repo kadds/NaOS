@@ -6,6 +6,7 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mutex.hpp"
+#include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 #include "kernel/usercopy.hpp"
@@ -1103,11 +1104,23 @@ na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_r
 
     timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
     deadline_wakeup wake{&queue};
+    auto *waiter = task::current();
+    const auto disarm_deadline = [&]() {
+        if (deadline_watcher == timer::invalid_watcher_id)
+            return;
+        const auto watcher = deadline_watcher;
+        (void)timer::cancel(watcher);
+        deadline_watcher = timer::invalid_watcher_id;
+        if (waiter != nullptr && waiter->wait_timeout_watcher == watcher)
+            waiter->wait_timeout_watcher = timer::invalid_watcher_id;
+    };
     if (deadline != std::numeric_limits<u64>::max())
     {
         if (timer::get_high_resolution_time() >= deadline)
             return NA_STATUS_WAIT_TIMED_OUT;
         deadline_watcher = timer::schedule_at(deadline, timer::timer_handler::bind<&deadline_wakeup::wake>(wake));
+        if (deadline_watcher != timer::invalid_watcher_id && waiter != nullptr)
+            waiter->wait_timeout_watcher = deadline_watcher;
     }
 
     for (;;)
@@ -1116,15 +1129,13 @@ na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_r
             break;
         if (deadline != std::numeric_limits<u64>::max() && timer::get_high_resolution_time() >= deadline)
         {
-            if (deadline_watcher != timer::invalid_watcher_id)
-                (void)timer::cancel(deadline_watcher);
+            disarm_deadline();
             return NA_STATUS_WAIT_TIMED_OUT;
         }
         queue.do_wait(condition);
     }
 
-    if (deadline_watcher != timer::invalid_watcher_id)
-        (void)timer::cancel(deadline_watcher);
+    disarm_deadline();
     return NA_STATUS_OK;
 }
 

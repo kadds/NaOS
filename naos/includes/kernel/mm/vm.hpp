@@ -40,6 +40,7 @@ enum flags : u64
     huge_page = 1ul << 18,
     shared = 1ul << 19,
     memory_object = 1ul << 20,
+    user_stack = 1ul << 21,
 };
 }
 
@@ -63,6 +64,8 @@ struct status_t
     u64 file_cache_pages = 0;
     u64 page_faults = 0;
     u64 peak_rss_pages = 0;
+    u64 user_stack_pages = 0;
+    u64 text_pages = 0;
 };
 
 enum class page_fault_method
@@ -72,6 +75,13 @@ enum class page_fault_method
     common,
     common_with_bss,
     memory_object,
+};
+
+struct fault_history_t
+{
+    u64 last_offset = ~u64(0);
+    u32 sequential_count = 0;
+    u16 window_pages = 4;
 };
 
 class vm_allocator
@@ -208,6 +218,7 @@ struct map_t
     /// of private COW pages.  Such mappings observe each other's writes
     /// directly, so they are never written back and never privatized on fork.
     bool pages_shared;
+    fault_history_t fault_history;
     info_t *vm_info;
     map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 data_offset,
           u64 data_length, u64 map_length, bool shared, info_t *vmi)
@@ -220,6 +231,7 @@ struct map_t
         , mmap_length(map_length)
         , shared(shared)
         , pages_shared(false)
+        , fault_history()
         , vm_info(vmi) {};
     map_t(const map_t &rhs, info_t *vmi)
         : memory_object(rhs.memory_object)
@@ -231,6 +243,7 @@ struct map_t
         , mmap_length(rhs.mmap_length)
         , shared(rhs.shared)
         , pages_shared(rhs.pages_shared)
+        , fault_history(rhs.fault_history)
         , vm_info(vmi) {};
 };
 

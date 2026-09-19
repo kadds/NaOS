@@ -580,7 +580,18 @@ bool info_t::expand_memory_object(u64 alignment_page, u64 access_address, vm_t *
     {
         if (relative >= mapping->file_length)
             return false;
-        const phy_addr_t frame = mapping->memory_object->page_frame(mapping->file_offset + relative);
+        const auto object_offset = mapping->file_offset + relative;
+        auto frame = mapping->memory_object->page_frame(object_offset);
+        if (frame.get() == nullptr)
+        {
+            auto *history = (item->flags & flags::executeable) != 0 ? nullptr : &mapping->fault_history;
+            const auto fault = mapping->memory_object->fault_page(object_offset, mapping->backing, history);
+            if (fault == naos::data_plane::page_fault_result::blocked)
+                return true;
+            if (fault != naos::data_plane::page_fault_result::ready)
+                return false;
+        }
+        frame = mapping->memory_object->page_frame(object_offset);
         if (frame.get() == nullptr)
             return false;
         const u64 page_flags = to_paging_flags(item->flags);
@@ -592,6 +603,19 @@ bool info_t::expand_memory_object(u64 alignment_page, u64 access_address, vm_t *
 
     byte *buffer = nullptr;
     const u64 page_flags = to_paging_flags(item->flags);
+    const u64 logical_end = mapping->data_offset + mapping->data_length;
+    const u64 page_end = relative + memory::page_size;
+    const u64 begin = relative < mapping->data_offset ? mapping->data_offset : relative;
+    const u64 end = logical_end < page_end ? logical_end : page_end;
+    if (begin < end && mapping->memory_object->pager_backed())
+    {
+        auto *history = (item->flags & flags::executeable) != 0 ? nullptr : &mapping->fault_history;
+        const auto fault = mapping->memory_object->fault_page(mapping->file_offset + begin, mapping->backing, history);
+        if (fault == naos::data_plane::page_fault_result::blocked)
+            return true;
+        if (fault != naos::data_plane::page_fault_result::ready)
+            return false;
+    }
     {
         uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
         paging_.map(reinterpret_cast<void *>(alignment_page), 1, page_flags, arch::paging::action_flags::override);
@@ -604,12 +628,8 @@ bool info_t::expand_memory_object(u64 alignment_page, u64 access_address, vm_t *
     memset(buffer, 0, memory::page_size);
     if (relative >= mapping->file_length)
         return true;
-    const u64 logical_end = mapping->data_offset + mapping->data_length;
-    const u64 page_end = relative + memory::page_size;
     if (relative >= logical_end || page_end <= mapping->data_offset)
         return true;
-    const u64 begin = relative < mapping->data_offset ? mapping->data_offset : relative;
-    const u64 end = logical_end < page_end ? logical_end : page_end;
     const u64 object_offset = mapping->file_offset + begin;
     const u64 amount = end - begin;
     u64 actual = 0;
@@ -655,10 +675,9 @@ const vm_t *info_t::map_memory_object(u64 start, khandle backing, naos::data_pla
         if (publish_status != NA_STATUS_OK && publish_status != NA_STATUS_NOT_SUPPORTED)
             return nullptr;
         const u64 object_span = object->size() - object_offset;
-        const u64 object_map_length =
-            (object_span + memory::page_size - 1) & ~(memory::page_size - 1);
-        pages_shared = data_offset == 0 && (object_offset & (memory::page_size - 1)) == 0 &&
-                       object->page_backed() && aligned_length <= object_map_length;
+        const u64 object_map_length = (object_span + memory::page_size - 1) & ~(memory::page_size - 1);
+        pages_shared = data_offset == 0 && (object_offset & (memory::page_size - 1)) == 0 && object->page_backed() &&
+                       aligned_length <= object_map_length;
     }
     const u64 mapping_flags = flags::lock | flags::user_mode | flags::expand | flags::memory_object | page_ext_attr;
     auto *mapping = memory::KernelCommonAllocatorV->New<map_t>(std::move(backing), object, object_offset, data_offset,
@@ -930,8 +949,11 @@ status_t info_t::status()
             continue;
         result.vma_count++;
         result.virtual_pages += (item.end - item.start) / memory::page_size;
-
         const u64 mapped = paging_.user_mappings(item.start, item.end).mapped_pages;
+        if ((item.flags & flags::user_stack) != 0)
+            result.user_stack_pages += mapped;
+        if ((item.flags & flags::executeable) != 0)
+            result.text_pages += mapped;
         result.mapped_pages += mapped;
         if ((item.flags & flags::memory_object) != 0)
         {

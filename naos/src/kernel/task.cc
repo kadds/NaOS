@@ -7,12 +7,12 @@
 #include "kernel/handle.hpp"
 #include "kernel/ipc/channel.hpp"
 #include "kernel/kobject.hpp"
-#include "kernel/system_status.hpp"
 #include "kernel/mm/data_plane.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
+#include "kernel/system_status.hpp"
 
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/string.hpp"
@@ -553,6 +553,12 @@ void delete_thread(thread_t *thd)
         thd->sleep_watcher = timer::invalid_watcher_id;
         (void)timer::cancel(watcher);
     }
+    if (thd->wait_timeout_watcher != timer::invalid_watcher_id)
+    {
+        const auto watcher = thd->wait_timeout_watcher;
+        thd->wait_timeout_watcher = timer::invalid_watcher_id;
+        (void)timer::cancel(watcher);
+    }
     if (thd->do_wait_queue_now)
         thd->do_wait_queue_now->remove(thd);
     while (thd->wait_queue_wake_refs.load(std::memory_order_acquire) != 0)
@@ -565,6 +571,8 @@ void delete_thread(thread_t *thd)
     thd->process->statistics.iowait_time += thd->statistics.iowait_time;
     thd->process->statistics.intr_time += thd->statistics.intr_time;
     thd->process->statistics.soft_intr_time += thd->statistics.soft_intr_time;
+    thd->process->statistics.voluntary_context_switches += thd->statistics.voluntary_context_switches;
+    thd->process->statistics.involuntary_context_switches += thd->statistics.involuntary_context_switches;
 
     using arch::task::register_info_t;
 
@@ -619,8 +627,8 @@ na_status_t read_process_command_line(process_t *process, naos::data_plane::memo
 
 namespace
 {
-na_status_t write_external_text(naos::data_plane::memory_object &buffer, const char *text, u64 size,
-                                u64 &actual_bytes, u64 &required_bytes)
+na_status_t write_external_text(naos::data_plane::memory_object &buffer, const char *text, u64 size, u64 &actual_bytes,
+                                u64 &required_bytes)
 {
     actual_bytes = 0;
     required_bytes = text == nullptr ? 1 : strlen(text) + 1;
@@ -640,8 +648,8 @@ na_status_t write_external_text(naos::data_plane::memory_object &buffer, const c
 }
 } // namespace
 
-na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
-                              u64 &actual_bytes, u64 &required_bytes)
+na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size, u64 &actual_bytes,
+                              u64 &required_bytes)
 {
     if (process == nullptr)
         return NA_STATUS_INVALID_ARGUMENT;
@@ -820,8 +828,7 @@ void init()
         system_status_meta.features = naos::system::SystemStatus::features;
         system_status_meta.meta_rights = NA_RIGHT_DUPLICATE | NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
         system_status_meta.protocol_rights = NA_SYSTEM_STATUS_RIGHT_INSPECT | NA_PROTOCOL_RIGHT_INVOKE;
-        if (service::register_kernel_service(service::system_status_uri,
-                                             sizeof(service::system_status_uri) - 1,
+        if (service::register_kernel_service(service::system_status_uri, sizeof(service::system_status_uri) - 1,
                                              handle_t<kobject>(system_status_handle.get_control()),
                                              system_status_meta) != 0)
             KLOG_PANIC("unable to publish system status service");
@@ -867,7 +874,8 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
     {
         auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                          memory::vm::flags::readable | memory::vm::flags::writeable |
-                                             memory::vm::flags::expand | memory::vm::flags::user_mode,
+                                             memory::vm::flags::expand | memory::vm::flags::user_mode |
+                                             memory::vm::flags::user_stack,
                                          memory::vm::page_fault_method::common, 0);
 
         if (stack_vm == nullptr)
@@ -1107,12 +1115,11 @@ void copy_fd(process_t *new_proc, process_t *old_proc, flag_t flags)
 
 process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
                           thread_start_func start_func, const char *const args[], const char *const envp[],
-                          flag_t flags)
+                          flag_t flags, khandle pager)
 {
     auto process = new_process();
     if (!process)
         return nullptr;
-
 
     auto *parent = current_process();
     {
@@ -1127,6 +1134,11 @@ process_t *create_process(handle_t<naos::data_plane::memory_object> object, khan
 
     auto mm_info = (mm_info_t *)process->mm_info;
     auto &paging = mm_info->paging();
+    if (pager && object->attach_pager(std::move(pager)) != NA_STATUS_OK)
+    {
+        abort_unstarted_process(process);
+        return nullptr;
+    }
     // read ELF header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
     bin_handle::execute_info exec_info;
@@ -1195,7 +1207,6 @@ process_t *create_process(handle_t<naos::data_plane::memory_object> object, khan
         thd->attributes |= thread_attributes::real_time;
     if ((flags & create_process_flags::deferred_start) == 0)
         start_process(process);
-
 
     return process;
 }
@@ -1334,7 +1345,8 @@ int fork()
 }
 
 int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na_handle_t executable_handle,
-           const char *path, thread_start_func start_func, char *const argv[], char *const envp[])
+           const char *path, thread_start_func start_func, char *const argv[], char *const envp[], khandle pager,
+           na_handle_t pager_handle)
 {
     auto thd = current();
     auto process = thd->process;
@@ -1375,6 +1387,13 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na
         return ENOMEM;
     }
     new_mm_info->paging().map_kernel_space();
+    if (pager && object->attach_pager(std::move(pager)) != NA_STATUS_OK)
+    {
+        memory::Delete(mm_info_t_allocator, new_mm_info);
+        memory::DeleteArray(memory::KernelCommonAllocatorV, process_args->data_ptr, process_args->size);
+        memory::Delete(memory::KernelCommonAllocatorV, process_args);
+        return EINVAL;
+    }
 
     // read ELF header 128 bytes
     byte *header = (byte *)memory::KernelCommonAllocatorV->allocate(128, 8);
@@ -1427,6 +1446,8 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na
     // of the new image and must be released before entering userland.
     if (executable_handle != NA_HANDLE_INVALID)
         process->resource.close_native(executable_handle);
+    if (pager_handle != NA_HANDLE_INVALID)
+        process->resource.close_native(pager_handle);
     thd->user_stack_top = exec_info.stack_top;
     thd->user_stack_bottom = exec_info.stack_bottom;
 
@@ -1452,6 +1473,7 @@ bool do_sleep(timeclock::microsecond_t duration)
         if (watcher == timer::invalid_watcher_id)
             return false;
         thd->sleep_watcher = watcher;
+        thd->attributes |= thread_attributes::voluntary_context_switch;
         scheduler::update_state(thd, thread_state::stop);
     }
     else
@@ -1720,6 +1742,18 @@ u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid, stat
     ret = static_cast<i64>(na_process_wait_status_exit(static_cast<i64>(process->ret_val)));
     waited_pid = process->pid;
     statistics = process->statistics;
+    if (process->mm_info != nullptr)
+    {
+        const auto vm_status = reinterpret_cast<mm_info_t *>(process->mm_info)->status();
+        statistics.page_faults = vm_status.page_faults;
+        statistics.peak_rss_pages = vm_status.peak_rss_pages;
+        statistics.user_stack_pages = vm_status.user_stack_pages;
+        statistics.text_pages = vm_status.text_pages;
+        statistics.resident_pages = vm_status.rss_pages;
+    }
+    statistics.file_inputs = process->file_inputs.load(std::memory_order_relaxed);
+    statistics.file_outputs = process->file_outputs.load(std::memory_order_relaxed);
+    statistics.signals_delivered = process->signals_delivered.load(std::memory_order_relaxed);
     if (--process->wait_counter == 0)
     {
         notify_parent_of_child_state_change(process);
@@ -2468,8 +2502,8 @@ process_t *find_pid(process_id pid)
     return global_process_map->get(pid).value_or(nullptr);
 }
 
-i64 open_process_snapshot(process_id after_pid, u64 limit,
-                          freelibcxx::vector<process_snapshot_entry> &entries, process_id &next_pid)
+i64 open_process_snapshot(process_id after_pid, u64 limit, freelibcxx::vector<process_snapshot_entry> &entries,
+                          process_id &next_pid)
 {
     entries.clear();
     next_pid = 0;
@@ -2605,6 +2639,7 @@ void get_process_memory_accounting(const process_t *process, memory_accounting_t
         accounting.committed_pages = vm_status.committed_pages;
         accounting.anonymous_pages = vm_status.anonymous_pages;
         accounting.file_cache_pages = vm_status.file_cache_pages;
+        accounting.user_stack_pages = vm_status.user_stack_pages;
         accounting.page_faults = vm_status.page_faults;
         accounting.peak_rss_pages = vm_status.peak_rss_pages;
     }
@@ -2668,6 +2703,15 @@ void switch_thread(thread_t *old, thread_t *new_task)
 {
     kassert(!arch::idt::is_enable(), "expect failed");
 
+    if (old != nullptr && old != new_task && old->process != nullptr)
+    {
+        if (old->attributes & thread_attributes::voluntary_context_switch)
+            old->statistics.voluntary_context_switches++;
+        else
+            old->statistics.involuntary_context_switches++;
+        old->attributes &= ~thread_attributes::voluntary_context_switch;
+    }
+
     cpu::current().set_task(new_task);
 
     if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
@@ -2687,6 +2731,7 @@ void set_cpu_mask(thread_t *thd, cpu_mask_t mask)
 
 void thread_yield()
 {
+    current()->attributes |= thread_attributes::voluntary_context_switch;
     current()->attributes |= thread_attributes::need_schedule;
     yield_preempt();
 }

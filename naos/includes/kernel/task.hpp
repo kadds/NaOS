@@ -77,6 +77,20 @@ struct statistics_t
     u64 sys_time = 0;
     u64 intr_time = 0;
     u64 soft_intr_time = 0;
+    /// Exit-time memory counters captured before the address space is
+    /// destroyed. Page faults are currently a single total; the rusage
+    /// adapter reports them as minor faults until the VM layer distinguishes
+    /// major I/O faults.
+    u64 page_faults = 0;
+    u64 peak_rss_pages = 0;
+    u64 user_stack_pages = 0;
+    u64 file_inputs = 0;
+    u64 file_outputs = 0;
+    u64 signals_delivered = 0;
+    u64 voluntary_context_switches = 0;
+    u64 involuntary_context_switches = 0;
+    u64 text_pages = 0;
+    u64 resident_pages = 0;
 };
 
 struct memory_accounting_t
@@ -145,6 +159,9 @@ struct process_t
     std::atomic_uint64_t capability_refs;
     std::atomic_bool reap_pending;
     std::atomic_bool storage_released;
+    std::atomic_uint64_t file_inputs{0};
+    std::atomic_uint64_t file_outputs{0};
+    std::atomic_uint64_t signals_delivered{0};
 
     thread_t *main_thread;
     u64 ret_val;
@@ -230,6 +247,7 @@ enum attributes : flag_t
 {
     need_schedule = 1,
     block_to_stop = 4,
+    voluntary_context_switch = 1UL << 10,
     detached = 8,
     main = 16,
     real_time = 32,
@@ -300,9 +318,12 @@ struct thread_t
     std::atomic_int wait_counter;
     u64 error_code = 0;
     wait_queue_t *do_wait_queue_now = nullptr;
+    wait_context_t async_wait_context;
     std::atomic_uint32_t wait_queue_wake_refs{0};
     /// Timer used to wake a thread blocked in sleep().
     u64 sleep_watcher = 0;
+    /// Timer used by a blocking wait with a deadline.
+    u64 wait_timeout_watcher = 0;
     void *tcb = 0;
 
     // A fault-safe usercopy temporarily arms the page-fault dispatcher with
@@ -401,7 +422,7 @@ process_args_t *copy_args(const char *path, const char *argv[], const char *env[
 
 process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
                           thread_start_func start_func,
-                          const char *const args[], const char *const envp[], flag_t flags);
+                          const char *const args[], const char *const envp[], flag_t flags, khandle pager = {});
 
 /// Publish a process created with create_process_flags::deferred_start.
 void start_process(process_t *process);
@@ -414,7 +435,8 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
 int fork();
 
 int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na_handle_t executable_handle,
-           const char *path, thread_start_func start_func, char *const argv[], char *const envp[]);
+           const char *path, thread_start_func start_func, char *const argv[], char *const envp[], khandle pager = {},
+           na_handle_t pager_handle = NA_HANDLE_INVALID);
 
 NoReturn void do_exit(i64 value);
 

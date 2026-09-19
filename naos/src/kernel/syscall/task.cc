@@ -10,6 +10,7 @@
 #include "naos/abi.h"
 #include "naos/bootstrap.hpp"
 #include "naos/generated/system/Directory.hpp"
+#include "naos/generated/system/File.hpp"
 #include "naos/generated/system/Process.hpp"
 #include "naos/generated/system/ServiceDirectory.hpp"
 #include "naos/generated/system_uapi.h"
@@ -162,6 +163,7 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
         std::atomic_bool timed_out{false};
         timer::watcher_id deadline_watcher = timer::invalid_watcher_id;
         futex_timeout timeout_wakeup{bucket, process, ptr, timed_out};
+        auto *waiter = task::current();
         if (has_timeout)
         {
             const auto seconds = static_cast<u64>(relative.tv_sec);
@@ -183,6 +185,8 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
                 timer::schedule_at(now + duration, timer::timer_handler::bind<&futex_timeout::wake>(timeout_wakeup));
             if (deadline_watcher == timer::invalid_watcher_id)
                 return EFAILED;
+            if (waiter != nullptr)
+                waiter->wait_timeout_watcher = deadline_watcher;
         }
 
         bucket.waiters.do_wait(
@@ -195,7 +199,11 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
             },
             process, ptr, &wake_sequence, true);
         if (deadline_watcher != timer::invalid_watcher_id)
+        {
             (void)timer::cancel(deadline_watcher);
+            if (waiter != nullptr && waiter->wait_timeout_watcher == deadline_watcher)
+                waiter->wait_timeout_watcher = timer::invalid_watcher_id;
+        }
 
         if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
             return EFAULT;
@@ -585,6 +593,19 @@ na_status_t process_exec(const na_process_exec_frame_t *frame)
         if (memory_object == nullptr)
             return NA_STATUS_WRONG_BINDING;
 
+        khandle pager;
+        if (values.pager != NA_HANDLE_INVALID)
+        {
+            capability::entry pager_entry;
+            if (!process->resource.lookup_native(values.pager, pager_entry) || !pager_entry.object ||
+                pager_entry.meta.binding != NA_BINDING_CLIENT_END || pager_entry.meta.scope != NA_SCOPE_FILE ||
+                (pager_entry.meta.protocol_rights & NA_PROTOCOL_RIGHT_INVOKE) == 0 ||
+                memcmp(pager_entry.meta.protocol_uuid.bytes, naos::system::File::protocol_uuid.bytes,
+                       sizeof(pager_entry.meta.protocol_uuid.bytes)) != 0)
+                return NA_STATUS_WRONG_BINDING;
+            pager = pager_entry.object;
+        }
+
         handle_t<naos::data_plane::memory_object> object(entry.object.get_control());
         khandle backing = entry.object;
         // Successful exec never unwinds this syscall frame, so the copied
@@ -594,7 +615,7 @@ na_status_t process_exec(const na_process_exec_frame_t *frame)
         entry.object.reset();
         arm_exec_bootstrap();
         const auto result = task::execve(std::move(object), std::move(backing), values.executable, path,
-                                         before_user_thread, argv, envp);
+                                         before_user_thread, argv, envp, std::move(pager), values.pager);
         clear_exec_bootstrap_on_failure();
         return native_status_from_errno(result);
     }
@@ -649,6 +670,18 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
         if (executable_entry.object->get<naos::data_plane::memory_object>() == nullptr)
             return NA_STATUS_WRONG_BINDING;
     }
+    khandle pager;
+    if (values.pager != NA_HANDLE_INVALID)
+    {
+        capability::entry pager_entry;
+        if (!parent->resource.lookup_native(values.pager, pager_entry) || !pager_entry.object ||
+            pager_entry.meta.binding != NA_BINDING_CLIENT_END || pager_entry.meta.scope != NA_SCOPE_FILE ||
+            (pager_entry.meta.protocol_rights & NA_PROTOCOL_RIGHT_INVOKE) == 0 ||
+            memcmp(pager_entry.meta.protocol_uuid.bytes, naos::system::File::protocol_uuid.bytes,
+                   sizeof(pager_entry.meta.protocol_uuid.bytes)) != 0)
+            return NA_STATUS_WRONG_BINDING;
+        pager = pager_entry.object;
+    }
     if (endpoint_entry.meta.binding != NA_BINDING_RAW_CHANNEL_END)
         return NA_STATUS_WRONG_BINDING;
 
@@ -679,7 +712,7 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
         khandle backing = records[0].resource.object();
         child = task::create_process(std::move(object), std::move(backing), path, before_user_thread,
                                      reinterpret_cast<const char *const *>(argv),
-                                     reinterpret_cast<const char *const *>(envp), child_flags);
+                                     reinterpret_cast<const char *const *>(envp), child_flags, std::move(pager));
     }
 
     if (child == nullptr)

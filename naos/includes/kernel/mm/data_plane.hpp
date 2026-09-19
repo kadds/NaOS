@@ -4,17 +4,46 @@
 #include "kernel/kobject.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/wait.hpp"
 #include "naos/abi.h"
+
+namespace naos::ipc
+{
+class protocol_endpoint;
+}
+
+namespace task
+{
+struct process_t;
+}
+
+namespace memory::vm
+{
+struct fault_history_t;
+}
 
 namespace naos::data_plane
 {
+
+enum class page_fault_result : u8
+{
+    ready,
+    blocked,
+    failed,
+};
 
 class memory_object final : public kobject
 {
   public:
     using release_callback = void (*)();
+    struct page_alias_tag
+    {
+    };
 
     memory_object(u64 size, u32 flags);
+    /// Non-owning page-backed view used as a pager I/O destination. The page
+    /// owner keeps the frames alive until the view is destroyed.
+    memory_object(byte *const *pages, u64 page_count, u64 size, page_alias_tag);
     /// Immutable zero-copy view over kernel-owned storage (the
     /// immutable-boot-object backing of USERSPACE_FILESYSTEM_ADR §5.1.3).
     /// Never allocates or copies: the size is not limited by
@@ -54,6 +83,23 @@ class memory_object final : public kobject
     phy_addr_t page_frame(u64 object_offset) const;
     /// True once publish_shared_pages() bound owned bytes to page frames.
     bool page_backed() const;
+    /// True when pages are supplied lazily by a user-space File pager.
+    bool pager_backed() const;
+
+    /// Attach the File client used by the existing map/exec boundary as this
+    /// object's lazy pager. The caller must have validated the capability.
+    na_status_t attach_pager(khandle pager);
+
+    /// Resolve one page through the attached user-space pager. In interrupt
+    /// context this registers the current thread and returns blocked; the
+    /// pager worker performs the actual IPC and wakes the thread.
+    page_fault_result fault_page(u64 object_offset, const khandle &backing = {},
+                                 memory::vm::fault_history_t *history = nullptr) const;
+
+    /// Service a page request previously marked as loading. The request may
+    /// cover a small aligned prefetch window. This is called by the pager
+    /// worker, outside interrupt context.
+    bool service_fault_pages(u64 first_page, u64 page_count, task::process_t *accounting_process = nullptr) const;
 
   private:
     /// Logical size of the owned storage, without the page-cache rounding.
@@ -65,6 +111,7 @@ class memory_object final : public kobject
     bool writable_locked(u64 offset, u64 size) const;
     void read_locked(u64 offset, byte *destination, u64 size) const;
     void write_locked(u64 offset, const byte *source, u64 size);
+    bool pager_backed_locked() const { return static_cast<bool>(pager_); }
 
     mutable lock::spinlock_t lock_;
     freelibcxx::vector<byte> bytes_;
@@ -80,10 +127,16 @@ class memory_object final : public kobject
     /// the kernel view.
     freelibcxx::vector<byte *> pages_;
     u64 pages_size_ = 0;
+    bool pages_owned_ = true;
+    khandle pager_;
+    freelibcxx::vector<u8> page_states_;
+    mutable task::wait_queue_t pager_wait_queue_;
+    naos::ipc::protocol_endpoint *pager_endpoint_ = nullptr;
     /// Physical base of direct-mapped device memory; null for heap objects
     /// and immutable boot-archive views.
     phy_addr_t physical_{nullptr};
     release_callback on_release_ = nullptr;
 };
 
+void init_pager_worker();
 } // namespace naos::data_plane

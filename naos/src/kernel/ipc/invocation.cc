@@ -893,7 +893,7 @@ na_status_t publish_system_status_call(invocation_state &state, system_status_se
         const auto snapshot_status = task::open_process_snapshot(decoded.after_pid, 64, entries, next_pid);
         if (snapshot_status != 0)
             return state.complete_reply(empty_bytes(), empty_resources(), snapshot_status) ? NA_STATUS_OK
-                                                                                            : NA_STATUS_PEER_CLOSED;
+                                                                                           : NA_STATUS_PEER_CLOSED;
 
         naos::system::SystemStatus::list_processes_response encoded{};
         encoded.next_after_pid = next_pid;
@@ -916,11 +916,10 @@ na_status_t publish_system_status_call(invocation_state &state, system_status_se
         for (auto &entry : entries)
         {
             response_resources.push_back(capability::transfer_record(
-                NA_HANDLE_INVALID, true,
-                capability::transferred_resource(std::move(entry.object), process_meta)));
+                NA_HANDLE_INVALID, true, capability::transferred_resource(std::move(entry.object), process_meta)));
         }
         return state.complete_reply(std::move(response), std::move(response_resources)) ? NA_STATUS_OK
-                                                                                          : NA_STATUS_PEER_CLOSED;
+                                                                                        : NA_STATUS_PEER_CLOSED;
     }
 
     if (method_id != NA_METHOD_SYSTEM_STATUS_GET)
@@ -947,9 +946,8 @@ na_status_t publish_system_status_call(invocation_state &state, system_status_se
     encoded.value.shared_pages = accounting.shared_pages;
     encoded.value.reclaimable_pages = allocator.available_pages - allocator.free_pages;
     encoded.value.kernel_reclaimable_pages = 0;
-    const u64 allocated_pages = allocator.usable_pages > allocator.free_pages
-                                    ? allocator.usable_pages - allocator.free_pages
-                                    : 0;
+    const u64 allocated_pages =
+        allocator.usable_pages > allocator.free_pages ? allocator.usable_pages - allocator.free_pages : 0;
     // User mappings are currently reported as mapping counts, so this is a
     // conservative attribution rather than a unique-frame total when shared
     // mappings exist.
@@ -977,8 +975,8 @@ na_status_t publish_system_status_call(invocation_state &state, system_status_se
 }
 
 na_status_t publish_process_call(invocation_state &state, task::process_object &process, u64 method_id,
-                                 const freelibcxx::vector<byte> &request,
-                                 capability::transfer_record_list &resources, task::process_t *caller)
+                                 const freelibcxx::vector<byte> &request, capability::transfer_record_list &resources,
+                                 task::process_t *caller)
 {
     auto response = freelibcxx::vector<byte>(memory::MemoryAllocatorV);
     auto *target = process.process();
@@ -1000,13 +998,25 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         if (state.execution_interrupted())
             return NA_STATUS_PEER_CLOSED;
         if (result != 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
+            return state.complete_reply(empty_bytes(), empty_resources(), result < 0 ? result : -result)
+                       ? NA_STATUS_OK
+                       : NA_STATUS_PEER_CLOSED;
         naos::system::Process::wait_response encoded{};
         encoded.status = status;
         encoded.pid = waited_pid;
         encoded.user_time_us = statistics.user_time;
         encoded.system_time_us = statistics.sys_time;
+        encoded.page_faults = statistics.page_faults;
+        encoded.peak_rss_pages = statistics.peak_rss_pages;
+        encoded.page_size = memory::page_size;
+        encoded.user_stack_pages = statistics.user_stack_pages;
+        encoded.file_inputs = statistics.file_inputs;
+        encoded.file_outputs = statistics.file_outputs;
+        encoded.signals_delivered = statistics.signals_delivered;
+        encoded.voluntary_context_switches = statistics.voluntary_context_switches;
+        encoded.involuntary_context_switches = statistics.involuntary_context_switches;
+        encoded.text_pages = statistics.text_pages;
+        encoded.resident_pages = statistics.resident_pages;
         if (!encode_message(response, encoded, naos::system::Process::encode_wait_response))
             return NA_STATUS_RESOURCE_EXHAUSTED;
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
@@ -1029,13 +1039,25 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         if (state.execution_interrupted())
             return NA_STATUS_PEER_CLOSED;
         if (result != 0)
-            return state.complete_reply(empty_bytes(), empty_resources(), result) ? NA_STATUS_OK
-                                                                                  : NA_STATUS_PEER_CLOSED;
+            return state.complete_reply(empty_bytes(), empty_resources(), result < 0 ? result : -result)
+                       ? NA_STATUS_OK
+                       : NA_STATUS_PEER_CLOSED;
         naos::system::Process::wait_children_response encoded{};
         encoded.status = status;
         encoded.pid = waited_pid;
         encoded.user_time_us = statistics.user_time;
         encoded.system_time_us = statistics.sys_time;
+        encoded.page_faults = statistics.page_faults;
+        encoded.peak_rss_pages = statistics.peak_rss_pages;
+        encoded.page_size = memory::page_size;
+        encoded.user_stack_pages = statistics.user_stack_pages;
+        encoded.file_inputs = statistics.file_inputs;
+        encoded.file_outputs = statistics.file_outputs;
+        encoded.signals_delivered = statistics.signals_delivered;
+        encoded.voluntary_context_switches = statistics.voluntary_context_switches;
+        encoded.involuntary_context_switches = statistics.involuntary_context_switches;
+        encoded.text_pages = statistics.text_pages;
+        encoded.resident_pages = statistics.resident_pages;
         if (!encode_message(response, encoded, naos::system::Process::encode_wait_children_response))
             return NA_STATUS_RESOURCE_EXHAUSTED;
         return state.complete_reply(std::move(response), empty_resources()) ? NA_STATUS_OK : NA_STATUS_PEER_CLOSED;
@@ -1063,16 +1085,16 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
             !naos::system::Process::validate_get_status_request_resources(decoded, resources.size()))
             return NA_STATUS_INVALID_MESSAGE;
         u64 region_offset = 0;
-        auto *region = request_region_object(resources, decoded.buffer.value,
-                                             NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0, decoded.size,
-                                             region_offset);
+        auto *region =
+            request_region_object(resources, decoded.buffer.value, NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0,
+                                  decoded.size, region_offset);
         if (region == nullptr || !region->writable(region_offset, decoded.size))
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
                                                                                   : NA_STATUS_PEER_CLOSED;
         naos::system::Process::get_status_response encoded{};
         fill_process_status(encoded.value, target);
-        const auto name_status = task::read_process_name(target, *region, decoded.size,
-                                                         encoded.value.name_bytes, encoded.value.name_required_bytes);
+        const auto name_status = task::read_process_name(target, *region, decoded.size, encoded.value.name_bytes,
+                                                         encoded.value.name_required_bytes);
         if (name_status != NA_STATUS_OK && name_status != NA_STATUS_BUFFER_TOO_SMALL)
             return state.complete_reply(empty_bytes(), empty_resources(), name_status) ? NA_STATUS_OK
                                                                                        : NA_STATUS_PEER_CLOSED;
@@ -1089,9 +1111,9 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
             return NA_STATUS_INVALID_MESSAGE;
 
         u64 region_offset = 0;
-        auto *region = request_region_object(resources, decoded.buffer.value,
-                                             NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0, decoded.size,
-                                             region_offset);
+        auto *region =
+            request_region_object(resources, decoded.buffer.value, NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0,
+                                  decoded.size, region_offset);
         if (region == nullptr || !region->writable(region_offset, decoded.size))
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
                                                                                   : NA_STATUS_PEER_CLOSED;
@@ -1117,9 +1139,9 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
             !naos::system::Process::validate_list_threads_request_resources(decoded, resources.size()))
             return NA_STATUS_INVALID_MESSAGE;
         u64 region_offset = 0;
-        auto *region = request_region_object(resources, decoded.buffer.value,
-                                             NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0, decoded.size,
-                                             region_offset);
+        auto *region =
+            request_region_object(resources, decoded.buffer.value, NA_MEMORY_RIGHT_MAP | NA_MEMORY_RIGHT_WRITE, 0,
+                                  decoded.size, region_offset);
         if (region == nullptr || !region->writable(region_offset, decoded.size))
             return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
                                                                                   : NA_STATUS_PEER_CLOSED;
@@ -1129,7 +1151,7 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         const auto snapshot_status = task::open_thread_snapshot(target, decoded.after_tid, 64, entries, next_tid);
         if (snapshot_status != 0)
             return state.complete_reply(empty_bytes(), empty_resources(), snapshot_status) ? NA_STATUS_OK
-                                                                                            : NA_STATUS_PEER_CLOSED;
+                                                                                           : NA_STATUS_PEER_CLOSED;
 
         naos::system::Process::list_threads_response encoded{};
         encoded.next_after_tid = next_tid;
@@ -1138,9 +1160,8 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
         {
             const u64 entry_name_bytes = strlen(entry.name) + 1;
             if (required_name_bytes > ~u64(0) - entry_name_bytes)
-                return state.complete_reply(empty_bytes(), empty_resources(), EOVERFLOW)
-                           ? NA_STATUS_OK
-                           : NA_STATUS_PEER_CLOSED;
+                return state.complete_reply(empty_bytes(), empty_resources(), EOVERFLOW) ? NA_STATUS_OK
+                                                                                         : NA_STATUS_PEER_CLOSED;
             required_name_bytes += entry_name_bytes;
         }
         encoded.name_required_bytes = required_name_bytes;
@@ -1157,10 +1178,10 @@ na_status_t publish_process_call(invocation_state &state, task::process_object &
                 const u64 entry_name_bytes = strlen(entries[index].name) + 1;
                 u64 written = 0;
                 if (region->write(region_offset + name_offset, reinterpret_cast<const byte *>(entries[index].name),
-                                  entry_name_bytes, written) != NA_STATUS_OK || written != entry_name_bytes)
-                    return state.complete_reply(empty_bytes(), empty_resources(), EINVAL)
-                               ? NA_STATUS_OK
-                               : NA_STATUS_PEER_CLOSED;
+                                  entry_name_bytes, written) != NA_STATUS_OK ||
+                    written != entry_name_bytes)
+                    return state.complete_reply(empty_bytes(), empty_resources(), EINVAL) ? NA_STATUS_OK
+                                                                                          : NA_STATUS_PEER_CLOSED;
                 encoded.threads.data[index].name_offset = name_offset;
                 encoded.threads.data[index].name_bytes = entry_name_bytes;
                 name_offset += entry_name_bytes;
@@ -2120,6 +2141,18 @@ void protocol_endpoint::end_operation()
         state_->end_operation();
 }
 
+void protocol_endpoint::acquire_kernel_reference()
+{
+    if (state_)
+        state_->endpoint_acquired(role_, capability::location::in_transit);
+}
+
+void protocol_endpoint::release_kernel_reference()
+{
+    if (state_)
+        state_->endpoint_released(role_, capability::location::in_transit);
+}
+
 namespace
 {
 std::atomic<naos_ipc_domain_t *> invocation_core_domain{nullptr};
@@ -2799,6 +2832,78 @@ na_signal_t protocol_state::signals(endpoint_role role) const
     if (owners_[peer].load() == 0 || (role == endpoint_role::client && server_closed_))
         result |= NA_SIGNAL_PEER_CLOSED;
     return result;
+}
+
+handle_t<invocation_state> submit_kernel_invocation(const khandle &target, u64 method_id,
+                                                    freelibcxx::vector<byte> &&bytes,
+                                                    capability::transfer_record_list &&resources)
+{
+    if (!target)
+        return {};
+    if (target->get_ktype() != protocol_endpoint::type_of(endpoint_role::client))
+        return {};
+    auto *endpoint = const_cast<protocol_endpoint *>(target->get_unsafe<protocol_endpoint>());
+    if (endpoint == nullptr || endpoint->role() != endpoint_role::client || endpoint->state() == nullptr ||
+        !endpoint->state()->valid())
+    {
+        return {};
+    }
+
+    endpoint->begin_operation();
+    struct operation_guard
+    {
+        protocol_endpoint *endpoint;
+        ~operation_guard() { endpoint->end_operation(); }
+    } guard{endpoint};
+
+    const auto &descriptor = endpoint->state()->descriptor();
+    if (!descriptor_allows_method(descriptor, method_id) || descriptor_allows_oneway(descriptor, method_id) ||
+        (descriptor.max_request_bytes != 0 && bytes.size() > descriptor.max_request_bytes) ||
+        (descriptor.max_resources != 0 && resources.size() > descriptor.max_resources))
+    {
+        return {};
+    }
+
+    auto state =
+        handle_t<invocation_state>::make(method_id, 0, descriptor.max_response_bytes, descriptor.max_resources);
+    if (!state || !state->reserve_result_budget() || state->arm_deadline(state) != NA_STATUS_OK)
+    {
+        return {};
+    }
+    state->set_queue_owner(endpoint->state_ref());
+
+    auto *request = memory::New<invocation_request>(memory::KernelCommonAllocatorV, memory::MemoryAllocatorV, state,
+                                                    method_id, 0, 0);
+    if (request == nullptr)
+    {
+        return {};
+    }
+    request->bytes = std::move(bytes);
+    request->resources = std::move(resources);
+
+    auto responder = handle_t<responder_object>::make(state);
+    if (!responder)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, request);
+        return {};
+    }
+    capability::metadata responder_metadata;
+    responder_metadata.binding = NA_BINDING_RESPONDER;
+    responder_metadata.protocol_uuid = descriptor.uuid;
+    responder_metadata.scope = descriptor.scope;
+    responder_metadata.revision = descriptor.revision;
+    responder_metadata.features = descriptor.features;
+    responder_metadata.meta_rights = NA_RIGHT_TRANSFER | NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+    request->responder = capability::transferred_resource(std::move(responder), responder_metadata);
+
+    bool queued = false;
+    const auto status = endpoint->state()->enqueue(request, &queued);
+    if (status != NA_STATUS_OK || !queued)
+    {
+        memory::Delete<>(memory::KernelCommonAllocatorV, request);
+        return {};
+    }
+    return state;
 }
 
 void protocol_state::endpoint_object_created(protocol_endpoint *endpoint)

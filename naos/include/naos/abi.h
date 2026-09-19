@@ -494,6 +494,8 @@ typedef struct na_process_exec_frame
     uint32_t struct_size;
     uint32_t flags;
     na_handle_t executable;
+    /* Optional File client used as the executable's lazy pager. */
+    na_handle_t pager;
     uint64_t path;
     uint64_t argv;
     uint64_t envp;
@@ -514,6 +516,8 @@ typedef struct na_process_spawn_frame
     uint32_t struct_size;
     uint32_t flags;
     na_handle_t executable;
+    /* Optional File client used as the executable's lazy pager. */
+    na_handle_t pager;
     na_handle_t bootstrap_endpoint;
     uint64_t path;
     uint64_t argv;
@@ -591,6 +595,8 @@ typedef struct na_memory_map_frame
     uint32_t flags;
     uint64_t hint;
     na_handle_t object;
+    /* Optional File client used to page data into the MemoryObject. */
+    na_handle_t pager;
     uint64_t offset;
     uint64_t length;
     uint64_t address;

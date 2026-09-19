@@ -25,16 +25,26 @@ namespace timer
 {
 namespace
 {
+struct watcher_lifetime
+{
+    watcher_id id = invalid_watcher_id;
+    std::atomic_uint32_t references{1};
+    std::atomic_bool completed{false};
+    watcher_lifetime *active_next = nullptr;
+};
+
 struct watcher_t
 {
     watcher_id id;
     timeclock::nanosecond_t expires_ns;
     timer_handler handler;
+    watcher_lifetime *lifetime;
 
-    watcher_t(watcher_id id, timeclock::nanosecond_t expires_ns, timer_handler handler)
+    watcher_t(watcher_id id, timeclock::nanosecond_t expires_ns, timer_handler handler, watcher_lifetime *lifetime)
         : id(id)
         , expires_ns(expires_ns)
         , handler(handler)
+        , lifetime(lifetime)
     {
     }
 
@@ -67,6 +77,8 @@ enum class clock_kind : u8
 };
 
 cpu_timer_t *timer_queues[arch::cpu::max_cpu_support]{};
+watcher_lifetime *active_watchers = nullptr;
+watcher_lifetime *active_callbacks[arch::cpu::max_cpu_support]{};
 lock::spinlock_t timer_queue_lock;
 lock::spinlock_t timer_spinlock;
 std::atomic_uint64_t next_watcher_id{1};
@@ -86,6 +98,56 @@ template <typename Atomic> void increment_saturated(Atomic &counter) noexcept
            !counter.compare_exchange_weak(old, old + 1, std::memory_order_relaxed, std::memory_order_relaxed))
     {
     }
+}
+
+void retain_watcher(watcher_lifetime *lifetime) noexcept
+{
+    lifetime->references.fetch_add(1, std::memory_order_relaxed);
+}
+
+void release_watcher(watcher_lifetime *lifetime) noexcept
+{
+    if (lifetime->references.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        memory::KernelCommonAllocatorV->Delete(lifetime);
+}
+
+void add_active_watcher_locked(watcher_lifetime *lifetime) noexcept
+{
+    lifetime->active_next = active_watchers;
+    active_watchers = lifetime;
+}
+
+void remove_active_watcher_locked(watcher_lifetime *lifetime) noexcept
+{
+    watcher_lifetime **current = &active_watchers;
+    while (*current != nullptr)
+    {
+        if (*current == lifetime)
+        {
+            *current = lifetime->active_next;
+            lifetime->active_next = nullptr;
+            return;
+        }
+        current = &(*current)->active_next;
+    }
+}
+
+watcher_lifetime *find_active_watcher_locked(watcher_id id) noexcept
+{
+    for (auto *current = active_watchers; current != nullptr; current = current->active_next)
+    {
+        if (current->id == id)
+            return current;
+    }
+    return nullptr;
+}
+
+bool is_current_callback(watcher_lifetime *lifetime) noexcept
+{
+    if (!cpu::has_init())
+        return false;
+    const u32 cpu_id = cpu::current().id();
+    return cpu_id < arch::cpu::max_cpu_support && active_callbacks[cpu_id] == lifetime;
 }
 
 timeclock::event_clock *get_event_clock() noexcept
@@ -158,6 +220,7 @@ void on_tick(u64 vector) noexcept
     for (;;)
     {
         timer_handler handler;
+        watcher_lifetime *lifetime = nullptr;
         timeclock::nanosecond_t expires_ns = 0;
         const auto now_ns = clock->now_ns();
         {
@@ -169,14 +232,24 @@ void on_tick(u64 vector) noexcept
                 break;
             }
             handler = it->handler;
+            lifetime = it->lifetime;
             expires_ns = it->expires_ns;
+            add_active_watcher_locked(lifetime);
             queue->watchers.remove(it);
             if (now_ns > expires_ns)
                 increment_saturated(late_deadlines);
         }
         // Removing before invoking is what makes cancellation safe when a
         // callback races with a caller on another CPU.
+        active_callbacks[cpu::current().id()] = lifetime;
         handler(expires_ns / timeclock::nanoseconds_per_microsecond);
+        active_callbacks[cpu::current().id()] = nullptr;
+        lifetime->completed.store(true, std::memory_order_release);
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+            remove_active_watcher_locked(lifetime);
+        }
+        release_watcher(lifetime);
     }
 }
 
@@ -383,10 +456,15 @@ watcher_id schedule_after(timeclock::microsecond_t duration, timer_handler handl
     if (!timeclock::try_add_nanoseconds(now_ns, duration_ns, expires_ns))
         return invalid_watcher_id;
 
+    auto *lifetime = memory::KernelCommonAllocatorV->New<watcher_lifetime>();
+    if (lifetime == nullptr)
+        return invalid_watcher_id;
+
     uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
     const watcher_id id = next_watcher_id.fetch_add(1, std::memory_order_relaxed);
+    lifetime->id = id;
     const bool was_earliest = queue->watchers.empty() || expires_ns < queue->watchers.begin()->expires_ns;
-    queue->watchers.insert(id, expires_ns, handler);
+    queue->watchers.insert(id, expires_ns, handler, lifetime);
     if (was_earliest)
         rearm_current_cpu_locked(*queue);
     return id;
@@ -405,10 +483,15 @@ watcher_id schedule_at(timeclock::microsecond_t expires_time_point, timer_handle
     if (get_high_resolution_time_ns() >= expires_ns)
         return invalid_watcher_id;
 
+    auto *lifetime = memory::KernelCommonAllocatorV->New<watcher_lifetime>();
+    if (lifetime == nullptr)
+        return invalid_watcher_id;
+
     uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
     const watcher_id id = next_watcher_id.fetch_add(1, std::memory_order_relaxed);
+    lifetime->id = id;
     const bool was_earliest = queue->watchers.empty() || expires_ns < queue->watchers.begin()->expires_ns;
-    queue->watchers.insert(id, expires_ns, handler);
+    queue->watchers.insert(id, expires_ns, handler, lifetime);
     if (was_earliest)
         rearm_current_cpu_locked(*queue);
     return id;
@@ -418,27 +501,54 @@ bool cancel(watcher_id id)
 {
     if (id == invalid_watcher_id)
         return false;
-    uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-    const u64 count = cpu::count();
-    for (u64 cpu_id = 0; cpu_id < count && cpu_id < arch::cpu::max_cpu_support; cpu_id++)
+
+    watcher_lifetime *removed = nullptr;
+    watcher_lifetime *active = nullptr;
     {
-        auto *queue = timer_queues[cpu_id];
-        if (queue == nullptr)
-            continue;
-        for (auto it = queue->watchers.begin(); it != queue->watchers.end(); ++it)
+        uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+        const u64 count = cpu::count();
+        for (u64 cpu_id = 0; cpu_id < count && cpu_id < arch::cpu::max_cpu_support; cpu_id++)
         {
-            if (it->id == id)
+            auto *queue = timer_queues[cpu_id];
+            if (queue == nullptr)
+                continue;
+            for (auto it = queue->watchers.begin(); it != queue->watchers.end(); ++it)
             {
-                const bool was_earliest = it == queue->watchers.begin();
-                queue->watchers.remove(it);
-                // A remote source will ignore the resulting stale interrupt;
-                // the owning CPU will rearm at its next soft timer pass.
-                if (was_earliest && cpu_id == cpu::current().id())
-                    rearm_current_cpu_locked(*queue);
-                return true;
+                if (it->id == id)
+                {
+                    const bool was_earliest = it == queue->watchers.begin();
+                    removed = it->lifetime;
+                    queue->watchers.remove(it);
+                    // A remote source will ignore the resulting stale interrupt;
+                    // the owning CPU will rearm at its next soft timer pass.
+                    if (was_earliest && cpu_id == cpu::current().id())
+                        rearm_current_cpu_locked(*queue);
+                    break;
+                }
             }
+            if (removed != nullptr)
+                break;
+        }
+        if (removed == nullptr)
+        {
+            active = find_active_watcher_locked(id);
+            if (active != nullptr && !is_current_callback(active))
+                retain_watcher(active);
         }
     }
+
+    if (removed != nullptr)
+    {
+        removed->completed.store(true, std::memory_order_release);
+        release_watcher(removed);
+        return true;
+    }
+    if (active == nullptr || is_current_callback(active))
+        return false;
+
+    while (!active->completed.load(std::memory_order_acquire))
+        cpu_pause();
+    release_watcher(active);
     return false;
 }
 

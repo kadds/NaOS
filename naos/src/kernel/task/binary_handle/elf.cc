@@ -191,7 +191,8 @@ bool load_common(const byte *header, exec_image &image, memory::vm::info_t *new_
     // stack mapping, stack size 8MB
     auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
                                      memory::vm::flags::readable | memory::vm::flags::writeable |
-                                         memory::vm::flags::expand | memory::vm::flags::user_mode,
+                                         memory::vm::flags::expand | memory::vm::flags::user_mode |
+                                         memory::vm::flags::user_stack,
                                      memory::vm::page_fault_method::common, 0);
 
     if (stack_vm == nullptr)

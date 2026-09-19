@@ -56,6 +56,8 @@ void signal_pack_t::send(process_t *to, signal_num_t num, i64 error, i64 code, i
     if (to == nullptr || num == 0 || num >= max_signal_count)
         return;
 
+    to->signals_delivered.fetch_add(1, std::memory_order_relaxed);
+
     auto t = task::current();
     signal_info_t info(num, error, code, t == nullptr ? 0 : t->process->pid, t == nullptr ? 0 : t->tid, status);
     if (num == signal::sigkill || num == signal::sigstop || num == signal::sigcout)

@@ -554,6 +554,7 @@ mod platform {
             flags,
             hint: 0,
             object: handle,
+            pager: 0,
             offset,
             length: u64::try_from(length).map_err(|_| MemoryError::InvalidArgument)?,
             address: 0,

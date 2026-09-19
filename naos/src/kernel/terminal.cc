@@ -27,6 +27,9 @@ terminal_manager *manager = nullptr;
 std::atomic_bool use_stand_terminal = false;
 std::atomic_bool framebuffer_user_writer = false;
 std::atomic_bool framebuffer_user_enabled_state = true;
+lock::spinlock_t flush_timer_lock;
+timer::watcher_id flush_timer_watcher = timer::invalid_watcher_id;
+bool panic_mode = false;
 
 constexpr u8 default_bg_index = 0;
 constexpr u8 default_fg_index = 7;
@@ -445,13 +448,45 @@ freelibcxx::tuple<stand_term_char_t *, int, int> stand_terminal::previous_term_c
     return freelibcxx::make_tuple(nullptr, row, col);
 }
 
+void flush_terminal(timeclock::microsecond_t) noexcept;
+
+void schedule_flush_timer() noexcept
+{
+    const auto watcher = timer::schedule_after(1000000 / 60, timer::timer_handler::bind<&flush_terminal>());
+    if (watcher == timer::invalid_watcher_id)
+        return;
+
+    bool cancel_watcher = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(flush_timer_lock);
+        if (panic_mode)
+            cancel_watcher = true;
+        else
+            flush_timer_watcher = watcher;
+    }
+    if (cancel_watcher)
+        (void)timer::cancel(watcher);
+}
+
 void flush_terminal(timeclock::microsecond_t) noexcept
 {
-    if (use_stand_terminal)
+    bool stopped = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(flush_timer_lock);
+        stopped = panic_mode;
+    }
+    if (!stopped && use_stand_terminal)
     {
         manager->flush_active_terminal();
     }
-    (void)timer::schedule_after(1000000 / 60, timer::timer_handler::bind<&flush_terminal>());
+    else if (!stopped && !framebuffer_user_writer.load(std::memory_order_acquire) && early_terminal != nullptr)
+    {
+        // Runtime kernel logs still use the early terminal until consoled owns
+        // the framebuffer.  Flush the accumulated damage at the display rate
+        // instead of making every log record pay for a full framebuffer walk.
+        early_terminal->flush_dirty();
+    }
+    schedule_flush_timer();
 }
 
 terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &backend)
@@ -463,7 +498,7 @@ terminal_manager::terminal_manager(int nums, const fb::framebuffer_backend &back
         terms_.push_back(1000);
     }
     switch_term(0);
-    (void)timer::schedule_after(1000000 / 60, timer::timer_handler::bind<&flush_terminal>());
+    schedule_flush_timer();
 }
 
 bool terminal_manager::switch_term(int index)
@@ -694,6 +729,19 @@ void reset_early_paging()
     early_terminal->backend()->fb().ptr = virt;
 }
 
+void enter_panic_mode()
+{
+    timer::watcher_id watcher = timer::invalid_watcher_id;
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(flush_timer_lock);
+        panic_mode = true;
+        watcher = flush_timer_watcher;
+        flush_timer_watcher = timer::invalid_watcher_id;
+    }
+    if (watcher != timer::invalid_watcher_id)
+        (void)timer::cancel(watcher);
+}
+
 void reset_panic_term()
 {
     early_terminal->reattach_backend();
@@ -723,7 +771,7 @@ void write_to(freelibcxx::const_string_view sv, int index)
     else
     {
         early_terminal->push_string(sv);
-        if (!framebuffer_user_writer.load(std::memory_order_acquire))
+        if (manager == nullptr && !framebuffer_user_writer.load(std::memory_order_acquire))
             early_terminal->flush_dirty();
     }
 }

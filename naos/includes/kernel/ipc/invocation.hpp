@@ -68,6 +68,8 @@ class protocol_endpoint final : public kobject
     endpoint_role role() const { return role_; }
     void begin_operation();
     void end_operation();
+    void acquire_kernel_reference();
+    void release_kernel_reference();
 
   private:
     handle_t<protocol_state> state_;
@@ -85,6 +87,7 @@ class invocation_state
     invocation_state &operator=(const invocation_state &) = delete;
 
     na_signal_t signals() const;
+    task::wait_queue_t &wait_queue() { return wait_queue_; }
     u64 method_id() const;
     u64 operation_deadline() const;
 
@@ -300,6 +303,9 @@ na_status_t create_protocol_endpoint_objects(const na_protocol_descriptor_t &des
                                              const na_protocol_endpoint_options_t *options, khandle &client,
                                              khandle &server, capability::metadata &client_metadata,
                                              capability::metadata &server_metadata);
+handle_t<invocation_state> submit_kernel_invocation(const khandle &target, u64 method_id,
+                                                    freelibcxx::vector<byte> &&bytes,
+                                                    capability::transfer_record_list &&resources);
 na_status_t invoke_submit(task::resource_table_t &resources, na_handle_t target, const na_submit_frame_t *frame,
                           na_handle_t *invocation, bool oneway);
 na_status_t receive_protocol(task::resource_table_t &resources, na_handle_t endpoint,

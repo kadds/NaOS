@@ -38,6 +38,7 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
         // the thread in the scheduler's blocked set and makes it runnable.
         // Both cases preserve the wake without a second, competing state
         // transition for the same wait context.
+        thd->attributes |= task::thread_attributes::voluntary_context_switch;
         thd->attributes |= task::thread_attributes::need_schedule;
         thd->do_wait_queue_now = this;
         scheduler::update_state(thd, thread_state::stop);
@@ -71,6 +72,7 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
                 // waiter runnable.  The predicate is the authority; consume
                 // the request before arming the next sleep.
                 context.wake_requested = false;
+                thd->attributes |= task::thread_attributes::voluntary_context_switch;
                 thd->attributes |= task::thread_attributes::need_schedule;
                 scheduler::update_state(thd, thread_state::stop);
                 registered = true;
@@ -88,6 +90,42 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
     }
 
     return condition();
+}
+
+bool wait_queue_t::block_current(freelibcxx::function_ref<bool()> condition)
+{
+    auto *thd = current();
+    if (thd == nullptr || thd->do_wait_queue_now != nullptr)
+        return false;
+
+    auto &context = thd->async_wait_context;
+    context.thd = thd;
+    context.condition = nullptr;
+    context.key_domain = nullptr;
+    context.key_address = nullptr;
+    context.wake_sequence = nullptr;
+    context.wake_requested = false;
+    context.queued = false;
+    context.pending_wake = false;
+    context.prev = nullptr;
+    context.next = nullptr;
+    context.pending_prev = nullptr;
+    context.pending_next = nullptr;
+    {
+        uctx::RawSpinLockUninterruptibleContext ctx(lock);
+        enqueue_locked(&context);
+        thd->do_wait_queue_now = this;
+        if (condition != nullptr && condition())
+        {
+            unlink_locked(&context);
+            thd->do_wait_queue_now = nullptr;
+            return false;
+        }
+        thd->attributes |= thread_attributes::voluntary_context_switch;
+        thd->attributes |= thread_attributes::need_schedule;
+        scheduler::update_state(thd, thread_state::stop);
+    }
+    return true;
 }
 
 u64 wait_queue_t::do_wake_up(u64 count)
@@ -171,6 +209,8 @@ void wait_queue_t::remove(thread_t *thread)
             unlink_locked(context);
         context = next;
     }
+    if (thread != nullptr && thread->do_wait_queue_now == this)
+        thread->do_wait_queue_now = nullptr;
 }
 
 void wait_queue_t::remove(process_t *process)

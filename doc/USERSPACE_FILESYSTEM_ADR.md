@@ -13,7 +13,7 @@ NaOS 的目录树、路径解析、inode/dentry、具体文件系统、挂载策
 
 第一版交付一个早期系统用户态进程 `vfsd`：它以只读 boot archive 为初始存储，提供现有 `Directory` 与 `File` NaoIDL 协议的 user-service 实现，并启动 `/bin/init`。普通程序经 mlibc 的 POSIX 兼容层访问 `vfsd`，而非进入 kernel VFS。
 
-这不是一次把块设备、可写持久文件系统和用户 pager 全部交付的项目。第一版使用内核 `MemoryObject` 作为有限、可验证的可执行文件和 `MAP_PRIVATE` 桥接；`MAP_SHARED`、写回、块设备、挂载和缺页 pager 明确留到后续阶段。
+这不是一次把块设备、可写持久文件系统和通用用户 pager 全部交付的项目。当前可执行文件和 regular-file `MAP_PRIVATE` 使用有限、可验证的 `MemoryObject` + `File` pager 桥接；`MAP_SHARED`、写回、块设备、挂载和通用 pager 仍留到后续阶段。
 
 ## 2. 现状与问题
 
@@ -55,7 +55,7 @@ NaOS 的目录树、路径解析、inode/dentry、具体文件系统、挂载策
 ### 3.2 非目标
 
 - 第一版不支持块设备、分区、FAT/ext2、可写持久化、崩溃恢复、配额、加密或网络文件系统。
-- 第一版不支持任意大小可执行文件、`MAP_SHARED`、`msync` 或用户 pager；单个 materialized object 不得超过发布时的 `NA_MEMORY_OBJECT_MAX_BYTES`。
+- 第一版不支持任意大小可执行文件、`MAP_SHARED`、`msync` 或通用用户 pager；File-backed executable object 仍不得超过 `NA_MEMORY_OBJECT_MAX_BYTES`。
 - 第一版不承诺多用户认证语义。当前实现的 uid/gid/access 已基本等价于 root，不能在迁移中误称为已提供隔离。
 - 不更改 capability / channel / Invocation 基础语义，不让 kernel 从路径名隐式发现服务，也不提供 service crash 的透明重连。
 - `/dev/ptmx`、`/dev/tty*`、`/dev/console` 的 mlibc-to-`ttyd` 特例可在本期保留；其 namespace 化归入后续 DevFS 阶段。
@@ -85,7 +85,7 @@ vfsd (early system user process)
   ├── namespace / path resolver / mount policy
   ├── rootimage → user-space block/filesystem workers
   ├── File / Directory protocol server
-  ├── archive file → immutable MemoryObject materializer
+  ├── archive file → sized MemoryObject + File pager
   └── launches /bin/init with a bootstrap channel
              │
              ▼
@@ -216,12 +216,12 @@ MVP RAM backend 仍必须：
 
 ### 5.4 exec 与 mmap 桥接
 
-MVP 不实现 pager：
+当前实现使用受限的 File pager：
 
-- `File.materialize` 复制 snapshot 到内核 MObj。线性化点是 **vfsd 服务端 handler 在该文件的版本/内容锁内取得不可变内容版本并开始复制的那一刻**（r7 修正：原文"invocation 的 admission"与 [ADR](OBJECT_CALL_ADR.md) 对 admission 的定义——消息进入 peer queue——冲突；admission 与 handler 执行之间文件仍可被其它 endpoint 的 write/truncate 修改）。长度、`EFBIG` 判定与复制全部以锁内取得的版本为准；并发的 write/truncate 要么整体发生在快照之前、要么整体在其之后，绝不混合。成功返回后，后续 vfsd 写入不影响该 object。
-- kernel ELF loader 抽象为 “read executable object”和“map executable object”；ELF header、program header 与 load segment 都从 MObj 读取，VM file-fault path 改为 MObj fault path。
-- mlibc 对 regular-file `MAP_PRIVATE` 先 materialize 再调用现有 memory-map object ABI；`MAP_SHARED`、`msync`、超限 mapping 返回 `ENOTSUP`/`EFBIG` 的确定错误。设备/terminal 保持各自的 protocol path。
-- vfsd 与 kernel 之间没有由 page fault 触发的 synchronous invocation。pager、page cache 和 shared writeback 是独立的后续 PRD，不能偷偷塞入本期。
+- mlibc 先通过 `File.stat` 取得长度，创建只读 `MemoryObject`，再把同一个 `File` client capability 作为 pager 传入现有 map/exec ABI；不会在启动阶段 materialize 整个 ELF。
+- 缺页以 16 KiB 对齐窗口生成一次 `File.pread` invocation（通常覆盖四个 page，文件尾部按实际长度缩短）。`pread` 的数据通过一个可写 `MemoryObject` resource 直接填充最终物理页，响应只返回状态和 count；kernel pager worker 将窗口内的页安装到 MemoryObject page cache，不建立临时 payload 拷贝。
+- page fault 的 exception/interrupt path 只登记 fault、阻塞当前线程并返回；实际 IPC 在 kernel pager worker 中完成，避免在 fault handler 内同步调用用户态服务。
+- ELF header、program header 与 load segment 仍从 MObj 读取，`MAP_SHARED`、`msync`、writeback、通用 pager 和 generation-pinned snapshot 仍是后续工作。设备/terminal 保持各自的 protocol path。
 
 ### 5.5 bootstrap 与 stdio
 
@@ -321,7 +321,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 
 ### Phase 3：mlibc 切换与兼容验证
 
-移除 mlibc 对 File/Directory 必为 kernel view 的假设；root/cwd 只保存在 runtime；将 spawn/exec 和 private file mmap 切换到 materialize。
+移除 mlibc 对 File/Directory 必为 kernel view 的假设；root/cwd 只保存在 runtime；将 spawn/exec 和 private file mmap 切换到 sized MemoryObject + File pager。
 
 退出条件：BusyBox 文件基本操作、relative/absolute/chroot path、symlink loop、open flags、fd offset sharing、fork/spawn bootstrap 在 QEMU 上通过；revision 2 的 `stat_node`/`sync`/`rename_at`/`link_at` 在 mlibc 与 Rust std 两侧同时可用，`lstat`、`fsync(dirfd)` 与跨目录 `renameat` 不再依赖被删除的模拟路径。
 
@@ -333,7 +333,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 
 ### Phase 5：后续独立项目（不阻塞 MVP）
 
-定义 Block/Device、Namespace/Mount 和 Pager 协议，增加 DevFS、可写持久 filesystem、page cache、`MAP_SHARED`/writeback、service restart policy 与多用户凭据。每一项另立 PRD 和 ABI review。VFS namespace/mount 与 `BlockDevice` 的第一份对象契约见[用户态 VFS 与 BlockDevice 对象 ADR](VFS_BLOCK_DEVICE_ADR.md)；pager、DevFS、格式实现和多用户策略仍需各自的 PRD。
+定义通用 Block/Device、Namespace/Mount 和 Pager 协议，增加 DevFS、可写持久 filesystem、generation pin、`MAP_SHARED`/writeback、service restart policy 与多用户凭据。每一项另立 PRD 和 ABI review。VFS namespace/mount 与 `BlockDevice` 的第一份对象契约见[用户态 VFS 与 BlockDevice 对象 ADR](VFS_BLOCK_DEVICE_ADR.md)；通用 pager、DevFS、格式实现和多用户策略仍需各自的 PRD。
 
 ### 6.1 跨平台 service transport 交付（横切，不改变 Phase 0–5 编号）
 
@@ -385,7 +385,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 | --- | --- |
 | 启动鸡生蛋 | `vfsd` 独立 boot module；archive 作为 `rootdir` ServiceDirectory 资源发布，不从 kernel VFS 打开 vfsd。 |
 | exec 重新依赖 VFS | 先落地 MObj executable，再删除 VFS。 |
-| page fault deadlock | MVP 禁止 user pager；只 map kernel MObj。 |
+| page fault deadlock | File pager 只由 kernel worker 发起 IPC；fault handler 不同步调用用户态服务。通用 pager 仍需独立 ABI review。 |
 | 16 MiB MObj 上限 | 在 build/boot gate 中检查 archive/ELF；超限必须显式失败或先实现专用 immutable boot backing。 |
 | 在 kernel 留下隐式 root/cwd | Phase 4 删除 `native_directory` 与 process 目录字段；bootstrap 只传递标准 namespace/stdio，其他内核资源通过 ServiceDirectory 发现。 |
 | File/Directory 语义漂移 | 将 endpoint contract tests 同时跑在 temporary kernel adapter 与 vfsd server 上，直到 adapter 删除。 |

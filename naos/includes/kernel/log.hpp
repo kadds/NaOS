@@ -38,6 +38,7 @@ enum class module : u8
 
 enum record_flags : u8
 {
+    /// The timestamp is a TSC tick delta from early logger initialization.
     early_record = 1 << 0,
     message_truncated = 1 << 1,
     raw_record = 1 << 2,
@@ -54,6 +55,7 @@ constexpr u8 max_process_name_length = 12;
 struct record_header
 {
     u64 sequence = 0;
+    // Runtime records use event-clock microseconds; early records use TSC ticks.
     u64 timestamp = 0;
     u32 cpu_id = 0;
     u32 pid = 0;
@@ -196,6 +198,13 @@ void assert_runtime(const char *expression, const char *file, u32 line,
     {                                                                                                                  \
         if (::log::enabled(::log::level::debug, klog_module))                                                          \
             ::log::detail::emit(::log::level::debug, klog_module, __FILE__, __LINE__, false, __VA_ARGS__);             \
+    } while (0)
+
+#define KLOG_DEBUG_RAW(...)                                                                                            \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if (::log::enabled(::log::level::debug, klog_module))                                                          \
+            ::log::detail::emit(::log::level::debug, klog_module, __FILE__, __LINE__, true, __VA_ARGS__);              \
     } while (0)
 
 #define KLOG_INFO(...)                                                                                                 \

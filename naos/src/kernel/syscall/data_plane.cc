@@ -1,4 +1,5 @@
 #include "kernel/mm/data_plane.hpp"
+#include "kernel/ipc/invocation.hpp"
 
 #include "kernel/arch/klib.hpp"
 #include "kernel/ipc/channel.hpp"
@@ -6,6 +7,7 @@
 #include "kernel/syscall.hpp"
 #include "kernel/task.hpp"
 #include "kernel/usercopy.hpp"
+#include "naos/generated/system/File.hpp"
 #include "naos/generated/system/MemoryObject.hpp"
 #include "naos/generated/system_uapi.h"
 #include <limits>
@@ -31,8 +33,7 @@ na_status_t memory_map(na_memory_map_frame_t *frame)
         return status;
     constexpr u32 normal_flags = NA_MEMORY_MAP_READ | NA_MEMORY_MAP_WRITE | NA_MEMORY_MAP_EXEC | NA_MEMORY_MAP_SHARED;
     constexpr u32 supported_flags = normal_flags | NA_MEMORY_MAP_COMMIT;
-    if (values.struct_size != sizeof(values) ||
-        values.flags & ~supported_flags ||
+    if (values.struct_size != sizeof(values) || values.flags & ~supported_flags ||
         (values.object == NA_HANDLE_INVALID && values.offset != 0) || values.length == 0 || values.address != 0 ||
         values.data_offset != 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
         (values.hint != 0 && (!is_user_space_pointer(values.hint) || (values.hint & (memory::page_size - 1)) != 0)) ||
@@ -78,6 +79,22 @@ na_status_t memory_map(na_memory_map_frame_t *frame)
         }
         else
             return NA_STATUS_WRONG_BINDING;
+    }
+    if (values.pager != NA_HANDLE_INVALID)
+    {
+        if (memory_object == nullptr)
+            return NA_STATUS_INVALID_ARGUMENT;
+        capability::entry pager_entry;
+        auto &resources = task::current_process()->resource;
+        if (!resources.lookup_native(values.pager, pager_entry) || !pager_entry.object ||
+            pager_entry.meta.binding != NA_BINDING_CLIENT_END || pager_entry.meta.scope != NA_SCOPE_FILE ||
+            (pager_entry.meta.protocol_rights & NA_PROTOCOL_RIGHT_INVOKE) == 0 ||
+            memcmp(pager_entry.meta.protocol_uuid.bytes, naos::system::File::protocol_uuid.bytes,
+                   sizeof(pager_entry.meta.protocol_uuid.bytes)) != 0)
+            return NA_STATUS_WRONG_BINDING;
+        const auto pager_status = memory_object->attach_pager(khandle(pager_entry.object));
+        if (pager_status != NA_STATUS_OK)
+            return pager_status;
     }
     flag_t vm_flags = 0;
     if ((values.flags & NA_MEMORY_MAP_READ) != 0)
@@ -136,9 +153,8 @@ na_status_t memory_unmap(na_memory_unmap_frame_t *frame)
     if (status != NA_STATUS_OK)
         return status;
     if (values.struct_size != sizeof(values) || values.flags & ~NA_MEMORY_UNMAP_DECOMMIT || values.address == 0 ||
-        values.length == 0 ||
-        values.reserved0 != 0 || values.reserved1 != 0 || (values.address & (memory::page_size - 1)) != 0 ||
-        values.length > NA_MEMORY_MAP_MAX_BYTES)
+        values.length == 0 || values.reserved0 != 0 || values.reserved1 != 0 ||
+        (values.address & (memory::page_size - 1)) != 0 || values.length > NA_MEMORY_MAP_MAX_BYTES)
         return NA_STATUS_INVALID_ARGUMENT;
     const bool decommit = (values.flags & NA_MEMORY_UNMAP_DECOMMIT) != 0;
     if (decommit && (values.length & (memory::page_size - 1)) != 0)
@@ -147,12 +163,11 @@ na_status_t memory_unmap(na_memory_unmap_frame_t *frame)
     if (rounded < values.length)
         return NA_STATUS_INVALID_ARGUMENT;
     auto *vm_info = reinterpret_cast<memory::vm::info_t *>(task::current_process()->mm_info);
-    const bool unmapped = decommit ? vm_info->decommit(values.address, values.length)
-                                   : vm_info->unmap(values.address, rounded);
+    const bool unmapped =
+        decommit ? vm_info->decommit(values.address, values.length) : vm_info->unmap(values.address, rounded);
     if (!unmapped)
         KLOG_WARN("memory {} failed pid {} address {} length {}", decommit ? "decommit" : "unmap",
-                  task::current_process()->pid,
-                  log::hex(values.address), log::hex(rounded));
+                  task::current_process()->pid, log::hex(values.address), log::hex(rounded));
     return unmapped ? NA_STATUS_OK : NA_STATUS_INVALID_ARGUMENT;
 }
 

@@ -35,6 +35,8 @@ struct wait_context_t
     {
     }
 
+    wait_context_t() = default;
+
     bool operator==(const wait_context_t &w) const { return thd == w.thd && condition == w.condition; }
 
     bool operator!=(const wait_context_t &w) const { return !operator==(w); }
@@ -57,6 +59,11 @@ struct wait_queue_t
     bool do_wait(freelibcxx::function_ref<bool()> condition, const void *key_domain = nullptr,
                  const void *key_address = nullptr, std::atomic_uint64_t *wake_sequence = nullptr,
                  bool register_before_check = false);
+
+    /// Register the current thread without evaluating a predicate or
+    /// scheduling from the caller. Used by interrupt-context page faults;
+    /// the eventual wake-up is performed by do_wake_up().
+    bool block_current(freelibcxx::function_ref<bool()> condition = nullptr);
 
     ///
     /// \brief try wake up task at queue

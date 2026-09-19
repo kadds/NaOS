@@ -387,9 +387,14 @@ ExportC
 
     void AcpiOsVprintf(const char *Format, va_list Args)
     {
+        // ACPICA emits verbose table diagnostics through this hook. Keep it
+        // behind the debug log level so normal boot does not synchronously
+        // stream every line through the early serial logger.
+        if (!log::enabled(log::level::debug, log::module::acpi))
+            return;
         char *buf = (char *)memory::kmalloc(4096, 1);
         vsnprintf(buf, 4095, Format, Args);
-        KLOG_RAW("{}", buf);
+        KLOG_DEBUG_RAW("{}", buf);
         memory::kfree(buf);
     }
 

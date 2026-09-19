@@ -148,10 +148,11 @@ and protocol-right checks; virtual-memory mapping remains a separate
 address-space syscall. User-space shared-memory rings live in `naos/libipc`
 and do not create a kernel object.
 
-`NA_SYSCALL_MEMORY_CREATE` (42) creates a bounded MemoryObject capability. The task loader uses the tagged `exec_source`
-abstraction so the same ELF admission logic accepts either a VFS file or a MemoryObject; MemoryObject segments are mapped
-through the VM's `memory_object` page-fault path. This is what permits boot modules and `File.materialize` products to be
-executed without reintroducing a kernel pathname lookup.
+`NA_SYSCALL_MEMORY_CREATE` (42) creates a bounded MemoryObject capability. The task loader uses a MemoryObject executable
+boundary; boot modules use immutable views, while regular File-backed images attach the File client as a pager. A fault
+loads an aligned 16 KiB window (up to four pages) through one File.pread into a MemoryObject data-plane buffer, then
+installs those same physical pages in the executable object. The kernel pager worker performs the IPC, so this keeps
+lazy executable loading without reintroducing a kernel pathname lookup or a temporary payload copy.
 
 A `NA_MEMORY_MAP_SHARED` mapping of a page-backed MemoryObject is served by the object's
 own page frames rather than a private per-process page: the kernel view and every shared
@@ -179,7 +180,8 @@ itself stays generated from NaoIDL, so servicekit does not depend on protocol bi
 a service cannot drift from the schema's method set by hand.
 
 mlibc now keeps root and cwd as runtime directory bindings and consumes Directory revision 2 methods
-(`stat_node`, `sync`, `rename_at`, `link_at`, and `clone_binding`). It uses `File.materialize` as the bridge for private
+(`stat_node`, `sync`, `rename_at`, `link_at`, and `clone_binding`). It uses a sized read-only MemoryObject plus a File
+pager as the bridge for private
 file `MAP_PRIVATE` mappings. The following compatibility fallbacks are deliberately transitional and must be removed with
 the corresponding service guarantees in Phase 4: the `renameat`/`linkat` unequal-dirfd `EXDEV` shortcut, directory-fd
 `fsync`, open-plus-stat emulation, fork/spawn duplicate fallback, and the file-backed `MAP_PRIVATE` mapping fallback.
