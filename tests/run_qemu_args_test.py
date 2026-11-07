@@ -18,11 +18,19 @@ def options(**overrides):
         "iso": True,
         "uefi": False,
         "nographic": True,
+        "machine": "q35",
+        "intel_iommu": False,
+        "intel_iommu_ir": False,
+        "acpi_ssdt": None,
+        "qemu_device": [],
         "memory": "128",
         "cores": "2",
         "wait_gdb": False,
         "gdb_port": None,
+        "no_gdb": False,
         "qemu_debug": False,
+        "qemu_trace_event": [],
+        "qemu_trace_event": [],
         "monitor": None,
         "no_reboot": False,
         "timeout": 1,
@@ -49,7 +57,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as directory:
         module_paths = build_paths(pathlib.Path(directory))
         module_paths.system_dir.mkdir(parents=True, exist_ok=True)
-        for name in ("kernel", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
+        for name in ("kernel", "platformd", "pcied", "edud", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
             module_paths.system_dir.joinpath(name).write_bytes(b"ELF")
         run.require_boot_artifacts(module_paths)
         module_paths.system_dir.joinpath("rootfsd").unlink()
@@ -67,8 +75,20 @@ def main() -> int:
             run.prepare_iso(module_paths)
         finally:
             run.subprocess.run = original_subprocess_run
-        for name in ("kernel", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
+        for name in ("kernel", "platformd", "pcied", "edud", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
             assert module_paths.iso_dir.joinpath(name).is_file()
+        grub_config = module_paths.iso_dir / "boot" / "grub" / "grub.cfg"
+        assert "module2 /edud pdrv-edud" in grub_config.read_text(encoding="utf-8")
+
+        # The driver image is opt-in. A normal build may omit it without
+        # turning the fixed boot-module contract into a missing-artifact error.
+        module_paths.system_dir.joinpath("edud").unlink()
+        run.require_boot_artifacts(module_paths)
+        run.prepare_iso(module_paths)
+        assert not module_paths.iso_dir.joinpath("edud").exists()
+        grub_config = module_paths.iso_dir / "boot" / "grub" / "grub.cfg"
+        assert "module2 /edud pdrv-edud" not in grub_config.read_text(encoding="utf-8")
+        module_paths.system_dir.joinpath("edud").write_bytes(b"ELF")
 
         # A negative boot may intentionally omit one named early module. The
         # runner removes its GRUB module entry instead of leaving a stale copy
@@ -80,18 +100,111 @@ def main() -> int:
         grub_config = module_paths.iso_dir / "boot" / "grub" / "grub.cfg"
         assert "module2 /vfsd vfsd" not in grub_config.read_text(encoding="utf-8")
 
+        # Disk-image preparation must apply the same explicit missing-module
+        # policy before installing its GRUB configuration.
+        module_paths.system_dir.joinpath("pcied").unlink()
+        disk_config = (ROOT / "run/iso/boot/grub/grub.cfg").read_text(encoding="utf-8")
+        disk_config = run._remove_missing_module_entries(
+            disk_config,
+            run.boot_module_sources(),
+            module_paths.system_dir,
+            ("pcied",),
+        )
+        assert "module2 /pcied pcied" not in disk_config
+        module_paths.system_dir.joinpath("pcied").write_bytes(b"ELF")
+
     default = build_qemu_argv(options(), paths)
     assert "-s" in default
     assert "-S" not in default
     assert "-serial" in default
     assert f"file:{paths.serial_log}" in default
     assert str(paths.iso_image) in default
+    assert default[default.index("-machine") + 1] == "q35"
+    assert default[default.index("-display") + 1] == "none"
     expected_cpu = "host" if run.kvm_available() else "Haswell-v4,pdpe1gb"
     assert default[default.index("-cpu") + 1] == expected_cpu
     if run.kvm_available():
         assert default[default.index("-accel") + 1] == "kvm"
     else:
         assert "-accel" not in default
+
+    cpu_hotplug = build_qemu_argv(options(max_cpus=3), paths)
+    assert cpu_hotplug[cpu_hotplug.index("-smp") + 1] == "2,sockets=1,cores=3,maxcpus=3"
+    try:
+        build_qemu_argv(options(max_cpus=1), paths)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("maximum CPU count below the boot count must be rejected")
+
+    pcie_machine = build_qemu_argv(options(machine="q35"), paths)
+    assert pcie_machine[pcie_machine.index("-machine") + 1] == "q35"
+    assert pcie_machine[pcie_machine.index("-display") + 1] == "none"
+    assert "intel-iommu" not in pcie_machine
+
+    iommu_machine = build_qemu_argv(options(machine="q35", intel_iommu=True), paths)
+    assert iommu_machine[iommu_machine.index("-device") + 1] == "intel-iommu"
+    interrupt_remapping_machine = build_qemu_argv(options(machine="q35", intel_iommu_ir=True), paths)
+    assert interrupt_remapping_machine[interrupt_remapping_machine.index("-machine") + 1] == \
+        f"q35,kernel-irqchip={'split' if run.kvm_available() else 'off'}"
+    assert interrupt_remapping_machine[interrupt_remapping_machine.index("-device") + 1] == \
+        "intel-iommu,intremap=on"
+    edu_machine = build_qemu_argv(options(machine="q35", qemu_device=["edu"]), paths)
+    edu_device_index = edu_machine.index("-device")
+    assert edu_machine[edu_device_index:edu_device_index + 2] == ["-device", "edu"]
+
+    traced_machine = build_qemu_argv(
+        options(qemu_trace_event=["vtd_ir_remap_msi_req", "vtd_ir_irte_get"]), paths
+    )
+    trace_options = [
+        traced_machine[index + 1]
+        for index, argument in enumerate(traced_machine[:-1])
+        if argument == "-trace"
+    ]
+    assert trace_options == [
+        "enable=vtd_ir_remap_msi_req",
+        "enable=vtd_ir_irte_get",
+    ]
+    assert paths.qemu_trace_log == paths.build_dir / "qemu-trace.log"
+    try:
+        build_qemu_argv(options(qemu_trace_event=["vtd_ir_remap_msi_req,file=/tmp/trace"]), paths)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("trace arguments must not allow QEMU option injection")
+
+    with tempfile.TemporaryDirectory() as directory:
+        ssdt = pathlib.Path(directory) / "qemu_edu_ssdt.aml"
+        ssdt.write_bytes(b"SSDT fixture")
+        ssdt_machine = build_qemu_argv(options(machine="q35", acpi_ssdt=ssdt), paths)
+        ssdt_index = ssdt_machine.index("-acpitable")
+        assert ssdt_machine[ssdt_index:ssdt_index + 2] == [
+            "-acpitable",
+            f"sig=SSDT,file={ssdt.resolve()}",
+        ]
+    try:
+        build_qemu_argv(options(machine="pc", intel_iommu=True))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Intel IOMMU must require the q35 machine")
+    try:
+        build_qemu_argv(options(machine="pc", intel_iommu_ir=True))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Intel IOMMU interrupt remapping must require q35")
+
+    headless_no_debugger = build_qemu_argv(options(no_gdb=True), paths)
+    assert "-s" not in headless_no_debugger
+    assert "-gdb" not in headless_no_debugger
+    assert "-S" not in headless_no_debugger
+    try:
+        build_qemu_argv(options(no_gdb=True, wait_gdb=True), paths)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("--no-gdb and --wait-gdb must be rejected together")
 
     waiting = build_qemu_argv(options(wait_gdb=True), paths)
     assert "-S" in waiting

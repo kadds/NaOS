@@ -31,6 +31,7 @@ call_code_interrupt:
     movq %rax, %ds
     movq %rax, %es
 
+    cld
 	testb $3, 0xa8(%rsp)
 	je no_sse
 	movabs $save_sse_context, %rdx

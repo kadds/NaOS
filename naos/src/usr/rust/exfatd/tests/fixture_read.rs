@@ -17,7 +17,8 @@ fn fixture_path() -> std::path::PathBuf {
             // Direct `cargo test` has no CMake build directory to receive the
             // generated image. Keep that developer path working without
             // writing generated data back into the source tree.
-            let output = std::env::temp_dir().join(format!("naos-exfatd-fat32-{}", std::process::id()));
+            let output =
+                std::env::temp_dir().join(format!("naos-exfatd-fat32-{}", std::process::id()));
             let fixture = output.join("fat32-fixture.img.gz");
             if !fixture.is_file() {
                 let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -7,11 +7,13 @@
 #include "kernel/mm/memory.hpp"
 #include "kernel/scheduler.hpp"
 #include "kernel/service_directory.hpp"
+#include "kernel/service_directory_policy.hpp"
 #include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/task/builtin/input_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
 #include "naos/generated/system/MemoryObject.hpp"
+#include "naos/generated/system/ServiceDirectory.hpp"
 
 namespace task::builtin::vfsd
 {
@@ -30,21 +32,20 @@ namespace
 {
 /// Look up a boot module by its fixed authority token; returns
 /// nullptr when the module was not provided at boot.
-const named_boot_module *find_boot_module(kernel_start_args *boot_args, const char *name)
+const boot_module *find_boot_module(kernel_start_args *boot_args, const char *name)
 {
     if (boot_args == nullptr)
         return nullptr;
-    for (u64 i = 0; i < boot_args->named_module_count; i++)
+    for (u64 i = 0; i < boot_args->boot_module_count; i++)
     {
-        auto &module = boot_args->named_modules[i];
+        auto &module = boot_args->boot_modules[i];
         if (module.size != 0 && strcmp(module.name, name) == 0)
             return &module;
     }
     return nullptr;
 }
 
-task::process_t *create_early_module(const named_boot_module &module, const char *path,
-                                     task::thread_start_func entry)
+task::process_t *create_early_module(const boot_module &module, const char *path, task::thread_start_func entry)
 {
     // kernel_start_args is packed: copy fields before binding them.
     const u64 image_addr = module.start;
@@ -70,7 +71,7 @@ task::process_t *create_early_module(const named_boot_module &module, const char
 /// Publish a boot module as a one-shot, read-only MemoryObject for the
 /// userland boot manager.  The kernel owns the initial module bytes, but does
 /// not decide when the filesystem worker or init process is created.
-void publish_boot_module(const named_boot_module &module, const char *uri, u64 uri_size)
+void publish_boot_module(const boot_module &module, const char *uri, u64 uri_size)
 {
     const u64 image_addr = module.start;
     const u64 image_size = module.size;
@@ -98,20 +99,75 @@ void publish_boot_module(const named_boot_module &module, const char *uri, u64 u
     KLOG_INFO("boot module {} published service={}", module.name, uri);
 }
 
+u64 boot_module_token_size(const boot_module &module)
+{
+    u64 size = 0;
+    while (size < sizeof(module.name) && module.name[size] != '\0')
+        size++;
+    return size;
+}
+
+bool is_pci_driver_boot_module(const boot_module &module)
+{
+    constexpr char prefix[] = "pdrv-";
+    constexpr u64 prefix_size = sizeof(prefix) - 1;
+    const u64 name_size = boot_module_token_size(module);
+    if (name_size <= prefix_size || name_size == sizeof(module.name) || memcmp(module.name, prefix, prefix_size) != 0)
+        return false;
+    for (u64 index = prefix_size; index < name_size; index++)
+    {
+        const auto value = static_cast<unsigned char>(module.name[index]);
+        if (!(value >= 'a' && value <= 'z') && !(value >= '0' && value <= '9') && value != '-' && value != '_')
+            return false;
+    }
+    return true;
+}
+
+u64 make_pci_driver_boot_module_uri(const boot_module &module, char *uri, u64 capacity)
+{
+    constexpr char prefix[] = "naos://service/boot/module/";
+    constexpr u64 prefix_size = sizeof(prefix) - 1;
+    if (uri == nullptr || !is_pci_driver_boot_module(module))
+        return 0;
+    const u64 name_size = boot_module_token_size(module);
+    const u64 total_size = prefix_size + name_size;
+    if (total_size >= capacity)
+        return 0;
+    memcpy(uri, prefix, prefix_size);
+    memcpy(uri + prefix_size, module.name, name_size);
+    uri[total_size] = '\0';
+    return total_size;
+}
+
+void publish_pci_driver_boot_modules(kernel_start_args *boot_args)
+{
+    if (boot_args == nullptr)
+        return;
+    for (u64 index = 0; index < boot_args->boot_module_count; index++)
+    {
+        const auto &module = boot_args->boot_modules[index];
+        char uri[64]{};
+        const u64 uri_size = make_pci_driver_boot_module_uri(module, uri, sizeof(uri));
+        if (uri_size != 0)
+            publish_boot_module(module, uri, uri_size);
+    }
+}
+
 void start_early_module(task::process_t *process)
 {
     if (process == nullptr)
         return;
     if (task::setsid(process) < 0)
         KLOG_WARN("Unable to create boot module session");
-    task::start_process(process);
+    if (!task::start_process(process))
+        KLOG_PANIC("Unable to start early service process {}", process->pid);
 }
 
 /// Launch the early service from its dedicated Multiboot module
 /// (USERSPACE_FILESYSTEM_ADR §5.1.1-§5.1.4). The kernel neither opens
 /// /bin/init nor resolves filesystem data; any module failure stops the boot
 /// instead of falling back to kernel VFS.
-task::process_t *launch_vfsd(const named_boot_module &module)
+task::process_t *launch_vfsd(const boot_module &module)
 {
     auto *vfsd_process = create_early_module(module, "/vfsd", builtin::vfsd::main);
     return vfsd_process;
@@ -119,10 +175,68 @@ task::process_t *launch_vfsd(const named_boot_module &module)
 
 /// Launch the optional ramdiskd block-backend boot module (VFS ADR §7.1).
 /// ramdiskd owns its ramdisk storage, LBA policy, and public IDL endpoints.
-void launch_blockd(const named_boot_module &module)
+void launch_blockd(const boot_module &module)
 {
     auto *ramdiskd_process = create_early_module(module, "/ramdiskd", builtin::ramdiskd::main);
     start_early_module(ramdiskd_process);
+}
+
+void launch_platform_service(const boot_module &module, const char *path, task::thread_start_func entry)
+{
+    auto *process = create_early_module(module, path, entry);
+    const bool is_platformd = strcmp(path, "/platformd") == 0;
+    const bool is_pcied = strcmp(path, "/pcied") == 0;
+    const char *allowed_uris[] = {service::firmware_root_uri, service::acpi_fixed_hardware_uri,
+                                  service::acpi_resource_authority_uri, service::platform_pci_topology_uri};
+    const char *pci_uris[max_boot_modules + 2] = {service::pci_discovery_uri, service::platform_pci_topology_uri};
+    char pci_driver_uris[max_boot_modules][64]{};
+    u64 pci_uri_count = 2;
+    if (is_pcied && ::kernel_args != nullptr)
+    {
+        if (::kernel_args->boot_module_count > max_boot_modules)
+            KLOG_PANIC("boot module count exceeds the kernel table capacity");
+        for (u64 index = 0; index < ::kernel_args->boot_module_count; index++)
+        {
+            const auto &driver_module = ::kernel_args->boot_modules[index];
+            const u64 uri_size =
+                make_pci_driver_boot_module_uri(driver_module, pci_driver_uris[index], sizeof(pci_driver_uris[index]));
+            if (uri_size != 0)
+                pci_uris[pci_uri_count++] = pci_driver_uris[index];
+        }
+    }
+    const char *const *view_uris = is_platformd ? allowed_uris : pci_uris;
+    const u64 view_uri_count = is_platformd ? 4 : pci_uri_count;
+    auto global_directory = service::get_global_service_directory();
+    const char *platform_publish_uris[] = {service::platform_pci_topology_uri, service::platform_power_control_uri};
+    const char *pci_publish_uris[] = {service::pci_block_device_catalog_uri};
+    auto scoped_directory =
+        is_platformd ? service::directory::make_scoped_provider_view(global_directory, view_uris, view_uri_count,
+                                                                     platform_publish_uris, 2)
+        : is_pcied   ? service::directory::make_scoped_provider_view(global_directory, view_uris, view_uri_count,
+                                                                     pci_publish_uris, 1)
+                     : service::directory::make_scoped_view(global_directory, view_uris, view_uri_count);
+    if (!scoped_directory)
+        KLOG_PANIC("unable to create scoped ServiceDirectory for {}", path);
+    capability::metadata metadata;
+    metadata.binding = NA_BINDING_KERNEL_VIEW;
+    metadata.protocol_uuid = naos::system::ServiceDirectory::protocol_uuid;
+    metadata.scope = NA_SCOPE_SERVICE_DIRECTORY;
+    metadata.revision = naos::system::ServiceDirectory::revision;
+    // pcied mints narrower views for its driver children, so its parent view
+    // needs TRANSFER for that constrained delegation. platformd consumes its
+    // scoped view directly and does not need TRANSFER.
+    metadata.meta_rights = service::bootstrap_service_directory_meta_rights(is_pcied);
+    metadata.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+    if (!is_platformd)
+        metadata.protocol_rights |= NA_SERVICE_DIRECTORY_RIGHT_CREATE_VIEW;
+    if (is_platformd)
+        metadata.protocol_rights |= NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER;
+    if (is_pcied)
+        metadata.protocol_rights |= NA_SERVICE_DIRECTORY_RIGHT_PROVIDER;
+    process->early_service_directory_handle = process->resource.install_native(std::move(scoped_directory), metadata);
+    if (process->early_service_directory_handle == NA_HANDLE_INVALID)
+        KLOG_PANIC("unable to install scoped ServiceDirectory for {}", path);
+    start_early_module(process);
 }
 
 } // namespace
@@ -154,28 +268,43 @@ void main(void *arg)
         // the only modules that participate in the boot contract.
         if (boot_args != nullptr)
         {
-            for (u64 i = 0; i < boot_args->named_module_count; i++)
+            for (u64 i = 0; i < boot_args->boot_module_count; i++)
             {
-                auto &module = boot_args->named_modules[i];
+                auto &module = boot_args->boot_modules[i];
                 if (strcmp(module.name, "vfsd") != 0 && strcmp(module.name, "blockd") != 0 &&
                     strcmp(module.name, "rootfsd") != 0 && strcmp(module.name, "init") != 0 &&
-                    strcmp(module.name, "rootimage") != 0)
+                    strcmp(module.name, "rootimage") != 0 && strcmp(module.name, "platformd") != 0 &&
+                    strcmp(module.name, "pcied") != 0 && !is_pci_driver_boot_module(module))
                     KLOG_DEBUG("ignoring unknown boot module '{}'", module.name);
             }
         }
-        for (u64 i = 0; i < boot_args->named_module_count; i++)
+        for (u64 i = 0; i < boot_args->boot_module_count; i++)
         {
-            auto &entry = boot_args->named_modules[i];
+            auto &entry = boot_args->boot_modules[i];
+            if (entry.size == 0)
+            {
+                KLOG_WARN("ignoring empty boot module token='{}'", static_cast<const char *>(entry.name));
+                continue;
+            }
             const byte *entry_bytes = memory::pa2va<byte *>(phy_addr_t::from(entry.start));
             KLOG_INFO("mod-table[{}] name={} start={:x} size={:x} head={:x}{:x}{:x}{:x}", i,
                       static_cast<const char *>(entry.name), static_cast<u64>(entry.start),
                       static_cast<u64>(entry.size), static_cast<u64>(entry_bytes[0]), static_cast<u64>(entry_bytes[1]),
                       static_cast<u64>(entry_bytes[2]), static_cast<u64>(entry_bytes[3]));
         }
-        const named_boot_module *vfsd_module = find_boot_module(boot_args, "vfsd");
+        const boot_module *vfsd_module = find_boot_module(boot_args, "vfsd");
         if (vfsd_module == nullptr)
             KLOG_PANIC("vfsd boot module missing; kernel VFS fallback disabled");
         KLOG_INFO("starting vfsd early module");
+        const boot_module *platformd_module = find_boot_module(boot_args, "platformd");
+        const boot_module *pcied_module = find_boot_module(boot_args, "pcied");
+        if (platformd_module != nullptr)
+            launch_platform_service(*platformd_module, "/platformd", builtin::vfsd::main);
+        if (pcied_module != nullptr)
+        {
+            publish_pci_driver_boot_modules(boot_args);
+            launch_platform_service(*pcied_module, "/pcied", builtin::vfsd::main);
+        }
         auto *vfsd_process = launch_vfsd(*vfsd_module);
         // vfsd is the trusted userland boot manager in both modes.  It owns
         // the decision to create the filesystem worker and the eventual init;
@@ -186,19 +315,17 @@ void main(void *arg)
         // Publish every one-shot image before starting vfsd. Otherwise
         // scheduler timing can let vfsd consume the rootfsd URI before the
         // later init/root-image registrations.
-        const named_boot_module *blockd_module = find_boot_module(boot_args, "blockd");
-        const named_boot_module *rootfsd_module = find_boot_module(boot_args, "rootfsd");
-        const named_boot_module *init_module = find_boot_module(boot_args, "init");
-        const named_boot_module *root_image_module = find_boot_module(boot_args, "rootimage");
+        const boot_module *blockd_module = find_boot_module(boot_args, "blockd");
+        const boot_module *rootfsd_module = find_boot_module(boot_args, "rootfsd");
+        const boot_module *init_module = find_boot_module(boot_args, "init");
+        const boot_module *root_image_module = find_boot_module(boot_args, "rootimage");
         if (blockd_module == nullptr || rootfsd_module == nullptr || init_module == nullptr ||
             root_image_module == nullptr)
             KLOG_PANIC("mounted-root boot requires blockd, rootfsd, init, and rootimage modules");
         publish_boot_module(*rootfsd_module, service::boot_module_rootfsd_uri,
                             sizeof(service::boot_module_rootfsd_uri) - 1);
-        publish_boot_module(*init_module, service::boot_module_init_uri,
-                            sizeof(service::boot_module_init_uri) - 1);
-        publish_boot_module(*root_image_module, service::boot_root_image_uri,
-                            sizeof(service::boot_root_image_uri) - 1);
+        publish_boot_module(*init_module, service::boot_module_init_uri, sizeof(service::boot_module_init_uri) - 1);
+        publish_boot_module(*root_image_module, service::boot_root_image_uri, sizeof(service::boot_root_image_uri) - 1);
         launch_blockd(*blockd_module);
         // All boot resources are now visible in ServiceDirectory, so the
         // userland manager cannot observe a partially published bootstrap.

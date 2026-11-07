@@ -34,6 +34,7 @@ void local_post_IPI_all(u64 intr);
 void local_post_IPI_all_notself(u64 intr);
 void local_post_IPI_self(u64 intr);
 void local_post_IPI_mask(u64 intr, u64 mask0);
+bool local_vector_pending_or_in_service(u8 vector);
 
 u64 local_ID();
 

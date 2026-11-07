@@ -35,6 +35,7 @@ call_code:
     movq %rax, %ds
     movq %rax, %es
 
+    cld
     movq %rsp, %rdi
 	movq 0x80(%rsp), %rdx
     callq *%rdx
@@ -45,6 +46,12 @@ return_code:
 	callq *%rdx
 	jmp endjmp
  need_preempt:
+	# Do not preempt on the way out of an exception that interrupted an
+	# uninterruptible section (saved IF=0): scheduling there can re-enter the
+	# same lock and deadlock. The pending schedule runs at the next
+	# preemptible return.
+	testb $2, 0xb1(%rsp)
+	je endjmp
 	movabs $kernel_return, %rdx
 	callq *%rdx
 endjmp:
@@ -129,6 +136,7 @@ _nmi_wrapper:
     movq %rax, %ds
     movq %rax, %es
 
+    cld
     movq %rsp, %rdi
 	movq 0x80(%rsp), %rdx
     callq *%rdx

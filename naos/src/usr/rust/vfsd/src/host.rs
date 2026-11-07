@@ -7,11 +7,10 @@
 //! in `service.rs` and owns the VFS admin listener.
 
 use std::collections::BTreeMap;
-use std::vec::Vec;
 
-use naos_idl::{directory, file, ResourceSlot};
-use naos_idl::transport::RpcRequestOwned;
-use servicekit::server::{Request, Response, ServeHandler, Server};
+use naos_idl::transport::{RpcMethodReply, RpcOutcome};
+use naos_idl::{ResourceSlot, directory, file};
+use servicekit::server::{EndpointResource, Request, ServeHandler, Server};
 use servicekit::{Context, sys};
 
 use vfsd::backend::{FileKind, NodeId, RamFs};
@@ -29,89 +28,6 @@ const OPEN_MODE_WRITE: u64 = 2;
 const LOOKUP_NOFOLLOW: u64 = 1;
 const CHROOT: u64 = 1 << 63;
 
-fn validate_directory_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    macro_rules! check {
-        ($decode:ident, $validate:ident) => {{
-            let value = directory::$decode(&request.payload).map_err(|_| -22_i64)?;
-            directory::$validate(&value, &request.resources).map_err(|_| -22_i64)
-        }};
-    }
-    match request.method_id {
-        directory::METHOD_OPEN => check!(decode_open_request, validate_open_request_transport_resources),
-        directory::METHOD_LIST => check!(decode_list_request, validate_list_request_transport_resources),
-        directory::METHOD_STAT => check!(decode_stat_request, validate_stat_request_transport_resources),
-        directory::METHOD_CREATE => check!(decode_create_request, validate_create_request_transport_resources),
-        directory::METHOD_REMOVE => check!(decode_remove_request, validate_remove_request_transport_resources),
-        directory::METHOD_PATH => check!(decode_path_request, validate_path_request_transport_resources),
-        directory::METHOD_ACCESS => check!(decode_access_request, validate_access_request_transport_resources),
-        directory::METHOD_RENAME => check!(decode_rename_request, validate_rename_request_transport_resources),
-        directory::METHOD_LINK => check!(decode_link_request, validate_link_request_transport_resources),
-        directory::METHOD_SYMLINK => check!(decode_symlink_request, validate_symlink_request_transport_resources),
-        directory::METHOD_READLINK => check!(decode_readlink_request, validate_readlink_request_transport_resources),
-        directory::METHOD_SET_CURRENT => check!(decode_set_current_request, validate_set_current_request_transport_resources),
-        directory::METHOD_SET_ROOT => check!(decode_set_root_request, validate_set_root_request_transport_resources),
-        directory::METHOD_CLONE_BINDING => check!(decode_clone_binding_request, validate_clone_binding_request_transport_resources),
-        directory::METHOD_STAT_NODE => check!(decode_stat_node_request, validate_stat_node_request_transport_resources),
-        directory::METHOD_SYNC => check!(decode_sync_request, validate_sync_request_transport_resources),
-        directory::METHOD_RENAME_AT => check!(decode_rename_at_request, validate_rename_at_request_transport_resources),
-        directory::METHOD_LINK_AT => check!(decode_link_at_request, validate_link_at_request_transport_resources),
-        _ => Err(-38),
-    }
-}
-
-fn validate_file_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    macro_rules! check {
-        ($decode:ident, $validate:ident) => {{
-            let value = file::$decode(&request.payload).map_err(|_| -22_i64)?;
-            file::$validate(&value, &request.resources).map_err(|_| -22_i64)
-        }};
-    }
-    match request.method_id {
-        file::METHOD_PREAD => check!(decode_pread_request, validate_pread_request_transport_resources),
-        file::METHOD_PWRITE => check!(decode_pwrite_request, validate_pwrite_request_transport_resources),
-        file::METHOD_SEEK => check!(decode_seek_request, validate_seek_request_transport_resources),
-        file::METHOD_STAT => check!(decode_stat_request, validate_stat_request_transport_resources),
-        file::METHOD_SYNC => check!(decode_sync_request, validate_sync_request_transport_resources),
-        file::METHOD_TRUNCATE => check!(decode_truncate_request, validate_truncate_request_transport_resources),
-        file::METHOD_ALLOCATE => check!(decode_allocate_request, validate_allocate_request_transport_resources),
-        file::METHOD_GET_FLAGS => check!(decode_get_flags_request, validate_get_flags_request_transport_resources),
-        file::METHOD_SET_FLAGS => check!(decode_set_flags_request, validate_set_flags_request_transport_resources),
-        file::METHOD_DEVICE_CONTROL => check!(decode_device_control_request, validate_device_control_request_transport_resources),
-        file::METHOD_READ => check!(decode_read_request, validate_read_request_transport_resources),
-        file::METHOD_WRITE => check!(decode_write_request, validate_write_request_transport_resources),
-        file::METHOD_PREADV => check!(decode_preadv_request, validate_preadv_request_transport_resources),
-        file::METHOD_PWRITEV => check!(decode_pwritev_request, validate_pwritev_request_transport_resources),
-        file::METHOD_READV => check!(decode_readv_request, validate_readv_request_transport_resources),
-        file::METHOD_WRITEV => check!(decode_writev_request, validate_writev_request_transport_resources),
-        file::METHOD_MATERIALIZE => check!(decode_materialize_request, validate_materialize_request_transport_resources),
-        _ => Err(-38),
-    }
-}
-
-fn encoded(encode: impl Fn(&mut [u8]) -> Result<usize, naos_idl::CodecError>) -> Vec<u8> {
-    let mut wire = vec![0_u8; 64];
-    loop {
-        match encode(&mut wire) {
-            Ok(size) => {
-                wire.truncate(size);
-                return wire;
-            }
-            Err(naos_idl::CodecError::Overflow) if wire.len() < 65_536 => {
-                wire.resize((wire.len() * 2).min(65_536), 0);
-            }
-            Err(error) => panic!("generated host VFS response fits: {error:?}"),
-        }
-    }
-}
-
-fn failure(request: &Request, errno: Errno) -> Response {
-    Response::error(request, -i64::from(errno.to_i32()))
-}
-
-fn protocol_failure(request: &Request, errno: i64) -> Response {
-    Response::error(request, errno)
-}
-
 fn strip_nul(path: &[u8]) -> &[u8] {
     let mut end = path.len();
     while end > 0 && path[end - 1] == 0 {
@@ -121,8 +37,15 @@ fn strip_nul(path: &[u8]) -> &[u8] {
 }
 
 enum HostHandle {
-    Directory { fd: u64, root: NodeId, current: NodeId },
-    File { fd: u64, mode: u64 },
+    Directory {
+        fd: u64,
+        root: NodeId,
+        current: NodeId,
+    },
+    File {
+        fd: u64,
+        mode: u64,
+    },
 }
 
 struct HostVfs {
@@ -152,7 +75,10 @@ impl HostVfs {
     }
 
     fn scope(&self, request: &Request) -> Result<(NodeId, NodeId), Errno> {
-        let Some(resource) = request.target.or_else(|| request.resources.first().copied()) else {
+        let Some(resource) = request
+            .target
+            .or_else(|| request.resources.first().copied())
+        else {
             let root = self.fs.root();
             return Ok((root, root));
         };
@@ -187,9 +113,9 @@ impl HostVfs {
                 scope,
                 u64::MAX,
                 if kind == FileKind::Directory {
-                    validate_directory_request
+                    directory::validate_request_transport_resources
                 } else {
-                    validate_file_request
+                    file::validate_request_transport_resources
                 },
             )
             .map_err(|_| Errno::ENomem)?;
@@ -270,329 +196,11 @@ impl HostVfs {
         Ok(resource.resource_id)
     }
 
-    fn directory_request(
-        &mut self,
-        server: &mut Server,
-        request: &Request,
-    ) -> Response {
-        if request.method_id == directory::METHOD_LIST
-            || !request.bulk.is_empty()
-            || (request.target.is_none() && !request.resources.is_empty())
-        {
-            return protocol_failure(request, -22);
-        }
-        let (root, current) = match self.scope(request) {
-            Ok(scope) => scope,
-            Err(errno) => return failure(request, errno),
-        };
-        match request.method_id {
-            directory::METHOD_OPEN => {
-                let value = match directory::decode_open_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                let path = strip_nul(value.path);
-                let node = match self.fs.lookup_scoped(root, current, path, true) {
-                    Ok(node) => node,
-                    Err(Errno::ENoent) if value.flags & OPEN_CREATE != 0 => {
-                        if value.flags & OPEN_DIRECTORY != 0 {
-                            return failure(request, Errno::ENoent);
-                        }
-                        match self.fs.create_scoped(
-                            root,
-                            current,
-                            path,
-                            value.mode & OPEN_EXCL != 0,
-                        ) {
-                            Ok(meta) => meta.node_id,
-                            Err(errno) => return failure(request, errno),
-                        }
-                    }
-                    Err(errno) => return failure(request, errno),
-                };
-                let meta = match self.fs.metadata_of(node) {
-                    Ok(meta) => meta,
-                    Err(errno) => return failure(request, errno),
-                };
-                if meta.kind == FileKind::Directory && value.flags & OPEN_TRUNC != 0 {
-                    return failure(request, Errno::EIsDir);
-                }
-                if meta.kind == FileKind::Regular && value.flags & OPEN_TRUNC != 0 {
-                    if let Err(errno) = self.fs.truncate_path(current, path, 0) {
-                        return failure(request, errno);
-                    }
-                }
-                let fd = match self.fs.open_node(node) {
-                    Ok(fd) => fd,
-                    Err(errno) => return failure(request, errno),
-                };
-                let endpoint = if meta.kind == FileKind::Directory {
-                    self.endpoint(
-                        server,
-                        &directory::protocol_descriptor(),
-                        meta.kind,
-                        fd,
-                        value.mode,
-                        if value.flags & CHROOT != 0 { node } else { root },
-                        node,
-                    )
-                } else {
-                    self.endpoint(
-                        server,
-                        &file::protocol_descriptor(),
-                        meta.kind,
-                        fd,
-                        value.mode,
-                        root,
-                        current,
-                    )
-                };
-                let endpoint = match endpoint {
-                    Ok(endpoint) => endpoint,
-                    Err(errno) => {
-                        let _ = self.fs.close(fd);
-                        return failure(request, errno);
-                    }
-                };
-                let response = directory::open_response {
-                    object: ResourceSlot::new(0).expect("slot zero"),
-                };
-                let mut response = Response::success(
-                    request,
-                    encoded(|wire| directory::encode_open_response(&response, wire)),
-                );
-                response.push_resource(endpoint);
-                response
-            }
-            directory::METHOD_CREATE => {
-                let value = match directory::decode_create_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                let path = strip_nul(value.path);
-                let result = if value.flags & CREATE_DIRECTORY != 0 {
-                    self.fs.mkdir_scoped(root, current, path).map(|_| ())
-                } else {
-                    self.fs
-                        .create_scoped(root, current, path, true)
-                        .map(|_| ())
-                };
-                result.map_or_else(|errno| failure(request, errno), |_| Response::success(request, Vec::new()))
-            }
-            directory::METHOD_REMOVE => {
-                let value = match directory::decode_remove_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                let path = strip_nul(value.path);
-                if value.flags & CREATE_DIRECTORY == 0 {
-                    let target = match self.fs.lookup_scoped(root, current, path, false) {
-                        Ok(target) => target,
-                        Err(errno) => return failure(request, errno),
-                    };
-                    let open = self.handles.values().any(|handle| {
-                        let HostHandle::File { fd, .. } = handle else {
-                            return false;
-                        };
-                        self.fs.fstat(*fd).is_ok_and(|meta| meta.node_id == target)
-                    });
-                    if open {
-                        return failure(request, Errno::EBusy);
-                    }
-                }
-                let result = if value.flags & CREATE_DIRECTORY != 0 {
-                    self.fs.rmdir_scoped(root, current, path)
-                } else {
-                    self.fs.unlink_scoped(root, current, path)
-                };
-                result.map_or_else(|errno| failure(request, errno), |_| Response::success(request, Vec::new()))
-            }
-            directory::METHOD_STAT => self.fs.metadata_of(current).map_or_else(
-                |errno| failure(request, errno),
-                |meta| Response::success(request, encoded(|wire| {
-                    directory::encode_stat_response(&directory::stat_response { value: Self::stat(meta) }, wire)
-                })),
-            ),
-            directory::METHOD_STAT_NODE => {
-                let value = match directory::decode_stat_node_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                if value.flags & !LOOKUP_NOFOLLOW != 0 {
-                    return failure(request, Errno::EInval);
-                }
-                self.fs
-                    .lookup_scoped(root, current, strip_nul(value.path), value.flags & LOOKUP_NOFOLLOW == 0)
-                    .map_or_else(
-                        |errno| failure(request, errno),
-                        |node| self.fs.metadata_of(node).map_or_else(
-                            |errno| failure(request, errno),
-                            |meta| Response::success(request, encoded(|wire| {
-                                directory::encode_stat_node_response(
-                                    &directory::stat_node_response { value: Self::stat(meta) },
-                                    wire,
-                                )
-                            })),
-                        ),
-                    )
-            }
-            directory::METHOD_ACCESS => Response::success(request, Vec::new()),
-            directory::METHOD_RENAME => {
-                let value = match directory::decode_rename_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                self.fs
-                    .rename_scoped(root, current, strip_nul(value.first), root, current, strip_nul(value.second))
-                    .map_or_else(|errno| failure(request, errno), |_| Response::success(request, Vec::new()))
-            }
-            directory::METHOD_SYNC => Response::success(request, Vec::new()),
-            directory::METHOD_CLONE_BINDING => {
-                let fd = match self.fs.open_node(current) {
-                    Ok(fd) => fd,
-                    Err(errno) => return failure(request, errno),
-                };
-                let endpoint = match self.endpoint(
-                    server,
-                    &directory::protocol_descriptor(),
-                    FileKind::Directory,
-                    fd,
-                    0,
-                    root,
-                    current,
-                ) {
-                    Ok(endpoint) => endpoint,
-                    Err(errno) => {
-                        let _ = self.fs.close(fd);
-                        return failure(request, errno);
-                    }
-                };
-                let value = directory::clone_binding_response {
-                    directory: ResourceSlot::new(0).expect("slot zero"),
-                };
-                let mut response = Response::success(
-                    request,
-                    encoded(|wire| directory::encode_clone_binding_response(&value, wire)),
-                );
-                response.push_resource(endpoint);
-                response
-            }
-            _ => protocol_failure(request, -38),
-        }
-    }
-
-    fn file_request(&mut self, request: &Request) -> Response {
-        let id = match Self::endpoint_id(request) {
-            Ok(id) => id,
-            Err(errno) => return failure(request, errno),
-        };
-        let (fd, mut mode) = match self.handles.get(&id) {
-            Some(HostHandle::File { fd, mode }) => (*fd, *mode),
-            _ => return failure(request, Errno::EBadf),
-        };
-        match request.method_id {
-            file::METHOD_PREAD => {
-                if mode & OPEN_MODE_READ == 0 {
-                    return failure(request, Errno::EBadf);
-                }
-                let value = match file::decode_pread_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                if value.offset < 0 {
-                    return protocol_failure(request, -22);
-                }
-                Self::read_region(request, value.buffer, 0, value.size, |data| {
-                    self.fs.pread(fd, value.offset.max(0) as u64, data)
-                })
-                .map_or_else(|error| protocol_failure(request, error), |count| Response::success(request, encoded(|wire| {
-                    file::encode_pread_response(&file::pread_response { count: count as u64 }, wire)
-                })))
-            }
-            file::METHOD_READ => {
-                if mode & OPEN_MODE_READ == 0 {
-                    return failure(request, Errno::EBadf);
-                }
-                let value = match file::decode_read_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                Self::read_region(request, value.buffer, 0, value.size, |data| self.fs.read(fd, data))
-                    .map_or_else(|error| protocol_failure(request, error), |count| Response::success(request, encoded(|wire| {
-                        file::encode_read_response(&file::read_response { count: count as u64 }, wire)
-                    })))
-            }
-            file::METHOD_PWRITE => {
-                if mode & OPEN_MODE_WRITE == 0 {
-                    return failure(request, Errno::EBadf);
-                }
-                let value = match file::decode_pwrite_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                if value.offset < 0 {
-                    return protocol_failure(request, -22);
-                }
-                Self::write_region(request, value.buffer, 0, value.size, |data| {
-                    self.fs.pwrite(fd, value.offset.max(0) as u64, data)
-                })
-                .map_or_else(|error| protocol_failure(request, error), |count| Response::success(request, encoded(|wire| {
-                    file::encode_pwrite_response(&file::pwrite_response { count: count as u64 }, wire)
-                })))
-            }
-            file::METHOD_WRITE => {
-                if mode & OPEN_MODE_WRITE == 0 {
-                    return failure(request, Errno::EBadf);
-                }
-                let value = match file::decode_write_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                if mode & OPEN_APPEND != 0 {
-                    if let Err(errno) = self.fs.seek(fd, vfsd::backend::SeekFrom::End(0)) {
-                        return failure(request, errno);
-                    }
-                }
-                Self::write_region(request, value.buffer, 0, value.size, |data| self.fs.write(fd, data))
-                    .map_or_else(|error| protocol_failure(request, error), |count| Response::success(request, encoded(|wire| {
-                        file::encode_write_response(&file::write_response { count: count as u64 }, wire)
-                    })))
-            }
-            file::METHOD_STAT => self.fs.fstat(fd).map_or_else(
-                |errno| failure(request, errno),
-                |meta| Response::success(request, encoded(|wire| {
-                    file::encode_stat_response(&file::stat_response { value: Self::stat_file(meta) }, wire)
-                })),
-            ),
-            file::METHOD_SYNC => Response::success(request, Vec::new()),
-            file::METHOD_TRUNCATE => {
-                if mode & OPEN_MODE_WRITE == 0 {
-                    return failure(request, Errno::EBadf);
-                }
-                let value = match file::decode_truncate_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                self.fs.ftruncate(fd, value.length).map_or_else(
-                    |errno| failure(request, errno),
-                    |_| Response::success(request, Vec::new()),
-                )
-            }
-            file::METHOD_GET_FLAGS => Response::success(request, encoded(|wire| {
-                file::encode_get_flags_response(&file::get_flags_response { flags: mode }, wire)
-            })),
-            file::METHOD_SET_FLAGS => {
-                let value = match file::decode_set_flags_request(&request.payload) {
-                    Ok(value) => value,
-                    Err(_) => return protocol_failure(request, -22),
-                };
-                mode = value.flags;
-                if let Some(HostHandle::File { mode: stored, .. }) = self.handles.get_mut(&id) {
-                    *stored = mode;
-                }
-                Response::success(request, Vec::new())
-            }
-            _ => protocol_failure(request, -38),
+    fn descriptor(&self, request: &Request) -> Result<(u64, u64), Errno> {
+        let id = Self::endpoint_id(request)?;
+        match self.handles.get(&id) {
+            Some(HostHandle::File { fd, mode }) => Ok((*fd, *mode)),
+            _ => Err(Errno::EBadf),
         }
     }
 
@@ -641,6 +249,544 @@ impl HostVfs {
     }
 }
 
+struct HostRequestContext<'a> {
+    request: &'a Request,
+    server: &'a mut Server,
+}
+
+fn rpc_failure(error: i64) -> RpcOutcome {
+    RpcOutcome {
+        execution: 0,
+        reason: 0,
+        protocol_error: error,
+    }
+}
+
+fn errno_failure(errno: Errno) -> RpcOutcome {
+    rpc_failure(-i64::from(errno.to_i32()))
+}
+
+macro_rules! unsupported_directory_method {
+    ($name:ident, $request:ty, $response:ty) => {
+        async fn $name<'s>(
+            &'s mut self,
+            context: &mut HostRequestContext<'_>,
+            _request: $request,
+        ) -> Result<RpcMethodReply<$response, Self::Resource>, RpcOutcome> {
+            if !context.request.bulk.is_empty() {
+                return Err(rpc_failure(-22));
+            }
+            Err(rpc_failure(-38))
+        }
+    };
+}
+
+impl<'ctx> directory::DirectoryServiceKitHandler<HostRequestContext<'ctx>> for Handler {
+    type Resource = EndpointResource;
+
+    async fn open<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: directory::open_request<'_>,
+    ) -> Result<RpcMethodReply<directory::open_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        if !request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(request).map_err(errno_failure)?;
+        let path = strip_nul(value.path);
+        let node = match self.state.fs.lookup_scoped(root, current, path, true) {
+            Ok(node) => node,
+            Err(Errno::ENoent) if value.flags & OPEN_CREATE != 0 => {
+                if value.flags & OPEN_DIRECTORY != 0 {
+                    return Err(errno_failure(Errno::ENoent));
+                }
+                self.state
+                    .fs
+                    .create_scoped(root, current, path, value.mode & OPEN_EXCL != 0)
+                    .map_err(errno_failure)?
+                    .node_id
+            }
+            Err(error) => return Err(errno_failure(error)),
+        };
+        let meta = self.state.fs.metadata_of(node).map_err(errno_failure)?;
+        if meta.kind == FileKind::Directory && value.flags & OPEN_TRUNC != 0 {
+            return Err(errno_failure(Errno::EIsDir));
+        }
+        if meta.kind == FileKind::Regular && value.flags & OPEN_TRUNC != 0 {
+            self.state
+                .fs
+                .truncate_path(current, path, 0)
+                .map_err(errno_failure)?;
+        }
+        let fd = self.state.fs.open_node(node).map_err(errno_failure)?;
+        let endpoint = if meta.kind == FileKind::Directory {
+            self.state.endpoint(
+                context.server,
+                &directory::protocol_descriptor(),
+                meta.kind,
+                fd,
+                value.mode,
+                if value.flags & CHROOT != 0 {
+                    node
+                } else {
+                    root
+                },
+                node,
+            )
+        } else {
+            self.state.endpoint(
+                context.server,
+                &file::protocol_descriptor(),
+                meta.kind,
+                fd,
+                value.mode,
+                root,
+                current,
+            )
+        }
+        .map_err(|error| {
+            let _ = self.state.fs.close(fd);
+            errno_failure(error)
+        })?;
+        let mut reply = RpcMethodReply::new(directory::open_response {
+            object: ResourceSlot::new(0).expect("resource slot zero"),
+        });
+        reply.resources.push(endpoint);
+        Ok(reply)
+    }
+
+    async fn list<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: directory::list_request,
+    ) -> Result<RpcMethodReply<directory::list_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        Err(rpc_failure(-22))
+    }
+
+    async fn create<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: directory::create_request<'_>,
+    ) -> Result<RpcMethodReply<directory::create_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        let path = strip_nul(value.path);
+        if value.flags & CREATE_DIRECTORY != 0 {
+            self.state
+                .fs
+                .mkdir_scoped(root, current, path)
+                .map_err(errno_failure)?;
+        } else {
+            self.state
+                .fs
+                .create_scoped(root, current, path, true)
+                .map_err(errno_failure)?;
+        }
+        Ok(RpcMethodReply::new(directory::create_response {}))
+    }
+
+    async fn remove<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: directory::remove_request<'_>,
+    ) -> Result<RpcMethodReply<directory::remove_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        let path = strip_nul(value.path);
+        if value.flags & CREATE_DIRECTORY == 0 {
+            let target = self
+                .state
+                .fs
+                .lookup_scoped(root, current, path, false)
+                .map_err(errno_failure)?;
+            let is_open = self.state.handles.values().any(|handle| {
+                let HostHandle::File { fd, .. } = handle else {
+                    return false;
+                };
+                self.state
+                    .fs
+                    .fstat(*fd)
+                    .is_ok_and(|meta| meta.node_id == target)
+            });
+            if is_open {
+                return Err(errno_failure(Errno::EBusy));
+            }
+        }
+        if value.flags & CREATE_DIRECTORY != 0 {
+            self.state
+                .fs
+                .rmdir_scoped(root, current, path)
+                .map_err(errno_failure)?;
+        } else {
+            self.state
+                .fs
+                .unlink_scoped(root, current, path)
+                .map_err(errno_failure)?;
+        }
+        Ok(RpcMethodReply::new(directory::remove_response {}))
+    }
+
+    async fn stat<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: directory::stat_request,
+    ) -> Result<RpcMethodReply<directory::stat_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (_, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        let meta = self.state.fs.metadata_of(current).map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(directory::stat_response {
+            value: HostVfs::stat(meta),
+        }))
+    }
+
+    async fn stat_node<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: directory::stat_node_request<'_>,
+    ) -> Result<RpcMethodReply<directory::stat_node_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        if value.flags & !LOOKUP_NOFOLLOW != 0 {
+            return Err(errno_failure(Errno::EInval));
+        }
+        let node = self
+            .state
+            .fs
+            .lookup_scoped(
+                root,
+                current,
+                strip_nul(value.path),
+                value.flags & LOOKUP_NOFOLLOW == 0,
+            )
+            .map_err(errno_failure)?;
+        let meta = self.state.fs.metadata_of(node).map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(directory::stat_node_response {
+            value: HostVfs::stat(meta),
+        }))
+    }
+
+    async fn access<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _value: directory::access_request<'_>,
+    ) -> Result<RpcMethodReply<directory::access_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        self.state.scope(context.request).map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(directory::access_response {}))
+    }
+
+    async fn rename<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: directory::rename_request<'_>,
+    ) -> Result<RpcMethodReply<directory::rename_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        self.state
+            .fs
+            .rename_scoped(
+                root,
+                current,
+                strip_nul(value.first),
+                root,
+                current,
+                strip_nul(value.second),
+            )
+            .map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(directory::rename_response {}))
+    }
+
+    async fn sync<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: directory::sync_request,
+    ) -> Result<RpcMethodReply<directory::sync_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        self.state.scope(context.request).map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(directory::sync_response {}))
+    }
+
+    async fn clone_binding<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: directory::clone_binding_request,
+    ) -> Result<RpcMethodReply<directory::clone_binding_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(rpc_failure(-22));
+        }
+        let (root, current) = self.state.scope(context.request).map_err(errno_failure)?;
+        let fd = self.state.fs.open_node(current).map_err(errno_failure)?;
+        let endpoint = self
+            .state
+            .endpoint(
+                context.server,
+                &directory::protocol_descriptor(),
+                FileKind::Directory,
+                fd,
+                0,
+                root,
+                current,
+            )
+            .map_err(|error| {
+                let _ = self.state.fs.close(fd);
+                errno_failure(error)
+            })?;
+        let mut reply = RpcMethodReply::new(directory::clone_binding_response {
+            directory: ResourceSlot::new(0).expect("resource slot zero"),
+        });
+        reply.resources.push(endpoint);
+        Ok(reply)
+    }
+
+    unsupported_directory_method!(path, directory::path_request, directory::path_response<'s>);
+    unsupported_directory_method!(link, directory::link_request<'_>, directory::link_response);
+    unsupported_directory_method!(
+        symlink,
+        directory::symlink_request<'_>,
+        directory::symlink_response
+    );
+    unsupported_directory_method!(
+        readlink,
+        directory::readlink_request<'_>,
+        directory::readlink_response<'s>
+    );
+    unsupported_directory_method!(
+        set_current,
+        directory::set_current_request,
+        directory::set_current_response
+    );
+    unsupported_directory_method!(
+        set_root,
+        directory::set_root_request,
+        directory::set_root_response
+    );
+    unsupported_directory_method!(
+        rename_at,
+        directory::rename_at_request<'_>,
+        directory::rename_at_response
+    );
+    unsupported_directory_method!(
+        link_at,
+        directory::link_at_request<'_>,
+        directory::link_at_response
+    );
+}
+
+macro_rules! unsupported_file_method {
+    ($name:ident, $request:ty, $response:ty) => {
+        async fn $name<'s>(
+            &'s mut self,
+            context: &mut HostRequestContext<'_>,
+            _request: $request,
+        ) -> Result<RpcMethodReply<$response, Self::Resource>, RpcOutcome> {
+            HostVfs::endpoint_id(context.request).map_err(errno_failure)?;
+            Err(rpc_failure(-38))
+        }
+    };
+}
+
+impl<'ctx> file::FileServiceKitHandler<HostRequestContext<'ctx>> for Handler {
+    type Resource = EndpointResource;
+
+    async fn pread<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::pread_request,
+    ) -> Result<RpcMethodReply<file::pread_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let (fd, mode) = self.state.descriptor(request).map_err(errno_failure)?;
+        if mode & OPEN_MODE_READ == 0 {
+            return Err(errno_failure(Errno::EBadf));
+        }
+        if value.offset < 0 {
+            return Err(rpc_failure(-22));
+        }
+        let count = HostVfs::read_region(request, value.buffer, 0, value.size, |data| {
+            self.state.fs.pread(fd, value.offset as u64, data)
+        })
+        .map_err(rpc_failure)?;
+        Ok(RpcMethodReply::new(file::pread_response {
+            count: count as u64,
+        }))
+    }
+
+    async fn pwrite<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::pwrite_request,
+    ) -> Result<RpcMethodReply<file::pwrite_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let (fd, mode) = self.state.descriptor(request).map_err(errno_failure)?;
+        if mode & OPEN_MODE_WRITE == 0 {
+            return Err(errno_failure(Errno::EBadf));
+        }
+        if value.offset < 0 {
+            return Err(rpc_failure(-22));
+        }
+        let count = HostVfs::write_region(request, value.buffer, 0, value.size, |data| {
+            self.state.fs.pwrite(fd, value.offset as u64, data)
+        })
+        .map_err(rpc_failure)?;
+        Ok(RpcMethodReply::new(file::pwrite_response {
+            count: count as u64,
+        }))
+    }
+
+    unsupported_file_method!(seek, file::seek_request, file::seek_response);
+
+    async fn stat<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: file::stat_request,
+    ) -> Result<RpcMethodReply<file::stat_response, Self::Resource>, RpcOutcome> {
+        let (fd, _) = self
+            .state
+            .descriptor(context.request)
+            .map_err(errno_failure)?;
+        let meta = self.state.fs.fstat(fd).map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(file::stat_response {
+            value: HostVfs::stat_file(meta),
+        }))
+    }
+
+    async fn sync<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: file::sync_request,
+    ) -> Result<RpcMethodReply<file::sync_response, Self::Resource>, RpcOutcome> {
+        self.state
+            .descriptor(context.request)
+            .map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(file::sync_response {}))
+    }
+
+    async fn truncate<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::truncate_request,
+    ) -> Result<RpcMethodReply<file::truncate_response, Self::Resource>, RpcOutcome> {
+        let (fd, mode) = self
+            .state
+            .descriptor(context.request)
+            .map_err(errno_failure)?;
+        if mode & OPEN_MODE_WRITE == 0 {
+            return Err(errno_failure(Errno::EBadf));
+        }
+        self.state
+            .fs
+            .ftruncate(fd, value.length)
+            .map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(file::truncate_response {}))
+    }
+
+    unsupported_file_method!(allocate, file::allocate_request, file::allocate_response);
+
+    async fn get_flags<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        _request: file::get_flags_request,
+    ) -> Result<RpcMethodReply<file::get_flags_response, Self::Resource>, RpcOutcome> {
+        let (_, mode) = self
+            .state
+            .descriptor(context.request)
+            .map_err(errno_failure)?;
+        Ok(RpcMethodReply::new(file::get_flags_response {
+            flags: mode,
+        }))
+    }
+
+    async fn set_flags<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::set_flags_request,
+    ) -> Result<RpcMethodReply<file::set_flags_response, Self::Resource>, RpcOutcome> {
+        let id = HostVfs::endpoint_id(context.request).map_err(errno_failure)?;
+        let Some(HostHandle::File { mode, .. }) = self.state.handles.get_mut(&id) else {
+            return Err(errno_failure(Errno::EBadf));
+        };
+        *mode = value.flags;
+        Ok(RpcMethodReply::new(file::set_flags_response {}))
+    }
+
+    unsupported_file_method!(
+        device_control,
+        file::device_control_request,
+        file::device_control_response
+    );
+
+    async fn read<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::read_request,
+    ) -> Result<RpcMethodReply<file::read_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let (fd, mode) = self.state.descriptor(request).map_err(errno_failure)?;
+        if mode & OPEN_MODE_READ == 0 {
+            return Err(errno_failure(Errno::EBadf));
+        }
+        let count = HostVfs::read_region(request, value.buffer, 0, value.size, |data| {
+            self.state.fs.read(fd, data)
+        })
+        .map_err(rpc_failure)?;
+        Ok(RpcMethodReply::new(file::read_response {
+            count: count as u64,
+        }))
+    }
+
+    async fn write<'s>(
+        &'s mut self,
+        context: &mut HostRequestContext<'ctx>,
+        value: file::write_request,
+    ) -> Result<RpcMethodReply<file::write_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let (fd, mode) = self.state.descriptor(request).map_err(errno_failure)?;
+        if mode & OPEN_MODE_WRITE == 0 {
+            return Err(errno_failure(Errno::EBadf));
+        }
+        if mode & OPEN_APPEND != 0 {
+            self.state
+                .fs
+                .seek(fd, vfsd::backend::SeekFrom::End(0))
+                .map_err(errno_failure)?;
+        }
+        let count = HostVfs::write_region(request, value.buffer, 0, value.size, |data| {
+            self.state.fs.write(fd, data)
+        })
+        .map_err(rpc_failure)?;
+        Ok(RpcMethodReply::new(file::write_response {
+            count: count as u64,
+        }))
+    }
+
+    unsupported_file_method!(preadv, file::preadv_request, file::preadv_response);
+    unsupported_file_method!(pwritev, file::pwritev_request, file::pwritev_response);
+    unsupported_file_method!(readv, file::readv_request, file::readv_response);
+    unsupported_file_method!(writev, file::writev_request, file::writev_response);
+    unsupported_file_method!(
+        materialize,
+        file::materialize_request,
+        file::materialize_response
+    );
+}
+
 struct Handler {
     state: HostVfs,
 }
@@ -648,14 +794,22 @@ struct Handler {
 impl ServeHandler for Handler {
     async fn handle(&mut self, server: &mut Server, request: Request) {
         self.state.reclaim(server);
-        let response = if request.protocol_uuid == directory::PROTOCOL_UUID {
-            self.state.directory_request(server, &request)
-        } else if request.protocol_uuid == file::PROTOCOL_UUID {
-            self.state.file_request(&request)
-        } else {
-            protocol_failure(&request, -71)
+        let protocol_uuid = request.protocol_uuid;
+        let dispatched = {
+            let rpc_request = request.rpc_request();
+            let mut context = HostRequestContext {
+                request: &request,
+                server,
+            };
+            if protocol_uuid == directory::PROTOCOL_UUID {
+                directory::dispatch_servicekit(&rpc_request, &mut context, self).await
+            } else if protocol_uuid == file::PROTOCOL_UUID {
+                file::dispatch_servicekit(&rpc_request, &mut context, self).await
+            } else {
+                naos_idl::transport::RpcDispatchResult::failure(rpc_request.method_id, -71)
+            }
         };
-        if let Err(error) = request.respond(response).await {
+        if let Err(error) = request.respond_dispatch(dispatched).await {
             log::debug!("host vfs response failed: {error:?}");
         }
     }
@@ -667,7 +821,7 @@ pub async fn run(context: Context) -> i64 {
         &directory,
         servicekit::uri::FS_VFS,
         &directory::protocol_descriptor(),
-        validate_directory_request,
+        directory::validate_request_transport_resources,
     )
     .await
     {

@@ -75,8 +75,9 @@ pub use naos_runtime;
 /// never on a platform namespace or raw runtime bootstrap.
 #[cfg(target_os = "naos")]
 pub use naos::{
-    Channel, Context, accept_listener, connect_until, list_service_uris, monotonic_ticks,
-    publish_listener, register_service, resolve_resource, resolve_service, resolve_until, run,
-    ReadinessSet, take_root_and_current, wait_for_completion, wait_for_service_prefix, wait_ready,
-    wait_ready_async,
+    Channel, Context, PCI_FUNCTION_URI, ReadinessSet, RegisterServiceError, accept_listener,
+    connect_until, create_service_directory_view, list_service_uris, monotonic_ticks,
+    publish_listener, register_service, register_service_async, resolve_resource, resolve_service,
+    resolve_until, run, take_root_and_current, wait_for_completion, wait_for_service_prefix,
+    wait_ready, wait_ready_async,
 };

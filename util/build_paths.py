@@ -58,6 +58,10 @@ class BuildPaths:
         return self.build_dir / "qemu.log"
 
     @property
+    def qemu_trace_log(self) -> Path:
+        return self.build_dir / "qemu-trace.log"
+
+    @property
     def boot_lock(self) -> Path:
         return self.build_dir / "boot.lock"
 

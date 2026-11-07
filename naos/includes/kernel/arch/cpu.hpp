@@ -49,6 +49,8 @@ struct cpu_t
 
     bool is_irq_pending(int index) { return soft_irq_pending & (1 << index); }
 
+    bool has_irq_pending() { return soft_irq_pending != 0; }
+
     void set_context(void *stack);
 
     cpuid_t get_id() { return id; }
@@ -78,6 +80,10 @@ struct cpu_t
     void set_apic_id(u64 id) { apic_id = id; }
 
 }; // storeage in gs
+
+bool in_exception_depth();
+void exception_context_enter();
+void exception_context_leave();
 extern cpu_t pre_cpu_data[];
 
 cpuid_t init();

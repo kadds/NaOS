@@ -43,10 +43,7 @@ mod platform {
 
     impl Drop for ClientResourceInner {
         fn drop(&mut self) {
-            crate::linux::release_resource(
-                self.endpoint.path(),
-                self.descriptor.resource_id,
-            );
+            crate::linux::release_resource(self.endpoint.path(), self.descriptor.resource_id);
         }
     }
 
@@ -315,7 +312,7 @@ mod platform {
     use core::cell::RefCell;
     use core::time::Duration;
     use naos_idl::transport::{BulkBuffer, BulkDirection, ResourceDescriptor};
-    use naos_idl::{CallError, OwnedHandle, ProtocolClientEndpoint, ResourceSlot, ResourceTable};
+    use naos_idl::{CallError, OwnedHandle, ProtocolClientEndpoint, ResourceSlot, ResourceTransferBuilder};
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum ClientError {
@@ -565,7 +562,7 @@ mod platform {
             bulk: &[BulkBuffer],
         ) -> Result<Response, ClientError> {
             self.admit_bulk(resources, bulk)?;
-            let mut table = ResourceTable::new();
+            let mut table = ResourceTransferBuilder::new();
             for resource in resources {
                 if resource.descriptor.rights & sys::RIGHT_TRANSFER == 0 {
                     return Err(ClientError::Status(sys::STATUS_ACCESS_DENIED));
@@ -601,7 +598,7 @@ mod platform {
             bulk: &[BulkBuffer],
         ) -> Result<Response, ClientError> {
             self.admit_bulk(resources, bulk)?;
-            let mut table = ResourceTable::new();
+            let mut table = ResourceTransferBuilder::new();
             for resource in resources {
                 if resource.descriptor.rights & sys::RIGHT_TRANSFER == 0 {
                     return Err(ClientError::Status(sys::STATUS_ACCESS_DENIED));

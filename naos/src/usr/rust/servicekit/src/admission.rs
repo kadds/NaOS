@@ -195,7 +195,10 @@ mod tests {
 
         // The bound is what makes the queue bounded: the third request is
         // refused instead of queued.
-        assert_eq!(admission.try_admit().unwrap_err(), AdmissionRefusal::WouldBlock);
+        assert_eq!(
+            admission.try_admit().unwrap_err(),
+            AdmissionRefusal::WouldBlock
+        );
         assert_eq!(admission.refused(), 1);
 
         // Releasing a permit frees exactly one slot.
@@ -249,7 +252,10 @@ mod tests {
             assert_eq!(admission.in_flight(), expected);
         }
         assert_eq!(admission.peak_in_flight(), admission.limit());
-        assert_eq!(admission.try_admit().unwrap_err(), AdmissionRefusal::WouldBlock);
+        assert_eq!(
+            admission.try_admit().unwrap_err(),
+            AdmissionRefusal::WouldBlock
+        );
     }
 
     #[test]

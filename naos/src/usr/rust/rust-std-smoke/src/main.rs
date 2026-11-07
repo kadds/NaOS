@@ -1,9 +1,35 @@
-#![cfg_attr(target_os = "naos", feature(thread_local))]
+#![cfg_attr(target_os = "naos", feature(allocator_api, thread_local))]
 
 #[cfg(target_os = "naos")]
-#[tokio::main]
-async fn main() -> std::process::ExitCode {
-    std::process::ExitCode::from(servicekit::run("rust-smoke-suite", naos_entry::entry).await as u8)
+fn main() -> std::process::ExitCode {
+    if !native_smoke::initialize_stdout() {
+        return std::process::ExitCode::from(1);
+    }
+    if native_smoke::run_allocator_quota_smoke() != 0 {
+        return std::process::ExitCode::from(1);
+    }
+    if std::env::args_os()
+        .any(|argument| argument == std::ffi::OsStr::new("--allocator-quota-only"))
+    {
+        native_smoke::log(b"rust-smoke-suite: allocator quota smoke complete\0");
+        return std::process::ExitCode::SUCCESS;
+    }
+
+    native_smoke::log(b"rust-smoke-suite: tokio runtime building\0");
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(_) => {
+            native_smoke::log(b"rust-smoke-suite: tokio runtime build failed\0");
+            return std::process::ExitCode::from(1);
+        }
+    };
+    native_smoke::log(b"rust-smoke-suite: tokio runtime ready\0");
+    std::process::ExitCode::from(
+        runtime.block_on(servicekit::run("rust-smoke-suite", naos_entry::entry)) as u8,
+    )
 }
 
 #[cfg(not(target_os = "naos"))]

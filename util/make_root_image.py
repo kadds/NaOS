@@ -11,16 +11,16 @@ from pathlib import Path
 
 
 SECTOR_SIZE = 512
-# mkfs.fat's -C count is in 1024-byte blocks.  The staged root currently uses
-# about 20 MiB after the FAT image materializes the boot aliases as regular
-# files; 24 MiB leaves a little room for metadata and growth without keeping
-# the old 34 MiB medium in every guest.
-ROOT_BLOCKS = 24 * 1024
-# fatfs reads one filesystem cluster per block-client call.  Four KiB
+# mkfs.fat's -C count is in 1024-byte blocks. The staged root currently uses
+# about 26 MiB after the FAT image materializes boot aliases plus the separate
+# reboot client as regular files. Retain 34 MiB so FAT16 has enough clusters at
+# the required 8 KiB cluster size while leaving room for metadata and growth.
+ROOT_BLOCKS = 34 * 1024
+# fatfs reads one filesystem cluster per block-client call. Eight KiB
 # clusters keep executable materialization on the direct MemoryObject data
 # path while avoiding one RPC for every 512-byte sector.  The fixed image is
 # below the FAT32 cluster-count threshold, so use the matching FAT16 layout.
-SECTORS_PER_CLUSTER = 8
+SECTORS_PER_CLUSTER = 16
 
 # FAT has no Unix symlink representation.  Keep the boot-critical and common
 # interactive aliases as dereferenced regular files; omitting the long tail

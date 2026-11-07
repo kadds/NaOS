@@ -76,6 +76,29 @@ struct tss_t
 
 static_assert(sizeof(tss_t) == 104, "sizeof(tss_t) must == 104");
 
+/// x86 requires one permission bit for every I/O port and one terminating
+/// 0xff byte after the bitmap.  The bitmap is per CPU and is never shared
+/// between address spaces.
+inline constexpr u32 io_bitmap_bytes = 8192;
+inline constexpr u32 io_bitmap_guard_bytes = 1;
+inline constexpr u32 max_direct_io_ranges = 16;
+
+struct io_range
+{
+    u16 first_port;
+    u32 port_count;
+};
+
+struct alignas(16) tss_storage
+{
+    tss_t tss;
+    u8 io_bitmap[io_bitmap_bytes + io_bitmap_guard_bytes];
+    u32 cached_io_range_count = 0;
+    io_range cached_io_ranges[max_direct_io_ranges]{};
+};
+
+static_assert(sizeof(tss_storage) >= sizeof(tss_t) + io_bitmap_bytes + io_bitmap_guard_bytes);
+
 void init(int core_index, phy_addr_t base_addr, void *ist);
 
 void set_ist(int core_index, int index, void *ist);
@@ -83,4 +106,19 @@ void *get_ist(int core_index, int index);
 
 void set_rsp(int core_index, int index, void *rsp0);
 void *get_rsp(int core_index, int index);
+
+/// Install one contiguous, direct-I/O lease on a CPU's current TSS.  This is
+/// a kernel-internal data-plane primitive; capability admission and thread
+/// ownership are enforced by the caller before reaching it.
+bool install_io_lease(int core_index, u16 first_port, u32 port_count);
+
+/// Rebuild the bitmap from the complete lease set of the thread being
+/// scheduled. The set is bounded by the task layer and is never shared with
+/// another address space.
+bool install_io_leases(int core_index, const io_range *ranges, u32 range_count);
+
+/// Revoke the current direct-I/O lease and put the TSS back in explicit
+/// all-deny mode.  The caller must stop the affected user thread before
+/// changing its effective lease.
+void revoke_io_lease(int core_index);
 } // namespace arch::tss

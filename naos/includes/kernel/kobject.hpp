@@ -30,7 +30,7 @@ class readiness_allocation_lock
     void lock();
     void unlock();
 };
-}
+} // namespace kobject_detail
 
 /// Receives readiness transitions from a kobject it is watching.
 ///
@@ -74,6 +74,17 @@ class kobject
         framebuffer,
         epoll,
         system_status,
+        firmware_root,
+        pci_discovery_fabric,
+        acpi_fixed_hardware,
+        acpi_resource_authority,
+        pci_fabric_admin,
+        pci_function,
+        pci_dma_domain,
+        pci_root_resource_attestation,
+        pci_device_resource_attestation,
+        interrupt_source,
+        pci_dma_fault_source,
     };
 
     explicit kobject(type_e ty);

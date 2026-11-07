@@ -6,12 +6,16 @@ publish = false
 
 [features]
 default = ["naos"]
-naos = ["dep:naos-sys"]
+naos = ["dep:naos-sys", "dep:smallvec"]
 linux = []
 alloc = []
+# Private VFS worker protocols are generated only for the vfsd consumer; they
+# are not part of the default application-facing IDL surface.
+internal = []
 # In-process fake kernel used by host-side round-trip tests (see
 # `src/loopback.rs`).  Implies `alloc`: the fake kernel keeps queues.
 test-loopback = ["alloc", "naos"]
 
 [dependencies]
 naos-sys = { path = "../naos-sys", optional = true }
+smallvec = { version = "1.16", default-features = false, features = ["const_generics"], optional = true }

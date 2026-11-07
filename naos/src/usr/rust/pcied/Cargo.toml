@@ -1,0 +1,46 @@
+[package]
+name = "pcied"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = []
+pci-msi-route-smoke = []
+pci-virtio-block-fault-smoke = []
+pci-amdvi-memory-iopf-smoke = ["pci-msi-route-smoke"]
+
+[[bin]]
+name = "pcied"
+path = "src/main.rs"
+
+[[bin]]
+name = "edud"
+path = "src/bin/edud.rs"
+required-features = ["pci-msi-route-smoke"]
+
+[[bin]]
+name = "virtioblkd"
+path = "src/bin/virtioblkd.rs"
+
+[[bin]]
+name = "virtio-block-smoke"
+path = "src/bin/virtio_block_smoke.rs"
+required-features = ["pci-msi-route-smoke"]
+
+[dependencies]
+naos-idl = { path = "../naos-idl", features = ["alloc"] }
+naos-sys = { path = "../naos-sys" }
+servicekit = { path = "../servicekit" }
+log = { version = "0.4.34", default-features = false }
+tokio = { version = "1.47", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+pci_types = "=0.10.1"
+
+[dev-dependencies]
+pretty_assertions = "1"

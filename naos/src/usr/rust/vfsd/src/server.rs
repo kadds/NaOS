@@ -28,11 +28,9 @@ use core::mem::ManuallyDrop;
 
 use naos_idl::directory::{self, DirectoryHandler};
 use naos_idl::file::{self, FileHandler};
-use naos_idl::vfs;
 use naos_idl::{
     CallError, DispatchOutcome, FailInvocation, Invocation, MethodReply, OwnedHandle,
-    ProtocolClientEndpoint, ProtocolServerEndpoint, ReceivedResources, ResourceSlot, ResourceTable,
-    ResponderHandle,
+    ProtocolClientEndpoint, ProtocolServerEndpoint, ReceivedResources, ResourceSlot, ResourceTransferBuilder,
 };
 use naos_sys as sys;
 
@@ -204,6 +202,12 @@ pub struct NsBindingState {
 pub(crate) struct Entry {
     pub(crate) endpoint: ProtocolServerEndpoint,
     pub(crate) binding: Binding,
+}
+
+#[derive(Clone, Copy)]
+enum PairOperation {
+    Rename,
+    Link,
 }
 
 /// Registrations produced inside a handler while the serve loop holds the
@@ -393,16 +397,6 @@ impl VfsServer {
                 return;
             };
             let binding = entry.binding;
-            let scope = match binding {
-                Binding::Directory {
-                    mount,
-                    root,
-                    current,
-                } => (mount, root, current),
-                Binding::File { mount, .. } => (mount, 0, 0),
-                // Control-plane endpoints pick their backend per request.
-                _ => (crate::mount::ROOT_MOUNT_ID, 0, 0),
-            };
             // Split the struct so handlers can use the backend while the
             // loop reads the entry table.
             let VfsServer {
@@ -423,7 +417,7 @@ impl VfsServer {
                 parent_anchors: _,
             } = self;
 
-            let mut incoming = {
+            let incoming = {
                 let endpoint = &entries.get(&handle).expect("checked above").endpoint;
                 match naos_idl::receive_request(endpoint, wire) {
                     Ok(incoming) => incoming,
@@ -458,139 +452,110 @@ impl VfsServer {
                 .and_then(|slot| incoming.resources.get(slot))
                 .map(OwnedHandle::get);
 
-            // rename_at/link_at carry a MOVE-disposition endpoint whose raw
-            // handle never reaches generated handlers; route them manually.
-            let is_pair_method = binding.is_directory()
-                && (incoming.method_id == directory::METHOD_RENAME_AT
-                    || incoming.method_id == directory::METHOD_LINK_AT);
-
-            let outcome = if is_pair_method {
-                let responder = incoming.responder.take();
-                let backend = match scope.0 {
-                    crate::mount::ROOT_MOUNT_ID => fs,
-                    mount => backends
-                        .get_mut(&mount)
-                        .expect("backend alive while endpoints live"),
-                };
-                run_pair_method(
-                    backend,
-                    topology,
-                    entries,
-                    clients,
-                    scope,
-                    incoming.method_id,
-                    incoming.wire,
-                    responder,
-                    &incoming.resources,
-                    reply_wire,
-                )
-                .map(|_| DispatchOutcome::Completed)
-                .map_err(|_| naos_idl::CallError::Status(sys::STATUS_IO_ERROR))
-            } else {
-                match binding {
-                    Binding::Directory {
+            let outcome = match binding {
+                Binding::Directory {
+                    mount,
+                    root,
+                    current,
+                } => {
+                    let backend = match mount {
+                        crate::mount::ROOT_MOUNT_ID => fs,
+                        m => backends
+                            .get_mut(&m)
+                            .expect("backend alive while endpoints live"),
+                    };
+                    let mut handler = DirectoryContext {
+                        fs: backend,
+                        topology,
+                        root_anchors,
+                        pending,
+                        entries: &*entries,
+                        clients: &*clients,
                         mount,
                         root,
                         current,
-                    } => {
-                        let backend = match mount {
-                            crate::mount::ROOT_MOUNT_ID => fs,
-                            m => backends
-                                .get_mut(&m)
-                                .expect("backend alive while endpoints live"),
-                        };
-                        let mut handler = DirectoryContext {
-                            fs: backend,
-                            topology: &*topology,
-                            root_anchors,
-                            pending,
-                            mount,
-                            root,
-                            current,
-                            region,
-                            scratch: Vec::new(),
-                        };
-                        directory::dispatch(&mut handler, incoming, reply_wire)
-                    }
-                    Binding::File { mount, fd, mode } => {
-                        let backend = match mount {
-                            crate::mount::ROOT_MOUNT_ID => fs,
-                            m => backends
-                                .get_mut(&m)
-                                .expect("backend alive while endpoints live"),
-                        };
-                        let mut handler = FileContext {
-                            fs: backend,
-                            mount,
-                            fd,
-                            mode,
-                            region,
-                            next_generation,
-                        };
-                        file::dispatch(&mut handler, incoming, reply_wire)
-                    }
-                    Binding::VfsAdmin => run_vfs_admin(
-                        VfsCtl {
-                            root_fs: fs,
-                            backends,
-                            pending_backends,
-                            topology,
-                            entries,
-                            clients,
-                            binding_clients,
-                            root_anchors,
-                            mount_controls,
-                            external_workers: *external_workers,
-                            pending,
-                            reply_wire,
-                        },
-                        incoming,
-                    ),
-                    Binding::MountTicket { ticket } => run_mount_ticket(
-                        fs,
-                        topology,
-                        pending_backends,
-                        backends,
-                        mount_controls,
-                        pending,
-                        root_anchors,
-                        *external_workers,
-                        ticket,
-                        incoming,
-                    ),
-                    Binding::MutationTicket { ticket } => {
-                        run_mutation_ticket(topology, ticket, incoming)
-                    }
-                    Binding::NamespaceBinding(state) => run_namespace_binding(
-                        NamespaceCtx {
-                            root_fs: fs,
-                            backends,
-                            topology,
-                            pending,
-                            state,
-                            mint_directory: crate::mount_admin::real_directory_pair,
-                            mint_ns_binding: crate::internal::namespace_binding::create_endpoints,
-                            mint_mutation_ticket:
-                                crate::internal::mutation_ticket::create_endpoints,
-                        },
-                        incoming,
-                        reply_wire,
-                    ),
-                    Binding::MountControl { ticket } => run_mount_control(
-                        MountControlCtx {
-                            root_fs: fs,
-                            backends,
-                            topology,
-                            pending,
-                            entries,
-                            binding_clients,
-                            ticket,
-                            mint_directory: crate::mount_admin::real_directory_pair,
-                        },
-                        incoming,
-                        reply_wire,
-                    ),
+                        region,
+                        scratch: Vec::new(),
+                    };
+                    directory::dispatch(&mut handler, incoming, reply_wire)
                 }
+                Binding::File { mount, fd, mode } => {
+                    let backend = match mount {
+                        crate::mount::ROOT_MOUNT_ID => fs,
+                        m => backends
+                            .get_mut(&m)
+                            .expect("backend alive while endpoints live"),
+                    };
+                    let mut handler = FileContext {
+                        fs: backend,
+                        mount,
+                        fd,
+                        mode,
+                        region,
+                        next_generation,
+                    };
+                    file::dispatch(&mut handler, incoming, reply_wire)
+                }
+                Binding::VfsAdmin => run_vfs_admin(
+                    VfsCtl {
+                        root_fs: fs,
+                        backends,
+                        pending_backends,
+                        topology,
+                        entries,
+                        clients,
+                        binding_clients,
+                        root_anchors,
+                        mount_controls,
+                        external_workers: *external_workers,
+                        pending,
+                        reply_wire,
+                    },
+                    incoming,
+                ),
+                Binding::MountTicket { ticket } => run_mount_ticket(
+                    fs,
+                    topology,
+                    pending_backends,
+                    backends,
+                    mount_controls,
+                    pending,
+                    root_anchors,
+                    *external_workers,
+                    ticket,
+                    incoming,
+                ),
+                Binding::MutationTicket { ticket } => {
+                    run_mutation_ticket(topology, ticket, incoming)
+                }
+                Binding::NamespaceBinding(state) => run_namespace_binding(
+                    NamespaceCtx {
+                        root_fs: fs,
+                        backends,
+                        topology,
+                        pending,
+                        state,
+                        mint_directory: crate::mount_admin::real_directory_pair,
+                        mint_ns_binding: crate::mount_admin::real_namespace_binding_pair,
+                        mint_mutation_ticket: crate::mount_admin::real_mutation_ticket_pair,
+                    },
+                    incoming,
+                    reply_wire,
+                ),
+                Binding::MountControl { ticket } => run_mount_control(
+                    MountControlCtx {
+                        root_fs: fs,
+                        backends,
+                        topology,
+                        pending,
+                        entries,
+                        binding_clients,
+                        ticket,
+                        mint_directory: crate::mount_admin::real_directory_pair,
+                    },
+                    incoming,
+                    reply_wire,
+                ),
             };
 
             // Handler-produced endpoints join the table after dispatch.
@@ -742,26 +707,26 @@ impl VfsServer {
             .wait(Some(crate::mount::TICKET_TIMEOUT_TICKS))
             .await
         {
-                Ok(event) => {
-                    let index = event.index;
-                    let mut signals = 0;
-                    if event.readable {
-                        signals |= sys::SIGNAL_READABLE;
-                    }
-                    if event.writable {
-                        signals |= sys::SIGNAL_WRITABLE;
-                    }
-                    if event.read_closed || event.write_closed {
-                        signals |= sys::SIGNAL_PEER_CLOSED;
-                    }
-                    if event.error {
-                        signals |= sys::SIGNAL_OBJECT_REVOKED;
-                    }
-                    (Some(index), vec![(handles[index], signals)])
+            Ok(event) => {
+                let index = event.index;
+                let mut signals = 0;
+                if event.readable {
+                    signals |= sys::SIGNAL_READABLE;
                 }
-                Err(sys::STATUS_WAIT_TIMED_OUT) => (None, Vec::new()),
-                Err(status) => return Err(status),
-            };
+                if event.writable {
+                    signals |= sys::SIGNAL_WRITABLE;
+                }
+                if event.read_closed || event.write_closed {
+                    signals |= sys::SIGNAL_PEER_CLOSED;
+                }
+                if event.error {
+                    signals |= sys::SIGNAL_OBJECT_REVOKED;
+                }
+                (Some(index), vec![(handles[index], signals)])
+            }
+            Err(sys::STATUS_WAIT_TIMED_OUT) => (None, Vec::new()),
+            Err(status) => return Err(status),
+        };
         self.topology.poll_expiry(servicekit::monotonic_ticks());
         let result = self.serve_observed(listeners, observed, wire, reply_wire);
         if let Some(index) = ready_index {
@@ -951,37 +916,26 @@ fn retire_endpoint(
     );
 }
 
-impl Binding {
-    fn is_directory(self) -> bool {
-        matches!(self, Binding::Directory { .. })
-    }
-}
-
-/// Manual routing for rename_at/link_at: validates the disposition, maps
-/// the transferred `new_parent` to one of our own Directory bindings
-/// (consuming the moved handle), rejects cross-mount pairs with `EXDEV`
-/// before any work (§6.4 worker rule), reserves both affected components in
-/// the shared mutation table, then commits the backend change while the
-/// reservation is held (r7 rule 1: local commit under the reservation).
-pub(crate) fn run_pair_method(
+/// Apply a typed rename_at/link_at request. The generated dispatcher already
+/// decodes the request and validates the moved `new_parent` resource.
+fn run_pair_method(
     fs: &mut RamFs,
     topology: &mut crate::mount::Topology,
     entries: &BTreeMap<sys::Handle, Entry>,
     clients: &BTreeMap<u64, (u64, NodeId, NodeId)>,
     scope: (u64, NodeId, NodeId),
-    method_id: u64,
-    wire: &[u8],
-    responder: Option<ResponderHandle>,
+    operation: PairOperation,
+    first: &[u8],
+    second: &[u8],
+    flags: u64,
+    new_parent: ResourceSlot,
     resources: &ReceivedResources,
-    reply_wire: &mut [u8],
-) -> Result<(), ()> {
-    let Some(mut responder) = responder else {
-        return Err(());
-    };
-    let fail_with = |mut responder: ResponderHandle, errno: Errno| -> Result<(), ()> {
-        let _ = responder.fail(FailInvocation::domain(-(errno.to_i32() as i64)));
-        Err(())
-    };
+) -> Result<(), FailInvocation> {
+    match operation {
+        PairOperation::Rename if flags != 0 => return Err(fail(Errno::EInval)),
+        PairOperation::Link if flags & !1 != 0 => return Err(fail(Errno::EInval)),
+        _ => {}
+    }
 
     // Resolve the transferred `new_parent` endpoint to its binding scope:
     // registered server ends first, then client ends this server minted.
@@ -1010,75 +964,36 @@ pub(crate) fn run_pair_method(
         Err(())
     };
 
-    let decode =
-        |method_id: u64, wire: &[u8]| -> Result<(Vec<u8>, Vec<u8>, u64, ResourceSlot), ()> {
-            if method_id == directory::METHOD_RENAME_AT {
-                let request = directory::decode_rename_at_request(wire).map_err(|_| ())?;
-                directory::validate_rename_at_request_received_resources(&request, &resources)
-                    .map_err(|_| ())?;
-                if request.flags != 0 {
-                    // NOREPLACE/EXCHANGE bits are reserved in v1.
-                    return Err(());
-                }
-                Ok((
-                    Vec::from(strip_nul(request.first)),
-                    Vec::from(strip_nul(request.second)),
-                    0,
-                    request.new_parent,
-                ))
-            } else {
-                let request = directory::decode_link_at_request(wire).map_err(|_| ())?;
-                directory::validate_link_at_request_received_resources(&request, &resources)
-                    .map_err(|_| ())?;
-                if request.flags & !1 != 0 {
-                    return Err(());
-                }
-                Ok((
-                    Vec::from(strip_nul(request.first)),
-                    Vec::from(strip_nul(request.second)),
-                    request.flags & 1,
-                    request.new_parent,
-                ))
-            }
-        };
-
-    let (first, second, flags, new_parent_slot) = match decode(method_id, wire) {
-        Ok(decoded) => decoded,
-        Err(()) => return fail_with(responder, Errno::EInval),
-    };
-    let peer_scope = match peer(new_parent_slot, entries, clients, resources) {
-        Ok(peer) => peer,
-        Err(()) => return fail_with(responder, Errno::EInval),
-    };
+    let peer_scope =
+        peer(new_parent, entries, clients, resources).map_err(|()| fail(Errno::EInval))?;
     // Cross-mount rename/link fails EXDEV by identity comparison alone --
     // never an RPC, and without side effects (§6.4).
     if peer_scope.0 != scope.0 {
-        return fail_with(responder, Errno::EXdev);
+        return Err(fail(Errno::EXdev));
     }
 
     // Dry-run resolution so the reservation covers the real victims before
     // any metadata moves. Failures here are plain POSIX errors.
     let (old_parent, old_name, old_target) = match resolve_victims(fs, scope.1, scope.2, &first) {
         Ok(victim) => victim,
-        Err(errno) => return fail_with(responder, errno),
+        Err(errno) => return Err(fail(errno)),
     };
     let new_side = match resolve_victims(fs, peer_scope.1, peer_scope.2, &second) {
         Ok((parent, name, target)) => (parent, name, Some(target)),
         Err(Errno::ENoent) => match fs.resolve_parent_scoped(peer_scope.1, peer_scope.2, &second) {
             Ok((parent, _name)) => (parent, last_component(&second).to_vec(), None),
-            Err(errno) => return fail_with(responder, errno),
+            Err(errno) => return Err(fail(errno)),
         },
-        Err(errno) => return fail_with(responder, errno),
+        Err(errno) => return Err(fail(errno)),
     };
-    let operation = if method_id == directory::METHOD_RENAME_AT {
-        crate::internal::namespace_binding::OP_RENAME
-    } else {
-        crate::internal::namespace_binding::OP_LINK
+    let mutation_operation = match operation {
+        PairOperation::Rename => crate::internal::namespace_binding::OP_RENAME,
+        PairOperation::Link => crate::internal::namespace_binding::OP_LINK,
     };
     let key = |mount: u64, id: NodeId| node_key(topology, mount, id);
     let ticket = match topology.begin_mutation(
         scope.0,
-        operation,
+        mutation_operation,
         key(scope.0, old_parent),
         key(scope.0, old_target),
         key(scope.0, new_side.0),
@@ -1091,13 +1006,13 @@ pub(crate) fn run_pair_method(
         servicekit::monotonic_ticks(),
     ) {
         Ok(ticket) => ticket,
-        Err(errno) => return fail_with(responder, errno),
+        Err(errno) => return Err(fail(errno)),
     };
 
     let applied = apply_pair(
         fs,
         (scope.1, scope.2),
-        method_id,
+        operation,
         &first,
         (peer_scope.1, peer_scope.2),
         &second,
@@ -1109,15 +1024,42 @@ pub(crate) fn run_pair_method(
             // release (COMMITTING) and finish (COMMITTED).
             let _ = topology.admit_mutation(ticket);
             let _ = topology.finish_mutation(ticket, true);
-            reply_empty(responder, method_id, reply_wire);
             Ok(())
         }
         Err(errno) => {
             // No local effect happened: abort releases the reservation.
             let _ = topology.abort_mutation(ticket);
-            fail_with(responder, errno)
+            Err(fail(errno))
         }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn dispatch_directory_for_test(
+    fs: &mut RamFs,
+    topology: &mut crate::mount::Topology,
+    entries: &BTreeMap<sys::Handle, Entry>,
+    clients: &BTreeMap<u64, (u64, NodeId, NodeId)>,
+    scope: (u64, NodeId, NodeId),
+    incoming: naos_idl::IncomingRequest<'_>,
+    reply_wire: &mut [u8],
+) -> Result<DispatchOutcome, CallError> {
+    let root_anchors = BTreeMap::new();
+    let mut pending = Vec::new();
+    let mut handler = DirectoryContext {
+        fs,
+        topology,
+        root_anchors: &root_anchors,
+        pending: &mut pending,
+        entries,
+        clients,
+        mount: scope.0,
+        root: scope.1,
+        current: scope.2,
+        region: None,
+        scratch: Vec::new(),
+    };
+    directory::dispatch(&mut handler, incoming, reply_wire)
 }
 
 /// Generation-tagged wire identity of a backend node; the mount's backend
@@ -1159,33 +1101,21 @@ fn last_component(path: &[u8]) -> &[u8] {
 fn apply_pair(
     fs: &mut RamFs,
     scope: (NodeId, NodeId),
-    method_id: u64,
+    operation: PairOperation,
     first: &[u8],
     peer: (NodeId, NodeId),
     second: &[u8],
     flags: u64,
 ) -> Result<(), Errno> {
-    if method_id == directory::METHOD_RENAME_AT {
-        return fs.rename_scoped(scope.0, scope.1, first, peer.0, peer.1, second);
-    }
-    if flags & 1 == 0 {
-        fs.link_scoped(scope.0, scope.1, first, peer.0, peer.1, second)
-    } else {
-        // AT_SYMLINK_FOLLOW: resolve the source fully, then hard-link.
-        link_following(fs, scope.0, scope.1, first, peer.0, peer.1, second)
-    }
-}
-
-/// Answer a `->;` pair-method with its (empty) canonical response.
-fn reply_empty(mut responder: ResponderHandle, method_id: u64, reply_wire: &mut [u8]) {
-    let outcome = match method_id {
-        directory::METHOD_RENAME_AT => {
-            directory::encode_rename_at_response(&directory::rename_at_response {}, reply_wire)
+    match operation {
+        PairOperation::Rename => fs.rename_scoped(scope.0, scope.1, first, peer.0, peer.1, second),
+        PairOperation::Link if flags & 1 == 0 => {
+            fs.link_scoped(scope.0, scope.1, first, peer.0, peer.1, second)
         }
-        _ => directory::encode_link_at_response(&directory::link_at_response {}, reply_wire),
-    };
-    if let Ok(written) = outcome {
-        let _ = responder.reply(&reply_wire[..written], ResourceTable::new().as_slice());
+        PairOperation::Link => {
+            // AT_SYMLINK_FOLLOW: resolve the source fully, then hard-link.
+            link_following(fs, scope.0, scope.1, first, peer.0, peer.1, second)
+        }
     }
 }
 
@@ -1219,9 +1149,11 @@ fn link_following(
 
 struct DirectoryContext<'a> {
     fs: &'a mut RamFs,
-    topology: &'a crate::mount::Topology,
+    topology: &'a mut crate::mount::Topology,
     root_anchors: &'a BTreeMap<u64, OwnedHandle>,
     pending: &'a mut Vec<PendingRegistration>,
+    entries: &'a BTreeMap<sys::Handle, Entry>,
+    clients: &'a BTreeMap<u64, (u64, NodeId, NodeId)>,
     mount: u64,
     root: NodeId,
     current: NodeId,
@@ -1262,7 +1194,7 @@ fn worker_clone_directory(anchor: &OwnedHandle) -> Result<OwnedHandle, FailInvoc
     let mut invocation = directory::submit_clone_binding(
         &endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1288,7 +1220,7 @@ fn worker_open_directory(
     let mut invocation = directory::submit_open(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1310,7 +1242,7 @@ fn worker_stat_directory(
     let mut invocation = directory::submit_stat(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1336,7 +1268,7 @@ fn worker_stat_node(
     let mut invocation = directory::submit_stat_node(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1359,7 +1291,7 @@ fn worker_create(
     let mut invocation = directory::submit_create(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1382,7 +1314,7 @@ fn worker_remove(
     let mut invocation = directory::submit_remove(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1404,7 +1336,7 @@ fn worker_access(
     let mut invocation = directory::submit_access(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1431,7 +1363,7 @@ fn worker_rename(
     let mut invocation = directory::submit_rename(
         endpoint,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )
@@ -1505,7 +1437,7 @@ impl<'a> DirectoryContext<'a> {
             Err(error) => return Err(error),
         };
         if relative.is_empty() {
-            let mut resources = ResourceTable::new();
+            let mut resources = ResourceTransferBuilder::new();
             let slot = resources.push_move(cloned).map_err(|_| fail(Errno::EIo))?;
             return Ok(MethodReply::with_resources(
                 directory::open_response { object: slot },
@@ -1514,7 +1446,7 @@ impl<'a> DirectoryContext<'a> {
         }
         let endpoint = worker_endpoint(&cloned);
         let object = worker_open_directory(&endpoint, relative, mode, flags)?;
-        let mut resources = ResourceTable::new();
+        let mut resources = ResourceTransferBuilder::new();
         let slot = resources.push_move(object).map_err(|_| fail(Errno::EIo))?;
         Ok(MethodReply::with_resources(
             directory::open_response { object: slot },
@@ -1527,7 +1459,7 @@ impl<'a> DirectoryContext<'a> {
     fn spawn_endpoint(
         &mut self,
         binding: Binding,
-    ) -> Result<(ResourceSlot, ResourceTable<'static>), FailInvocation> {
+    ) -> Result<(ResourceSlot, ResourceTransferBuilder<'static>), FailInvocation> {
         // File and Directory are distinct protocol scopes.  They share the
         // opaque endpoint wrapper, but the kernel metadata still carries the
         // descriptor and method surface; creating a File binding with a
@@ -1542,7 +1474,7 @@ impl<'a> DirectoryContext<'a> {
             .map_err(|_| FailInvocation::domain(-Errno::EIo.to_i32() as i64))?;
         let client_raw = client.into_raw();
         let client_handle = unsafe { OwnedHandle::from_raw(client_raw) };
-        let mut resources: ResourceTable<'static> = ResourceTable::new();
+        let mut resources: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
         let slot = resources
             .push_move(client_handle)
             .map_err(|_| fail(Errno::EIo))?;
@@ -1635,6 +1567,7 @@ impl DirectoryHandler for DirectoryContext<'_> {
     fn list<'s>(
         &'s mut self,
         request: directory::list_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::list_response>, FailInvocation> {
         // Record budget mirrors the kernel adapter: requested_bytes == 0
         // means "fill the maximum payload".
@@ -1685,8 +1618,7 @@ impl DirectoryHandler for DirectoryContext<'_> {
                 };
                 out[cursor..cursor + 4].copy_from_slice(&type_word.to_le_bytes());
                 cursor += 4;
-                out[cursor..cursor + 4]
-                    .copy_from_slice(&((name.len() + 1) as u32).to_le_bytes());
+                out[cursor..cursor + 4].copy_from_slice(&((name.len() + 1) as u32).to_le_bytes());
                 cursor += 4;
                 out[cursor..cursor + name.len()].copy_from_slice(name);
                 cursor += name.len();
@@ -1975,21 +1907,46 @@ impl DirectoryHandler for DirectoryContext<'_> {
         Ok(MethodReply::new(directory::sync_response {}))
     }
 
-    // rename_at/link_at are routed manually in `service_endpoint` because
-    // their MOVE-disposition `new_parent` never reaches generated handlers;
-    // these trait slots answer EINVAL should a request ever slip through.
     fn rename_at<'s>(
         &'s mut self,
-        _request: directory::rename_at_request<'_>,
+        request: directory::rename_at_request<'_>,
+        request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::rename_at_response>, FailInvocation> {
-        Err(FailInvocation::domain(-Errno::EInval.to_i32() as i64))
+        run_pair_method(
+            self.fs,
+            self.topology,
+            self.entries,
+            self.clients,
+            (self.mount, self.root, self.current),
+            PairOperation::Rename,
+            strip_nul(request.first),
+            strip_nul(request.second),
+            request.flags,
+            request.new_parent,
+            request_resources,
+        )?;
+        Ok(MethodReply::new(directory::rename_at_response {}))
     }
 
     fn link_at<'s>(
         &'s mut self,
-        _request: directory::link_at_request<'_>,
+        request: directory::link_at_request<'_>,
+        request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::link_at_response>, FailInvocation> {
-        Err(FailInvocation::domain(-Errno::EInval.to_i32() as i64))
+        run_pair_method(
+            self.fs,
+            self.topology,
+            self.entries,
+            self.clients,
+            (self.mount, self.root, self.current),
+            PairOperation::Link,
+            strip_nul(request.first),
+            strip_nul(request.second),
+            request.flags,
+            request.new_parent,
+            request_resources,
+        )?;
+        Ok(MethodReply::new(directory::link_at_response {}))
     }
 }
 
@@ -2027,6 +1984,7 @@ impl FileHandler for FileContext<'_> {
     fn pread<'s>(
         &'s mut self,
         request: file::pread_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pread_response>, FailInvocation> {
         self.require_readable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2034,12 +1992,9 @@ impl FileHandler for FileContext<'_> {
             return Ok(MethodReply::new(file::pread_response { count: 0 }));
         }
         let handle = region_handle(self.region)?;
-        let count = servicekit::memory::with_region_write(
-            handle,
-            0,
-            bytes,
-            |out| self.fs.pread(self.fd, request.offset.max(0) as u64, out),
-        )
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            self.fs.pread(self.fd, request.offset.max(0) as u64, out)
+        })
         .map_err(|_| fail(Errno::EInval))?
         .map_err(fail)?;
         Ok(MethodReply::new(file::pread_response {
@@ -2050,6 +2005,7 @@ impl FileHandler for FileContext<'_> {
     fn pwrite<'s>(
         &'s mut self,
         request: file::pwrite_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pwrite_response>, FailInvocation> {
         self.require_writable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2057,12 +2013,9 @@ impl FileHandler for FileContext<'_> {
             return Ok(MethodReply::new(file::pwrite_response { count: 0 }));
         }
         let handle = region_handle(self.region)?;
-        let count = servicekit::memory::with_region_read(
-            handle,
-            0,
-            bytes,
-            |data| self.fs.pwrite(self.fd, request.offset.max(0) as u64, data),
-        )
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            self.fs.pwrite(self.fd, request.offset.max(0) as u64, data)
+        })
         .map_err(|_| fail(Errno::EInval))?
         .map_err(fail)?;
         Ok(MethodReply::new(file::pwrite_response {
@@ -2142,6 +2095,7 @@ impl FileHandler for FileContext<'_> {
     fn device_control<'s>(
         &'s mut self,
         _request: file::device_control_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::device_control_response>, FailInvocation> {
         Err(FailInvocation::domain(-25)) // -ENOTTY
     }
@@ -2149,6 +2103,7 @@ impl FileHandler for FileContext<'_> {
     fn read<'s>(
         &'s mut self,
         request: file::read_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::read_response>, FailInvocation> {
         self.require_readable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2169,6 +2124,7 @@ impl FileHandler for FileContext<'_> {
     fn write<'s>(
         &'s mut self,
         request: file::write_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::write_response>, FailInvocation> {
         self.require_writable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2181,9 +2137,10 @@ impl FileHandler for FileContext<'_> {
             if append {
                 let size = self.fs.fstat(self.fd)?.size;
                 let count = self.fs.pwrite(self.fd, size, data)?;
-                let _ = self
-                    .fs
-                    .seek(self.fd, crate::backend::SeekFrom::Set((size + count as u64) as i64));
+                let _ = self.fs.seek(
+                    self.fd,
+                    crate::backend::SeekFrom::Set((size + count as u64) as i64),
+                );
                 return Ok(count);
             }
             self.fs.write(self.fd, data)
@@ -2198,6 +2155,7 @@ impl FileHandler for FileContext<'_> {
     fn preadv<'s>(
         &'s mut self,
         request: file::preadv_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::preadv_response>, FailInvocation> {
         self.require_readable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2206,31 +2164,30 @@ impl FileHandler for FileContext<'_> {
         }
         let handle = region_handle(self.region)?;
         let segments = request.layout.segment_count as usize;
-        let count =
-            servicekit::memory::with_region_write(handle, 0, bytes, |out| {
-                let mut offset = request.offset.max(0) as u64;
-                let mut total = 0usize;
-                let mut cursor = 0usize;
-                for length in request.layout.lengths.iter().take(segments) {
-                    let length = *length as usize;
-                    let remaining = out.len() - cursor;
-                    if remaining == 0 || length > remaining {
-                        break;
-                    }
-                    let read = self
-                        .fs
-                        .pread(self.fd, offset, &mut out[cursor..cursor + length])?;
-                    if read == 0 {
-                        break;
-                    }
-                    total += read;
-                    offset += read as u64;
-                    cursor += length;
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            let mut offset = request.offset.max(0) as u64;
+            let mut total = 0usize;
+            let mut cursor = 0usize;
+            for length in request.layout.lengths.iter().take(segments) {
+                let length = *length as usize;
+                let remaining = out.len() - cursor;
+                if remaining == 0 || length > remaining {
+                    break;
                 }
-                Ok::<usize, Errno>(total)
-            })
-            .map_err(|_| fail(Errno::EInval))?
-            .map_err(fail)?;
+                let read = self
+                    .fs
+                    .pread(self.fd, offset, &mut out[cursor..cursor + length])?;
+                if read == 0 {
+                    break;
+                }
+                total += read;
+                offset += read as u64;
+                cursor += length;
+            }
+            Ok::<usize, Errno>(total)
+        })
+        .map_err(|_| fail(Errno::EInval))?
+        .map_err(fail)?;
         Ok(MethodReply::new(file::preadv_response {
             count: count as u64,
         }))
@@ -2239,6 +2196,7 @@ impl FileHandler for FileContext<'_> {
     fn pwritev<'s>(
         &'s mut self,
         request: file::pwritev_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pwritev_response>, FailInvocation> {
         self.require_writable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2247,25 +2205,24 @@ impl FileHandler for FileContext<'_> {
         }
         let handle = region_handle(self.region)?;
         let segments = request.layout.segment_count as usize;
-        let count =
-            servicekit::memory::with_region_read(handle, 0, bytes, |data| {
-                let mut offset = request.offset.max(0) as u64;
-                let mut total = 0usize;
-                let mut cursor = 0usize;
-                for length in request.layout.lengths.iter().take(segments) {
-                    let end = cursor.saturating_add(*length as usize).min(data.len());
-                    if cursor >= end {
-                        break;
-                    }
-                    let written = self.fs.pwrite(self.fd, offset, &data[cursor..end])?;
-                    total += written;
-                    offset += written as u64;
-                    cursor = end;
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            let mut offset = request.offset.max(0) as u64;
+            let mut total = 0usize;
+            let mut cursor = 0usize;
+            for length in request.layout.lengths.iter().take(segments) {
+                let end = cursor.saturating_add(*length as usize).min(data.len());
+                if cursor >= end {
+                    break;
                 }
-                Ok::<usize, Errno>(total)
-            })
-            .map_err(|_| fail(Errno::EInval))?
-            .map_err(fail)?;
+                let written = self.fs.pwrite(self.fd, offset, &data[cursor..end])?;
+                total += written;
+                offset += written as u64;
+                cursor = end;
+            }
+            Ok::<usize, Errno>(total)
+        })
+        .map_err(|_| fail(Errno::EInval))?
+        .map_err(fail)?;
         Ok(MethodReply::new(file::pwritev_response {
             count: count as u64,
         }))
@@ -2274,6 +2231,7 @@ impl FileHandler for FileContext<'_> {
     fn readv<'s>(
         &'s mut self,
         request: file::readv_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::readv_response>, FailInvocation> {
         self.require_readable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2282,27 +2240,26 @@ impl FileHandler for FileContext<'_> {
         }
         let handle = region_handle(self.region)?;
         let segments = request.layout.segment_count as usize;
-        let count =
-            servicekit::memory::with_region_write(handle, 0, bytes, |out| {
-                let mut total = 0usize;
-                let mut cursor = 0usize;
-                for length in request.layout.lengths.iter().take(segments) {
-                    let length = *length as usize;
-                    let remaining = out.len() - cursor;
-                    if remaining == 0 || length > remaining {
-                        break;
-                    }
-                    let read = self.fs.read(self.fd, &mut out[cursor..cursor + length])?;
-                    if read == 0 {
-                        break;
-                    }
-                    total += read;
-                    cursor += length;
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            let mut total = 0usize;
+            let mut cursor = 0usize;
+            for length in request.layout.lengths.iter().take(segments) {
+                let length = *length as usize;
+                let remaining = out.len() - cursor;
+                if remaining == 0 || length > remaining {
+                    break;
                 }
-                Ok::<usize, Errno>(total)
-            })
-            .map_err(|_| fail(Errno::EInval))?
-            .map_err(fail)?;
+                let read = self.fs.read(self.fd, &mut out[cursor..cursor + length])?;
+                if read == 0 {
+                    break;
+                }
+                total += read;
+                cursor += length;
+            }
+            Ok::<usize, Errno>(total)
+        })
+        .map_err(|_| fail(Errno::EInval))?
+        .map_err(fail)?;
         Ok(MethodReply::new(file::readv_response {
             count: count as u64,
         }))
@@ -2311,6 +2268,7 @@ impl FileHandler for FileContext<'_> {
     fn writev<'s>(
         &'s mut self,
         request: file::writev_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::writev_response>, FailInvocation> {
         self.require_writable()?;
         let bytes = bulk_transfer_bytes(request.size)?;
@@ -2319,23 +2277,22 @@ impl FileHandler for FileContext<'_> {
         }
         let handle = region_handle(self.region)?;
         let segments = request.layout.segment_count as usize;
-        let count =
-            servicekit::memory::with_region_read(handle, 0, bytes, |data| {
-                let mut total = 0usize;
-                let mut cursor = 0usize;
-                for length in request.layout.lengths.iter().take(segments) {
-                    let end = cursor.saturating_add(*length as usize).min(data.len());
-                    if cursor >= end {
-                        break;
-                    }
-                    let written = self.fs.write(self.fd, &data[cursor..end])?;
-                    total += written;
-                    cursor = end;
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            let mut total = 0usize;
+            let mut cursor = 0usize;
+            for length in request.layout.lengths.iter().take(segments) {
+                let end = cursor.saturating_add(*length as usize).min(data.len());
+                if cursor >= end {
+                    break;
                 }
-                Ok::<usize, Errno>(total)
-            })
-            .map_err(|_| fail(Errno::EInval))?
-            .map_err(fail)?;
+                let written = self.fs.write(self.fd, &data[cursor..end])?;
+                total += written;
+                cursor = end;
+            }
+            Ok::<usize, Errno>(total)
+        })
+        .map_err(|_| fail(Errno::EInval))?
+        .map_err(fail)?;
         Ok(MethodReply::new(file::writev_response {
             count: count as u64,
         }))
@@ -2361,7 +2318,7 @@ impl FileHandler for FileContext<'_> {
         *self.next_generation = self.next_generation.wrapping_add(1);
         let object =
             crate::mobj::create_and_fill_read_only(&snapshot).map_err(|_| fail(Errno::EIo))?;
-        let mut resources: ResourceTable<'static> = ResourceTable::new();
+        let mut resources: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
         let slot = resources.push_move(object).map_err(|_| fail(Errno::EIo))?;
         Ok(MethodReply::with_resources(
             file::materialize_response {
@@ -2380,7 +2337,7 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
     use naos_idl::loopback::{self, install};
-    use naos_idl::{Invocation, ProtocolClientEndpoint, ResourceTable};
+    use naos_idl::{Invocation, ProtocolClientEndpoint, ResourceTransferBuilder};
 
     const CAP: u64 = 1 << 20;
 
@@ -2610,7 +2567,7 @@ mod tests {
             second: b"/link",
         };
         let mut invocation =
-            directory::submit_symlink(&dir, &link, ResourceTable::new(), &mut wire, 1024).unwrap();
+            directory::submit_symlink(&dir, &link, ResourceTransferBuilder::new(), &mut wire, 1024).unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         directory::take_symlink(&mut invocation, &mut result_wire).unwrap();
 
@@ -2621,7 +2578,7 @@ mod tests {
             path: b"/link",
         };
         let mut invocation =
-            directory::submit_stat_node(&dir, &request, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_stat_node(&dir, &request, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         let response = directory::take_stat_node(&mut invocation, &mut result_wire).unwrap();
@@ -2634,7 +2591,7 @@ mod tests {
             path: b"/link",
         };
         let mut invocation =
-            directory::submit_stat_node(&dir, &request, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_stat_node(&dir, &request, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         let response = directory::take_stat_node(&mut invocation, &mut result_wire).unwrap();
@@ -2648,7 +2605,7 @@ mod tests {
             path: b"/absent",
         };
         let invocation =
-            directory::submit_stat_node(&dir, &absent, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_stat_node(&dir, &absent, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         assert_eq!(raw_error(&invocation), -(Errno::ENoent.to_i32() as i64));
@@ -2670,7 +2627,7 @@ mod tests {
             path: b"/hello",
         };
         let mut invocation =
-            directory::submit_remove(&dir, &request, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_remove(&dir, &request, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         directory::take_remove(&mut invocation, &mut result_wire).unwrap();
@@ -2681,7 +2638,7 @@ mod tests {
             path: b"/hello",
         };
         let invocation =
-            directory::submit_stat_node(&dir, &gone, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_stat_node(&dir, &gone, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         assert_eq!(raw_error(&invocation), -(Errno::ENoent.to_i32() as i64));
@@ -2701,7 +2658,7 @@ mod tests {
         let mut invocation = directory::submit_clone_binding(
             &dir,
             &directory::clone_binding_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2721,7 +2678,7 @@ mod tests {
             path: b"/hello",
         };
         let mut invocation =
-            directory::submit_stat_node(&clone, &request, ResourceTable::new(), &mut wire, 1024)
+            directory::submit_stat_node(&clone, &request, ResourceTransferBuilder::new(), &mut wire, 1024)
                 .unwrap();
         let clone_key = newest_key(&server, &before);
         pump(&mut server, clone_key, &mut wire, &mut reply_wire);
@@ -2741,7 +2698,7 @@ mod tests {
         let mut invocation = directory::submit_sync(
             &dir,
             &directory::sync_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2752,7 +2709,7 @@ mod tests {
         let invocation = directory::submit_set_current(
             &dir,
             &directory::set_current_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2778,7 +2735,7 @@ mod tests {
         };
         let before: Vec<sys::Handle> = server.entries.keys().copied().collect();
         let mut invocation =
-            directory::submit_open(&dir, &open, ResourceTable::new(), &mut wire, 1024).unwrap();
+            directory::submit_open(&dir, &open, ResourceTransferBuilder::new(), &mut wire, 1024).unwrap();
         pump(&mut server, key, &mut wire, &mut reply_wire);
         let (response, mut resources) =
             directory::take_open(&mut invocation, &mut result_wire).unwrap();
@@ -2789,7 +2746,7 @@ mod tests {
         let invocation = file::submit_materialize(
             &empty_file,
             &file::materialize_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2848,10 +2805,9 @@ mod tests {
             path,
         };
         let mut invocation =
-            directory::submit_open(dir, &open, ResourceTable::new(), wire, 1024).unwrap();
+            directory::submit_open(dir, &open, ResourceTransferBuilder::new(), wire, 1024).unwrap();
         pump(server, dir_key, wire, reply_wire);
-        let (response, mut resources) =
-            directory::take_open(&mut invocation, result_wire).unwrap();
+        let (response, mut resources) = directory::take_open(&mut invocation, result_wire).unwrap();
         let raw = resources.take(response.object).unwrap().into_raw();
         // SAFETY: taken above, so the raw handle is uniquely owned here and
         // lives for the whole test.
@@ -2902,7 +2858,7 @@ mod tests {
                 offset: 0,
                 whence: 2,
             },
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2912,7 +2868,7 @@ mod tests {
         assert_eq!(seek.offset, 11);
 
         let region = memory_region(&[0u8; 11], true);
-        let mut table = ResourceTable::new();
+        let mut table = ResourceTransferBuilder::new();
         let slot = table.push_duplicate(&region).unwrap();
         let mut invocation = file::submit_read(
             &second,
@@ -2954,7 +2910,7 @@ mod tests {
 
         let payload = b"over the region";
         let region = memory_region(payload, false);
-        let mut table = ResourceTable::new();
+        let mut table = ResourceTransferBuilder::new();
         let slot = table.push_duplicate(&region).unwrap();
         let mut invocation = file::submit_write(
             &file,
@@ -2978,7 +2934,7 @@ mod tests {
                 offset: 0,
                 whence: 1,
             },
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             1024,
         )
@@ -2987,7 +2943,7 @@ mod tests {
         let _ = file::take_seek(&mut invocation, &mut result_wire).unwrap();
 
         let read_region = memory_region(&[0u8; 15], true);
-        let mut table = ResourceTable::new();
+        let mut table = ResourceTransferBuilder::new();
         let slot = table.push_duplicate(&read_region).unwrap();
         let mut invocation = file::submit_read(
             &file,
@@ -3032,7 +2988,7 @@ mod tests {
         apply_pair(
             server.backend_mut(),
             (root, root),
-            directory::METHOD_RENAME_AT,
+            PairOperation::Rename,
             b"/hello",
             (sub, sub),
             b"victim",
@@ -3060,7 +3016,7 @@ mod tests {
             apply_pair(
                 server.backend_mut(),
                 (root, root),
-                directory::METHOD_RENAME_AT,
+                PairOperation::Rename,
                 b"/sub",
                 (root, root),
                 b"empty",
@@ -3074,7 +3030,7 @@ mod tests {
         apply_pair(
             server.backend_mut(),
             (root, root),
-            directory::METHOD_LINK_AT,
+            PairOperation::Link,
             b"empty",
             (sub, sub),
             b"hardlink",
@@ -3090,7 +3046,7 @@ mod tests {
         apply_pair(
             server.backend_mut(),
             (root, root),
-            directory::METHOD_LINK_AT,
+            PairOperation::Link,
             b"/jump",
             (sub, sub),
             b"followed",

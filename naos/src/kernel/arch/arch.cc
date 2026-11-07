@@ -83,6 +83,7 @@ void init(const kernel_start_args *args)
 
         term::reset_early_paging();
         idt::enable();
+        paging::flush_caches_for_kernel_mapping_transition();
         memory::kernel_vm_info->paging().load();
 
         memory::init2();
@@ -124,9 +125,15 @@ void post_init()
 {
     if (cpu::current().is_bsp())
     {
+        if (cmdline::get_bool("acpi", false))
+            ACPI::start_deferred_services();
     }
 }
 
-void init_drivers() { device::chip8042::init(); }
+void init_drivers()
+{
+    device::chip8042::init();
+    (void)APIC::enable_interrupt_remapping_if_safe();
+}
 
 } // namespace arch

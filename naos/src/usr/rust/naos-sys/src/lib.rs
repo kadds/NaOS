@@ -56,6 +56,9 @@ pub const PROTOCOL_RIGHT_INVOKE: u64 = 1 << 0;
 /// `naos/abi.h`; ADMIN is intentionally not granted to ordinary children.
 pub const SERVICE_DIRECTORY_RIGHT_ADMIN: u64 = 1 << 1;
 pub const SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER: u64 = 1 << 3;
+pub const SERVICE_DIRECTORY_RIGHT_CREATE_VIEW: u64 = 1 << 4;
+pub const SERVICE_DIRECTORY_RIGHT_LOCAL_REGISTER: u64 = 1 << 5;
+pub const SERVICE_DIRECTORY_RIGHT_PROVIDER: u64 = 1 << 6;
 pub const TERMINAL_RIGHT_READ: u64 = 1 << 8;
 pub const TERMINAL_RIGHT_WRITE: u64 = 1 << 9;
 pub const TERMINAL_RIGHT_CONTROL: u64 = 1 << 10;
@@ -75,6 +78,7 @@ pub const MEMORY_RIGHT_INFO: u64 = 1 << 3;
 pub const MEMORY_FLAG_READ_ONLY: u32 = 1 << 0;
 /// `na_handle_restriction_t.flags`: attenuate protocol rights and MemoryObject
 /// view ranges.
+pub const RESTRICTION_META_RIGHTS: u32 = 1 << 3;
 pub const RESTRICTION_PROTOCOL_RIGHTS: u32 = 1 << 4;
 pub const RESTRICTION_RANGE: u32 = 1 << 5;
 /// Hard upper bound for one MemoryObject (abi.h NA_MEMORY_OBJECT_MAX_BYTES).

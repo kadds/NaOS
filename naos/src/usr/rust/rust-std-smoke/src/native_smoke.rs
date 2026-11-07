@@ -59,7 +59,7 @@ pub fn log(message: &'static [u8]) {
     let Some(owner) = region.native_handle() else {
         return;
     };
-    let mut resources = naos_idl::ResourceTable::new();
+    let mut resources = naos_idl::ResourceTransferBuilder::new();
     let Ok(buffer) = resources.push_duplicate(owner) else {
         return;
     };
@@ -83,8 +83,16 @@ pub fn log(message: &'static [u8]) {
     let _ = stream::take_write(&mut invocation, &mut response_wire);
 }
 
+pub fn initialize_stdout() -> bool {
+    servicekit::naos_runtime::with_context(|_, bootstrap| {
+        STDOUT_STREAM.store(bootstrap.stdout_stream().raw(), Ordering::Relaxed);
+    })
+    .is_some()
+}
+
 fn run_native_smoke(context: servicekit::Context) -> i64 {
     STDOUT_STREAM.store(context.stdout_stream(), Ordering::Relaxed);
+    log(b"rust-smoke-suite: native bootstrap starting\0");
 
     if Channel::create(None).is_err() {
         log(b"rust-smoke-suite: channel create failed\0");
@@ -151,6 +159,62 @@ fn run_allocator_smoke() -> i64 {
         return 16;
     }
     log(b"rust-smoke-suite: native allocator ready\0");
+    0
+}
+
+pub(super) fn run_allocator_quota_smoke() -> i64 {
+    let quota = servicekit::naos_runtime::HeapQuota::new(64);
+    let retained = {
+        let _quota_scope = match servicekit::naos_runtime::HeapQuotaScope::enter(&quota) {
+            Ok(scope) => scope,
+            Err(_) => {
+                log(b"rust-smoke-suite: allocator quota scope failed\0");
+                return 21;
+            }
+        };
+        let allocator = servicekit::naos_runtime::HeapQuotaAllocator::current();
+        let mut retained: Vec<u8, servicekit::naos_runtime::HeapQuotaAllocator> =
+            Vec::new_in(allocator);
+        if retained.try_reserve_exact(16).is_err() {
+            log(b"rust-smoke-suite: allocator quota initial reserve failed\0");
+            return 22;
+        }
+        let used_before_rejection = quota.used_bytes();
+        if used_before_rejection == 0 || used_before_rejection > quota.maximum_bytes() {
+            log(b"rust-smoke-suite: allocator quota did not track live bytes\0");
+            return 23;
+        }
+        if retained.try_reserve_exact(65).is_ok() {
+            log(b"rust-smoke-suite: allocator quota allowed over-limit growth\0");
+            return 24;
+        }
+        if quota.used_bytes() != used_before_rejection {
+            log(b"rust-smoke-suite: rejected allocator growth leaked quota\0");
+            return 25;
+        }
+        retained
+    };
+    if quota.used_bytes() == 0 {
+        log(b"rust-smoke-suite: allocator quota forgot retained allocation\0");
+        return 26;
+    }
+    drop(retained);
+    if quota.used_bytes() != 0 {
+        log(b"rust-smoke-suite: allocator quota failed cross-scope release\0");
+        return 27;
+    }
+
+    if rust_acpi_naos::run_allocator_quota_smoke().is_err() {
+        log(b"rust-smoke-suite: AML executor allocator quota failed\0");
+        return 29;
+    }
+
+    let mut unscoped: Vec<u8> = Vec::new();
+    if unscoped.try_reserve_exact(128).is_err() || quota.used_bytes() != 0 {
+        log(b"rust-smoke-suite: allocator quota leaked into unscoped allocation\0");
+        return 28;
+    }
+    log(b"rust-smoke-suite: allocator quota ready\0");
     0
 }
 

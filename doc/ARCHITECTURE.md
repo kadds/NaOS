@@ -19,27 +19,38 @@ NaOS is a freestanding 64-bit x86-64 operating system. GRUB loads the kernel usi
 
 ## Build and Image Flow
 
-The build has two stages. Meson first cross-compiles static mlibc for the `naos` target. CMake then builds the kernel, `init`, and legacy `nanobox`, while an independent out-of-tree Make invocation builds pinned BusyBox 1.37.0 with `CONFIG_STATIC=y`, NaOS mlibc, and NaOS `crt1.o`. The stripped BusyBox binary is installed as `/bin/busybox`; the rootfs linker step creates `/bin/sh`, `/bin/ls`, `/bin/cat`, and the other configured applet links. CMake generates `data/ksybs` as a userland/debug artifact, copies `run/fakeroot` into `<build-dir>/bin/rfsroot`, and builds the prepared FAT16 root image (4 KiB clusters) at `<build-dir>/bin/system/root.img`. The kernel is emitted as `<build-dir>/bin/system/kernel` and does not load `ksybs` at runtime.
+The build has two stages. Meson first cross-compiles static mlibc for the `naos` target. CMake then builds the kernel, `init`, and legacy `nanobox`, while an independent out-of-tree Make invocation builds pinned BusyBox 1.37.0 with `CONFIG_STATIC=y`, NaOS mlibc, and NaOS `crt1.o`. The stripped BusyBox binary is installed as `/bin/busybox`; the rootfs linker step creates `/bin/sh`, `/bin/ls`, `/bin/cat`, and the other configured applet links. CMake generates `data/ksybs` as a userland/debug artifact, copies `run/fakeroot` into `<build-dir>/bin/rfsroot`, and builds the prepared FAT16 root image (8 KiB clusters) at `<build-dir>/bin/system/root.img`. The kernel is emitted as `<build-dir>/bin/system/kernel` and does not load `ksybs` at runtime.
 
 For an ISO boot, `python3 util/run.py --build-dir build-debug q --iso -n` copies `kernel`, `root.img`, and the early-service modules into `build-debug/iso` and invokes `grub-mkrescue`, writing the ISO to `build-debug/image/naos.iso`. When `/dev/kvm` is available, the launcher enables KVM acceleration automatically; otherwise QEMU falls back to its default TCG accelerator. For disk boot, the utility writes the system files directly into `build-debug/image/disk.img:/boot` through `fstool` and installs the rootless BIOS GRUB MBR/core image; no host mount or loop device is involved. `-n` is the supported CI/development mode: QEMU remains headless and agents inspect `build-debug/kernel_out.log` directly.
 
 ### Multiboot root and early-service modules
 
-Every Multiboot module declares its authority token in the module command line.
-The kernel copies those ranges into `kernel_start_args::named_modules`; `idle_task`
-publishes the one-shot `rootfsd`, `init`, and `rootimage` resources, then starts
-`vfsd` and `blockd`. `vfsd` resolves the prepared FAT16 image (8 KiB clusters) through the
-published MemoryObject, while ramdiskd allocates its memory-backed disk and
-publishes the userland block factory under the shared service namespace.
+Service Multiboot modules declare their authority token in the module command
+line. The kernel preserves every module's physical range in
+`kernel_start_args::boot_modules`; an empty or unknown token grants no service
+authority but remains reserved from the allocator and firmware mappings.
+`idle_task` publishes the one-shot `rootfsd`, `init`, and `rootimage` resources,
+then starts `vfsd` and `blockd`. `vfsd` resolves the prepared FAT16 image (8 KiB
+clusters) through the published MemoryObject, while ramdiskd allocates its
+memory-backed disk and publishes the userland block factory under the shared
+service namespace.
 Filesystem workers are ordinary userland services: they resolve the factory and
 VFS mount authority through ServiceDirectory. The early services are Rust
 implementations, as assigned by the VFS/BlockDevice ADR r7.
 
-The service namespace is hierarchical and shared by NaOS and Linux. The current
-vertical slice publishes `naos://service/fs/vfs/0`,
-`naos://service/fs/exfat/0`, and `naos://service/block/ramdiskd/0`.
+ServiceDirectory URIs are hierarchical and shared by NaOS and Linux. `kernel/...`
+names kernel-published typed endpoints, `system/...` names stable machine-wide
+services owned by system daemons, and `service/...` names general service roles
+and boot resources; `service` does not imply a particular provider. A path gets
+an instance key only when callers need to choose among multiple named instances.
+Protocol revisions are negotiated through the interface contract, not encoded
+as `/0`; dynamic objects travel as capabilities instead of per-object global
+names.
+
+The current vertical slice publishes `naos://service/fs/vfs`,
+`naos://service/fs/exfat`, and `naos://service/block/ramdiskd`.
 `ServiceDirectory.list_prefix`/`ServiceLocator::list` enumerate all matching
-instances below a URI prefix.
+service names below a URI prefix.
 
 On Linux these names are concrete fixed-root UDS paths, so exfatd resolves
 the block factory through the shared locator. On NaOS the factory is also a
@@ -101,8 +112,9 @@ python3 util/run.py --build-dir build-debug q --iso -n --qemu-debug --monitor /t
 An opt-in run (`--init-script`, used by the gated boot smokes) ends the boot from
 inside the guest: the injected `/etc/init.sh` runs its smoke, records the status, and
 then calls `/bin/poweroff`. Machine teardown belongs to whoever drives the boot, not to
-a test binary, so a smoke only reports a verdict. `poweroff` is a `nanobox` applet over
-`NA_SYSCALL_POWER_OFF`, which issues the ACPI S5 request the power button already uses.
+a test binary, so a smoke only reports a verdict. `/bin/poweroff` and `/bin/reboot`
+request transitions through the `PlatformPowerControl` service published by `platformd`.
+The service applies policy and asks the kernel to commit the typed platform transition.
 This is why the guest-power-off path must stay enabled: a run that is finished would
 otherwise idle until the launcher's `--timeout` limit.
 
@@ -179,7 +191,7 @@ dispatch, ordering, and the reply -- which is where services legitimately differ
 itself stays generated from NaoIDL, so servicekit does not depend on protocol bindings and
 a service cannot drift from the schema's method set by hand.
 
-mlibc now keeps root and cwd as runtime directory bindings and consumes Directory revision 2 methods
+mlibc now keeps root and cwd as runtime directory bindings and consumes Directory revision 1 methods
 (`stat_node`, `sync`, `rename_at`, `link_at`, and `clone_binding`). It uses a sized read-only MemoryObject plus a File
 pager as the bridge for private
 file `MAP_PRIVATE` mappings. The following compatibility fallbacks are deliberately transitional and must be removed with

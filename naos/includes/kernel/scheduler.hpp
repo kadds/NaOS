@@ -41,6 +41,10 @@ class scheduler
     ///
     virtual void update_state(thread_t *thread, thread_state state) = 0;
 
+    /// Commit the outgoing thread's queue membership before a context switch.
+    /// This is an operation, never a persistent thread_state.
+    virtual void prepare_switch_out(thread_t *thread) = 0;
+
     ///
     /// \brief call when the task is migrating to other cpu
     ///

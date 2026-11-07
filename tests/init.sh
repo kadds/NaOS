@@ -4,9 +4,9 @@ failed=0
 
 run_one() {
     name="$1"
-    path="$2"
+    shift
     echo "smoke: ${name}: start"
-    "$path"
+    "$@"
     status=$?
     if [ "$status" -eq 0 ]; then
         echo "smoke: ${name}: pass"
@@ -16,8 +16,10 @@ run_one() {
     fi
 }
 
+run_one service-directory-scope /bin/naos-smoke-suite --service-directory-scope
 run_one naos-smoke-suite /bin/naos-smoke-suite
 run_one rust-smoke-suite /bin/rust-smoke-suite
+run_one virtio-block-smoke /bin/virtio-block-smoke
 
 if [ "$failed" -eq 0 ]; then
     echo "smoke: all tests passed"

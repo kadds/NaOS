@@ -25,6 +25,7 @@ void init();
 /// \note the time of each CPU is not synchronized
 timeclock::microsecond_t get_high_resolution_time();
 timeclock::nanosecond_t get_high_resolution_time_ns() noexcept;
+bool high_resolution_time_is_cross_cpu_monotonic() noexcept;
 
 diagnostics_snapshot diagnostics() noexcept;
 

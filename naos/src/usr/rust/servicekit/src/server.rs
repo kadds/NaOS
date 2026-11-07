@@ -14,7 +14,8 @@ mod platform {
     use crate::memory;
     use naos_idl::ResourceSlot;
     use naos_idl::transport::{
-        BulkBuffer, ResourceDescriptor, RpcOutcome, RpcRequestOwned, RpcResponseOwned,
+        BulkBuffer, ResourceDescriptor, RpcDispatchResource, RpcDispatchResult, RpcOutcome,
+        RpcRequest, RpcRequestOwned, RpcResponseOwned,
     };
     use naos_sys as sys;
     use std::path::PathBuf;
@@ -44,6 +45,12 @@ mod platform {
         }
     }
 
+    impl RpcDispatchResource for EndpointResource {
+        fn descriptor(&self) -> ResourceDescriptor {
+            self.descriptor
+        }
+    }
+
     /// Method-specific resource admission supplied by the generated/service
     /// binding.  The transport validates identity and lifetime separately.
     pub type RequestValidator = fn(&RpcRequestOwned) -> Result<(), i64>;
@@ -66,6 +73,19 @@ mod platform {
     }
 
     impl Request {
+        pub fn rpc_request(&self) -> RpcRequest<'_> {
+            RpcRequest {
+                protocol_uuid: self.protocol_uuid,
+                revision: self.revision,
+                method_id: self.method_id,
+                request_id: self.request_id,
+                target: self.target,
+                payload: &self.payload,
+                resources: &self.resources,
+                bulk: &self.bulk,
+            }
+        }
+
         pub fn resource_count(&self) -> usize {
             self.resources.len()
         }
@@ -806,6 +826,14 @@ mod platform {
         ) -> Result<(), ServerError> {
             request.respond(response).await
         }
+
+        pub async fn respond_dispatch(
+            &mut self,
+            request: Request,
+            dispatched: RpcDispatchResult<EndpointResource>,
+        ) -> Result<(), ServerError> {
+            request.respond_dispatch(dispatched).await
+        }
     }
 
     impl Request {
@@ -869,6 +897,18 @@ mod platform {
                 self.bulk.clear();
             }
             Ok(())
+        }
+
+        pub async fn respond_dispatch(
+            self,
+            dispatched: RpcDispatchResult<EndpointResource>,
+        ) -> Result<(), ServerError> {
+            let mut response = Response::success(&self, dispatched.payload);
+            response.outcome = dispatched.outcome;
+            for resource in dispatched.resources {
+                response.push_resource(resource);
+            }
+            self.respond(response).await
         }
     }
 
@@ -1077,10 +1117,13 @@ mod platform {
     use alloc::collections::VecDeque;
     use alloc::vec;
     use alloc::vec::Vec;
-    use naos_idl::transport::{BulkBuffer, ResourceDescriptor, RpcOutcome, RpcRequestOwned};
+    use naos_idl::transport::{
+        BulkBuffer, ResourceDescriptor, RpcDispatchResource, RpcDispatchResult, RpcOutcome,
+        RpcRequest, RpcRequestOwned,
+    };
     use naos_idl::{
         CallError, FailInvocation, IncomingRequest, OwnedHandle, ProtocolServerEndpoint,
-        ReceivedResources, ResourceSlot, ResourceTable, ResponderHandle,
+        ReceivedResources, ResourceSlot, ResourceTransferBuilder, ResponderHandle,
     };
 
     /// Shared service-specific admission hook.  NaOS validates the generated
@@ -1136,8 +1179,59 @@ mod platform {
             })
         }
 
+        /// Wrap an existing kernel-minted protocol capability for a reply.
+        /// Unlike `from_owned`, this preserves a kernel-view binding rather
+        /// than claiming the object is a client endpoint. The requested meta
+        /// and protocol rights are applied to the handle before it is replied.
+        pub fn from_owned_capability(
+            handle: OwnedHandle,
+            descriptor: &sys::ProtocolDescriptor,
+            meta_rights: u64,
+            protocol_rights: u64,
+        ) -> Result<Self, ServerError> {
+            let info = naos_idl::handle_info(handle.get()).map_err(|error| match error {
+                CallError::Status(status) => ServerError::Status(status),
+                _ => ServerError::Protocol,
+            })?;
+            if info.object_id == 0
+                || info.protocol_uuid.bytes != descriptor.uuid.bytes
+                || info.scope != descriptor.scope
+                || info.revision != descriptor.revision
+                || info.features != descriptor.features
+                || (meta_rights == 0 && protocol_rights == 0)
+                || meta_rights & !info.meta_rights != 0
+                || protocol_rights & !info.protocol_rights != 0
+            {
+                return Err(ServerError::Protocol);
+            }
+            let restriction = sys::HandleRestriction {
+                struct_size: core::mem::size_of::<sys::HandleRestriction>() as u32,
+                flags: sys::RESTRICTION_META_RIGHTS | sys::RESTRICTION_PROTOCOL_RIGHTS,
+                meta_rights,
+                protocol_rights,
+                ..sys::HandleRestriction::default()
+            };
+            let handle = handle.restrict(&restriction).map_err(ServerError::Status)?;
+            Ok(Self {
+                descriptor: ResourceDescriptor {
+                    resource_id: info.object_id,
+                    binding: info.binding,
+                    scope: info.scope,
+                    rights: meta_rights | protocol_rights,
+                    ..ResourceDescriptor::default()
+                },
+                handle: Some(handle),
+            })
+        }
+
         pub(crate) fn take_handle(&mut self) -> Option<OwnedHandle> {
             self.handle.take()
+        }
+    }
+
+    impl RpcDispatchResource for EndpointResource {
+        fn descriptor(&self) -> ResourceDescriptor {
+            self.descriptor
         }
     }
 
@@ -1163,6 +1257,19 @@ mod platform {
     }
 
     impl Request {
+        pub fn rpc_request(&self) -> RpcRequest<'_> {
+            RpcRequest {
+                protocol_uuid: self.protocol_uuid,
+                revision: self.revision,
+                method_id: self.method_id,
+                request_id: self.request_id,
+                target: self.target,
+                payload: &self.payload,
+                resources: &self.resources,
+                bulk: &self.bulk,
+            }
+        }
+
         pub fn resource_count(&self) -> usize {
             self.resources.len()
         }
@@ -1741,6 +1848,14 @@ mod platform {
             request.respond(response).await
         }
 
+        pub async fn respond_dispatch(
+            &mut self,
+            request: Request,
+            dispatched: RpcDispatchResult<EndpointResource>,
+        ) -> Result<(), ServerError> {
+            request.respond_dispatch(dispatched).await
+        }
+
         /// Serve requests until the endpoint set fails.
         ///
         /// Same policy as the Linux side: a peer that went away, or a frame
@@ -1794,7 +1909,7 @@ mod platform {
                     .map_err(ServerError::Status)?;
                 return Ok(());
             }
-            let mut resources = ResourceTable::new();
+            let mut resources = ResourceTransferBuilder::new();
             for resource in response.resources {
                 let handle = resource.handle.ok_or(ServerError::Protocol)?;
                 resources
@@ -1806,6 +1921,18 @@ mod platform {
                 .map_err(ServerError::Status)?;
             resources.commit_move();
             Ok(())
+        }
+
+        pub async fn respond_dispatch(
+            self,
+            dispatched: RpcDispatchResult<EndpointResource>,
+        ) -> Result<(), ServerError> {
+            let mut response = Response::success(&self, dispatched.payload);
+            response.outcome = dispatched.outcome;
+            for resource in dispatched.resources {
+                response.push_resource(resource);
+            }
+            self.respond(response).await
         }
     }
 

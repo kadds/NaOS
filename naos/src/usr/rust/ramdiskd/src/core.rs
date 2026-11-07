@@ -6,8 +6,8 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
 use alloc::boxed::Box;
+use alloc::vec::Vec;
 
 use crate::lease::{ACQUIRE_FLAG_READ_ONLY, LeaseRange};
 use naos_idl::block_device as block_idl;

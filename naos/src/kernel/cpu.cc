@@ -14,7 +14,7 @@ u32 cpu_data_t::id() { return smp_id; }
 void cpu_data_t::set_task(task::thread_t *task)
 {
     arch::cpu::current().set_context(task->kernel_stack_top);
-    current_task = task;
+    current_task.store(task, std::memory_order_release);
 }
 
 call_cpu_enqueue_result cpu_data_t::enqueue_call_cpu(const call_cpu_operation_t &operation)

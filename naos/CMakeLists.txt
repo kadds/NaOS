@@ -107,8 +107,6 @@ add_custom_target(naos_system_idl DEPENDS ${NAOS_SYSTEM_IDL_STAMP})
 add_subdirectory(freelibcxx)
 add_subdirectory(libipc)
 add_subdirectory(libc)
-add_subdirectory(src/acpica)
-
 add_subdirectory(src/kernel)
 add_dependencies(kernel naos_system_idl naos_internal_idl)
 add_subdirectory(src/usr)

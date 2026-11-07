@@ -4,14 +4,36 @@
 #include "kernel/ucontext.hpp"
 namespace task
 {
-
-bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const void *key_domain, const void *key_address,
-                           std::atomic_uint64_t *wake_sequence, bool register_before_check)
+namespace
 {
-    if (!register_before_check && condition())
-        return true;
+bool process_exit_requested(const thread_t *thread)
+{
+    return thread != nullptr && thread->process != nullptr &&
+           (thread->process->attributes.load(std::memory_order_acquire) & process_attributes::exiting) != 0;
+}
+} // namespace
+
+wait_result wait_queue_t::do_wait_result(freelibcxx::function_ref<bool()> condition, const void *key_domain,
+                                         const void *key_address, std::atomic_uint64_t *wake_sequence,
+                                         bool register_before_check, freelibcxx::function_ref<bool()> interrupted)
+{
     auto *thd = current();
+    if (process_exit_requested(thd))
+        return wait_result::process_exit;
+    if (interrupted && interrupted())
+        return wait_result::interrupted;
+    if (!register_before_check && condition())
+    {
+        if (process_exit_requested(thd))
+            return wait_result::process_exit;
+        if (interrupted && interrupted())
+            return wait_result::interrupted;
+        return wait_result::condition_met;
+    }
+
     wait_context_t context(thd, condition, key_domain, key_address, wake_sequence);
+    bool immediate = false;
+    bool terminate = false;
 
     {
         uctx::RawSpinLockUninterruptibleContext ctx(lock);
@@ -24,38 +46,68 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
             // while holding a queue lock (epoll predicates may take another
             // object lock).
             thd->do_wait_queue_now = this;
-            if (condition())
+            immediate = condition();
+            terminate = process_exit_requested(thd);
+            if (immediate || terminate)
             {
                 unlink_locked(&context);
                 thd->do_wait_queue_now = nullptr;
-                return true;
             }
         }
 
-        // Publish the blocked state while the waiter is visible to notifiers.
-        // A notifier that runs immediately afterwards can clear block_to_stop
-        // before schedule() switches away; a notifier that runs later finds
-        // the thread in the scheduler's blocked set and makes it runnable.
-        // Both cases preserve the wake without a second, competing state
-        // transition for the same wait context.
-        thd->attributes |= task::thread_attributes::voluntary_context_switch;
-        thd->attributes |= task::thread_attributes::need_schedule;
-        thd->do_wait_queue_now = this;
-        scheduler::update_state(thd, thread_state::stop);
+        if (!immediate && !terminate)
+        {
+            // Publish the blocked state while the waiter is visible to
+            // notifiers. A notifier that runs immediately afterwards can
+            // clear block_to_stop before schedule() switches away; a later
+            // notifier finds the thread in the scheduler's blocked set.
+            thd->attributes |= task::thread_attributes::voluntary_context_switch;
+            thd->attributes |= task::thread_attributes::need_schedule;
+            thd->do_wait_queue_now = this;
+            scheduler::update_state(thd, thread_state::stop);
+        }
     }
 
-    if (condition())
+    if (terminate)
+        return wait_result::process_exit;
+    if (immediate)
+    {
+        if (process_exit_requested(thd))
+            return wait_result::process_exit;
+        if (interrupted && interrupted())
+            return wait_result::interrupted;
+        return wait_result::condition_met;
+    }
+
+    const bool ready = condition();
+    terminate = process_exit_requested(thd);
+    const bool cancel = !terminate && interrupted && interrupted();
+    if (ready || terminate || cancel)
     {
         scheduler::update_state(thd, thread_state::ready);
-        uctx::RawSpinLockUninterruptibleContext ctx(lock);
-        unlink_locked(&context);
-        thd->do_wait_queue_now = nullptr;
-        return true;
+        {
+            uctx::RawSpinLockUninterruptibleContext ctx(lock);
+            unlink_locked(&context);
+            thd->do_wait_queue_now = nullptr;
+        }
+        if (terminate)
+            return wait_result::process_exit;
+        if (cancel)
+            return wait_result::interrupted;
+        return wait_result::condition_met;
     }
 
+    bool interrupted_after_wakeup = false;
     for (;;)
     {
         scheduler::schedule();
+        if (process_exit_requested(thd))
+            break;
+        if (interrupted && interrupted())
+        {
+            interrupted_after_wakeup = true;
+            break;
+        }
         if (condition())
             break;
 
@@ -80,7 +132,13 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
         }
 
         if (!registered)
-            return condition();
+        {
+            if (process_exit_requested(thd))
+                return wait_result::process_exit;
+            if (interrupted && interrupted())
+                return wait_result::interrupted;
+            return condition() ? wait_result::condition_met : wait_result::interrupted;
+        }
     }
 
     {
@@ -89,7 +147,21 @@ bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const voi
         thd->do_wait_queue_now = nullptr;
     }
 
-    return condition();
+    if (process_exit_requested(thd))
+        return wait_result::process_exit;
+    if (interrupted_after_wakeup || (interrupted && interrupted()))
+        return wait_result::interrupted;
+
+    return condition() ? wait_result::condition_met : wait_result::interrupted;
+}
+
+bool wait_queue_t::do_wait(freelibcxx::function_ref<bool()> condition, const void *key_domain, const void *key_address,
+                           std::atomic_uint64_t *wake_sequence, bool register_before_check)
+{
+    const auto result = do_wait_result(condition, key_domain, key_address, wake_sequence, register_before_check);
+    if (result == wait_result::process_exit)
+        do_exit_thread(0);
+    return result == wait_result::condition_met;
 }
 
 bool wait_queue_t::block_current(freelibcxx::function_ref<bool()> condition)

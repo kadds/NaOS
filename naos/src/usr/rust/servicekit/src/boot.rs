@@ -23,6 +23,50 @@ pub enum SpawnError {
     Status(naos_sys::Status),
 }
 
+fn start_outcome_is_definitive_rejection(execution: u32, reason: u32, protocol_error: i64) -> bool {
+    execution == 0 && reason == 0 && protocol_error != 0
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BootstrapMessage {
+    struct_size: u32,
+    flags: u32,
+    version: u32,
+    resource_count: u32,
+    root_directory: u32,
+    current_directory: u32,
+    service_directory: u32,
+    stdin_stream: u32,
+    stdout_stream: u32,
+    stderr_stream: u32,
+    argc: u64,
+    envc: u64,
+    reserved0: u64,
+    reserved1: u64,
+}
+
+const _: () = assert!(core::mem::size_of::<BootstrapMessage>() == 72);
+
+fn early_service_bootstrap_message() -> BootstrapMessage {
+    BootstrapMessage {
+        struct_size: core::mem::size_of::<BootstrapMessage>() as u32,
+        flags: naos_sys::BOOTSTRAP_FLAG_EARLY_SERVICE,
+        version: 5,
+        resource_count: 4,
+        root_directory: naos_sys::BOOTSTRAP_RESOURCE_NONE,
+        current_directory: naos_sys::BOOTSTRAP_RESOURCE_NONE,
+        service_directory: 0,
+        stdin_stream: 1,
+        stdout_stream: 2,
+        stderr_stream: 3,
+        argc: 1,
+        envc: 0,
+        reserved0: 0,
+        reserved1: 0,
+    }
+}
+
 #[cfg(target_os = "linux")]
 pub fn read_module(_context: &crate::Context, _uri: &str) -> Result<Vec<u8>, BootError> {
     Err(BootError::Unavailable)
@@ -49,38 +93,19 @@ pub fn spawn_early_service(
 
 #[cfg(target_os = "naos")]
 mod naos_boot {
-    use super::{BootError, SpawnError};
+    use super::{BootError, BootstrapMessage, SpawnError, early_service_bootstrap_message};
     use crate::naos::Channel;
     use crate::server::EndpointResource;
-    use crate::{memory, Context};
+    use crate::{Context, memory};
     use alloc::vec::Vec;
     use core::mem::size_of;
     use naos_idl::process as process_idl;
-    use naos_idl::{OwnedHandle, ProtocolClientEndpoint, ResourceTable};
+    use naos_idl::{OwnedHandle, ProtocolClientEndpoint, ResourceTransferBuilder};
     use naos_sys as sys;
 
     const BOOT_MODULE_MAX_BYTES: usize = 64 << 20;
     const BOOT_MODULE_COPY_CHUNK_BYTES: usize = 1 << 20;
-
-    #[repr(C)]
-    struct BootstrapMessage {
-        struct_size: u32,
-        flags: u32,
-        version: u32,
-        resource_count: u32,
-        root_directory: u32,
-        current_directory: u32,
-        service_directory: u32,
-        stdin_stream: u32,
-        stdout_stream: u32,
-        stderr_stream: u32,
-        argc: u64,
-        envc: u64,
-        reserved0: u64,
-        reserved1: u64,
-    }
-
-    const _: () = assert!(size_of::<BootstrapMessage>() == 72);
+    const PROCESS_START_REPLY_TIMEOUT_US: u64 = 1_000_000;
 
     /// Open a kernel-published boot module without copying its bytes.
     ///
@@ -144,7 +169,7 @@ mod naos_boot {
         let mut invocation = process_idl::submit_start(
             &endpoint,
             &process_idl::start_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut request_wire,
             0,
         )
@@ -231,7 +256,7 @@ mod naos_boot {
             reserved0: 0,
             reserved1: 0,
         };
-        let mut resources = ResourceTable::new();
+        let mut resources = ResourceTransferBuilder::new();
         resources
             .push_move(root)
             .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
@@ -274,15 +299,193 @@ mod naos_boot {
         Ok(pid)
     }
 
-    /// Start a service that only needs the common ServiceDirectory and stdio
-    /// contract. Filesystem workers use this shape: their block lease and
-    /// mount-control resources are acquired through published protocols,
-    /// never smuggled through bootstrap.
-    pub fn spawn_early_service(
-        context: &Context,
+    /// A process image loaded with deferred start and an open bootstrap
+    /// channel. The owner may grant the child narrowly scoped capabilities
+    /// before `start` queues the standard ServiceDirectory + stdio contract.
+    /// Releasing its final Process capability before start asks the kernel to
+    /// abort the deferred child, so failed setup does not leave an unstarted
+    /// process behind.
+    #[must_use = "start the prepared process or drop it to abort before start"]
+    pub struct PreparedEarlyService {
+        pid: u64,
+        process: OwnedHandle,
+        parent: Channel,
+    }
+
+    impl PreparedEarlyService {
+        /// Duplicate the process capability for a protocol operation that
+        /// must target this child before it starts, such as PciFunction grant.
+        pub fn process_capability(&self) -> Result<OwnedHandle, SpawnError> {
+            self.process.duplicate(0).map_err(SpawnError::Status)
+        }
+
+        fn queue_bootstrap(
+            self,
+            context: &Context,
+            service_directory: OwnedHandle,
+        ) -> Result<(u64, OwnedHandle), SpawnError> {
+            let Self {
+                pid,
+                process,
+                parent,
+            } = self;
+            let stdin = unsafe { OwnedHandle::from_raw(duplicate(context.stdin_stream())?) };
+            let stdout = unsafe { OwnedHandle::from_raw(duplicate(context.stdout_stream())?) };
+            let stderr = unsafe { OwnedHandle::from_raw(duplicate(context.stderr_stream())?) };
+            let message = early_service_bootstrap_message();
+            let mut resources = ResourceTransferBuilder::new();
+            resources
+                .push_move(service_directory)
+                .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
+            resources
+                .push_move(stdin)
+                .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
+            resources
+                .push_move(stdout)
+                .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
+            resources
+                .push_move(stderr)
+                .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
+            let message_bytes = unsafe {
+                core::slice::from_raw_parts(
+                    (&message as *const BootstrapMessage).cast::<u8>(),
+                    size_of::<BootstrapMessage>(),
+                )
+            };
+            parent
+                .send(message_bytes, resources)
+                .map_err(SpawnError::Status)?;
+            Ok((pid, process))
+        }
+
+        /// Queue bootstrap resources and start this process. `service_directory`
+        /// is the ordinary bootstrap ServiceDirectory capability, which may be
+        /// a restricted view prepared for this child. The start reply is
+        /// observed by a helper thread; callers that need the result should use
+        /// `start_confirmed`.
+        pub fn start(
+            self,
+            context: &Context,
+            service_directory: OwnedHandle,
+        ) -> Result<u64, SpawnError> {
+            let (pid, process) = self.queue_bootstrap(context, service_directory)?;
+            std::thread::spawn(move || {
+                if let Err(error) = wait_start(&process) {
+                    log::error!("child service start failed: {error:?}");
+                }
+            });
+            Ok(pid)
+        }
+
+        /// Queue bootstrap resources and await the kernel's Process.start
+        /// result without blocking the Tokio executor. A caller can retain a
+        /// duplicate Process capability beforehand to observe the child's
+        /// eventual exit independently.
+        pub async fn start_confirmed(
+            self,
+            context: &Context,
+            service_directory: OwnedHandle,
+        ) -> Result<u64, SpawnError> {
+            let (pid, process) = self.queue_bootstrap(context, service_directory)?;
+            let retry_process = process.duplicate(0).map_err(SpawnError::Status)?;
+            let endpoint = unsafe { ProtocolClientEndpoint::from_raw(process.into_raw()) };
+            let retry_endpoint =
+                unsafe { ProtocolClientEndpoint::from_raw(retry_process.into_raw()) };
+            let mut request_wire = [0u8; 64];
+            let endpoints = [&endpoint, &retry_endpoint];
+            let mut attempt = 0_usize;
+            let mut consecutive_submit_failures = 0_u8;
+            let mut submitted_any = false;
+            loop {
+                let target = endpoints[attempt % endpoints.len()];
+                attempt = attempt.wrapping_add(1);
+                let mut invocation = match process_idl::submit_start(
+                    target,
+                    &process_idl::start_request {},
+                    ResourceTransferBuilder::new(),
+                    &mut request_wire,
+                    0,
+                ) {
+                    Ok(invocation) => {
+                        submitted_any = true;
+                        consecutive_submit_failures = 0;
+                        invocation
+                    }
+                    Err(error) => {
+                        consecutive_submit_failures = consecutive_submit_failures.saturating_add(1);
+                        if !submitted_any && consecutive_submit_failures >= 3 {
+                            return Err(SpawnError::Io);
+                        }
+                        log::warn!(
+                            "Process.start submission was not accepted for pid={pid}: {error:?}"
+                        );
+                        start_retry_backoff().await;
+                        continue;
+                    }
+                };
+
+                let readiness = crate::naos::wait_ready_async(
+                    &[invocation.get()],
+                    Some(PROCESS_START_REPLY_TIMEOUT_US),
+                )
+                .await;
+                if let Ok(event) = readiness {
+                    if event.readable {
+                        let mut response_wire = [0u8; 64];
+                        match process_idl::take_start(&mut invocation, &mut response_wire) {
+                            Ok(_) => return Ok(pid),
+                            Err(naos_idl::CallError::Outcome {
+                                execution,
+                                reason,
+                                protocol_error,
+                            }) if super::start_outcome_is_definitive_rejection(
+                                execution,
+                                reason,
+                                protocol_error,
+                            ) =>
+                            {
+                                log::error!(
+                                    "Process.start was definitively rejected for pid={pid}: {protocol_error}"
+                                );
+                                return Err(SpawnError::Io);
+                            }
+                            Err(error) => {
+                                log::warn!(
+                                    "Process.start reply remains uncertain for pid={pid}: {error:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+
+                // Once a start request has been admitted, a lost readiness or
+                // reply cannot distinguish "not started" from "started but
+                // unacknowledged". Process.start is idempotent in the kernel,
+                // so keep the child capability alive and retry until a reply
+                // confirms that the child entered the started state.
+                log::warn!(
+                    "Process.start reply was not confirmed for pid={pid}; retrying idempotently"
+                );
+                start_retry_backoff().await;
+            }
+        }
+    }
+
+    async fn start_retry_backoff() {
+        if tokio::task::spawn_blocking(|| std::thread::sleep(core::time::Duration::from_millis(1)))
+            .await
+            .is_err()
+        {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Prepare a deferred child without sending bootstrap or starting it.
+    /// This creates the insertion point for process-scoped grants.
+    pub fn prepare_early_service(
         executable_bytes: &[u8],
         path: &str,
-    ) -> Result<u64, SpawnError> {
+    ) -> Result<PreparedEarlyService, SpawnError> {
         if executable_bytes.is_empty() || path.is_empty() || path.as_bytes().contains(&0) {
             return Err(SpawnError::Invalid);
         }
@@ -317,6 +520,18 @@ mod naos_boot {
             return Err(SpawnError::Status(status));
         }
         let process = unsafe { OwnedHandle::from_raw(process) };
+        // process_spawn moves the executable and bootstrap-end handles into
+        // the child. Their Rust wrappers now contain stale numeric handles.
+        core::mem::forget(executable);
+        core::mem::forget(child);
+        Ok(PreparedEarlyService {
+            pid,
+            process,
+            parent,
+        })
+    }
+
+    fn inherited_service_directory(context: &Context) -> Result<OwnedHandle, SpawnError> {
         let service_directory =
             unsafe { OwnedHandle::from_raw(duplicate(context.service_directory_handle())?) };
         let restriction = sys::HandleRestriction {
@@ -329,57 +544,54 @@ mod naos_boot {
         let service_directory = service_directory
             .restrict(&restriction)
             .map_err(SpawnError::Status)?;
-        let stdin = unsafe { OwnedHandle::from_raw(duplicate(context.stdin_stream())?) };
-        let stdout = unsafe { OwnedHandle::from_raw(duplicate(context.stdout_stream())?) };
-        let stderr = unsafe { OwnedHandle::from_raw(duplicate(context.stderr_stream())?) };
-        let message = BootstrapMessage {
-            struct_size: size_of::<BootstrapMessage>() as u32,
-            flags: sys::BOOTSTRAP_FLAG_EARLY_SERVICE,
-            version: 5,
-            resource_count: 4,
-            root_directory: sys::BOOTSTRAP_RESOURCE_NONE,
-            current_directory: sys::BOOTSTRAP_RESOURCE_NONE,
-            service_directory: 0,
-            stdin_stream: 1,
-            stdout_stream: 2,
-            stderr_stream: 3,
-            argc: 1,
-            envc: 0,
-            reserved0: 0,
-            reserved1: 0,
-        };
-        let mut resources = ResourceTable::new();
-        resources
-            .push_move(service_directory)
-            .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
-        resources
-            .push_move(stdin)
-            .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
-        resources
-            .push_move(stdout)
-            .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
-        resources
-            .push_move(stderr)
-            .map_err(|_| SpawnError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
-        let message_bytes = unsafe {
-            core::slice::from_raw_parts(
-                (&message as *const BootstrapMessage).cast::<u8>(),
-                size_of::<BootstrapMessage>(),
-            )
-        };
-        parent
-            .send(message_bytes, resources)
-            .map_err(SpawnError::Status)?;
-        core::mem::forget(executable);
-        core::mem::forget(child);
-        std::thread::spawn(move || {
-            if let Err(error) = wait_start(&process) {
-                log::error!("child service start failed: {error:?}");
-            }
-        });
-        Ok(pid)
+        Ok(service_directory)
+    }
+
+    /// Start a service with the inherited manager directory and stdio.
+    /// Filesystem workers acquire their additional resources through published
+    /// protocols rather than service-specific bootstrap handles.
+    pub fn spawn_early_service(
+        context: &Context,
+        executable_bytes: &[u8],
+        path: &str,
+    ) -> Result<u64, SpawnError> {
+        let prepared = prepare_early_service(executable_bytes, path)?;
+        prepared.start(context, inherited_service_directory(context)?)
     }
 }
 
 #[cfg(target_os = "naos")]
-pub use naos_boot::{open_module, read_module, spawn_early_service, spawn_init};
+pub use naos_boot::{
+    PreparedEarlyService, open_module, prepare_early_service, read_module, spawn_early_service,
+    spawn_init,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn early_service_bootstrap_keeps_service_directory_and_stdio_contract() {
+        let message = early_service_bootstrap_message();
+
+        assert_eq!(message.version, 5);
+        assert_eq!(message.flags, naos_sys::BOOTSTRAP_FLAG_EARLY_SERVICE);
+        assert_eq!(message.resource_count, 4);
+        assert_eq!(message.root_directory, naos_sys::BOOTSTRAP_RESOURCE_NONE);
+        assert_eq!(message.current_directory, naos_sys::BOOTSTRAP_RESOURCE_NONE);
+        assert_eq!(message.service_directory, 0);
+        assert_eq!(message.stdin_stream, 1);
+        assert_eq!(message.stdout_stream, 2);
+        assert_eq!(message.stderr_stream, 3);
+        assert_eq!(message.argc, 1);
+        assert_eq!(message.envc, 0);
+    }
+
+    #[test]
+    fn process_start_retries_only_outcomes_that_are_not_definitive_rejections() {
+        assert!(start_outcome_is_definitive_rejection(0, 0, 16));
+        assert!(!start_outcome_is_definitive_rejection(1, 10, 16));
+        assert!(!start_outcome_is_definitive_rejection(0, 1, 16));
+        assert!(!start_outcome_is_definitive_rejection(0, 0, 0));
+    }
+}

@@ -126,6 +126,13 @@ class VirtBootAllocator : public PhyBootAllocator
 void *kmalloc(u64 size, u64 align);
 void kfree(void *addr);
 
+/// Temporary allocation history for 24-byte slab objects, used to identify the
+/// writer of a corrupted scheduler list node.
+
+/// Set or clear the writable bit on the linear-map page containing `virt`.
+
+/// Diagnostics: writable state of the linear-map page and page-table bases.
+
 void *vmalloc(u64 size, u64 align);
 void vfree(void *addr);
 

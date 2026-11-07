@@ -202,6 +202,7 @@ constexpr inline u64 huge_pages = frame_size::size_1gb / frame_size::size_4kb;
 void init();
 void init_ap();
 void enable_new_paging();
+void flush_caches_for_kernel_mapping_transition();
 void temp_init(bool is_bsp);
 void temp_update_uncached(void *virt, u64 pages);
 
@@ -290,6 +291,20 @@ class page_table_t
     void load();
     static void reload();
 
+    /// Set cache flags on the kernel's fixed physical linear mapping. Large
+    /// pages are split as needed; the caller must flush caches and TLBs before
+    /// switching to a page table with changed memory types.
+    bool set_linear_cache_flags(phy_addr_t physical_base, size_t pages, u64 cache_flags);
+
+    /// Set or clear the writable bit on the kernel's fixed physical linear
+    /// mapping. Clearing writability splits large pages as needed; restoring
+    /// writability never allocates, so it is safe from a page-fault handler.
+
+    /// Report whether one 4K linear-map page is currently writable in this
+    /// page table. Large pages report their own writable bit.
+
+    /// Physical address of the top-level page table (diagnostics).
+
     void map(void *virt_start, size_t pages, u64 flags, u64 actions);
     void map_to(void *virt_start, size_t pages, phy_addr_t phy_start, u64 flags, u64 actions);
 
@@ -309,6 +324,12 @@ class page_table_t
     /// otherwise be freed twice.
     void unmap(void *virt_start, size_t pages, bool release_frames = true);
 
+    /// Remove mappings while retaining leaf frames and page-table pages until
+    /// a remote TLB shootdown has completed. Call reclaim_unmapped() only
+    /// after the range is inaccessible to faults and all CPUs have flushed.
+    void unmap_deferred_reclaim(void *virt_start, size_t pages);
+    void reclaim_unmapped(void *virt_start, size_t pages, bool release_frames);
+
     bool has_flags(void *virt_start, u64 flags = flags::present);
 
     void clone_readonly_to(void *virt_start, size_t pages, page_table_t *to);
@@ -320,6 +341,7 @@ class page_table_t
     user_mapping_statistics user_mappings(u64 start, u64 end);
 
   private:
+    void unmap_impl(void *virt_start, size_t pages, bool release_frames, bool defer_reclaim, bool reclaim_deferred);
     void ensure(int pml4e_index, int pdpe_index, int pde_index, u64 flags, u64 actions);
     void ensure(int pml4e_index, int pdpe_index, u64 flags, u64 actions);
     void ensure(int pml4e_index, u64 flags, u64 actions);

@@ -250,9 +250,8 @@ fn receive_registration(
     while !current.is_null() {
         let value = unsafe { &*current };
         if value.cmsg_level == libc::SOL_SOCKET && value.cmsg_type == libc::SCM_RIGHTS {
-            let payload_bytes = (value.cmsg_len as usize).saturating_sub(
-                unsafe { libc::CMSG_LEN(0) } as usize,
-            );
+            let payload_bytes =
+                (value.cmsg_len as usize).saturating_sub(unsafe { libc::CMSG_LEN(0) } as usize);
             let count = payload_bytes / std::mem::size_of::<RawFd>();
             let data = unsafe { libc::CMSG_DATA(current) as *const RawFd };
             for index in 0..count {
@@ -341,8 +340,7 @@ fn receive_registration(
                 true
             }
             Some(_) => false,
-            None if capacity_available =>
-            {
+            None if capacity_available => {
                 regions.insert(
                     region_id,
                     Region {
@@ -564,12 +562,20 @@ pub fn read(descriptor: BulkBuffer, data: &mut [u8]) -> Result<(), BulkAccessErr
     let endpoint = registry()
         .lock()
         .ok()
-        .and_then(|regions| regions.get(&descriptor.region_id).map(|region| region.endpoint.clone()))
+        .and_then(|regions| {
+            regions
+                .get(&descriptor.region_id)
+                .map(|region| region.endpoint.clone())
+        })
         .ok_or(BulkAccessError::MissingRegion)?;
     let owner = registry()
         .lock()
         .ok()
-        .and_then(|regions| regions.get(&descriptor.region_id).map(|region| region.owner))
+        .and_then(|regions| {
+            regions
+                .get(&descriptor.region_id)
+                .map(|region| region.owner)
+        })
         .ok_or(BulkAccessError::MissingRegion)?;
     read_for(&endpoint, owner, descriptor, data)
 }
@@ -579,12 +585,20 @@ pub fn write(descriptor: BulkBuffer, data: &[u8]) -> Result<(), BulkAccessError>
     let endpoint = registry()
         .lock()
         .ok()
-        .and_then(|regions| regions.get(&descriptor.region_id).map(|region| region.endpoint.clone()))
+        .and_then(|regions| {
+            regions
+                .get(&descriptor.region_id)
+                .map(|region| region.endpoint.clone())
+        })
         .ok_or(BulkAccessError::MissingRegion)?;
     let owner = registry()
         .lock()
         .ok()
-        .and_then(|regions| regions.get(&descriptor.region_id).map(|region| region.owner))
+        .and_then(|regions| {
+            regions
+                .get(&descriptor.region_id)
+                .map(|region| region.owner)
+        })
         .ok_or(BulkAccessError::MissingRegion)?;
     write_for(&endpoint, owner, descriptor, data)
 }

@@ -1,4 +1,4 @@
-#include "kernel/arch/acpipm.hpp"
+#include "kernel/arch/acpi/acpipm.hpp"
 
 #include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/io.hpp"
@@ -60,7 +60,8 @@ bool clock::start_cpu() noexcept
     {
         return false;
     }
-    initial_count_ = read_register_(address_) & counter_mask_24;
+    const u32 counter_mask = bit32_mode_ ? ~u32(0) : counter_mask_24;
+    counter_.reset(read_register_(address_), counter_mask);
     started_ = true;
     return true;
 }
@@ -69,11 +70,10 @@ timeclock::nanosecond_t clock::now_ns() noexcept
 {
     if (!started_ || read_register_ == nullptr)
         return 0;
-    const u32 current = read_register_(address_) & counter_mask_24;
-    const u32 mask = bit32_mode_ ? 0xFFFF'FFFFu : counter_mask_24;
-    const u32 delta = (current - initial_count_) & mask;
+    const u32 ticks_raw = read_register_(address_);
+    const u64 ticks = counter_.sample(ticks_raw);
     u64 ns = 0;
-    if (!timeclock::unsigned_math::try_mul_div_floor(delta, timeclock::nanoseconds_per_second, input_frequency_hz, ns))
+    if (!timeclock::unsigned_math::try_mul_div_floor(ticks, timeclock::nanoseconds_per_second, input_frequency_hz, ns))
         return static_cast<u64>(-1);
     return ns;
 }

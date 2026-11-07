@@ -1,6 +1,7 @@
 #include "kernel/arch/multiboot/multiboot2.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
+#include "kernel/arch/multiboot/boot_modules.hpp"
 #include "kernel/common.hpp"
 #include "kernel/kernel.hpp"
 Unpaged_Bss_Section u32 data_offset;
@@ -52,34 +53,25 @@ void Unpaged_Text_Section memcpy_2(void *dst, const void *source, u32 len)
     }
 }
 
-/// Single pass over the loader tags building the {token -> range} table of
-/// self-declaring service modules. Unknown tokens are retained so the kernel
-/// can diagnose them without assigning them filesystem semantics.
-u64 Unpaged_Text_Section find_named_modules(multiboot_tag *tags, named_boot_module *modules)
+/// Keep every loader-provided module range, copying its optional service
+/// token when present. Empty and unknown tokens never grant service authority.
+bool Unpaged_Text_Section find_boot_modules(multiboot_tag *tags, boot_module *modules, u64 &count)
 {
-    u64 count = 0;
+    count = 0;
     u32 next_size = ((tags->size + 7) & ~7);
     for (; tags->type != MULTIBOOT_TAG_TYPE_END; tags = (multiboot_tag *)((u8 *)tags + next_size))
     {
-        if (tags->type == MULTIBOOT_TAG_TYPE_MODULE && count < max_named_boot_modules)
+        if (tags->type == MULTIBOOT_TAG_TYPE_MODULE)
         {
             multiboot_tag_module *md = (multiboot_tag_module *)tags;
-            if (md->cmdline[0] != '\0')
-            {
-                named_boot_module &entry = modules[count++];
-                u32 i = 0;
-                for (; i < sizeof(entry.name) - 1 && md->cmdline[i] != '\0'; i++)
-                {
-                    entry.name[i] = md->cmdline[i];
-                }
-                entry.name[i] = '\0';
-                entry.start = (u64)md->mod_start;
-                entry.size = (u64)(md->mod_end - md->mod_start);
-            }
+            if (tags->size < sizeof(multiboot_tag_module) + 1 ||
+                !arch::multiboot::append_boot_module(modules, max_boot_modules, count, md->mod_start, md->mod_end,
+                                                     md->cmdline, tags->size - sizeof(multiboot_tag_module)))
+                return false;
         }
         next_size = ((tags->size + 7) & ~7);
     }
-    return count;
+    return true;
 }
 
 NoReturn void Unpaged_Text_Section panic()
@@ -195,17 +187,19 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
     u32 start_ptr = (u32)(u64)header;
     max_boot_tag_ptr = (void *)(*(u32 *)header + ((u8 *)header));
     multiboot_tag *tags = (multiboot_tag *)((byte *)header + 8);
-    // One pass builds the {token -> range} table of self-declaring service
-    // modules; launchers later query it by name.
+    // One pass preserves every module range. Only entries with a recognized
+    // token can later participate in the service bootstrap contract.
     // Do not value-initialize this stack buffer here.  The compiler lowers
     // `T buffer[N] = {}` to a call to the normal memset implementation, which
     // lives in the high-half kernel text.  At this point Multiboot is still
     // running with the low identity-only page table, so that call would fetch
-    // from an unmapped high-half address and triple fault.  find_named_modules
+    // from an unmapped high-half address and triple fault.  find_boot_modules
     // initializes every entry that it returns, and entries beyond its count
     // are never consumed.
-    named_boot_module modules[max_named_boot_modules];
-    const u64 module_count = find_named_modules(tags, modules);
+    boot_module modules[max_boot_modules];
+    u64 module_count = 0;
+    if (!find_boot_modules(tags, modules, module_count))
+        panic();
     // The boot data region (kernel args, relocated modules, boot allocator)
     // must never overlap any loader-provided module, so placement considers
     // the union of all module ranges.
@@ -245,8 +239,8 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
     // alloca_data() overwrite a module header before it was copied.  Keep
     // the existing placement when it is already past the module union, but
     // move the whole boot-data area past that union whenever the candidate
-    // is below it. This is the minimum lifetime guarantee needed by named
-    // boot modules.
+    // is below it. This is the minimum lifetime guarantee needed by boot
+    // modules, including those without a service token.
     if (module_count != 0 && offset < mod_end)
     {
         offset = (u64)mod_end;
@@ -259,9 +253,9 @@ ExportC u64 Unpaged_Text_Section _multiboot_main(void *header, u64 *kstart, u64 
 
     for (u64 i = 0; i < module_count; i++)
     {
-        args->named_modules[i] = modules[i];
+        args->boot_modules[i] = modules[i];
     }
-    args->named_module_count = module_count;
+    args->boot_module_count = module_count;
     args->data_base = offset;
     set_args(args, tags);
 

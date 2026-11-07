@@ -1,10 +1,23 @@
 #pragma once
 #include "freelibcxx/hash_map.hpp"
 #include "freelibcxx/optional.hpp"
-#include "freelibcxx/tuple.hpp"
 #include "freelibcxx/vector.hpp"
 #include "kernel/common.hpp"
+#include "kernel/iommu/backend.hpp"
 #include "kernel/types.hpp"
+#include "naos/abi.h"
+
+template <typename T> class handle_t;
+namespace firmware
+{
+class root;
+}
+namespace acpi
+{
+class fixed_hardware;
+class resource_authority;
+} // namespace acpi
+
 namespace arch::ACPI
 {
 void init();
@@ -13,13 +26,35 @@ bool has_init();
 
 void enable();
 
-typedef irq::request_result (*timer_fn)(u64 user_data);
+/// Start provider-backed firmware services whose runtime dependencies become
+/// available after ACPI inventory initialization.
+void start_deferred_services();
 
-bool register_timer(timer_fn, u64 user_data);
-void unregister_timer();
+struct io_apic_info
+{
+    phy_addr_t address{};
+    u32 gsi_base = 0;
+    u8 enumeration_id = 0;
+};
 
-// return base address and global irq base
-freelibcxx::vector<freelibcxx::tuple<phy_addr_t, u32>> get_io_apic_list();
+freelibcxx::vector<io_apic_info> get_io_apic_list();
+
+/// Resolve an IOAPIC's firmware-declared interrupt source to its exact PCI
+/// requester. The function only reads validated ECAM bridge configuration and
+/// fails closed.
+struct ioapic_source_identity
+{
+    iommu::device_source_ref source{};
+};
+
+bool resolve_ioapic_interrupt_source(u8 enumeration_id, ioapic_source_identity &identity);
+bool install_ioapic_interrupt_route(u8 enumeration_id, u32 destination_apic_id, u8 vector, bool low_polarity,
+                                    bool level_triggered, iommu::ioapic_route_encoding &route);
+bool disable_ioapic_interrupt_route(const iommu::interrupt_route_token &route);
+bool interrupt_remapping_ready();
+bool enable_interrupt_remapping();
+bool interrupt_remapping_enabled();
+bool interrupt_remapping_activation_uncertain();
 
 struct lapic_info
 {
@@ -66,7 +101,26 @@ struct numa_info
 
 freelibcxx::hash_map<u32, numa_info> get_numa_info();
 
-void shutdown();
-void reboot();
+handle_t<firmware::root> firmware_root();
+handle_t<acpi::fixed_hardware> fixed_hardware();
+handle_t<acpi::resource_authority> resource_authority();
+
+/// Close a kernel-owned physical resource lease after the last capability
+/// and VM mapping have gone away.
+bool revoke_resource(u64 resource_id, u64 owner);
+bool revoke_resource_kernel(u64 resource_id);
+bool begin_map_resource_kernel(u64 resource_id, u64 base, u64 length);
+bool end_map_resource_kernel(u64 resource_id);
+bool unmap_resource_kernel(u64 resource_id);
+bool revoke_owner_resources(process_id owner);
+bool revoke_thread_resources(process_id owner, u64 thread_id);
+/// Revoke ACPI state owned by an exiting process or thread.
+void on_process_exit(process_id owner);
+void on_thread_exit(process_id owner, u64 thread_id);
+
+/// Validate that a physical range belongs to firmware/device-reserved memory,
+/// not normal RAM. This is an admission helper for the scoped ACPI resource authority;
+/// it does not expose a physical mapping ABI.
+bool is_device_range(u64 address, u64 length);
 
 } // namespace arch::ACPI

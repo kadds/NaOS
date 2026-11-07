@@ -612,7 +612,9 @@ async fn run_smoke(ramdiskd: PathBuf, exfatd: PathBuf, vfsd: PathBuf, root: Path
     // an offset and length, and the response carries only the byte count.
     const PAYLOAD: &[u8] = b"hello linux";
     let file_region = servicekit::memory::MemoryObject::new(PAYLOAD.len()).expect("file region");
-    file_region.register(&vfs_endpoint).expect("file region registration");
+    file_region
+        .register(&vfs_endpoint)
+        .expect("file region registration");
     file_region
         .write_at(0, PAYLOAD)
         .expect("file region contents");
@@ -623,12 +625,7 @@ async fn run_smoke(ramdiskd: PathBuf, exfatd: PathBuf, vfsd: PathBuf, root: Path
     };
     let write_payload = encode(|wire| file::encode_write_request(&write, wire));
     let write_descriptor = file_region
-        .descriptor(
-            0,
-            PAYLOAD.len() as u64,
-            BulkDirection::In,
-            BULK_RIGHT_READ,
-        )
+        .descriptor(0, PAYLOAD.len() as u64, BulkDirection::In, BULK_RIGHT_READ)
         .expect("file write descriptor");
     let write_region = file_region.resource_descriptor(write_descriptor, false);
     let response = invoke_with_bulk(
@@ -1042,8 +1039,8 @@ mod measure {
             &[],
         )
         .await;
-        let lease_value = block_device_factory::decode_acquire_response(&lease.payload)
-            .expect("lease response");
+        let lease_value =
+            block_device_factory::decode_acquire_response(&lease.payload).expect("lease response");
         let lease_resource = *lease
             .resources
             .get(lease_value.device.index() as usize)
@@ -1084,7 +1081,12 @@ mod measure {
         for depth in depths.iter().copied() {
             let memory = MemoryObject::new(TRANSFER_BYTES).expect("transfer region");
             let descriptor = memory
-                .descriptor(0, TRANSFER_BYTES as u64, BulkDirection::Out, BULK_RIGHT_WRITE)
+                .descriptor(
+                    0,
+                    TRANSFER_BYTES as u64,
+                    BulkDirection::Out,
+                    BULK_RIGHT_WRITE,
+                )
                 .expect("bulk descriptor");
             // A service read writes the caller's buffer, so the caller grants
             // WRITE; `resource_descriptor` builds exactly that right set.
@@ -1189,7 +1191,8 @@ mod measure {
                     .descriptor(0, TRANSFER_BYTES as u64, direction, rights)
                     .expect("bulk descriptor");
                 register += start.elapsed().as_micros() as u64;
-                let resource = memory.resource_descriptor(descriptor, direction == BulkDirection::Out);
+                let resource =
+                    memory.resource_descriptor(descriptor, direction == BulkDirection::Out);
 
                 let response = invoke_with_bulk(
                     &transport,
@@ -1316,8 +1319,9 @@ mod measure {
             }
             let elapsed = start.elapsed();
             let per_request = elapsed.as_micros() as f64 / iterations as f64;
-            let throughput =
-                (iterations as f64 * TRANSFER_BYTES as f64) / elapsed.as_secs_f64() / (1024.0 * 1024.0);
+            let throughput = (iterations as f64 * TRANSFER_BYTES as f64)
+                / elapsed.as_secs_f64()
+                / (1024.0 * 1024.0);
             println!(
                 "measure: write_qd={depth} requests={iterations} per_request={per_request:.1}us throughput={throughput:.1}MiB/s"
             );
@@ -1358,7 +1362,9 @@ mod measure {
             let per_request = start.elapsed().as_micros() as f64 / iterations as f64;
             println!(
                 "measure: size={transfer}B per_request={per_request:.1}us payload_MiB_per_s={:.1}",
-                (iterations as f64 * transfer as f64) / start.elapsed().as_secs_f64() / (1024.0 * 1024.0)
+                (iterations as f64 * transfer as f64)
+                    / start.elapsed().as_secs_f64()
+                    / (1024.0 * 1024.0)
             );
         }
 

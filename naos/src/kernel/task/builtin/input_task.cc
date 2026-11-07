@@ -146,15 +146,16 @@ void print_mouse(io::mouse_result_t &res, const io::status_t &status, io::reques
 }
 
 io::keyboard_request_t request;
+wait_queue_t keyboard_wait_queue;
+const auto keyboard_completion = [](io::request_t *, bool) noexcept { keyboard_wait_queue.do_wake_up(); };
+
 void listen_keyboard()
 {
     key_down_state.reset_all();
     request.type = io::chain_number::keyboard;
     request.cmd_type = io::keyboard_request_t::command::get_key;
     request.status.io_is_completion = true;
-    wait_queue_t input_wait_queue;
-    auto completion = [&input_wait_queue](io::request_t *, bool) noexcept { input_wait_queue.do_wake_up(); };
-    request.final_completion_func = io::completion_result_func_t::borrow(completion);
+    request.final_completion_func = io::completion_result_func_t::borrow(keyboard_completion);
     request.poll = false;
     while (1)
     {
@@ -168,13 +169,16 @@ void listen_keyboard()
         }
         if (!request.status.io_is_completion)
         {
-            input_wait_queue.do_wait([] { return request.status.io_is_completion.load(); });
+            keyboard_wait_queue.do_wait([] { return request.status.io_is_completion.load(); });
         }
         print_keyboard(request.result, request.status, &request);
     };
 }
 
 io::mouse_request_t mreq;
+wait_queue_t mouse_wait_queue;
+const auto mouse_completion = [](io::request_t *, bool) noexcept { mouse_wait_queue.do_wake_up(); };
+
 void listen_mouse()
 {
     current_mouse_data.down_x = current_mouse_data.down_y = current_mouse_data.down_z = current_mouse_data.down_a =
@@ -188,9 +192,7 @@ void listen_mouse()
 
     mreq.type = io::chain_number::mouse;
     mreq.cmd_type = io::mouse_request_t::command::get;
-    wait_queue_t input_wait_queue;
-    auto completion = [&input_wait_queue](io::request_t *, bool) noexcept { input_wait_queue.do_wake_up(); };
-    mreq.final_completion_func = io::completion_result_func_t::borrow(completion);
+    mreq.final_completion_func = io::completion_result_func_t::borrow(mouse_completion);
     mreq.poll = false;
     mreq.status.io_is_completion = true;
 
@@ -207,7 +209,7 @@ void listen_mouse()
 
         if (!mreq.status.io_is_completion)
         {
-            input_wait_queue.do_wait([] { return mreq.status.io_is_completion.load(); });
+            mouse_wait_queue.do_wait([] { return mreq.status.io_is_completion.load(); });
         }
         print_mouse(mreq.result, mreq.status, &mreq);
     };

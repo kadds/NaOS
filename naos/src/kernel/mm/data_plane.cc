@@ -1,4 +1,5 @@
 #include "kernel/mm/data_plane.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/ipc/invocation.hpp"
 
@@ -207,16 +208,40 @@ memory_object::memory_object(byte *storage, u64 size)
 {
 }
 
-memory_object::memory_object(phy_addr_t physical, byte *kernel_view, u64 size, release_callback on_release)
+memory_object::memory_object(phy_addr_t physical, byte *kernel_view, u64 size, release_callback on_release,
+                             u64 release_context)
+    : memory_object(physical, kernel_view, size, 0, on_release, release_context)
+{
+}
+
+memory_object::memory_object(phy_addr_t physical, byte *kernel_view, u64 size, u32 flags, release_callback on_release,
+                             u64 release_context)
     : kobject(type_of())
     , bytes_(memory::MemoryAllocatorV)
-    , flags_(0)
+    , flags_(flags)
     , view_(kernel_view)
     , view_size_(size)
     , pages_(memory::MemoryAllocatorV)
     , page_states_(memory::MemoryAllocatorV)
     , physical_(physical)
     , on_release_(on_release)
+    , release_context_(release_context)
+{
+}
+
+memory_object::memory_object(phy_addr_t physical, byte *kernel_view, u64 size, u32 flags,
+                             context_release_callback on_release, u64 release_context)
+    : kobject(type_of())
+    , bytes_(memory::MemoryAllocatorV)
+    , flags_(flags)
+    , view_(kernel_view)
+    , view_size_(size)
+    , pages_(memory::MemoryAllocatorV)
+    , page_states_(memory::MemoryAllocatorV)
+    , physical_(physical)
+    , on_context_release_(on_release)
+    , release_context_(release_context)
+    , ledger_managed_resource_(on_release != nullptr && release_context != 0)
 {
 }
 
@@ -228,6 +253,8 @@ memory_object::~memory_object()
     ipc::protocol_endpoint *pager_endpoint = nullptr;
     bool pages_owned = true;
     release_callback on_release = nullptr;
+    context_release_callback on_context_release = nullptr;
+    u64 release_context = 0;
     {
         uctx::RawSpinLockUninterruptibleContext context(lock_);
         // Move storage out while protected, then release it after dropping the
@@ -242,6 +269,10 @@ memory_object::~memory_object()
         pages_owned = pages_owned_;
         on_release = on_release_;
         on_release_ = nullptr;
+        on_context_release = on_context_release_;
+        on_context_release_ = nullptr;
+        release_context = release_context_;
+        release_context_ = 0;
     }
     if (pages_owned)
         free_pages(pages);
@@ -251,6 +282,22 @@ memory_object::~memory_object()
         pager_endpoint->release_kernel_reference();
     if (on_release != nullptr)
         on_release();
+    if (on_context_release != nullptr)
+        on_context_release(release_context);
+}
+
+bool memory_object::acquire_physical_mapping()
+{
+    if (physical_.get() == nullptr || !ledger_managed_resource_)
+        return true;
+    return arch::ACPI::begin_map_resource_kernel(release_context_, reinterpret_cast<u64>(physical_()), view_size_);
+}
+
+bool memory_object::release_physical_mapping()
+{
+    if (physical_.get() == nullptr || !ledger_managed_resource_)
+        return true;
+    return arch::ACPI::end_map_resource_kernel(release_context_);
 }
 
 u64 memory_object::owned_size_locked() const
@@ -261,6 +308,31 @@ u64 memory_object::owned_size_locked() const
         return pages_size_;
     return bytes_.size();
 }
+
+namespace
+{
+na_status_t dma_page_policy_status(dma_page_policy_error error)
+{
+    switch (error)
+    {
+        case dma_page_policy_error::none:
+            return NA_STATUS_OK;
+        case dma_page_policy_error::invalid_range:
+        case dma_page_policy_error::partial_page:
+        case dma_page_policy_error::invalid_direction:
+            return NA_STATUS_INVALID_ARGUMENT;
+        case dma_page_policy_error::not_page_backed:
+        case dma_page_policy_error::borrowed_frames:
+        case dma_page_policy_error::external_storage:
+            return NA_STATUS_NOT_SUPPORTED;
+        case dma_page_policy_error::page_not_ready:
+            return NA_STATUS_WOULD_BLOCK;
+        case dma_page_policy_error::read_only:
+            return NA_STATUS_ACCESS_DENIED;
+    }
+    return NA_STATUS_INVALID_ARGUMENT;
+}
+} // namespace
 
 bool memory_object::readable_locked(u64 offset, u64 size) const
 {
@@ -401,6 +473,43 @@ phy_addr_t memory_object::page_frame(u64 object_offset) const
     return page == nullptr ? nullptr : memory::va2pa(page);
 }
 
+na_status_t memory_object::dma_page_frame(u64 object_offset, dma_direction direction, phy_addr_t &frame) const
+{
+    frame = nullptr;
+    uctx::RawSpinLockUninterruptibleContext context(lock_);
+
+    dma_page_policy_input input{};
+    input.size = owned_size_locked();
+    input.offset = object_offset;
+    input.page_backed = pager_backed_locked() || page_count() != 0;
+    input.owns_frames = pages_owned_;
+    input.external_view = view_ != nullptr;
+    input.direct_physical = physical_.get() != nullptr;
+    input.read_only = (flags_ & NA_MEMORY_FLAG_READ_ONLY) != 0;
+
+    // The range policy rejects malformed offsets before this method indexes
+    // the page-state arrays. A not-ready result is deferred until the actual
+    // page readiness has been checked under lock_.
+    const auto preliminary = validate_dma_page_policy(input, memory::page_size, direction);
+    if (preliminary != dma_page_policy_error::page_not_ready)
+        return dma_page_policy_status(preliminary);
+
+    const u64 page_index = object_offset / memory::page_size;
+    bool ready = page_index < page_count() && page_at(page_index) != nullptr;
+    if (ready && pager_backed_locked())
+        ready = page_index < page_states_.size() && page_states_.data()[page_index] == page_ready;
+    input.page_ready = ready;
+    const auto policy = validate_dma_page_policy(input, memory::page_size, direction);
+    if (policy != dma_page_policy_error::none)
+        return dma_page_policy_status(policy);
+
+    const auto physical = memory::va2pa(page_at(page_index));
+    if (physical.get() == nullptr || (reinterpret_cast<u64>(physical()) & (memory::page_size - 1)) != 0)
+        return NA_STATUS_NOT_SUPPORTED;
+    frame = physical;
+    return NA_STATUS_OK;
+}
+
 bool memory_object::page_backed() const
 {
     uctx::RawSpinLockUninterruptibleContext context(lock_);
@@ -414,7 +523,7 @@ bool memory_object::pager_backed() const
 }
 
 bool memory_object::service_fault_pages(u64 first_page, u64 requested_page_count,
-                                         task::process_t *accounting_process) const
+                                        task::process_t *accounting_process) const
 {
     auto *self = const_cast<memory_object *>(this);
     khandle pager;
@@ -509,7 +618,7 @@ bool memory_object::service_fault_pages(u64 first_page, u64 requested_page_count
                                     ? self->pages_size_ - chunk_offset
                                     : chunk_pages * memory::page_size;
         auto buffer = handle_t<memory_object>::make(pages.data() + chunk_first, chunk_pages, chunk_bytes,
-                                                     memory_object::page_alias_tag{});
+                                                    memory_object::page_alias_tag{});
         bool chunk_loaded = false;
         if (buffer && buffer->page_backed())
         {
@@ -521,8 +630,8 @@ bool memory_object::service_fault_pages(u64 first_page, u64 requested_page_count
             value.flags = 0;
             value.buffer.value = 0;
             u64 written = 0;
-            if (naos::system::File::encode_pread_request(
-                    reinterpret_cast<std::uint8_t *>(request.data()), request.size(), value, written))
+            if (naos::system::File::encode_pread_request(reinterpret_cast<std::uint8_t *>(request.data()),
+                                                         request.size(), value, written))
             {
                 request.resize(written, byte{});
                 capability::metadata buffer_metadata;
@@ -542,8 +651,14 @@ bool memory_object::service_fault_pages(u64 first_page, u64 requested_page_count
                                                                 std::move(resources));
                 if (invocation)
                 {
-                    invocation->wait_queue().do_wait(
+                    const auto wait_result = invocation->wait_queue().do_wait_result(
                         [&invocation] { return (invocation->signals() & NA_SIGNAL_COMPLETED) != 0; });
+                    if (wait_result == task::wait_result::process_exit)
+                    {
+                        invocation.reset();
+                        buffer.reset();
+                        task::do_exit_thread(0);
+                    }
                     na_result_frame_t result{};
                     result.struct_size = sizeof(result);
                     result.byte_capacity = 64;

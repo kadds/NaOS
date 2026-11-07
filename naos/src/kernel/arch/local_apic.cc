@@ -216,15 +216,18 @@ void local_init()
         }
 
         KLOG_INFO("Local APIC base {}", log::hex(local_apic_base_addr()));
+        constexpr u64 local_apic_page_mask = memory::page_size - 1;
+        const u64 local_apic_physical_base = reinterpret_cast<u64>(local_apic_base_addr());
+        const u64 local_apic_page_offset = local_apic_physical_base & local_apic_page_mask;
+        const phy_addr_t local_apic_page_base = phy_addr_t::from(local_apic_physical_base & ~local_apic_page_mask);
         auto &paging = memory::kernel_vm_info->paging();
-        u64 map_base = memory::alloc_io_mmap_address(paging::frame_size::size_2mb, paging::frame_size::size_2mb);
+        u64 map_base = memory::alloc_io_mmap_address(memory::page_size, memory::page_size);
 
-        paging.big_page_map_to(reinterpret_cast<void *>(map_base), paging::big_pages, local_apic_base_addr,
-                               paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through,
-                               0);
+        paging.map_to(reinterpret_cast<void *>(map_base), 1, local_apic_page_base,
+                      paging::flags::cache_disable | paging::flags::writable | paging::flags::write_through, 0);
         paging.reload();
 
-        apic_base_addr = reinterpret_cast<void *>(map_base);
+        apic_base_addr = reinterpret_cast<void *>(map_base + local_apic_page_offset);
     }
 
     if (cpu_info::has_feature(cpu_info::feature::x2apic))
@@ -329,6 +332,15 @@ void local_post_IPI_mask(u64 intr, u64 mask0)
 {
     intr &= 0xFF;
     write_register64(icr_0, intr | (0b01000000u) << 8 | mask0 << 56);
+}
+
+bool local_vector_pending_or_in_service(u8 vector)
+{
+    const u16 register_index = static_cast<u16>(vector / 32);
+    const u32 vector_mask = 1u << (vector % 32);
+    const u32 in_service = read_register(static_cast<u16>(isr_0 + register_index));
+    const u32 pending = read_register(static_cast<u16>(irr_0 + register_index));
+    return ((in_service | pending) & vector_mask) != 0;
 }
 
 void local_EOI(u8 index) { write_register(eoi_register, 0); }

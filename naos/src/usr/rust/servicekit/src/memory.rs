@@ -309,6 +309,33 @@ mod platform {
             restricted.restrict(&restriction).map_err(map_status)
         }
 
+        /// Install one bounded read/write mapping for direct data-plane users.
+        /// The capability's protocol rights still decide whether the
+        /// requested flags are admitted by the kernel.
+        pub fn map(
+            &self,
+            offset: u64,
+            length: usize,
+            flags: u32,
+        ) -> Result<MappedMemory, MemoryError> {
+            if length == 0 {
+                return Err(MemoryError::InvalidArgument);
+            }
+            if let Some(size) = self.size {
+                check_view_range(offset, length as u64, size)?;
+            }
+            map(self.handle.get(), offset, length, flags)
+        }
+
+        pub fn map_all(&self, flags: u32) -> Result<MappedMemory, MemoryError> {
+            let size = self.size.ok_or(MemoryError::InvalidArgument)?;
+            self.map(
+                0,
+                usize::try_from(size).map_err(|_| MemoryError::InvalidArgument)?,
+                flags,
+            )
+        }
+
         pub fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), MemoryError> {
             let mut mapping = map(
                 self.handle.get(),
@@ -510,6 +537,20 @@ mod platform {
     }
 
     impl MappedMemory {
+        /// Return the mapping's raw base pointer without creating a Rust
+        /// reference to its contents. Device MMIO callers must use volatile
+        /// pointer operations and keep this mapping alive for every access.
+        pub fn as_ptr(&self) -> *const u8 {
+            self.address.cast_const()
+        }
+
+        /// Return the mutable raw base pointer without creating a Rust
+        /// reference to device memory. The mapping must include write rights;
+        /// callers are responsible for bounded volatile accesses.
+        pub fn as_mut_ptr(&mut self) -> *mut u8 {
+            self.address
+        }
+
         pub fn as_slice(&self) -> &[u8] {
             // SAFETY: the mapping is owned by `self` and remains live for the
             // returned borrow.
@@ -521,12 +562,13 @@ mod platform {
             // uniquely owned by this value.
             unsafe { core::slice::from_raw_parts_mut(self.address, self.length) }
         }
-    }
 
-    impl Drop for MappedMemory {
-        fn drop(&mut self) {
+        /// Remove the process VMA and report failure without discarding its
+        /// owner. Callers that revoke a physical lease must confirm this
+        /// succeeds before releasing the backing capability.
+        pub fn unmap(&mut self) -> Result<(), MemoryError> {
             if self.map_address.is_null() {
-                return;
+                return Ok(());
             }
             let mut frame = sys::MemoryUnmapFrame {
                 struct_size: core::mem::size_of::<sys::MemoryUnmapFrame>() as u32,
@@ -536,7 +578,21 @@ mod platform {
                 reserved0: 0,
                 reserved1: 0,
             };
-            let _ = unsafe { sys::_na_memory_unmap(&mut frame) };
+            let status = unsafe { sys::_na_memory_unmap(&mut frame) };
+            if status != sys::STATUS_OK {
+                return Err(map_status(status));
+            }
+            self.address = core::ptr::null_mut();
+            self.map_address = core::ptr::null_mut();
+            self.map_length = 0;
+            self.length = 0;
+            Ok(())
+        }
+    }
+
+    impl Drop for MappedMemory {
+        fn drop(&mut self) {
+            let _ = self.unmap();
         }
     }
 
@@ -1107,8 +1163,14 @@ mod region_contract_tests {
     fn persistent_region_sizes_are_page_aligned() {
         assert_eq!(page_aligned_size(1), Ok(MEMORY_PAGE_SIZE));
         assert_eq!(page_aligned_size(MEMORY_PAGE_SIZE), Ok(MEMORY_PAGE_SIZE));
-        assert_eq!(page_aligned_size(MEMORY_PAGE_SIZE + 1), Ok(2 * MEMORY_PAGE_SIZE));
-        assert_eq!(page_aligned_size(usize::MAX), Err(MemoryError::InvalidArgument));
+        assert_eq!(
+            page_aligned_size(MEMORY_PAGE_SIZE + 1),
+            Ok(2 * MEMORY_PAGE_SIZE)
+        );
+        assert_eq!(
+            page_aligned_size(usize::MAX),
+            Err(MemoryError::InvalidArgument)
+        );
     }
 
     /// Rights a caller grants when data flows *from* the service: the service

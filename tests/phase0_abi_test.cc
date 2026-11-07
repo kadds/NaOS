@@ -91,7 +91,7 @@ void test_layouts()
     static_assert(NA_CHANNEL_MAX_RESOURCES == 64);
     static_assert(NA_HANDLE_INVALID == 0);
     static_assert(NA_SYSCALL_NONE == 0);
-    static_assert(NA_SYSCALL_COUNT == 47);
+    static_assert(NA_SYSCALL_COUNT == 46);
     static_assert(NA_SYSCALL_MEMORY_MAP == 38);
     static_assert(NA_SYSCALL_PROCESS_SPAWN == 42);
     static_assert(syscall_numbers_are_dense());
@@ -146,6 +146,8 @@ void test_outcome_errno_mapping()
     REQUIRE(naos::result_errno(result) == EPROTO);
     result.outcome_reason = NA_OUTCOME_REASON_UNSUPPORTED;
     REQUIRE(naos::result_errno(result) == ENOTSUP);
+    result.outcome_reason = NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN;
+    REQUIRE(naos::result_errno(result) == EIO);
     result.protocol_error = -EINVAL;
     REQUIRE(naos::result_errno(result) == EINVAL);
     result.protocol_error = EINVAL;

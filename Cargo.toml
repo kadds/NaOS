@@ -10,11 +10,17 @@ members = [
     "naos/src/usr/rust/vfsd",
     "naos/src/usr/rust/ramdiskd",
     "naos/src/usr/rust/exfatd",
+    "naos/src/usr/rust/platformd",
+    "naos/src/usr/rust/rust-acpi-naos",
+    "naos/src/usr/rust/pcied",
     "naos/src/usr/rust/servicekit",
     "tests/host-smoke",
     "tests/rust-interop-fixture",
 ]
-exclude = ["naos/third_party/rust-naos/src/bootstrap"]
+exclude = [
+    "naos/third_party/rust-naos/src/bootstrap",
+    "naos/third_party/rust-acpi-naos",
+]
 
 # Tokio's NaOS port uses the same Mio API as Linux, but the selector backend
 # must wait on NaOS capability handles rather than Unix file descriptors.

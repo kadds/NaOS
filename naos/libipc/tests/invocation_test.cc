@@ -110,6 +110,7 @@ void claim_and_commit_empty(naos_ipc_invocation_t *invocation, std::uint32_t exp
     assert(info.actual_resources == 0);
     assert(info.execution_outcome == expected_outcome);
     assert(info.outcome_reason == expected_reason);
+    assert(info.protocol_error == 0);
     assert(naos_ipc_invocation_commit_result(invocation) == NAOS_IPC_STATUS_OK);
     assert((naos_ipc_invocation_signals(invocation) & NAOS_IPC_SIGNAL_COMPLETED) != 0);
 }
@@ -186,6 +187,22 @@ void test_dispatched_cancel_interrupts_until_failure()
     naos_ipc_invocation_destroy(invocation);
 }
 
+void test_hardware_failure_preserves_unknown_execution_outcome()
+{
+    Fixture fixture;
+    assert(!naos_ipc_invocation_failure_valid(NAOS_IPC_EXECUTION_NOT_DELIVERED,
+                                              NAOS_IPC_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN, 0));
+    assert(!naos_ipc_invocation_failure_valid(NAOS_IPC_EXECUTION_OUTCOME_UNKNOWN,
+                                              NAOS_IPC_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN, -1));
+    auto *invocation = fixture.create();
+    dispatch(invocation);
+    assert(naos_ipc_invocation_complete_failure(invocation, NAOS_IPC_EXECUTION_OUTCOME_UNKNOWN,
+                                                NAOS_IPC_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN, 0) != 0);
+    claim_and_commit_empty(invocation, NAOS_IPC_EXECUTION_OUTCOME_UNKNOWN,
+                           NAOS_IPC_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN);
+    naos_ipc_invocation_destroy(invocation);
+}
+
 void test_responder_close_while_receiving_is_terminal()
 {
     Fixture fixture;
@@ -218,6 +235,7 @@ int main()
     test_reply_ownership_and_capacity();
     test_queued_cancel_is_not_delivered();
     test_dispatched_cancel_interrupts_until_failure();
+    test_hardware_failure_preserves_unknown_execution_outcome();
     test_responder_close_while_receiving_is_terminal();
     test_deadline_publishes_not_delivered();
 }

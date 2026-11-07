@@ -11,8 +11,8 @@ namespace dev::framebuffer
 class framebuffer_service final : public kobject
 {
   public:
-    framebuffer_service(phy_addr_t physical_base, void *kernel_view, u64 frame_bytes, u64 width, u64 height,
-                        u64 pitch, u64 bpp, u64 type)
+    framebuffer_service(phy_addr_t physical_base, void *kernel_view, u64 frame_bytes, u64 width, u64 height, u64 pitch,
+                        u64 bpp, u64 type)
         : kobject(kobject::type_e::framebuffer)
         , physical_base_(physical_base)
         , kernel_view_(kernel_view)
@@ -25,7 +25,7 @@ class framebuffer_service final : public kobject
     {
     }
 
-    static type_e type_of() { return type_e::framebuffer; }
+    static constexpr type_e type_of() { return type_e::framebuffer; }
 
     phy_addr_t physical_base() const { return physical_base_; }
     void *kernel_view() const { return kernel_view_; }

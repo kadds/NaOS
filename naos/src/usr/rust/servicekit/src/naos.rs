@@ -15,12 +15,18 @@ use core::time::Duration;
 use naos_idl::service_directory;
 use naos_idl::{
     CallError, CodecError, OwnedHandle, ProtocolClientEndpoint, ProtocolServerEndpoint,
-    RawHandleGuard, ReceivedResources, ResourceError, ResourceSlot, ResourceTable,
+    RawHandleGuard, ReceivedResources, ResourceError, ResourceSlot, ResourceTransferBuilder,
 };
+use std::time::Instant;
 pub(crate) use tokio::io::naos::{Event as ReadinessEvent, Readiness};
+
+/// The only locator exposed by the per-driver ServiceDirectory returned from
+/// `PciFunction.grant_driver`.
+pub const PCI_FUNCTION_URI: &str = "naos://service/pci/function";
 
 const LISTEN_MAX_PENDING: u64 = 16;
 const CHANNEL_MAX_MESSAGE_BYTES: u64 = 65536;
+const SERVICE_DIRECTORY_RETRY_INTERVAL: Duration = Duration::from_millis(1);
 /// Bytes one directory listing page can carry. The records travel in the
 /// caller's region rather than the control message, so this is the window the
 /// listing loop grants, not the channel message budget.
@@ -164,7 +170,10 @@ impl ReadinessSet {
         Ok(())
     }
 
-    pub async fn wait(&mut self, timeout_us: Option<u64>) -> Result<crate::ReadyEvent, sys::Status> {
+    pub async fn wait(
+        &mut self,
+        timeout_us: Option<u64>,
+    ) -> Result<crate::ReadyEvent, sys::Status> {
         if self.sources.is_empty() {
             return Err(sys::STATUS_INVALID_ARGUMENT);
         }
@@ -233,13 +242,12 @@ pub async fn wait_ready_async(
         .collect::<Result<Vec<_>, _>>()
         .map_err(|_| sys::STATUS_INVALID_ARGUMENT)?;
     let (index, event) = match timeout_us {
-        Some(timeout_us) => tokio::time::timeout(
-            Duration::from_micros(timeout_us),
-            next_readiness(&sources),
-        )
-        .await
-        .map_err(|_| sys::STATUS_WAIT_TIMED_OUT)?
-        .map_err(|_| sys::STATUS_IO_ERROR)?,
+        Some(timeout_us) => {
+            tokio::time::timeout(Duration::from_micros(timeout_us), next_readiness(&sources))
+                .await
+                .map_err(|_| sys::STATUS_WAIT_TIMED_OUT)?
+                .map_err(|_| sys::STATUS_IO_ERROR)?
+        }
         None => next_readiness(&sources)
             .await
             .map_err(|_| sys::STATUS_IO_ERROR)?,
@@ -299,7 +307,7 @@ impl Channel {
     }
 
     /// Send one byte payload and its capability resources.
-    pub fn send(&self, bytes: &[u8], resources: ResourceTable<'_>) -> Result<(), sys::Status> {
+    pub fn send(&self, bytes: &[u8], resources: ResourceTransferBuilder<'_>) -> Result<(), sys::Status> {
         let frame = sys::ChannelSendFrame {
             struct_size: core::mem::size_of::<sys::ChannelSendFrame>() as u32,
             flags: 0,
@@ -425,7 +433,7 @@ pub fn publish_listener(
     };
     let (receive, send) = Channel::create(Some(&options))?;
 
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let listener = resources
         .push_move(send.into_owned())
         .map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)?;
@@ -463,7 +471,7 @@ pub fn register_service(
         return Err(status);
     }
     let directory = unsafe { ProtocolClientEndpoint::from_raw(duplicate) };
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources
         .push_move(service)
         .map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)?;
@@ -479,6 +487,91 @@ pub fn register_service(
     service_directory::take_register(&mut invocation, &mut response_wire)
         .map(|_| ())
         .map_err(|_| sys::STATUS_IO_ERROR)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RegisterServiceError {
+    Directory(sys::Status),
+    Resource(naos_idl::ResourceError),
+    Submit(CallError),
+    Readiness(sys::Status),
+    Take(CallError),
+}
+
+/// Register a service endpoint without blocking the Tokio executor.
+pub async fn register_service_async(
+    service_directory_handle: sys::Handle,
+    uri: &str,
+    service: OwnedHandle,
+) -> Result<(), RegisterServiceError> {
+    let mut duplicate = sys::HANDLE_INVALID;
+    let status = unsafe { sys::_na_handle_duplicate(service_directory_handle, 0, &mut duplicate) };
+    if status != sys::STATUS_OK || duplicate == sys::HANDLE_INVALID {
+        return Err(RegisterServiceError::Directory(
+            if status == sys::STATUS_OK {
+                sys::STATUS_INVALID_HANDLE
+            } else {
+                status
+            },
+        ));
+    }
+    let directory = unsafe { ProtocolClientEndpoint::from_raw(duplicate) };
+    let mut resources = ResourceTransferBuilder::new();
+    let slot = resources
+        .push_move(service)
+        .map_err(RegisterServiceError::Resource)?;
+    let request = service_directory::register_request { service: slot, uri };
+    let mut request_wire = [0_u8; 512];
+    let mut invocation =
+        service_directory::submit_register(&directory, &request, resources, &mut request_wire, 0)
+            .map_err(RegisterServiceError::Submit)?;
+    let readiness = wait_ready_async(&[invocation.get()], None)
+        .await
+        .map_err(RegisterServiceError::Readiness)?;
+    if !readiness.readable {
+        return Err(RegisterServiceError::Readiness(sys::STATUS_PEER_CLOSED));
+    }
+    let mut response_wire = [0_u8; 64];
+    service_directory::take_register(&mut invocation, &mut response_wire)
+        .map_err(RegisterServiceError::Take)?;
+    Ok(())
+}
+
+/// Derive a moveable ServiceDirectory capability that can resolve exactly one
+/// URI already visible through the source directory. The kernel verifies the
+/// child scope is a strict attenuation of the source view.
+pub fn create_service_directory_view(
+    service_directory_handle: sys::Handle,
+    uri: &str,
+) -> Result<OwnedHandle, CallError> {
+    let mut duplicate = sys::HANDLE_INVALID;
+    let status = unsafe { sys::_na_handle_duplicate(service_directory_handle, 0, &mut duplicate) };
+    if status != sys::STATUS_OK || duplicate == sys::HANDLE_INVALID {
+        return Err(CallError::Status(status));
+    }
+    let directory = unsafe { ProtocolClientEndpoint::from_raw(duplicate) };
+    let request = service_directory::create_view_request { uri };
+    let mut request_wire = Vec::new();
+    request_wire.resize(
+        service_directory::CREATE_VIEW_REQUEST_HEADER_BYTES + uri.len(),
+        0_u8,
+    );
+    let mut invocation = service_directory::submit_create_view(
+        &directory,
+        &request,
+        ResourceTransferBuilder::new(),
+        &mut request_wire,
+        0,
+    )?;
+    if !wait_for_completion(invocation.get(), u64::MAX) {
+        return Err(CallError::InvalidInvocation);
+    }
+    let mut response_wire = [0_u8; service_directory::CREATE_VIEW_RESPONSE_HEADER_BYTES];
+    let (response, mut resources) =
+        service_directory::take_create_view(&mut invocation, &mut response_wire)?;
+    resources
+        .take(response.view)
+        .ok_or(CallError::Resource(ResourceError::InvalidHandle))
 }
 
 /// Resolve a protocol endpoint from the process' ServiceDirectory.
@@ -504,7 +597,7 @@ pub fn resolve_resource(
             match service_directory::submit_resolve(
                 &endpoint,
                 &request,
-                ResourceTable::new(),
+                ResourceTransferBuilder::new(),
                 &mut request_wire,
                 0,
             ) {
@@ -524,7 +617,7 @@ pub fn resolve_resource(
                 let service = resources
                     .take(response.service)
                     .ok_or(CallError::Resource(ResourceError::InvalidHandle))?;
-                return Ok(service);
+                return attenuate_resolved_resource(service);
             }
             Err(CallError::Outcome { protocol_error, .. })
                 if protocol_error == -2 || protocol_error == 2 =>
@@ -547,7 +640,7 @@ fn resolve_resource_once(
         match service_directory::submit_resolve(
             endpoint,
             &request,
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut request_wire,
             0,
         ) {
@@ -566,9 +659,24 @@ fn resolve_resource_once(
     let mut response_wire = [0_u8; 512];
     let (response, mut resources) =
         service_directory::take_resolve(&mut invocation, &mut response_wire)?;
-    resources
+    let service = resources
         .take(response.service)
-        .ok_or(CallError::Resource(ResourceError::InvalidHandle))
+        .ok_or(CallError::Resource(ResourceError::InvalidHandle))?;
+    attenuate_resolved_resource(service)
+}
+
+/// ServiceDirectory resolution is a capability handoff, not a new authority
+/// root. The transport disposition needs TRANSFER while the response is in
+/// flight, but the resolved process-local handle must not retain the ability
+/// to duplicate or re-export a scoped kernel service.
+fn attenuate_resolved_resource(service: OwnedHandle) -> Result<OwnedHandle, CallError> {
+    let restriction = sys::HandleRestriction {
+        struct_size: core::mem::size_of::<sys::HandleRestriction>() as u32,
+        flags: sys::RESTRICTION_META_RIGHTS,
+        meta_rights: sys::RIGHT_WAIT | sys::RIGHT_INSPECT,
+        ..sys::HandleRestriction::default()
+    };
+    service.restrict(&restriction).map_err(CallError::Status)
 }
 
 fn list_prefix_once(
@@ -587,7 +695,7 @@ fn list_prefix_once(
         service_directory::LIST_PREFIX_REQUEST_HEADER_BYTES + prefix.len(),
         0,
     );
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let buffer = resources
         .push_duplicate(region.as_handle())
         .map_err(CallError::Resource)?;
@@ -597,13 +705,8 @@ fn list_prefix_once(
         prefix,
         buffer,
     };
-    let mut invocation = service_directory::submit_list_prefix(
-        endpoint,
-        &request,
-        resources,
-        &mut request_wire,
-        0,
-    )?;
+    let mut invocation =
+        service_directory::submit_list_prefix(endpoint, &request, resources, &mut request_wire, 0)?;
 
     if !wait_for_completion(invocation.get(), u64::MAX) {
         return Err(CallError::InvalidInvocation);
@@ -720,20 +823,16 @@ pub async fn wait_for_service_prefix(
     prefix: &str,
     timeout: Duration,
 ) -> Result<Vec<String>, CallError> {
-    let result = tokio::time::timeout(timeout, async {
-        loop {
-            let services = list_service_uris(service_directory, prefix)?;
-            if !services.is_empty() {
-                return Ok(services);
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+    let deadline = retry_deadline(timeout);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT));
         }
-    })
-    .await;
-
-    match result {
-        Ok(result) => result,
-        Err(_) => Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT)),
+        let services = list_service_uris(service_directory, prefix)?;
+        if !services.is_empty() {
+            return Ok(services);
+        }
+        wait_for_retry_interval(deadline).await?;
     }
 }
 
@@ -755,26 +854,22 @@ pub async fn resolve_until(
     }
     let endpoint = unsafe { ProtocolClientEndpoint::from_raw(duplicate) };
 
-    let result = tokio::time::timeout(timeout, async {
-        loop {
-            match resolve_resource_once(&endpoint, uri) {
-                Ok(resource) => {
-                    return Ok(unsafe { ProtocolClientEndpoint::from_raw(resource.into_raw()) });
-                }
-                Err(CallError::Outcome { protocol_error, .. })
-                    if protocol_error == -2 || protocol_error == 2 =>
-                {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }
-                Err(error) => return Err(error),
-            }
+    let deadline = retry_deadline(timeout);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT));
         }
-    })
-    .await;
-
-    match result {
-        Ok(result) => result,
-        Err(_) => Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT)),
+        match resolve_resource_once(&endpoint, uri) {
+            Ok(resource) => {
+                return Ok(unsafe { ProtocolClientEndpoint::from_raw(resource.into_raw()) });
+            }
+            Err(CallError::Outcome { protocol_error, .. })
+                if protocol_error == -2 || protocol_error == 2 =>
+            {
+                wait_for_retry_interval(deadline).await?;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -812,7 +907,7 @@ fn connect_service_once(
     let mut invocation = service_directory::submit_connect(
         directory,
         &request,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut request_wire,
         0,
     )?;
@@ -846,31 +941,48 @@ pub async fn connect_until(
         return Err(CallError::Status(status));
     }
     let endpoint = unsafe { ProtocolClientEndpoint::from_raw(duplicate) };
-    let result = tokio::time::timeout(timeout, async {
-        loop {
-            match connect_service_once(
-                &endpoint,
-                uri,
-                expected_uuid,
-                requested_rights,
-                requested_revision,
-                requested_features,
-            ) {
-                Ok(resource) => return Ok(resource),
-                Err(CallError::Outcome { protocol_error, .. })
-                    if protocol_error == -2 || protocol_error == 2 =>
-                {
-                    tokio::time::sleep(Duration::from_millis(1)).await;
-                }
-                Err(error) => return Err(error),
-            }
+    let deadline = retry_deadline(timeout);
+    loop {
+        if Instant::now() >= deadline {
+            return Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT));
         }
-    })
-    .await;
-    match result {
-        Ok(result) => result,
-        Err(_) => Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT)),
+        match connect_service_once(
+            &endpoint,
+            uri,
+            expected_uuid,
+            requested_rights,
+            requested_revision,
+            requested_features,
+        ) {
+            Ok(resource) => return Ok(resource),
+            Err(CallError::Outcome { protocol_error, .. })
+                if protocol_error == -2 || protocol_error == 2 =>
+            {
+                wait_for_retry_interval(deadline).await?;
+            }
+            Err(error) => return Err(error),
+        }
     }
+}
+
+fn retry_deadline(timeout: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(timeout).unwrap_or(now)
+}
+
+async fn wait_for_retry_interval(deadline: Instant) -> Result<(), CallError> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT));
+    }
+    let interval = remaining.min(SERVICE_DIRECTORY_RETRY_INTERVAL);
+    tokio::task::spawn_blocking(move || std::thread::sleep(interval))
+        .await
+        .map_err(|_| CallError::Status(sys::STATUS_RESOURCE_EXHAUSTED))?;
+    if Instant::now() >= deadline {
+        return Err(CallError::Status(sys::STATUS_WAIT_TIMED_OUT));
+    }
+    Ok(())
 }
 
 /// Run a NaOS service future from the compiler-generated `#[tokio::main]`

@@ -151,7 +151,10 @@ bool invocation::valid_failure(na_execution_outcome_t outcome, na_outcome_reason
     if (outcome == NA_EXECUTION_NONE && reason == NA_OUTCOME_REASON_NONE)
         return protocol_error < 0;
     if ((outcome != NA_EXECUTION_NOT_DELIVERED && outcome != NA_EXECUTION_OUTCOME_UNKNOWN) ||
-        reason <= NA_OUTCOME_REASON_NONE || reason > NA_OUTCOME_REASON_UNSUPPORTED)
+        reason <= NA_OUTCOME_REASON_NONE || reason > NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN)
+        return false;
+    if (reason == NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN &&
+        (outcome != NA_EXECUTION_OUTCOME_UNKNOWN || protocol_error != 0))
         return false;
     if (outcome == NA_EXECUTION_NOT_DELIVERED)
         return reason == NA_OUTCOME_REASON_PEER_CLOSED || reason == NA_OUTCOME_REASON_OBJECT_REVOKED ||
@@ -161,7 +164,8 @@ bool invocation::valid_failure(na_execution_outcome_t outcome, na_outcome_reason
     return reason == NA_OUTCOME_REASON_PEER_CLOSED || reason == NA_OUTCOME_REASON_OBJECT_REVOKED ||
            reason == NA_OUTCOME_REASON_OPERATION_DEADLINE || reason == NA_OUTCOME_REASON_CANCEL_REQUESTED ||
            reason == NA_OUTCOME_REASON_RESPONDER_ABANDONED || reason == NA_OUTCOME_REASON_BROKER_FAILURE ||
-           reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION || reason == NA_OUTCOME_REASON_UNSUPPORTED;
+           reason == NA_OUTCOME_REASON_PROTOCOL_VIOLATION || reason == NA_OUTCOME_REASON_UNSUPPORTED ||
+           reason == NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN;
 }
 
 std::uint64_t invocation::signals() const noexcept
@@ -411,8 +415,8 @@ bool invocation::complete_reply(const std::uint8_t *bytes, std::uint64_t byte_co
     resource *owned_resources = nullptr;
     if (resource_count != 0)
     {
-        owned_resources = static_cast<resource *>(
-            control_allocator_.allocate(sizeof(resource) * resource_count, alignof(resource)));
+        owned_resources =
+            static_cast<resource *>(control_allocator_.allocate(sizeof(resource) * resource_count, alignof(resource)));
         if (owned_resources == nullptr)
         {
             if (copy != nullptr)

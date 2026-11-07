@@ -11,14 +11,16 @@ pub mod transport;
 #[cfg(feature = "naos")]
 use naos_sys as sys;
 #[cfg(feature = "naos")]
+use smallvec::SmallVec;
+#[cfg(feature = "naos")]
 pub use server::{
     DispatchOutcome, EXECUTION_NONE, EXECUTION_NOT_DELIVERED, EXECUTION_OUTCOME_UNKNOWN,
     FailInvocation, IncomingRequest, MethodReply, OptionalResponder, REASON_BROKER_FAILURE,
-    REASON_CANCEL_REQUESTED, REASON_NONE, REASON_OBJECT_REVOKED, REASON_OPERATION_DEADLINE,
-    REASON_PEER_CLOSED, REASON_PROTOCOL_VIOLATION, REASON_REQUEST_DISCARDED,
-    REASON_RESPONDER_ABANDONED, REASON_UNSUPPORTED, ReplySink, ResponderHandle,
-    create_endpoints_from_descriptor, receive_request, reject_protocol_violation, reject_request,
-    reject_unsupported,
+    REASON_CANCEL_REQUESTED, REASON_HARDWARE_OUTCOME_UNKNOWN, REASON_NONE, REASON_OBJECT_REVOKED,
+    REASON_OPERATION_DEADLINE, REASON_PEER_CLOSED, REASON_PROTOCOL_VIOLATION,
+    REASON_REQUEST_DISCARDED, REASON_RESPONDER_ABANDONED, REASON_UNSUPPORTED, ReplySink,
+    ResponderHandle, create_endpoints_from_descriptor, receive_request, reject_protocol_violation,
+    reject_request, reject_unsupported,
 };
 
 #[cfg(feature = "alloc")]
@@ -432,7 +434,7 @@ pub fn submit_invocation(
     target: &ProtocolClientEndpoint,
     method_id: u64,
     request: &[u8],
-    resources: ResourceTable<'_>,
+    resources: ResourceTransferBuilder<'_>,
     operation_budget: u64,
 ) -> Result<Invocation, CallError> {
     let dispositions = resources.as_slice();
@@ -616,6 +618,7 @@ impl ResourceSlot {
 }
 
 pub const MAX_RESOURCES: usize = 64;
+const INLINE_RESOURCE_CAPACITY: usize = 4;
 
 /// Validate a generated resource slot against the neutral Linux/NaOS
 /// transport descriptor.  The platform adapter performs the authoritative
@@ -683,12 +686,18 @@ pub fn validate_resource_slot(
 pub enum ResourceError {
     Full,
     InvalidHandle,
+    AllocationFailed,
 }
 
 #[cfg(feature = "naos")]
-pub struct ResourceTable<'a> {
-    dispositions: [sys::ResourceDisposition; MAX_RESOURCES],
-    owners: [Option<OwnedHandle>; MAX_RESOURCES],
+/// Rust-side RAII builder for the resources attached to one RPC.
+///
+/// Its storage layout is private to Rust. The cross-language syscall contract
+/// is the contiguous `ResourceDisposition` prefix returned by `as_slice()`
+/// together with its length.
+pub struct ResourceTransferBuilder<'a> {
+    dispositions: SmallVec<[sys::ResourceDisposition; INLINE_RESOURCE_CAPACITY]>,
+    owners: SmallVec<[Option<OwnedHandle>; INLINE_RESOURCE_CAPACITY]>,
     len: usize,
     borrowed: core::marker::PhantomData<&'a OwnedHandle>,
 }
@@ -699,7 +708,7 @@ pub struct ResourceTable<'a> {
 /// unclaimed handle on drop.
 #[cfg(feature = "naos")]
 pub struct ReceivedResources {
-    owners: [Option<OwnedHandle>; MAX_RESOURCES],
+    owners: SmallVec<[Option<OwnedHandle>; INLINE_RESOURCE_CAPACITY]>,
     len: usize,
 }
 
@@ -720,11 +729,18 @@ impl ReceivedResources {
             return Err(ResourceError::InvalidHandle);
         }
         let mut result = Self {
-            owners: core::array::from_fn(|_| None),
+            owners: SmallVec::new(),
             len: 0,
         };
+        if result.owners.try_reserve(handles.len()).is_err() {
+            for handle in handles.iter().copied() {
+                let _ = unsafe { sys::_na_handle_close(handle) };
+            }
+            return Err(ResourceError::AllocationFailed);
+        }
         for (index, handle) in handles.iter().copied().enumerate() {
-            result.owners[index] = Some(unsafe { OwnedHandle::from_raw(handle) });
+            debug_assert_eq!(index, result.owners.len());
+            result.owners.push(Some(unsafe { OwnedHandle::from_raw(handle) }));
             result.len += 1;
         }
         Ok(result)
@@ -814,11 +830,11 @@ pub fn handle_info(handle: sys::Handle) -> Result<sys::HandleInfo, CallError> {
 }
 
 #[cfg(feature = "naos")]
-impl<'a> ResourceTable<'a> {
+impl<'a> ResourceTransferBuilder<'a> {
     pub fn new() -> Self {
         Self {
-            dispositions: [sys::ResourceDisposition::default(); MAX_RESOURCES],
-            owners: core::array::from_fn(|_| None),
+            dispositions: SmallVec::new(),
+            owners: SmallVec::new(),
             len: 0,
             borrowed: core::marker::PhantomData,
         }
@@ -880,14 +896,22 @@ impl<'a> ResourceTable<'a> {
         if self.len == MAX_RESOURCES {
             return Err(ResourceError::Full);
         }
+        self.dispositions
+            .try_reserve(1)
+            .map_err(|_| ResourceError::AllocationFailed)?;
+        self.owners
+            .try_reserve(1)
+            .map_err(|_| ResourceError::AllocationFailed)?;
         let slot = ResourceSlot(self.len as u32);
+        self.dispositions.push(sys::ResourceDisposition::default());
+        self.owners.push(None);
         self.len += 1;
         Ok(slot)
     }
 }
 
 #[cfg(feature = "naos")]
-impl Default for ResourceTable<'_> {
+impl Default for ResourceTransferBuilder<'_> {
     fn default() -> Self {
         Self::new()
     }

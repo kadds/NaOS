@@ -159,6 +159,29 @@ void *zones::allocate(size_t size, size_t align) noexcept
     KLOG_PANIC("Kernel OOM allocate pages {}", pages);
 }
 
+void *zones::try_allocate(size_t size, size_t align) noexcept
+{
+    if (size == 0 || align == 0 || (align & (align - 1)) != 0 || size > ~size_t{0} - (memory::page_size - 1))
+        return nullptr;
+    const size_t rounded_size = align_up(size, memory::page_size);
+    const u64 pages = rounded_size / memory::page_size;
+    for (int index = 0; index < active_zones(); ++index)
+    {
+        const phy_addr_t physical = zone_array_[index].malloc(pages);
+        if (physical == nullptr)
+            continue;
+        void *const virtual_address = pa2va(physical);
+        if ((reinterpret_cast<u64>(physical()) & (align - 1)) != 0 ||
+            (reinterpret_cast<u64>(virtual_address) & (align - 1)) != 0)
+        {
+            zone_array_[index].free(physical);
+            continue;
+        }
+        return virtual_address;
+    }
+    return nullptr;
+}
+
 void zones::deallocate(void *ptr) noexcept
 {
     phy_addr_t p = va2pa(ptr);

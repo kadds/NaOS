@@ -4,6 +4,7 @@
 #include "kernel/cpu.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
+#include "kernel/schedulers/thread_transition.hpp"
 #include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
@@ -104,132 +105,68 @@ void completely_fair_scheduler::add(thread_t *thread)
     task_list->runable_list.insert(cfs_thread_t(thread));
 }
 
+namespace
+{
+struct cfs_queues
+{
+    cpu_task_list_cf_t &cpu;
+    bool remove_ready(thread_t *thread)
+    {
+        bool removed = false;
+        for (auto it = cpu.runable_list.begin(); it != cpu.runable_list.end();)
+        {
+            if (it->thread == thread)
+            {
+                it = cpu.runable_list.remove(it);
+                removed = true;
+            }
+            else
+                ++it;
+        }
+        return removed;
+    }
+    void remove_blocked(thread_t *thread)
+    {
+        for (auto it = cpu.block_list.begin(); it != cpu.block_list.end();)
+            if (*it == thread)
+                it = cpu.block_list.remove(it);
+            else
+                ++it;
+    }
+    void add_ready(thread_t *thread) { cpu.runable_list.insert(cfs_thread_t(thread)); }
+    void add_blocked(thread_t *thread)
+    {
+        if (cpu.block_list.find(thread) == cpu.block_list.end())
+            cpu.block_list.push_back(thread);
+    }
+};
+} // namespace
+
 void completely_fair_scheduler::remove(thread_t *thread)
 {
-    auto task_list = get_cpu_task_list();
-
-    uctx::UninterruptibleContext icu;
-    auto node = task_list->block_list.find(thread);
-    if (node != task_list->block_list.end())
-    {
-        task_list->block_list.remove(node);
-    }
-    else
-    {
-        auto it = find_thread(task_list, thread);
-        if (it != task_list->runable_list.end())
-        {
-            task_list->runable_list.remove(it);
-        }
-        else
-        {
-            // Exit cleanup can run after the scheduler has detached a ready
-            // thread but before its state is marked destroy. Removal is
-            // therefore idempotent: there is no scheduler node left to
-            // remove, but the exit callback still owns schedule_data.
-        }
-    }
-
-    auto scher_data = get_schedule_data(thread);
+    uctx::UninterruptibleContext guard;
+    cfs_queues queues{*get_cpu_task_list()};
+    queues.remove_ready(thread);
+    queues.remove_blocked(thread);
+    auto *data = get_schedule_data(thread);
     thread->schedule_data = nullptr;
-    memory::Delete<>(memory::KernelCommonAllocatorV, scher_data);
-} // namespace task::scheduler
+    if (data != nullptr)
+        memory::Delete<>(memory::KernelCommonAllocatorV, data);
+}
 
 void completely_fair_scheduler::update_state(thread_t *thread, thread_state state)
 {
-    auto task_list = get_cpu_task_list();
-    uctx::UninterruptibleContext icu;
+    uctx::UninterruptibleContext guard;
+    cfs_queues queues{*get_cpu_task_list()};
+    if (!detail::update_state(thread, state, queues))
+        KLOG_PANIC("Invalid CFS transition: {} -> {}", static_cast<u64>(thread->state), static_cast<u64>(state));
+}
 
-    if (state == thread_state::ready)
-    {
-        if (thread->attributes & thread_attributes::job_control_stopped)
-            return;
-        if (thread->process->pid == 0)
-        {
-            thread->state = thread_state::ready;
-            return;
-        }
-        if (thread->state == thread_state::stop)
-        {
-            auto node = task_list->block_list.find(thread);
-            if (node != task_list->block_list.end())
-            {
-                thread->state = state;
-                task_list->block_list.remove(node);
-                thread->attributes &= ~(thread_attributes::block_to_stop);
-                task_list->runable_list.insert(cfs_thread_t(thread));
-                return;
-            }
-        }
-        else if (thread->state == thread_state::running)
-        {
-            thread->attributes &= ~(thread_attributes::block_to_stop);
-            return;
-        }
-        else if (thread->state == thread_state::ready)
-        {
-            KLOG_DEBUG("task ready to ready pid {} tid {}", thread->process->pid, thread->tid);
-            // ready to ready is safe
-            return;
-        }
-    }
-    else if (state == thread_state::stop)
-    {
-        if (thread->state == thread_state::running)
-        {
-            thread->attributes |= thread_attributes::block_to_stop | thread_attributes::need_schedule;
-
-            return;
-        }
-        else if (thread->state == thread_state::ready)
-        {
-            auto it = find_thread(task_list, thread);
-            if (it != task_list->runable_list.end())
-            {
-                thread->state = state;
-                task_list->runable_list.remove(it);
-                task_list->block_list.push_back(thread);
-                return;
-            }
-            if (thread->attributes & thread_attributes::exit_pending)
-            {
-                // An exit callback may race the scheduler handoff after the
-                // thread has left the runnable tree but before its state is
-                // published as destroy. Keep the removal path idempotent;
-                // scheduler::remove will release schedule_data below.
-                thread->state = state;
-                return;
-            }
-        }
-        else if (thread->state == task::thread_state::stop)
-        {
-            return;
-        }
-    }
-    else if (state == thread_state::sched_switch_to_ready)
-    {
-        if (thread->process->pid == 0)
-        {
-            thread->state = thread_state::ready;
-            return;
-        }
-
-        if (thread->attributes & thread_attributes::block_to_stop)
-        {
-            thread->state = thread_state::stop;
-            task_list->block_list.push_back(thread);
-        }
-        else
-        {
-            if (thread->state == thread_state::running)
-            {
-                thread->state = thread_state::ready;
-                task_list->runable_list.insert(cfs_thread_t(thread));
-            }
-        }
-        return;
-    }
-    KLOG_PANIC("Unreachable control flow. CFS thread state: {}, to state: {}", (int)thread->state, (int)state);
+void completely_fair_scheduler::prepare_switch_out(thread_t *thread)
+{
+    uctx::UninterruptibleContext guard;
+    cfs_queues queues{*get_cpu_task_list()};
+    detail::prepare_switch_out(thread, queues);
 }
 
 void completely_fair_scheduler::on_migrate(thread_t *thread)
@@ -252,13 +189,29 @@ thread_t *completely_fair_scheduler::pick_available_task()
 {
     auto task_list = get_cpu_task_list();
 
+    while (!task_list->runable_list.empty() && !detail::dispatchable(task_list->runable_list.front().thread))
+        task_list->runable_list.remove(task_list->runable_list.begin());
     if (task_list->runable_list.empty())
-    {
         return cpu::current().get_idle_task();
+    auto first = task_list->runable_list.begin();
+    const auto thd = *first;
+    if (thd.thread == nullptr)
+        KLOG_PANIC("CFS runnable entry has a null thread pointer");
+    const auto *schedule_data = thd.thread->schedule_data;
+    if (schedule_data == nullptr || reinterpret_cast<u64>(schedule_data) == ~u64{0})
+    {
+        KLOG_PANIC("CFS runnable entry has invalid scheduler data: thread={} data={} process={} tid={} state={} "
+                   "cpuid={} current={}",
+                   reinterpret_cast<u64>(thd.thread), reinterpret_cast<u64>(schedule_data),
+                   reinterpret_cast<u64>(thd.thread->process), static_cast<u64>(thd.thread->tid),
+                   static_cast<u64>(thd.thread->state), static_cast<u64>(thd.thread->cpuid),
+                   reinterpret_cast<u64>(current()));
     }
-    auto thd = task_list->runable_list.front();
-    task_list->runable_list.remove(thd);
-    if (!task_list->runable_list.empty())
+    // vtime is the ordering key and changes while a task runs. Remove this
+    // exact node before returning it instead of re-searching with its mutable
+    // key, which could leave a second runnable entry for the selected thread.
+    task_list->runable_list.remove(first);
+    if (!task_list->runable_list.empty() && detail::dispatchable(task_list->runable_list.front().thread))
     {
         kassert(get_schedule_data(thd.thread)->vtime <=
                     get_schedule_data(task_list->runable_list.front().thread)->vtime,
@@ -276,7 +229,7 @@ bool completely_fair_scheduler::schedule()
     {
         uctx::UninterruptibleContext icu;
 
-        cur->scheduler->update_state(cur, thread_state::sched_switch_to_ready);
+        cur->scheduler->prepare_switch_out(cur);
 
         cur->attributes &= ~task::thread_attributes::need_schedule; ///< clean flags
 
@@ -321,7 +274,7 @@ void completely_fair_scheduler::schedule_tick()
             uctx::UninterruptibleContext icu;
             auto next = task_list->runable_list.front();
 
-            if (cur->process->pid == 0 || get_schedule_data(next.thread)->vtime <= scher_data->vtime)
+            if (cur == cpu::current().get_idle_task() || get_schedule_data(next.thread)->vtime <= scher_data->vtime)
                 cur->attributes |= thread_attributes::need_schedule;
         }
     }

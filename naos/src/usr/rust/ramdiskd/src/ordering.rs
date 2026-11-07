@@ -206,7 +206,10 @@ mod tests {
         let write = domain.admit_write();
         domain.complete_write(write, Err(-5)); // EIO
         let flush = domain.admit_flush();
-        assert_eq!(domain.flush_decision(flush), FlushDecision::Failed { errno: -5 });
+        assert_eq!(
+            domain.flush_decision(flush),
+            FlushDecision::Failed { errno: -5 }
+        );
         assert_eq!(domain.poisoned_with(), Some(-5));
     }
 
@@ -234,7 +237,10 @@ mod tests {
         let write = domain.admit_write();
         domain.complete_write(write, Err(-19));
         let flush = domain.admit_flush();
-        assert_eq!(domain.flush_decision(flush), FlushDecision::Failed { errno: -19 });
+        assert_eq!(
+            domain.flush_decision(flush),
+            FlushDecision::Failed { errno: -19 }
+        );
     }
 
     /// Only writes admitted before the flush poison it; a failure that happened
@@ -260,7 +266,10 @@ mod tests {
         domain.complete_write(second, Err(-19));
         domain.complete_write(first, Err(-5));
         let flush = domain.admit_flush();
-        assert_eq!(domain.flush_decision(flush), FlushDecision::Failed { errno: -5 });
+        assert_eq!(
+            domain.flush_decision(flush),
+            FlushDecision::Failed { errno: -5 }
+        );
     }
 
     /// A completion for a sequence that was never admitted must not invent

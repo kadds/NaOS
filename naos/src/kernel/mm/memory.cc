@@ -10,6 +10,7 @@
 #include "kernel/kernel.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/log.hpp"
+#include "kernel/mm/io_mapping_allocator.hpp"
 #include "kernel/mm/msg_queue.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/mm/slab.hpp"
@@ -231,12 +232,12 @@ void init(kernel_start_args *args, u64 fix_memory_limit)
         zone *z = global_zones->at(zone_id);
         z = new (z) zone(range.beg, range.end, nullptr, nullptr);
         KLOG_DEBUG("Memory zone index {}, {}-{} num of page {}", zone_id, log::hex(range.beg.get()),
-                  log::hex(range.end.get()), z->total_pages());
+                   log::hex(range.end.get()), z->total_pages());
     }
     global_zones->tag_alloc(phy_addr_t::from(0x100000), va2pa(end_used_memory_addr));
-    for (u64 i = 0; i < args->named_module_count; i++)
+    for (u64 i = 0; i < args->boot_module_count; i++)
     {
-        const auto &module = args->named_modules[i];
+        const auto &module = args->boot_modules[i];
         if (module.size == 0)
             continue;
         const auto module_start = align_down(phy_addr_t::from(module.start), page_size);
@@ -318,33 +319,28 @@ void *kmalloc(u64 size, u64 align)
     {
         KLOG_PANIC("align is larger than size");
     }
-    constexpr int tmp = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]) - 1;
-    if (unlikely(size > kmalloc_fixed_slab_size[tmp].size))
+    constexpr u64 slab_count = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]);
+    if (unlikely(size > kmalloc_fixed_slab_size[slab_count - 1].size))
     {
         KLOG_PANIC("allocate size is too large");
     }
 
-    u64 left = 0, right = sizeof(kmalloc_fixed_slab_size) / sizeof(kmalloc_fixed_slab_size[0]), mid = 0;
-
+    u64 left = 0;
+    u64 right = slab_count;
     while (left < right)
     {
-        mid = left + (right - left) / 2;
-        if (kmalloc_fixed_slab_size[mid].size >= size)
-        {
-            if (kmalloc_fixed_slab_size[mid - 1].size < size)
-            {
-                break;
-            }
-            right = mid;
-        }
-        else
-        {
+        const u64 mid = left + (right - left) / 2;
+        if (kmalloc_fixed_slab_size[mid].size < size)
             left = mid + 1;
-        }
+        else
+            right = mid;
     }
-    kassert(kmalloc_fixed_slab_size[mid].size >= size, "Kernel malloc check failed!");
+    if (unlikely(left >= slab_count || kmalloc_fixed_slab_size[left].size < size))
+    {
+        KLOG_PANIC("failed to find a slab class for allocation size={}", size);
+    }
 
-    SlabObjectAllocator allocator(kmalloc_fixed_slab_size[mid].group);
+    SlabObjectAllocator allocator(kmalloc_fixed_slab_size[left].group);
     auto ptr = allocator.allocate(size, align);
     kassert((reinterpret_cast<u64>(ptr) & (align - 1)) == 0, "check alignment fail");
     return ptr;
@@ -430,14 +426,7 @@ void MemoryAllocator::deallocate(void *p) noexcept
 std::atomic_uint64_t io_map_bottom_ptr = io_map_bottom_address;
 u64 alloc_io_mmap_address(u64 bytes, u64 align)
 {
-    u64 base, new_base;
-    do
-    {
-        base = io_map_bottom_ptr.load();
-        base = align_up(base, align);
-        new_base = base + bytes;
-    } while (!io_map_bottom_ptr.compare_exchange_strong(base, new_base));
-    return base;
+    return detail::reserve_io_mapping_address(io_map_bottom_ptr, bytes, align);
 }
 
 } // namespace memory

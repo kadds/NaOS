@@ -6,23 +6,22 @@
 
 use std::vec::Vec;
 
+use naos_idl::ResourceSlot;
 use naos_idl::block_device as device_idl;
 use naos_idl::block_device_factory as factory_idl;
-use naos_idl::{CodecError, ResourceSlot};
-use naos_idl::transport::RpcRequestOwned;
+use naos_idl::transport::{RpcDispatchResult, RpcMethodReply, RpcOutcome};
 use ramdiskd::core::{
-    DeviceLease, RamDisk, BLOCK_SIZE, MAX_IN_FLIGHT, MAX_TRANSFER_BLOCKS, RIGHT_BLOCK_DISCARD,
-    RIGHT_BLOCK_FLUSH, RIGHT_BLOCK_INSPECT, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE,
+    BLOCK_SIZE, DeviceLease, MAX_IN_FLIGHT, MAX_TRANSFER_BLOCKS, RIGHT_BLOCK_DISCARD,
+    RIGHT_BLOCK_FLUSH, RIGHT_BLOCK_INSPECT, RIGHT_BLOCK_READ, RIGHT_BLOCK_WRITE, RamDisk,
 };
+use servicekit::Context;
 use servicekit::boot;
 #[cfg(target_os = "linux")]
 use servicekit::boot::BootError;
-use servicekit::server::{Request, Response, ServeHandler, Server, ServerError};
-use servicekit::Context;
+use servicekit::server::{EndpointResource, Request, Response, ServeHandler, Server, ServerError};
 
 #[cfg(target_os = "linux")]
 const DEFAULT_BYTES: usize = 69_632 * 512;
-const WIRE_BYTES: usize = 65_536;
 const ERR_EINVAL: i64 = -22;
 const ERR_EIO: i64 = -5;
 const ERR_EACCES: i64 = -13;
@@ -30,53 +29,6 @@ const ERR_EACCES: i64 = -13;
 struct DeviceLeaseBinding {
     target_id: u64,
     lease: DeviceLease,
-}
-
-fn validate_factory_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    match request.method_id {
-        factory_idl::METHOD_GET_INFO => {
-            let value = factory_idl::decode_get_info_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            factory_idl::validate_get_info_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        factory_idl::METHOD_ACQUIRE => {
-            let value = factory_idl::decode_acquire_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            factory_idl::validate_acquire_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        _ => Err(-38),
-    }
-}
-
-fn validate_device_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    match request.method_id {
-        device_idl::METHOD_GET_INFO => {
-            let value = device_idl::decode_get_info_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            device_idl::validate_get_info_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        device_idl::METHOD_READ => {
-            let value = device_idl::decode_read_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            device_idl::validate_read_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        device_idl::METHOD_WRITE => {
-            let value = device_idl::decode_write_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            device_idl::validate_write_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        device_idl::METHOD_FLUSH => {
-            let value = device_idl::decode_flush_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            device_idl::validate_flush_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        device_idl::METHOD_DISCARD => {
-            let value = device_idl::decode_discard_request(&request.payload).map_err(|_| ERR_EINVAL)?;
-            device_idl::validate_discard_request_transport_resources(&value, &request.resources)
-                .map_err(|_| ERR_EINVAL)
-        }
-        _ => Err(-38),
-    }
 }
 
 /// Device ordering state: the admission ledger plus the progress signal.
@@ -227,46 +179,6 @@ async fn await_flush(ordering: &Ordering, sequence: u64) -> Result<(), i64> {
     }
 }
 
-/// Which lock a request needs.
-///
-/// Derived from the protocol and method, never from runtime state, so the
-/// dispatcher can take the lock before any work starts and the acquisition
-/// order is the arrival order.
-enum LockKind {
-    /// Observes the medium only; may run alongside other readers.
-    Shared,
-    /// Applies bytes: overlaps other writes but applies in admission order, so
-    /// a `flush` admitted around it can wait for it on the ordering ledger.
-    Write,
-    /// Waits for the writes admitted before it, then acts on the medium alone.
-    Flush,
-    /// Reads or changes lease state under the medium lock for its whole
-    /// duration; runs alone.
-    Exclusive,
-}
-
-fn lock_kind(request: &Request) -> LockKind {
-    if request.protocol_uuid == factory_idl::PROTOCOL_UUID {
-        return if request.method_id == factory_idl::METHOD_ACQUIRE {
-            LockKind::Exclusive
-        } else {
-            LockKind::Shared
-        };
-    }
-    match request.method_id {
-        device_idl::METHOD_GET_INFO | device_idl::METHOD_READ => LockKind::Shared,
-        device_idl::METHOD_WRITE => LockKind::Write,
-        device_idl::METHOD_FLUSH => LockKind::Flush,
-        _ => LockKind::Exclusive,
-    }
-}
-
-/// Whether a request mints an endpoint and therefore needs the server half.
-fn needs_server(request: &Request) -> bool {
-    request.protocol_uuid == factory_idl::PROTOCOL_UUID
-        && request.method_id == factory_idl::METHOD_ACQUIRE
-}
-
 impl Manager {
     fn new(disk: RamDisk) -> Self {
         Self {
@@ -313,13 +225,6 @@ impl Manager {
     }
 }
 
-fn encoded(encode: impl FnOnce(&mut [u8]) -> Result<usize, CodecError>) -> Vec<u8> {
-    let mut wire = vec![0; WIRE_BYTES];
-    let length = encode(&mut wire).expect("generated response fits protocol limit");
-    wire.truncate(length);
-    wire
-}
-
 fn fail(request: &Request, errno: i64) -> Response {
     Response::error(request, errno)
 }
@@ -358,8 +263,11 @@ fn region_failure(error: ServerError) -> i64 {
 
 /// Read path: observes the medium only, so a shared lock is enough and the body
 /// may run beside other read bodies.
-fn serve_read_request(shared: &Shared, request: &Request) -> Result<(), i64> {
-    let value = device_idl::decode_read_request(&request.payload).map_err(|_| ERR_EINVAL)?;
+fn serve_read_request(
+    shared: &Shared,
+    request: &Request,
+    value: device_idl::read_request,
+) -> Result<(), i64> {
     if value.flags != 0 {
         return Err(ERR_EINVAL);
     }
@@ -373,7 +281,10 @@ fn serve_read_request(shared: &Shared, request: &Request) -> Result<(), i64> {
     if !request.validate_memory(value.buffer, false) {
         return Err(ERR_EACCES);
     }
-    let bytes = value.block_count.checked_mul(BLOCK_SIZE).ok_or(ERR_EINVAL)?;
+    let bytes = value
+        .block_count
+        .checked_mul(BLOCK_SIZE)
+        .ok_or(ERR_EINVAL)?;
     let length = usize::try_from(bytes).map_err(|_| ERR_EINVAL)?;
     request
         .with_write_memory(value.buffer, 0, length, |data| {
@@ -405,8 +316,8 @@ fn prepare_write(
     shared: &Shared,
     ordering: &Ordering,
     request: &Request,
+    value: &device_idl::write_request,
 ) -> Result<PreparedWrite, i64> {
-    let value = device_idl::decode_write_request(&request.payload).map_err(|_| ERR_EINVAL)?;
     let lease = target_lease(shared, request, RIGHT_BLOCK_WRITE)?;
     if value.block_count == 0 || value.block_count > MAX_TRANSFER_BLOCKS {
         return Err(ERR_EINVAL);
@@ -414,7 +325,10 @@ fn prepare_write(
     if !request.validate_memory(value.buffer, true) {
         return Err(ERR_EACCES);
     }
-    let bytes = value.block_count.checked_mul(BLOCK_SIZE).ok_or(ERR_EINVAL)?;
+    let bytes = value
+        .block_count
+        .checked_mul(BLOCK_SIZE)
+        .ok_or(ERR_EINVAL)?;
     let length = usize::try_from(bytes).map_err(|_| ERR_EINVAL)?;
     // Admitted: this is the write's place in the device order, taken before any
     // side effect so a later flush can name exactly the writes it must observe.
@@ -435,22 +349,21 @@ fn prepare_write(
 /// Recording where it ended is the caller's step, because the medium lock must
 /// be released first: a `flush` woken by the record would otherwise race for a
 /// lock this write still holds.
-fn apply_write(shared: &mut Shared, request: &Request, prepared: &PreparedWrite) -> Result<(), i64> {
+fn apply_write(
+    shared: &mut Shared,
+    request: &Request,
+    prepared: &PreparedWrite,
+) -> Result<(), i64> {
     request
-        .with_read_memory(
-            prepared.buffer,
-            0,
-            prepared.length,
-            |data| {
-                shared.disk.write_blocks(
-                    prepared.lease,
-                    prepared.lba,
-                    prepared.block_count,
-                    prepared.flags,
-                    data,
-                )
-            },
-        )
+        .with_read_memory(prepared.buffer, 0, prepared.length, |data| {
+            shared.disk.write_blocks(
+                prepared.lease,
+                prepared.lba,
+                prepared.block_count,
+                prepared.flags,
+                data,
+            )
+        })
         .map_err(region_failure)
         .and_then(|result| result)
 }
@@ -460,6 +373,7 @@ fn prepare_flush(
     shared: &Shared,
     ordering: &Ordering,
     request: &Request,
+    _value: &device_idl::flush_request,
 ) -> Result<(DeviceLease, u64), i64> {
     if !request.payload.is_empty() || !request.resources.is_empty() || !request.bulk.is_empty() {
         return Err(ERR_EINVAL);
@@ -470,221 +384,403 @@ fn prepare_flush(
     Ok((lease, ordering.admit_flush()))
 }
 
+fn service_outcome(protocol_error: i64) -> RpcOutcome {
+    RpcOutcome {
+        execution: 0,
+        reason: 0,
+        protocol_error,
+    }
+}
+
+enum AdmissionPlan {
+    Shared(tokio::sync::OwnedRwLockReadGuard<Shared>),
+    Write(PreparedWrite),
+    Flush(DeviceLease, u64),
+    Exclusive(tokio::sync::OwnedRwLockWriteGuard<Shared>),
+}
+
+enum AdmittedCall {
+    Factory(factory_idl::DecodedServiceKitRequest),
+    Device(device_idl::DecodedServiceKitRequest),
+}
+
+struct RequestAdmission {
+    plan: AdmissionPlan,
+    call: AdmittedCall,
+}
+
+struct RamdiskAdmission<'a> {
+    manager: &'a Manager,
+}
+
+impl factory_idl::BlockDeviceFactoryServiceKitAdmission<&Request> for RamdiskAdmission<'_> {
+    type Admission = AdmissionPlan;
+
+    async fn get_info(
+        &mut self,
+        _context: &mut &Request,
+        _request: &factory_idl::get_info_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        Ok(Some(AdmissionPlan::Shared(
+            self.manager.lock_shared().await,
+        )))
+    }
+
+    async fn acquire(
+        &mut self,
+        _context: &mut &Request,
+        _request: &factory_idl::acquire_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        Ok(Some(AdmissionPlan::Exclusive(
+            self.manager.lock_exclusive().await,
+        )))
+    }
+}
+
+impl device_idl::BlockDeviceServiceKitAdmission<&Request> for RamdiskAdmission<'_> {
+    type Admission = AdmissionPlan;
+
+    async fn get_info(
+        &mut self,
+        _context: &mut &Request,
+        _request: &device_idl::get_info_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        Ok(Some(AdmissionPlan::Shared(
+            self.manager.lock_shared().await,
+        )))
+    }
+
+    async fn read(
+        &mut self,
+        _context: &mut &Request,
+        _request: &device_idl::read_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        Ok(Some(AdmissionPlan::Shared(
+            self.manager.lock_shared().await,
+        )))
+    }
+
+    async fn write(
+        &mut self,
+        context: &mut &Request,
+        request: &device_idl::write_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        let prepared = {
+            let shared = self.manager.lock_shared().await;
+            prepare_write(&shared, &self.manager.ordering, *context, request)
+        }
+        .map_err(service_outcome)?;
+        Ok(Some(AdmissionPlan::Write(prepared)))
+    }
+
+    async fn flush(
+        &mut self,
+        context: &mut &Request,
+        request: &device_idl::flush_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        let prepared = {
+            let shared = self.manager.lock_shared().await;
+            prepare_flush(&shared, &self.manager.ordering, *context, request)
+        }
+        .map_err(service_outcome)?;
+        Ok(Some(AdmissionPlan::Flush(prepared.0, prepared.1)))
+    }
+
+    async fn discard(
+        &mut self,
+        _context: &mut &Request,
+        _request: &device_idl::discard_request,
+    ) -> Result<Option<Self::Admission>, RpcOutcome> {
+        Ok(Some(AdmissionPlan::Exclusive(
+            self.manager.lock_exclusive().await,
+        )))
+    }
+}
+
+async fn admit_request(
+    manager: &Manager,
+    request: &Request,
+) -> Result<RequestAdmission, RpcOutcome> {
+    let rpc_request = request.rpc_request();
+    let mut context = request;
+    let mut admission = RamdiskAdmission { manager };
+    let result = if rpc_request.protocol_uuid == factory_idl::PROTOCOL_UUID {
+        let decoded = factory_idl::decode_servicekit_request(&rpc_request)?;
+        let plan =
+            factory_idl::admit_servicekit_request(&decoded, &mut context, &mut admission).await?;
+        Ok((AdmittedCall::Factory(decoded), plan))
+    } else if rpc_request.protocol_uuid == device_idl::PROTOCOL_UUID {
+        let decoded = device_idl::decode_servicekit_request(&rpc_request)?;
+        let plan =
+            device_idl::admit_servicekit_request(&decoded, &mut context, &mut admission).await?;
+        Ok((AdmittedCall::Device(decoded), plan))
+    } else {
+        Err(service_outcome(ERR_EACCES))
+    };
+    let (call, plan) = result?;
+    let plan = plan.ok_or_else(|| service_outcome(ERR_EIO))?;
+    Ok(RequestAdmission { plan, call })
+}
+
+struct SharedProtocol<'a> {
+    shared: &'a Shared,
+}
+
+impl factory_idl::BlockDeviceFactoryServiceKitHandler<&Request> for SharedProtocol<'_> {
+    type Resource = EndpointResource;
+
+    async fn get_info<'s>(
+        &'s mut self,
+        request: &mut &Request,
+        _value: factory_idl::get_info_request,
+    ) -> Result<RpcMethodReply<factory_idl::get_info_response, Self::Resource>, RpcOutcome> {
+        if request.target.is_some() || !request.bulk.is_empty() {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        Ok(RpcMethodReply::new(factory_idl::get_info_response {
+            value: self.shared.disk.medium_info(),
+        }))
+    }
+
+    async fn acquire<'s>(
+        &'s mut self,
+        _request: &mut &Request,
+        _value: factory_idl::acquire_request,
+    ) -> Result<RpcMethodReply<factory_idl::acquire_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+}
+
+impl device_idl::BlockDeviceServiceKitHandler<&Request> for SharedProtocol<'_> {
+    type Resource = EndpointResource;
+
+    async fn get_info<'s>(
+        &'s mut self,
+        request: &mut &Request,
+        _value: device_idl::get_info_request,
+    ) -> Result<RpcMethodReply<device_idl::get_info_response, Self::Resource>, RpcOutcome> {
+        if !request.bulk.is_empty() {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        let lease =
+            target_lease(self.shared, request, RIGHT_BLOCK_INSPECT).map_err(service_outcome)?;
+        Ok(RpcMethodReply::new(device_idl::get_info_response {
+            value: self.shared.disk.block_info(lease),
+        }))
+    }
+
+    async fn read<'s>(
+        &'s mut self,
+        request: &mut &Request,
+        value: device_idl::read_request,
+    ) -> Result<RpcMethodReply<device_idl::read_response, Self::Resource>, RpcOutcome> {
+        serve_read_request(self.shared, request, value).map_err(service_outcome)?;
+        Ok(RpcMethodReply::new(device_idl::read_response {}))
+    }
+
+    async fn write<'s>(
+        &'s mut self,
+        _request: &mut &Request,
+        _value: device_idl::write_request,
+    ) -> Result<RpcMethodReply<device_idl::write_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+
+    async fn flush<'s>(
+        &'s mut self,
+        _request: &mut &Request,
+        _value: device_idl::flush_request,
+    ) -> Result<RpcMethodReply<device_idl::flush_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+
+    async fn discard<'s>(
+        &'s mut self,
+        _request: &mut &Request,
+        _value: device_idl::discard_request,
+    ) -> Result<RpcMethodReply<device_idl::discard_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+}
+
+struct ExclusiveContext<'a> {
+    request: &'a Request,
+    server: &'a mut Server,
+}
+
+struct ExclusiveProtocol<'a> {
+    shared: &'a mut Shared,
+}
+
+impl factory_idl::BlockDeviceFactoryServiceKitHandler<ExclusiveContext<'_>>
+    for ExclusiveProtocol<'_>
+{
+    type Resource = EndpointResource;
+
+    async fn get_info<'s>(
+        &'s mut self,
+        context: &mut ExclusiveContext<'_>,
+        _value: factory_idl::get_info_request,
+    ) -> Result<RpcMethodReply<factory_idl::get_info_response, Self::Resource>, RpcOutcome> {
+        if context.request.target.is_some() || !context.request.bulk.is_empty() {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        Ok(RpcMethodReply::new(factory_idl::get_info_response {
+            value: self.shared.disk.medium_info(),
+        }))
+    }
+
+    async fn acquire<'s>(
+        &'s mut self,
+        context: &mut ExclusiveContext<'_>,
+        value: factory_idl::acquire_request,
+    ) -> Result<RpcMethodReply<factory_idl::acquire_response, Self::Resource>, RpcOutcome> {
+        if context.request.target.is_some()
+            || !context.request.resources.is_empty()
+            || !context.request.bulk.is_empty()
+        {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        let lease = self
+            .shared
+            .disk
+            .acquire(value.start_lba, value.block_count, value.flags)
+            .map_err(service_outcome)?;
+        let resource = context
+            .server
+            .create_endpoint(
+                &device_idl::protocol_descriptor(),
+                0,
+                device_idl::PROTOCOL_SCOPE,
+                RIGHT_BLOCK_INSPECT
+                    | RIGHT_BLOCK_READ
+                    | if lease.read_only {
+                        0
+                    } else {
+                        RIGHT_BLOCK_WRITE | RIGHT_BLOCK_FLUSH | RIGHT_BLOCK_DISCARD
+                    },
+                device_idl::validate_request_transport_resources,
+            )
+            .map_err(|_| service_outcome(ERR_EIO))?;
+        self.shared.devices.push(DeviceLeaseBinding {
+            target_id: resource.descriptor().resource_id,
+            lease,
+        });
+        let mut reply = RpcMethodReply::new(factory_idl::acquire_response {
+            device: ResourceSlot::new(0).expect("resource slot zero is valid"),
+        });
+        reply.resources.push(resource);
+        Ok(reply)
+    }
+}
+
+impl device_idl::BlockDeviceServiceKitHandler<ExclusiveContext<'_>> for ExclusiveProtocol<'_> {
+    type Resource = EndpointResource;
+
+    async fn get_info<'s>(
+        &'s mut self,
+        context: &mut ExclusiveContext<'_>,
+        _value: device_idl::get_info_request,
+    ) -> Result<RpcMethodReply<device_idl::get_info_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        let lease = target_lease(self.shared, context.request, RIGHT_BLOCK_INSPECT)
+            .map_err(service_outcome)?;
+        Ok(RpcMethodReply::new(device_idl::get_info_response {
+            value: self.shared.disk.block_info(lease),
+        }))
+    }
+
+    async fn read<'s>(
+        &'s mut self,
+        context: &mut ExclusiveContext<'_>,
+        value: device_idl::read_request,
+    ) -> Result<RpcMethodReply<device_idl::read_response, Self::Resource>, RpcOutcome> {
+        serve_read_request(self.shared, context.request, value).map_err(service_outcome)?;
+        Ok(RpcMethodReply::new(device_idl::read_response {}))
+    }
+
+    async fn write<'s>(
+        &'s mut self,
+        _context: &mut ExclusiveContext<'_>,
+        _value: device_idl::write_request,
+    ) -> Result<RpcMethodReply<device_idl::write_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+
+    async fn flush<'s>(
+        &'s mut self,
+        _context: &mut ExclusiveContext<'_>,
+        _value: device_idl::flush_request,
+    ) -> Result<RpcMethodReply<device_idl::flush_response, Self::Resource>, RpcOutcome> {
+        Err(service_outcome(ERR_EACCES))
+    }
+
+    async fn discard<'s>(
+        &'s mut self,
+        context: &mut ExclusiveContext<'_>,
+        value: device_idl::discard_request,
+    ) -> Result<RpcMethodReply<device_idl::discard_response, Self::Resource>, RpcOutcome> {
+        if !context.request.resources.is_empty() || !context.request.bulk.is_empty() {
+            return Err(service_outcome(ERR_EINVAL));
+        }
+        let lease = target_lease(self.shared, context.request, RIGHT_BLOCK_DISCARD)
+            .map_err(service_outcome)?;
+        self.shared
+            .disk
+            .discard(lease, value.lba, value.block_count)
+            .map_err(service_outcome)?;
+        Ok(RpcMethodReply::new(device_idl::discard_response {}))
+    }
+}
+
+async fn dispatch_shared(
+    shared: &Shared,
+    request: &Request,
+    call: AdmittedCall,
+) -> naos_idl::transport::RpcDispatchResult<EndpointResource> {
+    let mut context = request;
+    let mut handler = SharedProtocol { shared };
+    match call {
+        AdmittedCall::Factory(decoded) => {
+            factory_idl::dispatch_servicekit_request(decoded, &mut context, &mut handler).await
+        }
+        AdmittedCall::Device(decoded) => {
+            device_idl::dispatch_servicekit_request(decoded, &mut context, &mut handler).await
+        }
+    }
+}
+
+async fn dispatch_exclusive(
+    shared: &mut Shared,
+    server: &mut Server,
+    request: &Request,
+    call: AdmittedCall,
+) -> naos_idl::transport::RpcDispatchResult<EndpointResource> {
+    let mut context = ExclusiveContext { request, server };
+    let mut handler = ExclusiveProtocol { shared };
+    match call {
+        AdmittedCall::Factory(decoded) => {
+            factory_idl::dispatch_servicekit_request(decoded, &mut context, &mut handler).await
+        }
+        AdmittedCall::Device(decoded) => {
+            device_idl::dispatch_servicekit_request(decoded, &mut context, &mut handler).await
+        }
+    }
+}
+
 /// Handle a request that only observes the medium.
 ///
 /// Reachable methods are exactly the ones `lock_kind` routes here, so this
 /// never mutates state and never needs the server.
-fn dispatch_shared(shared: &Shared, request: &Request) -> Response {
-    let expected_revision = if request.protocol_uuid == factory_idl::PROTOCOL_UUID {
-        factory_idl::PROTOCOL_REVISION
-    } else if request.protocol_uuid == device_idl::PROTOCOL_UUID {
-        device_idl::PROTOCOL_REVISION
-    } else {
-        return fail(request, ERR_EACCES);
-    };
-    if request.revision != expected_revision {
-        return fail(request, -71);
-    }
-    if request.protocol_uuid == factory_idl::PROTOCOL_UUID {
-        if request.target.is_some() || !request.resources.is_empty() || !request.bulk.is_empty() {
-            return fail(request, ERR_EINVAL);
-        }
-        return match request.method_id {
-            factory_idl::METHOD_GET_INFO => {
-                if !request.payload.is_empty() {
-                    return fail(request, ERR_EINVAL);
-                }
-                let value = factory_idl::get_info_response {
-                    value: shared.disk.medium_info(),
-                };
-                Response::success(
-                    request,
-                    encoded(|wire| factory_idl::encode_get_info_response(&value, wire)),
-                )
-            }
-            _ => fail(request, -38),
-        };
-    }
-
-    if request.protocol_uuid != device_idl::PROTOCOL_UUID || request.target.is_none() {
-        return fail(request, ERR_EACCES);
-    }
-    match request.method_id {
-        device_idl::METHOD_GET_INFO => {
-            if !request.payload.is_empty()
-                || !request.resources.is_empty()
-                || !request.bulk.is_empty()
-            {
-                return fail(request, ERR_EINVAL);
-            }
-            let lease = match target_lease(shared, request, RIGHT_BLOCK_INSPECT) {
-                Ok(lease) => lease,
-                Err(errno) => return fail(request, errno),
-            };
-            let value = device_idl::get_info_response {
-                value: shared.disk.block_info(lease),
-            };
-            Response::success(
-                request,
-                encoded(|wire| device_idl::encode_get_info_response(&value, wire)),
-            )
-        }
-        device_idl::METHOD_READ => match serve_read_request(shared, request) {
-            Ok(()) => Response::success(request, Vec::new()),
-            Err(errno) => fail(request, errno),
-        },
-        // Unreachable through `lock_kind`.  Kept explicit so a method added to
-        // the schema alone cannot silently land on a shared lock.
-        _ => fail(request, ERR_EACCES),
-    }
-}
-
-/// Handle a request that may change lease state or the medium.
-///
-/// `server` is needed only to mint an endpoint (`acquire`); the byte-level
-/// mutations do not need it.  Every call runs under the exclusive lock, so the
-/// order in which the dispatcher takes that lock is the order these observe.
-fn dispatch_exclusive(
-    shared: &mut Shared,
-    server: Option<&mut Server>,
-    request: &Request,
-) -> Response {
-    let expected_revision = if request.protocol_uuid == factory_idl::PROTOCOL_UUID {
-        factory_idl::PROTOCOL_REVISION
-    } else if request.protocol_uuid == device_idl::PROTOCOL_UUID {
-        device_idl::PROTOCOL_REVISION
-    } else {
-        return fail(request, ERR_EACCES);
-    };
-    if request.revision != expected_revision {
-        return fail(request, -71);
-    }
-    if request.protocol_uuid == factory_idl::PROTOCOL_UUID {
-        if request.target.is_some() || !request.resources.is_empty() || !request.bulk.is_empty() {
-            return fail(request, ERR_EINVAL);
-        }
-        return match request.method_id {
-            factory_idl::METHOD_GET_INFO => {
-                if !request.payload.is_empty() {
-                    return fail(request, ERR_EINVAL);
-                }
-                let value = factory_idl::get_info_response {
-                    value: shared.disk.medium_info(),
-                };
-                Response::success(
-                    request,
-                    encoded(|wire| factory_idl::encode_get_info_response(&value, wire)),
-                )
-            }
-            factory_idl::METHOD_ACQUIRE => {
-                let Ok(value) = factory_idl::decode_acquire_request(&request.payload) else {
-                    return fail(request, ERR_EINVAL);
-                };
-                let Some(server) = server else {
-                    return fail(request, ERR_EIO);
-                };
-                let lease =
-                    match shared
-                        .disk
-                        .acquire(value.start_lba, value.block_count, value.flags)
-                    {
-                        Ok(lease) => lease,
-                        Err(errno) => return fail(request, errno),
-                    };
-                let resource = match server.create_endpoint(
-                    &device_idl::protocol_descriptor(),
-                    0,
-                    device_idl::PROTOCOL_SCOPE,
-                    RIGHT_BLOCK_INSPECT
-                        | RIGHT_BLOCK_READ
-                        | if lease.read_only {
-                            0
-                        } else {
-                            RIGHT_BLOCK_WRITE | RIGHT_BLOCK_FLUSH | RIGHT_BLOCK_DISCARD
-                        },
-                    validate_device_request,
-                ) {
-                    Ok(resource) => resource,
-                    Err(_) => return fail(request, ERR_EIO),
-                };
-                shared.devices.push(DeviceLeaseBinding {
-                    target_id: resource.descriptor().resource_id,
-                    lease,
-                });
-                let slot = ResourceSlot::new(0).expect("resource slot zero is valid");
-                let value = factory_idl::acquire_response { device: slot };
-                let mut response = Response::success(
-                    request,
-                    encoded(|wire| factory_idl::encode_acquire_response(&value, wire)),
-                );
-                response.push_resource(resource);
-                response
-            }
-            _ => fail(request, -38),
-        };
-    }
-
-    if request.protocol_uuid != device_idl::PROTOCOL_UUID || request.target.is_none() {
-        return fail(request, ERR_EACCES);
-    }
-    match request.method_id {
-        device_idl::METHOD_GET_INFO => {
-            if !request.payload.is_empty()
-                || !request.resources.is_empty()
-                || !request.bulk.is_empty()
-            {
-                return fail(request, ERR_EINVAL);
-            }
-            let lease = match target_lease(shared, request, RIGHT_BLOCK_INSPECT) {
-                Ok(lease) => lease,
-                Err(errno) => return fail(request, errno),
-            };
-            let value = device_idl::get_info_response {
-                value: shared.disk.block_info(lease),
-            };
-            Response::success(
-                request,
-                encoded(|wire| device_idl::encode_get_info_response(&value, wire)),
-            )
-        }
-        device_idl::METHOD_READ => match serve_read_request(shared, request) {
-            Ok(()) => Response::success(request, Vec::new()),
-            Err(errno) => fail(request, errno),
-        },
-        device_idl::METHOD_WRITE | device_idl::METHOD_FLUSH => {
-            // Routed to the overlapped write and ordering-aware flush paths,
-            // which need the ledger before they take the medium; reaching them
-            // here would apply a write outside the device order.
-            fail(request, ERR_EACCES)
-        }
-        device_idl::METHOD_DISCARD => {
-            let value = match device_idl::decode_discard_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return fail(request, ERR_EINVAL),
-            };
-            if !request.resources.is_empty() || !request.bulk.is_empty() {
-                return fail(request, ERR_EINVAL);
-            }
-            let lease = match target_lease(shared, request, RIGHT_BLOCK_DISCARD) {
-                Ok(lease) => lease,
-                Err(errno) => return fail(request, errno),
-            };
-            match shared.disk.discard(lease, value.lba, value.block_count) {
-                Ok(()) => Response::success(request, Vec::new()),
-                Err(errno) => fail(request, errno),
-            }
-        }
-        _ => fail(request, -38),
-    }
-}
-
 async fn service(context: Context) -> i64 {
     let directory = context.service_directory();
     let mut server = match Server::publish(
         &directory,
         servicekit::uri::BLOCK_RAMDISK,
         &factory_idl::protocol_descriptor(),
-        validate_factory_request,
+        factory_idl::validate_request_transport_resources,
     )
     .await
     {
@@ -785,41 +881,42 @@ struct BlockHandler {
 impl ServeHandler for BlockHandler {
     async fn handle(&mut self, server: &mut Server, request: Request) {
         self.manager.reclaim_closed(server).await;
-        match lock_kind(&request) {
-            LockKind::Shared => {
+        let admission = match admit_request(&self.manager, &request).await {
+            Ok(admission) => admission,
+            Err(outcome) => {
+                let dispatched = RpcDispatchResult {
+                    method_id: request.method_id,
+                    outcome,
+                    payload: Vec::new(),
+                    resources: Vec::new(),
+                };
+                if let Err(error) = request.respond_dispatch(dispatched).await {
+                    log::debug!("block service admission response failed: {error:?}");
+                }
+                self.manager.reclaim_closed(server).await;
+                return;
+            }
+        };
+
+        let RequestAdmission { plan, call } = admission;
+        match plan {
+            AdmissionPlan::Shared(guard) => {
                 // The body owns its guard and its own reply, so observations
                 // overlap and each is answered as soon as it is ready.  The
                 // guard was taken in arrival order, so this cannot reorder
                 // against a mutation.  Admission bounds how many may be
                 // outstanding.
-                let guard = self.manager.lock_shared().await;
                 tokio::spawn(async move {
-                    let response = dispatch_shared(&guard, &request);
-                    if let Err(error) = request.respond(response).await {
+                    let dispatched = dispatch_shared(&guard, &request, call).await;
+                    if let Err(error) = request.respond_dispatch(dispatched).await {
                         log::debug!("block service response failed: {error:?}");
                     }
                 });
             }
-            LockKind::Write => {
-                // Authorise and admit before any side effect, holding only a
-                // share of the medium: the application below needs the medium
-                // alone and may have to wait for its turn, which it cannot do
-                // while the dispatcher holds the exclusive guard.
-                let prepared = {
-                    let shared = self.manager.lock_shared().await;
-                    prepare_write(&shared, &self.manager.ordering, &request)
-                };
-                let prepared = match prepared {
-                    Ok(prepared) => prepared,
-                    Err(errno) => {
-                        let response = fail(&request, errno);
-                        if let Err(error) = server.respond(request, response).await {
-                            log::debug!("block service response failed: {error:?}");
-                        }
-                        self.manager.reclaim_closed(server).await;
-                        return;
-                    }
-                };
+            AdmissionPlan::Write(prepared) => {
+                drop(call);
+                // The typed admission hook authorised the write and reserved
+                // its place in device order before the request became a task.
                 let manager = self.manager.clone();
                 tokio::spawn(async move {
                     // Apply only when this is the oldest outstanding write, so
@@ -843,22 +940,8 @@ impl ServeHandler for BlockHandler {
                     }
                 });
             }
-            LockKind::Flush => {
-                let prepared = {
-                    let shared = self.manager.lock_shared().await;
-                    prepare_flush(&shared, &self.manager.ordering, &request)
-                };
-                let (lease, sequence) = match prepared {
-                    Ok(prepared) => prepared,
-                    Err(errno) => {
-                        let response = fail(&request, errno);
-                        if let Err(error) = server.respond(request, response).await {
-                            log::debug!("block service response failed: {error:?}");
-                        }
-                        self.manager.reclaim_closed(server).await;
-                        return;
-                    }
-                };
+            AdmissionPlan::Flush(lease, sequence) => {
+                drop(call);
                 // Wait for the writes admitted before this flush, then act on
                 // the medium alone.  The wait holds no medium lock, which is
                 // what lets the write it is waiting for make progress.
@@ -878,20 +961,14 @@ impl ServeHandler for BlockHandler {
                     log::debug!("block service response failed: {error:?}");
                 }
             }
-            LockKind::Exclusive => {
+            AdmissionPlan::Exclusive(mut guard) => {
                 // A lease-state change must not overtake reads that are already
                 // running, so it waits for the exclusive lock; because the reads
                 // took their guards in arrival order, acquiring here both
                 // follows them and precedes any later read.
-                let mut guard = self.manager.lock_exclusive().await;
-                let server_arg = if needs_server(&request) {
-                    Some(&mut *server)
-                } else {
-                    None
-                };
-                let response = dispatch_exclusive(&mut guard, server_arg, &request);
+                let dispatched = dispatch_exclusive(&mut guard, server, &request, call).await;
                 drop(guard);
-                if let Err(error) = server.respond(request, response).await {
+                if let Err(error) = request.respond_dispatch(dispatched).await {
                     log::debug!("block service response failed: {error:?}");
                 }
             }
@@ -913,7 +990,9 @@ mod tests {
     #[test]
     fn region_failures_keep_their_service_errno() {
         assert_eq!(
-            region_failure(ServerError::Status(servicekit::sys::STATUS_INVALID_ARGUMENT)),
+            region_failure(ServerError::Status(
+                servicekit::sys::STATUS_INVALID_ARGUMENT
+            )),
             ERR_EINVAL
         );
         assert_eq!(

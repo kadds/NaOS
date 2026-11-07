@@ -1,0 +1,23 @@
+[package]
+name = "rust-acpi-naos"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+naos-allocator-quota-smoke = []
+
+[dependencies]
+acpi = { path = "../../../../third_party/rust-acpi-naos", default-features = false, features = ["alloc", "aml"] }
+
+[lib]
+name = "rust_acpi_naos"
+path = "src/lib.rs"
+
+[target.'cfg(target_os = "naos")'.dependencies]
+log = { version = "0.4.34", default-features = false }
+naos-sys = { path = "../naos-sys" }
+naos-runtime = { path = "../naos-runtime", features = ["alloc"] }
+
+[dev-dependencies]
+pretty_assertions = "1"

@@ -477,9 +477,6 @@ bool kb_driver::setup(::dev::device *dev)
 
     flush();
 
-    kb_dev->tasklet.func = irq::tasklet_func::bind<&kb_device::run_tasklet>(*kb_dev);
-    irq::add_tasklet(&kb_dev->tasklet);
-
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
     entry.is_level_trigger_mode = false;
@@ -489,7 +486,19 @@ bool kb_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(0x1, &entry);
+    if (intr == 0)
+    {
+        KLOG_ERROR("unable to assign an interrupt vector to keyboard GSI");
+        return false;
+    }
     kb_dev->irq_registration = irq::register_handler(intr, irq::hard_handler::bind<&kb_device::on_interrupt>(*kb_dev));
+    if (!kb_dev->irq_registration)
+    {
+        KLOG_ERROR("unable to register keyboard interrupt handler vector {}", intr);
+        return false;
+    }
+    kb_dev->tasklet.func = irq::tasklet_func::bind<&kb_device::run_tasklet>(*kb_dev);
+    irq::add_tasklet(&kb_dev->tasklet);
     APIC::io_enable(0x1);
     return true;
 }
@@ -766,9 +775,6 @@ bool mouse_driver::setup(::dev::device *dev)
     }
     set_mouse_rate(ms_dev->port_index, 100);
 
-    ms_dev->tasklet.func = irq::tasklet_func::bind<&mouse_device::run_tasklet>(*ms_dev);
-    irq::add_tasklet(&ms_dev->tasklet);
-
     APIC::io_entry entry;
     entry.dest_apic_id = APIC::local_ID();
     entry.is_level_trigger_mode = false;
@@ -778,8 +784,20 @@ bool mouse_driver::setup(::dev::device *dev)
     entry.delivery_mode = APIC::io_entry::mode_t::fixed;
 
     auto intr = APIC::io_irq_setup(12, &entry);
+    if (intr == 0)
+    {
+        KLOG_ERROR("unable to assign an interrupt vector to mouse GSI");
+        return false;
+    }
     ms_dev->irq_registration =
         irq::register_handler(intr, irq::hard_handler::bind<&mouse_device::on_interrupt>(*ms_dev));
+    if (!ms_dev->irq_registration)
+    {
+        KLOG_ERROR("unable to register mouse interrupt handler vector {}", intr);
+        return false;
+    }
+    ms_dev->tasklet.func = irq::tasklet_func::bind<&mouse_device::run_tasklet>(*ms_dev);
+    irq::add_tasklet(&ms_dev->tasklet);
 
     // enable it
     write_ps2(ms_dev->port_index, 0xF4);

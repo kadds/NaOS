@@ -5,6 +5,9 @@
 #include "freelibcxx/vector.hpp"
 #include "kernel/common.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/mutex.hpp"
+#include "kernel/task/process_start_lifecycle.hpp"
+#include "kernel/task/thread_lifecycle.hpp"
 #include "kernel/time.hpp"
 #include "lock.hpp"
 #include "resource.hpp"
@@ -136,6 +139,10 @@ struct process_t
     na_handle_t console_err_handle = NA_HANDLE_INVALID;
     /// A native child consumes this endpoint exactly once during startup.
     na_handle_t bootstrap_channel_handle = NA_HANDLE_INVALID;
+    /// Optional scoped ServiceDirectory installed by the kernel for an early
+    /// platform service. It is consumed only as a lookup view during the
+    /// early-service bootstrap and never grants service registration rights.
+    na_handle_t early_service_directory_handle = NA_HANDLE_INVALID;
     /// Replace normal bootstrap stdout/stderr with a kernel klog stream.
     bool klog_stdio = false;
     /// Handles carried across an in-place exec.  The old image has already
@@ -147,7 +154,7 @@ struct process_t
     na_handle_t exec_service_directory = NA_HANDLE_INVALID;
     std::atomic_bool exec_bootstrap_pending{false};
     std::atomic_bool bootstrap_consumed{false};
-    std::atomic_bool main_thread_started{false};
+    std::atomic<process_start_state> start_state{process_start_state::unstarted};
     void *thread_id_gen;
     wait_queue_t wait_queue;
     wait_queue_t child_wait_queue;
@@ -157,8 +164,10 @@ struct process_t
     i64 last_stop_signal = 0;
     std::atomic_uint64_t child_wait_generation;
     std::atomic_uint64_t capability_refs;
-    std::atomic_bool reap_pending;
+    std::atomic_uint64_t internal_refs{0};
     std::atomic_bool storage_released;
+    std::atomic_uint64_t thread_count{0};
+    std::atomic_bool exit_cleanup_started{false};
     std::atomic_uint64_t file_inputs{0};
     std::atomic_uint64_t file_outputs{0};
     std::atomic_uint64_t signals_delivered{0};
@@ -184,6 +193,7 @@ struct process_t
     /// session leader rather than duplicated in every process in the session.
     group_id foreground_process_group = 0;
     process_t();
+    bool reaped() const { return (attributes.load(std::memory_order_acquire) & process_attributes::destroy) != 0; }
 };
 
 struct job_control_info
@@ -202,7 +212,7 @@ class process_object final : public kobject
     explicit process_object(process_t *process);
     ~process_object() override;
 
-    static type_e type_of() { return type_e::process; }
+    static constexpr type_e type_of() { return type_e::process; }
 
     process_t *process() { return process_; }
     const process_t *process() const { return process_; }
@@ -225,7 +235,6 @@ enum class thread_state : u8
     running,   ///< Running at a CPU
     stop,      ///< Can't reschedule
     destroy,
-    sched_switch_to_ready, ///< the task is interrupted by realtime task or switch to next scheduler
 };
 
 struct thread_snapshot_entry
@@ -253,7 +262,8 @@ enum attributes : flag_t
     real_time = 32,
     on_migrate = 128,
     job_control_stopped = 256,
-    exit_pending = 512,
+    exit_pending = 512, ///< Exported status bit; the exit lifecycle owns the internal state.
+    exit_wakeup_pending = 1UL << 11,
 };
 } // namespace thread_attributes
 struct preempt_t
@@ -289,6 +299,13 @@ struct cpu_mask_t
 /// The thread struct
 struct thread_t
 {
+    static constexpr u32 direct_io_lease_capacity = 16;
+    struct direct_io_range
+    {
+        u16 first_port = 0;
+        u32 port_count = 0;
+    };
+
     volatile thread_state state;
     std::atomic_ulong attributes;
     thread_id tid;
@@ -301,6 +318,18 @@ struct thread_t
     void *kernel_stack_top;
     void *user_stack_top;
     void *user_stack_bottom;
+    thread_lifecycle exit_lifecycle;
+    std::atomic_bool join_requested{false};
+
+    /// Direct I/O leases are kernel-owned and never represented as user
+    /// handles. They are populated only after scoped capability admission
+    /// binds each range to this execution thread; an empty set is explicit
+    /// all-deny.
+    direct_io_range direct_io_leases[direct_io_lease_capacity]{};
+    u32 direct_io_lease_count = 0;
+    lock::mutex_t direct_io_lease_update_lock;
+    lock::spinlock_t direct_io_lease_lock;
+    std::atomic_uint64_t direct_io_lease_generation{1};
 
     /// from 0 - 255, 0 is the highest priority, 100 - 139 to user thread, default is 125
     u8 static_priority = 0;
@@ -335,6 +364,14 @@ struct thread_t
     void wake_from_sleep(timeclock::microsecond_t) noexcept;
 
     thread_t();
+
+    flag_t status_attributes() const
+    {
+        auto result = attributes.load(std::memory_order_acquire);
+        if (exit_lifecycle.phase() == thread_lifecycle_phase::exiting && state != thread_state::destroy)
+            result |= thread_attributes::exit_pending;
+        return result;
+    }
 };
 
 inline constexpr u64 cpumask_none = 0xFFFFFFFFFFFFFFFF;
@@ -346,6 +383,14 @@ bool has_init();
 void sync_current_kernel_space();
 void start_task_idle();
 void switch_thread(thread_t *old, thread_t *new_task);
+
+/// Install or revoke the kernel-internal direct-I/O lease associated with a
+/// thread.  No userspace syscall exposes this mutation.
+u64 direct_io_lease_generation(const thread_t *thread);
+bool direct_io_lease_generation_is_current(const thread_t *thread, u64 generation);
+bool set_direct_io_lease(thread_t *thread, u64 generation, u16 first_port, u32 port_count);
+bool release_direct_io_lease(thread_t *thread, u64 generation, u16 first_port, u32 port_count);
+void revoke_direct_io_lease(thread_t *thread);
 
 namespace create_thread_flags
 {
@@ -421,11 +466,11 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
 process_args_t *copy_args(const char *path, const char *argv[], const char *env[]);
 
 process_t *create_process(handle_t<naos::data_plane::memory_object> object, khandle backing, const char *path,
-                          thread_start_func start_func,
-                          const char *const args[], const char *const envp[], flag_t flags, khandle pager = {});
+                          thread_start_func start_func, const char *const args[], const char *const envp[],
+                          flag_t flags, khandle pager = {});
 
 /// Publish a process created with create_process_flags::deferred_start.
-void start_process(process_t *process);
+bool start_process(process_t *process);
 
 /// Tear down a process that has a prepared but never scheduled main thread.
 void abort_unstarted_process(process_t *process);
@@ -445,14 +490,12 @@ bool do_sleep(timeclock::microsecond_t duration);
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
                           statistics_t &statistics);
 i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i64 &ret, process_id &waited_pid,
-                          statistics_t &statistics,
-                          freelibcxx::function_ref<bool()> interrupt,
+                          statistics_t &statistics, freelibcxx::function_ref<bool()> interrupt,
                           freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
                         statistics_t &statistics);
 i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 &ret, process_id &waited_pid,
-                        statistics_t &statistics,
-                        freelibcxx::function_ref<bool()> interrupt,
+                        statistics_t &statistics, freelibcxx::function_ref<bool()> interrupt,
                         freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue);
 i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object);
 
@@ -479,16 +522,16 @@ process_t *find_pid(process_id pid);
 /// Open a bounded, PID-ordered snapshot of process capabilities. The returned
 /// objects keep exited processes alive until the caller transfers or drops
 /// them; `next_pid` is zero when the page is complete.
-i64 open_process_snapshot(process_id after_pid, u64 limit,
-                          freelibcxx::vector<process_snapshot_entry> &entries, process_id &next_pid);
+i64 open_process_snapshot(process_id after_pid, u64 limit, freelibcxx::vector<process_snapshot_entry> &entries,
+                          process_id &next_pid);
 
 i64 open_thread_snapshot(process_t *process, thread_id after_tid, u64 limit,
                          freelibcxx::vector<thread_snapshot_entry> &entries, thread_id &next_tid);
 
 na_status_t read_process_command_line(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
                                       u64 &actual_bytes, u64 &required_bytes);
-na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size,
-                              u64 &actual_bytes, u64 &required_bytes);
+na_status_t read_process_name(process_t *process, naos::data_plane::memory_object &buffer, u64 size, u64 &actual_bytes,
+                              u64 &required_bytes);
 thread_t *find_tid(process_t *process, thread_id tid);
 
 void get_process_memory_accounting(const process_t *process, memory_accounting_t &accounting);

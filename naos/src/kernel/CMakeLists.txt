@@ -2,6 +2,12 @@
 file(GLOB_RECURSE DIR_SRCS CONFIGURE_DEPENDS *.cc *.cpp *.CC *.CPP)
 file(GLOB_RECURSE DIR_SRCS_S CONFIGURE_DEPENDS *.S)
 
+if(NAOS_TEST_ACPI_FACS_RESERVATION_COLLISION)
+    # Swap the production no-op provider for the boot-test fault fixture.
+    list(REMOVE_ITEM DIR_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/arch/acpi/facs_reservation_boot_test_hook_noop.cc")
+    list(APPEND DIR_SRCS "${PROJECT_SOURCE_DIR}/tests/acpi_facs_reservation_collision_hook.cc")
+endif()
+
 SET(DIR_ALL ${DIR_SRCS} ${DIR_SRCS_S})
 
 set(KERNEL_CXX_FLAGS "-mno-red-zone -fvisibility-inlines-hidden \
@@ -23,7 +29,21 @@ target_include_directories(kernel PRIVATE
 )
 target_link_libraries(kernel freelibcxx)
 target_link_libraries(kernel naos_ipc_core_kernel)
-target_link_libraries(kernel acpica)
+if(NAOS_TEST_ACPI_INIT_CAPABILITY_ROLLBACK)
+    target_compile_definitions(kernel PRIVATE NAOS_TEST_ACPI_INIT_CAPABILITY_ROLLBACK=1)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE)
+    target_compile_definitions(kernel PRIVATE NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE=1)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT)
+    target_compile_definitions(kernel PRIVATE NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT=1)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE)
+    target_compile_definitions(kernel PRIVATE NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE=1)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_SOFTWARE_FALLBACK)
+    target_compile_definitions(kernel PRIVATE NAOS_TEST_ACPI_GLOBAL_LOCK_SOFTWARE_FALLBACK=1)
+endif()
 
 set(KERNEL_LINK_TAG "-Wl,-T ${CMAKE_CURRENT_SOURCE_DIR}/arch/kernel.ld")
 

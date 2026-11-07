@@ -3,7 +3,7 @@
 //! The service uses the pinned NaOS `std` through the platform-neutral
 //! `servicekit` facade. It must never call a hosted `std::fs`/`std::path`
 //! surface, because those routes become self-invocations
-//! through `naos://service/fs/vfs/0` once the File/Directory protocol server
+//! through `naos://service/fs/vfs` once the File/Directory protocol server
 //! lands in this same binary.
 //! The native NaOS binary feature additionally links the pinned NaOS `std` and
 //! Tokio runtime without changing the backend protocol implementation.

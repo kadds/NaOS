@@ -31,3 +31,6 @@
 [submodule "naos/third_party/mimalloc"]
 	path = naos/third_party/mimalloc
 	url = https://github.com/microsoft/mimalloc.git
+[submodule "naos/third_party/rust-acpi-naos"]
+	path = naos/third_party/rust-acpi-naos
+	url = https://github.com/kadds/acpi.git

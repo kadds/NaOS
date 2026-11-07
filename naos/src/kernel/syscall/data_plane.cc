@@ -75,6 +75,8 @@ na_status_t memory_map(na_memory_map_frame_t *frame)
             if (memory_object == nullptr || values.offset > entry.meta.view_length ||
                 values.length > entry.meta.view_length - values.offset)
                 return NA_STATUS_INVALID_ARGUMENT;
+            if (!naos::data_plane::memory_object_device_mmio_mapping_is_allowed(memory_object->flags(), values.flags))
+                return NA_STATUS_ACCESS_DENIED;
             backing = entry.object;
         }
         else

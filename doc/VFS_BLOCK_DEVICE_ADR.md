@@ -1,11 +1,13 @@
 # ADR：用户态 VFS 与 BlockDevice 对象
 
-- 状态：Accepted（r7）
-- 日期：2026-08-20（r2：2026-08-23；r3：2026-08-23；r4：2026-08-23；r5：2026-08-23；r6/r7：2026-08-24）
+- 状态：Accepted（r9）
+- 日期：2026-08-20（r2：2026-08-23；r3：2026-08-23；r4：2026-08-23；r5：2026-08-23；r6/r7：2026-08-24；r8：2026-10-24）
+- r9 实现状态（2026-10-24）：固定 PCI-ID 的 `virtioblkd` provider 与 PCIED catalog broker 已实现；filesystem root startup 仍使用 ramdisk backend。
 - 修订记录：r2 将 `NamespaceContext` 拆分为每可见根的 `NamespaceBinding` 与每 mount 的 `MountControl`，新增 `MutationTicket` 变更事务与全局 walk 预算；明确 v1 禁止 mount stacking、chroot 定位为传统路径视图而非安全边界、FAT32/exFAT 的 POSIX 能力边界见附录 A。r3（评审修订）：binding 的向上/截断路由改按 `mount_stack` 判定并定义各 binding 取值（新增 `MountControl.lookup_target`）；`rename_at`/`link_at` 第二 dirfd 改为 MOVE `clone_binding` 副本；新增只读 lease、`BlockInfo.medium_id`、flush 故障终结与错误判别规则、wire 枚举；ticket 明确为预留租约模型并补齐失败路径清理；Phase 0 generator 清单补 scope/right 未知名硬错、`@concurrent` 支持与 UUID/scope 碰撞检测。r4（Rust 可执行性评审）：新增“语言分配与交付边界”（v1 server 先行 C++，Rust 冻结 client + std 数据面）；Phase 0 增加 MObj 创建 syscall 前置、双侧 typed MemoryObject 封装、跨语言进程级互操作 test、generator 改造覆盖 Rust 后端；补 worker bootstrap 转移预算、私有对象转移机制与错误映射收敛要求。r4 复查补漏：`get_root`/`get_mount_info` 补 `@concurrent`；COMMITTING 期间 peer close 的终态定义为 `ABORTED`；`renameat` 与 `linkat` 的 backend 限定拆分；只读 lease 补验证背书，right 剥离的拒绝语义固定为 admission 层 `EACCES`（`EROFS` 归 mount 层）；unmount 非零 flags 定为 `EINVAL`；WalkContext 移除无 wire 载体的 hop 措辞；bootstrap 转移预算改述为 channel 消息资源上限。
 r5（维护者裁定）：语言分配反转——`vfsd`、`ramdiskd` 与 filesystem worker 的 server 实现改以 Rust 交付；NaoIDL generator 的 Rust server/runtime/disposition-validator 模板从"后续 generator 工作"提升为本 ADR Phase 0 的前置交付项，Rust client + std 数据面承诺不变。
 r6（评审修正）：`visible_root_node` 语义收窄为 chroot 包容边界——`enter_child_mount` 不再重置可见根（原 r4 文本使 mount 内绝对路径锚定子根、getcwd 显示 `/`，与"进入 mount 不等价于 chroot"矛盾）；绝对路径由 topology 下行穿越，跨 mount `path`/`getcwd` 由 parent_anchor 链在 vfsd 侧重建为正式 v1 能力；详见 §6.3/§6.4。
 r7（评审修正，四项）：①挂载流程重排——初始根 NamespaceBinding 不再预发（NodeKey 为 worker 局部标识），commit 携带 `{root NodeKey, generation}`，根 binding 由 vfsd 在 commit 后经 bind_node 播种；②冻结重入规则：单线程同步 worker 合法，vfsd 禁止对未决 ticket worker 发起同步 MountControl RPC，删除 commit 前二次 lookup_target；③MutationTicket 共享 COMMITTING 态，消除本地提交期间超时释放预留的竞态；④unmount 显式状态机 ACTIVE→DRAINING→SYNCING→DETACHED→SHUTDOWN，明确 anchor 不计入 busy 引用并在 DRAINING 即关闭、child 先于 parent 卸载。
+r8（2026-10-24）：将 §6.1 `BlockDevice` wire 示例、revision、MemoryObject view 与 error annotations 对齐当前 NaoIDL 合同，移除过时的 `buffer_offset` 字段。所有协议仍未发布，当前 schema revision 统一为 1。
 - 前置条件（按阶段分解；r5 修订：原文“Phase 4 已完成后才能开始”与本 ADR Phase 0 被 USERSPACE_FILESYSTEM_ADR Phase 0/2 消费的事实构成循环依赖，故拆分为；r6 同步修正 §6.2 初始根 binding 的可见根取值）：
   本 ADR **Phase 0**（NaoIDL generator 扩展、Rust server/runtime/validator 模板、schema 冻结、跨语言互操作 test）是与 [USERSPACE_FILESYSTEM_ADR](USERSPACE_FILESYSTEM_ADR.md) **共享的前置交付**，须在其 Phase 0–2 之前或同期落地；
   **Phase 1**（用户态 BlockDevice 纵向切片）要求文件系统迁移 Phase 1（MObj 数据面）已完成；
@@ -51,9 +53,9 @@ r7（评审修正，四项）：①挂载流程重排——初始根 NamespaceBi
 
 首个实现只需一个用户态 `ramdiskd` block manager、一个可由 `vfsd` 按 mount instance 启动的 filesystem worker，以及由 `vfsd` 持有的单一系统 VFS namespace。worker 可以暂时内嵌在 `vfsd`，但其外部化不得改变 application-facing contract；独立进程必须经过相同的 capability 流程接口（bootstrap MOVE 与 NamespaceBinding/MountControl/MutationTicket 语义不变）。格式选择不能改写本文的 object contract。
 
-当前 NaOS boot slice 已将 FAT worker 外化为独立的 `rootfs` boot module（当前实现为 `exfatd`）。kernel 将不可变 worker ELF 发布为 `naos://service/rootfs/0`，由 `ramdiskd` 通过 ServiceDirectory 查询；`ramdiskd` 自己创建 24 MiB 内存盘，维护 lease/queue/flush 状态并把用户态 factory 发布到 ServiceDirectory，随后启动 rootfs。rootfs 通过 block URI 解析 factory、自行 acquire LBD，再通过 VFS admin URI 完成 `prepare_mount`，因此 early-service bootstrap 只含 ServiceDirectory 与 stdio，不搬运任何 block 或 mount capability。worker 挂载已有 FAT 卷（空白介质才执行首次格式化）后提交 ticket，vfsd 才发布 mount record；固定的 24 MiB 模拟介质低于 fatfs 的 FAT32 cluster threshold，因此启动日志会明确报告 library-selected FAT 兼容模式。NamespaceBinding 初始端按 r7 不预发。MountControl dispatcher、bind_node/root-anchor 播种，以及 worker 直达的 Directory/File 核心数据面已经接通；worker 侧 `rename_at` 通过重入 path 查询支持同 worker 的跨目录 rename，`link_at` 按 FAT 能力矩阵返回 `EOPNOTSUPP`。物理块设备、完整 inode 持有语义和更大 FAT32 几何仍不在此模拟介质切片内。
+当前 NaOS boot slice 已将 FAT worker 外化为独立的 `rootfs` boot module（当前实现为 `exfatd`）。kernel 将不可变 worker ELF 发布为 `naos://service/rootfs`，由 `ramdiskd` 通过 ServiceDirectory 查询；`ramdiskd` 自己创建 24 MiB 内存盘，维护 lease/queue/flush 状态并把用户态 factory 发布到 ServiceDirectory，随后启动 rootfs。rootfs 通过 block URI 解析 factory、自行 acquire LBD，再通过 VFS admin URI 完成 `prepare_mount`，因此 early-service bootstrap 只含 ServiceDirectory 与 stdio，不搬运任何 block 或 mount capability。worker 挂载已有 FAT 卷（空白介质才执行首次格式化）后提交 ticket，vfsd 才发布 mount record；固定的 24 MiB 模拟介质低于 fatfs 的 FAT32 cluster threshold，因此启动日志会明确报告 library-selected FAT 兼容模式。NamespaceBinding 初始端按 r7 不预发。MountControl dispatcher、bind_node/root-anchor 播种，以及 worker 直达的 Directory/File 核心数据面已经接通；worker 侧 `rename_at` 通过重入 path 查询支持同 worker 的跨目录 rename，`link_at` 按 FAT 能力矩阵返回 `EOPNOTSUPP`。物理块设备、完整 inode 持有语义和更大 FAT32 几何仍不在此模拟介质切片内。
 
-Linux std 是同一套协议的独立进程模拟轨道，不冒充 NaOS capability 安全边界：`ramdiskd` 在固定 service-root 下发布 `naos://service/block/ramdiskd/0`，`exfatd` 通过 `RpcTransport`/UDS 获取 opaque block lease，`vfsd` 目前提供固定 `/data` mount 的 Directory/File 代理。Linux host 轨道尚未实现 NaOS 的 `NamespaceBinding`、`MountControl`/`MountTicket` 事务或跨重启持久化；这些仍由 NaOS boot slice 和后续完整 mount phase 验收。主机 IDL loopback 的 `application_dataplane` 测试与 Linux 三进程 UDS smoke 是两组不同测试：前者覆盖 worker 的 `rename_at`/`O_EXCL`/active-file `EBUSY`，后者覆盖真实进程边界的 format/read/write/fsync/truncate/rename 及 service discovery。
+Linux std 是同一套协议的独立进程模拟轨道，不冒充 NaOS capability 安全边界：`ramdiskd` 在固定 service-root 下发布 `naos://service/block/ramdiskd`，`exfatd` 通过 `RpcTransport`/UDS 获取 opaque block lease，`vfsd` 目前提供固定 `/data` mount 的 Directory/File 代理。Linux host 轨道尚未实现 NaOS 的 `NamespaceBinding`、`MountControl`/`MountTicket` 事务或跨重启持久化；这些仍由 NaOS boot slice 和后续完整 mount phase 验收。主机 IDL loopback 的 `application_dataplane` 测试与 Linux 三进程 UDS smoke 是两组不同测试：前者覆盖 worker 的 `rename_at`/`O_EXCL`/active-file `EBUSY`，后者覆盖真实进程边界的 format/read/write/fsync/truncate/rename 及 service discovery。
 
 ## 4. 架构与信任边界
 
@@ -75,14 +77,16 @@ Linux std 是同一套协议的独立进程模拟轨道，不冒充 NaOS capabil
 
 `vfsd` 只负责 namespace、mount 和 Directory/File 路由；`fatd`/`exfatd`
 负责具体文件系统语义，并通过 `BlockDevice` 协议使用底层 backend。`ramdiskd`
-只是当前默认的内存 backend，未来 `nvmed`、`virtioblkd` 等服务注册同类
-BlockDevice endpoint 后，不需要修改上层文件系统协议。
+仍是当前 root filesystem 的默认内存 backend。`virtioblkd` 已作为受限 PCI child
+实现同类 BlockDevice endpoint，并通过 PCIED catalog 提供给受授权的 client；当前
+filesystem root startup 尚未切换到该 catalog。未来 `nvmed` 等 backend 注册同类
+endpoint 后，不需要修改上层文件系统协议。
 
-`BlockDeviceFactory` 是 `ramdiskd`/未来 `nvmed` 等用户态 block manager 提供的 IDL service，不是 kernel view。manager 持有 backing store 或 driver capability，按自己的策略选择 LBA 区间并创建不重叠的 `BlockDevice` endpoint；kernel 不创建 factory、lease table 或 BlockDevice endpoint。本期 NaOS kernel 不探测设备，也不创建 ramdisk backing store；它只负责普通 channel、MemoryObject 和 capability syscall。`ramdiskd` 通过 ServiceDirectory 发布持久 listener，mount worker 通过 URI `connect` 获取一个新的 factory client；listener 继续保留在目录中，后续 worker 可再次连接，单次连接对应的 factory server endpoint 由 manager 持有到 peer close。本切片的 exfatd 已按此发现流程落地。`vfsd` 不接触数据面。
+`BlockDeviceFactory` 是用户态 block manager 提供的 IDL service，不是 kernel view。`ramdiskd` 持有 backing store 并直接发布 factory；`virtioblkd` 由 PCIED 按固定 PCI-ID binding 启动，PCIED catalog 在 factory metadata 验证后转交其私有 factory endpoint。manager 按自己的策略选择 LBA 区间并创建不重叠的 `BlockDevice` endpoint；kernel 不创建 factory、lease table 或 BlockDevice endpoint。本期 NaOS kernel 不探测设备，也不创建 ramdisk backing store；它只负责普通 channel、MemoryObject 和 capability syscall。`ramdiskd` 通过 ServiceDirectory 发布持久 listener，mount worker 通过 URI `connect` 获取一个新的 factory client；listener 继续保留在目录中，后续 worker 可再次连接，单次连接对应的 factory server endpoint 由 manager 持有到 peer close。本切片的 exfatd 已按此发现流程接入 ramdisk factory。`vfsd` 不接触数据面。
 
 LBD 的 authority 链在最终形态仍是单一的：block manager 负责 acquire、检查重叠并持有 lease，不存在 kernel factory 再向 manager 转交的第二授权链。当前 `exfatd` 通过 ServiceDirectory 解析用户态 factory 后直接 acquire LBD；MountControl 与 MountTicket 则由同一次 VFS admin `prepare_mount` 返回，NamespaceBinding 仍按 r7 在 commit 后由 vfsd 创建。
 
-`vfsd` 是 Vfs server 的唯一实现和 namespace TCB，不另设 kernel VFS object、可链接的 VFS library 或第二个 namespace owner。它拥有 root route、mount topology、每可见根的 `NamespaceBinding`、每 mount 的 `MountControl` 与变更预留表；命中 mount 后可以返回 worker 签发的 direct `Directory`/`File` endpoint，但这些 endpoint 必须绑定 `vfsd` 签发的 NamespaceBinding，不能由 application 按地址自行连接 provider。这是 `..` 截断、chroot 后的路径解析、cross-mount rename、mountpoint 保护、endpoint accounting 和 safe unmount 的前提。现有 `naos://service/fs/vfs/0` listener 继续由 `vfsd` 提供普通目录树入口；`Vfs` admin endpoint 通过受信任的 ServiceDirectory URI 暴露给 mount manager，URI 本身只是 locator，返回的 Vfs capability 才是 authority。
+`vfsd` 是 Vfs server 的唯一实现和 namespace TCB，不另设 kernel VFS object、可链接的 VFS library 或第二个 namespace owner。它拥有 root route、mount topology、每可见根的 `NamespaceBinding`、每 mount 的 `MountControl` 与变更预留表；命中 mount 后可以返回 worker 签发的 direct `Directory`/`File` endpoint，但这些 endpoint 必须绑定 `vfsd` 签发的 NamespaceBinding，不能由 application 按地址自行连接 provider。这是 `..` 截断、chroot 后的路径解析、cross-mount rename、mountpoint 保护、endpoint accounting 和 safe unmount 的前提。现有 `naos://service/fs/vfs` listener 继续由 `vfsd` 提供普通目录树入口；`Vfs` admin endpoint 通过受信任的 ServiceDirectory URI 暴露给 mount manager，URI 本身只是 locator，返回的 Vfs capability 才是 authority。
 
 mount manager 是策略而不是 kernel 子系统。当前切片由独立 worker 通过 ServiceDirectory 解析 block factory 与受信任的 `vfsd` admin endpoint，自己 acquire LBD、准备挂载并持有 `MountControl` server end 与 ticket；locator 名称不属于任何一个协议 ABI。初始 `NamespaceBinding` 不随 bootstrap 转移，待 worker commit 后由 vfsd 播种。
 
@@ -107,13 +111,13 @@ mount manager 是策略而不是 kernel 子系统。当前切片由独立 worker
 
 | 协议 | UUID | scope | binding |
 | --- | --- | --- | --- |
-| `Vfs` | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1021` | 16 | `ClientEnd` |
-| `BlockDevice` | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1022` | 17 | `KernelView` |
-| `NamespaceBinding`（私有） | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1023` | 18 | `ClientEnd` |
-| `MountTicket` | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1024` | 19 | `ClientEnd` |
-| `BlockDeviceFactory` | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1025` | 20 | `KernelView` |
-| `MountControl`（私有） | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1026` | 21 | `ClientEnd` |
-| `MutationTicket`（私有） | `2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1027` | 22 | `ClientEnd` |
+| `Vfs` | `94fd4b22-528f-49e7-907e-428ad90aea9e` | 16 | `ClientEnd` |
+| `BlockDevice` | `7ab6e795-665b-49cb-b89b-c9e41a367b5d` | 17 | `KernelView` |
+| `NamespaceBinding`（私有） | `b57d48df-738a-460c-b432-cb34f7f52cf3` | 18 | `ClientEnd` |
+| `MountTicket` | `0163071e-41b8-47a0-bf3a-df84e6e54613` | 19 | `ClientEnd` |
+| `BlockDeviceFactory` | `d0fd4865-a483-4d6b-a03f-f6c32ea065a1` | 20 | `KernelView` |
+| `MountControl`（私有） | `8e63e77f-957a-4d19-9894-d080eba5028f` | 21 | `ClientEnd` |
+| `MutationTicket`（私有） | `98feee4d-f830-4384-8eb2-33bc4c3e121c` | 22 | `ClientEnd` |
 
 下列 protocol-right bit 同时预留。generator 必须拒绝未知的命名 right，不能静默生成不受限制的方法。
 
@@ -168,11 +172,12 @@ struct BlockInfo {
     u64 medium_id @id(10);         // opaque；与 BlockMediumInfo.medium_id 同值域，判定共享排序域
 };
 
-protocol BlockDeviceFactory @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1025") @revision(1) @features(0) @scope(20) @uapi_name("BLOCK_DEVICE_FACTORY") @scope_name("BLOCK_DEVICE_FACTORY") {
-    method get_info @id(1) @rights(block_factory_inspect) -> {
+protocol BlockDeviceFactory @uuid("d0fd4865-a483-4d6b-a03f-f6c32ea065a1") @revision(1) @features(0) @scope(20) @uapi_name("BLOCK_DEVICE_FACTORY") @scope_name("BLOCK_DEVICE_FACTORY") {
+    method get_info @id(1) @rights(block_factory_inspect) @errors(EIO, ENODEV) -> {
         BlockMediumInfo value @id(1);
     };
-    method acquire @id(2) @rights(block_factory_acquire) {
+    method acquire @id(2) @rights(block_factory_acquire)
+            @errors(EINVAL, EBUSY, ENODEV, EIO, EOVERFLOW) {
         u64 start_lba @id(1);
         u64 block_count @id(2);
         u64 flags @id(3);
@@ -181,26 +186,29 @@ protocol BlockDeviceFactory @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1025") @revis
     };
 };
 
-protocol BlockDevice @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1022") @revision(1) @features(0) @scope(17) @uapi_name("BLOCK_DEVICE") @scope_name("BLOCK_DEVICE") {
-    method get_info @id(1) @rights(block_inspect) @concurrent -> {
+protocol BlockDevice @uuid("7ab6e795-665b-49cb-b89b-c9e41a367b5d") @revision(1) @features(0) @scope(17) @uapi_name("BLOCK_DEVICE") @scope_name("BLOCK_DEVICE") {
+    method get_info @id(1) @rights(block_inspect) @concurrent
+            @errors(EIO, ENODEV) -> {
         BlockInfo value @id(1);
     };
-    method read @id(2) @rights(block_read) @concurrent {
+    method read @id(2) @rights(block_read) @concurrent
+            @errors(EINVAL, EOPNOTSUPP, ENODEV, EIO) {
         u64 lba @id(1);
         u64 block_count @id(2);
-        u64 buffer_offset @id(3);
-        handle<memory_object, memory_object_write + memory_object_map + transfer, duplicate> buffer @id(4);
-        u64 flags @id(5);
+        handle<memory_object, memory_object_write + memory_object_map + transfer, duplicate> buffer @id(3);
+        u64 flags @id(4);
     } ->;
-    method write @id(3) @rights(block_write) @concurrent {
+    method write @id(3) @rights(block_write) @concurrent
+            @errors(EINVAL, EOPNOTSUPP, ENODEV, EIO) {
         u64 lba @id(1);
         u64 block_count @id(2);
-        u64 buffer_offset @id(3);
-        handle<memory_object, memory_object_read + memory_object_map + transfer, duplicate> buffer @id(4);
-        u64 flags @id(5);
+        handle<memory_object, memory_object_read + memory_object_map + transfer, duplicate> buffer @id(3);
+        u64 flags @id(4);
     } ->;
-    method flush @id(4) @rights(block_flush) @concurrent ->;
-    method discard @id(5) @rights(block_discard) @concurrent {
+    method flush @id(4) @rights(block_flush) @concurrent
+            @errors(EOPNOTSUPP, ENODEV, EIO) ->;
+    method discard @id(5) @rights(block_discard) @concurrent
+            @errors(EINVAL, EOPNOTSUPP, ENODEV, EIO) {
         u64 lba @id(1);
         u64 block_count @id(2);
     } ->;
@@ -227,7 +235,7 @@ protocol BlockDevice @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1022") @revision(1) 
 #### 请求、缓冲区和完成规则
 
 - `block_count` 不能为零、不能大于 `max_transfer_blocks`，且 `lba + block_count` 不得溢出或超过 `BlockInfo` 中的 `block_count`。
-- `block_count * logical_block_bytes` 不得溢出、不得超过 `max_transfer_bytes` 或所给的 MemoryObject 区间。`buffer_offset` 和字节长度必须按逻辑块对齐。
+- `block_count * logical_block_bytes` 不得溢出、不得超过 `max_transfer_bytes`；v2 的 MemoryObject view 长度必须恰好等于此次传输窗口，因此请求从 view offset 0 开始。
 - 请求将 buffer capability 复制到 invocation。调用方保留原 handle；kernel 直到该请求得到唯一终态结果前始终保留 backing object 的强引用，不向用户态返回这份复制。
 - `write` 在字节区间对 driver queue 可见前采样精确内容。实现必须固定不可变 DMA backing，或在 admission 时创建有界的 bounce copy。因此调用方在 submit 后修改 MemoryObject，不能改变已接纳写入。
 - `read` 的目的区间在成功完成前内容未定义。成功时它含有完整请求区间；失败 read 没有部分成功响应，调用方必须视整个区间为无效。
@@ -257,7 +265,7 @@ struct MountInfo {
     u64 device_id @id(5);      // commit 时分配的稳定伪 st_dev
 };
 
-protocol Vfs @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1021") @revision(1) @features(0) @scope(16) @uapi_name("VFS") @scope_name("VFS") {
+protocol Vfs @uuid("94fd4b22-528f-49e7-907e-428ad90aea9e") @revision(1) @features(0) @scope(16) @uapi_name("VFS") @scope_name("VFS") {
     method get_root @id(1) @rights(vfs_lookup) @concurrent -> {
         client_end<directory, transfer, move> root @id(1);
     };
@@ -290,7 +298,7 @@ protocol Vfs @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1021") @revision(1) @feature
 `get_root`、`get_mount_info`、`unmount` 与 `sync` 均标记 `@concurrent`：慢速 worker lifecycle RPC（可能等待整盘 flush）不得阻塞同 endpoint 上的轻量查询；并发正确性由 per-mount-record 锁与 topology 锁约束——同一 mount 的控制操作仍串行，不同 mount 互不阻塞。`prepare_mount` 保持默认串行：topology 变更点是全局临界区，进行中预留之间的 `EBUSY` 由共享预留表在串行 dispatcher 下自然产生。
 
 ```naidl
-protocol MountTicket @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1024") @revision(1) @features(0) @scope(19) @uapi_name("MOUNT_TICKET") @scope_name("MOUNT_TICKET") {
+protocol MountTicket @uuid("0163071e-41b8-47a0-bf3a-df84e6e54613") @revision(1) @features(0) @scope(19) @uapi_name("MOUNT_TICKET") @scope_name("MOUNT_TICKET") {
     method commit @id(1) @rights(mount_ticket_control) {
         u64 root_node @id(1);          // worker 铸造的本地根 node_id（r7）
         u64 root_generation @id(2);
@@ -354,7 +362,7 @@ method clone_binding @id(14) -> {
 };
 ```
 
-它返回同一 `{visible_root_node, current_node, mount_stack, rights}` 的新 binding 引用与新 endpoint；由 mlibc 在构造 child bootstrap message 前调用。冻结规则：同进程 `dup` 是 runtime 引用计数共享，对 Directory endpoint 调用 `handle_duplicate` 视为编程错误；fork/spawn 的每个可继承目录 fd 都必须替换为 `clone_binding` 结果或既有独立 endpoint，任一步失败则整体回滚 fork。它不能共享公开 endpoint，也不能扩大目录权限。`chdir`、`fchdir` 和普通 `Directory.open` 返回的目录默认继承输入 endpoint 的 `visible_root_node`，只改变 `current_node`；只有 `NA_DIRECTORY_OPEN_FLAG_CHROOT` 能缩小这一边界。Directory revision 2 的完整方法清单（`clone_binding`/`stat_node`/`sync`/`rename_at`/`link_at` 及其语义）见 [USERSPACE_FILESYSTEM_ADR](USERSPACE_FILESYSTEM_ADR.md) §5.3；其中 `rename_at`/`link_at` 的第二个 dirfd 以 MOVE 方式传入：mlibc 先对原 dirfd 调用 `clone_binding` 生成临时副本、MOVE 副本进请求，服务端使用后即弃，调用者的原 handle 全程保留。MOVE 不触碰 ADR §11.2 对 endpoint 复制权的限制，dirfd 也无需携带 meta DUPLICATE right；每次调用多出的一次 clone RPC 是 v1 有意接受的成本。
+它返回同一 `{visible_root_node, current_node, mount_stack, rights}` 的新 binding 引用与新 endpoint；由 mlibc 在构造 child bootstrap message 前调用。冻结规则：同进程 `dup` 是 runtime 引用计数共享，对 Directory endpoint 调用 `handle_duplicate` 视为编程错误；fork/spawn 的每个可继承目录 fd 都必须替换为 `clone_binding` 结果或既有独立 endpoint，任一步失败则整体回滚 fork。它不能共享公开 endpoint，也不能扩大目录权限。`chdir`、`fchdir` 和普通 `Directory.open` 返回的目录默认继承输入 endpoint 的 `visible_root_node`，只改变 `current_node`；只有 `NA_DIRECTORY_OPEN_FLAG_CHROOT` 能缩小这一边界。Directory revision 1 的完整方法清单（`clone_binding`/`stat_node`/`sync`/`rename_at`/`link_at` 及其语义）见 [USERSPACE_FILESYSTEM_ADR](USERSPACE_FILESYSTEM_ADR.md) §5.3；其中 `rename_at`/`link_at` 的第二个 dirfd 以 MOVE 方式传入：mlibc 先对原 dirfd 调用 `clone_binding` 生成临时副本、MOVE 副本进请求，服务端使用后即弃，调用者的原 handle 全程保留。MOVE 不触碰 ADR §11.2 对 endpoint 复制权的限制，dirfd 也无需携带 meta DUPLICATE right；每次调用多出的一次 clone RPC 是 v1 有意接受的成本。
 
 必须在 `vfsd` 的 C++ protocol contract test 中覆盖：chroot 后的 absolute/relative lookup、根目录 `..`、absolute/relative symlink、`getcwd`、`fchdir`、fork/spawn 继承与 peer close。测试必须证明 chroot **之后**创建或派生的 binding 不能经路径解析越过 `visible_root_node`；同时将“chroot 前 open 的目录 fd 仍可用于 `openat` 访问界外”作为文档化行为测试（预期成功），防止实现误把它当作需要修复的违规。
 
@@ -376,7 +384,7 @@ struct WalkContext {
     u32 reserved @id(3);            // 必须为零
 };
 
-protocol NamespaceBinding @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1023") @revision(1) @features(0) @scope(18) @uapi_name("NAMESPACE_BINDING") @scope_name("NAMESPACE_BINDING") {
+protocol NamespaceBinding @uuid("b57d48df-738a-460c-b432-cb34f7f52cf3") @revision(1) @features(0) @scope(18) @uapi_name("NAMESPACE_BINDING") @scope_name("NAMESPACE_BINDING") {
     method resolve_absolute @id(1) @rights(namespace_route) @max_bytes(65536) {
         WalkContext walk @id(1);
         u64 path_size @id(2);
@@ -412,7 +420,7 @@ protocol NamespaceBinding @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1023") @revisio
     };
 };
 
-protocol MutationTicket @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1027") @revision(1) @features(0) @scope(22) @uapi_name("MUTATION_TICKET") @scope_name("MUTATION_TICKET") {
+protocol MutationTicket @uuid("98feee4d-f830-4384-8eb2-33bc4c3e121c") @revision(1) @features(0) @scope(22) @uapi_name("MUTATION_TICKET") @scope_name("MUTATION_TICKET") {
     method commit @id(1) @rights(mutation_ticket_control) ->;
     method abort @id(2) @rights(mutation_ticket_control) ->;
     method status @id(3) @rights(mutation_ticket_control) @idempotent -> {
@@ -420,7 +428,7 @@ protocol MutationTicket @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1027") @revision(
     };
 };
 
-protocol MountControl @uuid("2b9e3c2e-8c7d-4fb1-9e21-4c4b0e0a1026") @revision(1) @features(0) @scope(21) @uapi_name("MOUNT_CONTROL") @scope_name("MOUNT_CONTROL") {
+protocol MountControl @uuid("8e63e77f-957a-4d19-9894-d080eba5028f") @revision(1) @features(0) @scope(21) @uapi_name("MOUNT_CONTROL") @scope_name("MOUNT_CONTROL") {
     method bind_root @id(1) @rights(mount_control) -> {
         client_end<directory, transfer, move> directory @id(1);
     };
@@ -549,7 +557,7 @@ worker 侧规则汇总：
 - 实现用户态 `ramdiskd` block manager、固定内存盘、driver queue、区间 lease table、protocol dispatcher 和 service discovery。kernel 不加入 `block_device`/`block_device_factory` kobject；BlockDevice buffer 路径使用已有 MemoryObject syscall/frame。
 - 定义并 review `vfsd`↔worker 的私有 NamespaceBinding/MountControl/MutationTicket contract，以及 worker 的 FAT32/exFAT backend contract。
 - SDK 对齐项：C++/Rust 双侧 typed MemoryObject handle 封装（map/read/write 与 rights 检查）、invocation deadline-wait 安全封装；`NA_STATUS_*`/execution outcome 常量改为 generator 共享产物，取代 abi.h/mlibc/std 三处手写映射。
-- 冻结变更打包（单一变更同时落地，任何一步先行都会产生需返工的中间冻结）：上述全部 schema 文件与 directory/file revision bump；abi.h 全部新宏——right bit 13–26、scope 16–22、§6.1 feature/flags/state 宏、`NA_BOOTSTRAP_FLAG_EARLY_SERVICE=1u<<1`；boot archive 通过 `naos://service/rootdir/0` ServiceDirectory 资源发布，不再增加 bootstrap capability kind；ADR §18.5 全集生成物（含 per-method `protocol_metadata.json`、`protocol_abi_test`/`protocol_negative_tests` 生成物与 stale generated file 检测）；Rust 侧 `protocol_error`（负 errno）→`ErrorKind` 转换通道（当前完全缺失），其与 mlibc 的五处既有类别分歧以 mlibc 现值为基线在 manifest 中裁决（`RESOURCE_EXHAUSTED` 的映射单独评审）。
+- 冻结变更打包（单一变更同时落地，任何一步先行都会产生需返工的中间冻结）：上述全部 schema 文件与 directory/file revision bump；abi.h 全部新宏——right bit 13–26、scope 16–22、§6.1 feature/flags/state 宏、`NA_BOOTSTRAP_FLAG_EARLY_SERVICE=1u<<1`；boot archive 通过 `naos://service/rootdir` ServiceDirectory 资源发布，不再增加 bootstrap capability kind；ADR §18.5 全集生成物（含 per-method `protocol_metadata.json`、`protocol_abi_test`/`protocol_negative_tests` 生成物与 stale generated file 检测）；Rust 侧 `protocol_error`（负 errno）→`ErrorKind` 转换通道（当前完全缺失），其与 mlibc 的五处既有类别分歧以 mlibc 现值为基线在 manifest 中裁决（`RESOURCE_EXHAUSTED` 的映射单独评审）。
 
 退出条件：生成的 contract test 拒绝错误 binding/scope/rights、错误 resource disposition、溢出、不支持 flags 和 stale manifest；NaoIDL 层产出确定性 C++ 与 Rust codec/dispatcher tests，并以 Test/Echo 协议的一个 C++ server × Rust client 进程级互操作 test 证明 wire 与 resource disposition 兼容；一个 C++ kernel test 证明已接纳 write 具有稳定 byte snapshot，且没有 completion path 阻塞 IRQ handler。
 
@@ -582,7 +590,7 @@ worker 侧规则汇总：
 | userland block manager | alignment/overflow、read/write、FUA/flush ordering、queue limit、lease close、cancellation 和 cleanup Rust/UDS test |
 | VFS | atomic mount rollback、symlink/mount-root containment、`..`、namespace generation conflict、`EBUSY`、`EXDEV`、worker peer-close、NamespaceBinding 路由（含 anchor 重建）、全局 symlink 预算、mutation 预留竞争、ticket `OUTCOME_UNKNOWN` 对账、stacking `EBUSY`、direct endpoint 生命周期、root mount unmount 拒绝、sync error 后 mount 保持可用、chroot 前 open 的 fd 越界访问为文档化预期成功 test |
 | filesystem worker | malformed metadata、allocation failure、格式专属 crash consistency、flush propagation、media-generation failure、特性矩阵负向路径（`EOPNOTSUPP`）与大量 direct write 不触发 binding 路由 |
-| mlibc | 启用时的 `mount`/`umount` compatibility mapping、`fsync`、`stat`、`getdents`、cwd/chroot 行为和无 raw block fd 时的 error；revision 2 后加 `lstat/fstatat(NOFOLLOW)`、目录 fd 上的 `fsync`、双 dirfd `renameat`（同 instance 成功含 FAT32/exFAT，跨 instance `EXDEV`）与 `linkat`（同 instance 成功限定支持 hard link 的 backend：RAM MVP 或 ext2；FAT32/exFAT 同 instance 返回 `EOPNOTSUPP`，跨 instance `EXDEV`） |
+| mlibc | 启用时的 `mount`/`umount` compatibility mapping、`fsync`、`stat`、`getdents`、cwd/chroot 行为和无 raw block fd 时的 error；revision 1 包含 `lstat/fstatat(NOFOLLOW)`、目录 fd 上的 `fsync`、双 dirfd `renameat`（同 instance 成功含 FAT32/exFAT，跨 instance `EXDEV`）与 `linkat`（同 instance 成功限定支持 hard link 的 backend：RAM MVP 或 ext2；FAT32/exFAT 同 instance 返回 `EOPNOTSUPP`，跨 instance `EXDEV`） |
 | Rust std | 与 mlibc 行等价的同一文件操作集经生成的 naos-idl binding 验证：metadata/symlink_metadata、rename/hard_link（hard_link 成功用例限定支持 hard link 的 backend，FAT32/exFAT 断言 `EOPNOTSUPP`；跨 mount `EXDEV`）、sync_all、错误 `ErrorKind` 映射与 manifest 一致 |
 | QEMU | optional disk cold boot、format/mount/write/flush/unmount/reboot/read 场景；failure path 保留正常 archive-backed boot |
 
@@ -625,7 +633,7 @@ test 必须按需通过生成的 C++ binding、真实编译和 QEMU 验证行为
 规则：
 
 - 软链接目标字节存于具体 worker；相对链接在 worker 内解析，绝对/跨 mount 链接携带同一全局 WalkContext 经 binding 回 `vfsd`；`readlink` 不跟随。
-- `lstat` 与目录 fsync、双 dirfd 原子 rename/link 由 Directory revision 2 的 `stat_node`/`sync`/`rename_at`/`link_at` 承载（USERSPACE ADR §5.3），所有列出的 backend 必须实现或确定性返回矩阵中的错误码；mlibc 与 Rust std 两侧同步交付。
+- `lstat` 与目录 fsync、双 dirfd 原子 rename/link 由 Directory revision 1 的 `stat_node`/`sync`/`rename_at`/`link_at` 承载（USERSPACE ADR §5.3），所有列出的 backend 必须实现或确定性返回矩阵中的错误码；mlibc 与 Rust std 两侧同步交付。
 - 硬链接只能由同一 filesystem worker 在自己的 metadata transaction 内实现并维护 st_nlink；`vfsd` 只确认两端是否同一 mount，跨 mount 必须 `EXDEV`。
 - FAT32/exFAT 没有原生 inode、hard link、symlink、UID/GID 或 POSIX permission：link、symlink 必须显式返回并测试 `EOPNOTSUPP`。若产品要求这些语义，首个持久 worker 应改为 ext2/NaFS 这类 inode filesystem。
 - 用侧车/overlay 在 FAT 上模拟 POSIX 语义必须另立 PRD，定义持久格式、崩溃恢复和外部 FAT 工具并发修改后的行为。

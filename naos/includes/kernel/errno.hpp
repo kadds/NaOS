@@ -42,6 +42,11 @@
 #endif
 #define ENXIO -6
 
+#ifdef ENODEV
+#undef ENODEV
+#endif
+#define ENODEV -19
+
 #ifdef ENOEXEC
 #undef ENOEXEC
 #endif
@@ -72,6 +77,16 @@
 #endif
 #define EBUSY -16
 
+#ifdef EIDRM
+#undef EIDRM
+#endif
+#define EIDRM -43
+
+#ifdef EALREADY
+#undef EALREADY
+#endif
+#define EALREADY -114
+
 #ifdef EEXIST
 #undef EEXIST
 #endif
@@ -82,10 +97,20 @@
 #endif
 #define ENOMEM -12
 
+#ifdef ENOSPC
+#undef ENOSPC
+#endif
+#define ENOSPC -28
+
 #ifdef EINVAL
 #undef EINVAL
 #endif
 #define EINVAL -22
+
+#ifdef ERANGE
+#undef ERANGE
+#endif
+#define ERANGE -34
 
 #ifdef ENOTTY
 #undef ENOTTY
@@ -96,6 +121,11 @@
 #undef EOVERFLOW
 #endif
 #define EOVERFLOW -75
+
+#ifdef ESTALE
+#undef ESTALE
+#endif
+#define ESTALE -116
 
 #ifdef ENOTSUP
 #undef ENOTSUP

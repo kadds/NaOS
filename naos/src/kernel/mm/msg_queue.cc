@@ -2,6 +2,7 @@
 #include "freelibcxx/hash_map.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
+#include "kernel/task.hpp"
 #include "kernel/timer.hpp"
 #include "kernel/ucontext.hpp"
 
@@ -108,6 +109,19 @@ bool write_for_write(message_queue_t *queue, flag_t flags)
     return true;
 }
 
+void destroy_message_pack(message_pack_t *msg)
+{
+    if (msg == nullptr)
+        return;
+    while (msg->rest_msg != nullptr)
+    {
+        auto *segment = msg->rest_msg;
+        msg->rest_msg = segment->next;
+        memory::Delete<>(memory::KernelBuddyAllocatorV, segment);
+    }
+    memory::Delete<>(memory::KernelBuddyAllocatorV, msg);
+}
+
 i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 length, flag_t flags)
 {
     if (unlikely(length > max_message_pack_bytes) || queue->close)
@@ -118,24 +132,52 @@ i64 write_msg(message_queue_t *queue, msg_type type, const byte *buffer, u64 len
     msg->type = type;
     write_msg_data(msg, buffer, length);
 
+    bool inserted = false;
     {
-        uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
-        if (!write_for_write(queue, flags))
-            return -1;
-        auto list_opt = queue->msg_packs.get(type);
-        msg_pack_list_t *list;
+        for (;;)
+        {
+            bool closed = false;
+            {
+                uctx::RawSpinLockUninterruptibleContext icu(queue->spinlock);
+                if (queue->close)
+                {
+                    closed = true;
+                }
+                else if (queue->msg_count < queue->maximum_msg_count)
+                {
+                    auto list_opt = queue->msg_packs.get(type);
+                    msg_pack_list_t *list;
+                    if (!list_opt.has_value())
+                    {
+                        list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV,
+                                                            memory::KernelCommonAllocatorV);
+                        queue->msg_packs.insert(type, list);
+                    }
+                    else
+                    {
+                        list = list_opt.value();
+                    }
+                    list->push_back(msg);
+                    queue->msg_count++;
+                    inserted = true;
+                }
+            }
+            if (inserted)
+                break;
+            if (closed || (flags & msg_flags::no_block))
+            {
+                destroy_message_pack(msg);
+                return -1;
+            }
 
-        if (!list_opt.has_value())
-        {
-            list = memory::New<msg_pack_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-            queue->msg_packs.insert(type, list);
+            const auto result = queue->sender_wait_queue.do_wait_result(
+                [queue] { return queue->msg_count < queue->maximum_msg_count || queue->close; });
+            if (result == task::wait_result::process_exit)
+            {
+                destroy_message_pack(msg);
+                task::do_exit_thread(0);
+            }
         }
-        else
-        {
-            list = list_opt.value();
-        }
-        list->push_back(msg);
-        queue->msg_count++;
     }
     queue->receiver_wait_queue.do_wake_up();
     return length;
@@ -217,8 +259,11 @@ i64 read_msg(message_queue_t *queue, msg_type type, byte *buffer, u64 length, fl
             wait->queue = queue;
             wait->type = type;
             wait->flags = flags;
-            queue->receiver_wait_queue.do_wait([wait] { return wait_reader_condition(wait); });
+            const auto result =
+                queue->receiver_wait_queue.do_wait_result([wait] { return wait_reader_condition(wait); });
             memory::Delete<>(memory::KernelCommonAllocatorV, wait);
+            if (result == task::wait_result::process_exit)
+                task::do_exit_thread(0);
         }
         else
         {

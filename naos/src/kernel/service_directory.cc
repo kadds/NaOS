@@ -1,4 +1,5 @@
 #include "kernel/service_directory.hpp"
+#include "kernel/service_directory_policy.hpp"
 
 #include "kernel/errno.hpp"
 #include "kernel/ipc/channel.hpp"
@@ -16,7 +17,7 @@ handle_control *global_service_directory_control = nullptr;
 
 bool connect_allowed(const char *uri, u64 uri_size, process_id listener_owner, const task::process_t *caller)
 {
-    constexpr char vfs_admin[] = "naos://service/fs/vfs/0/admin";
+    constexpr char vfs_admin[] = "naos://service/fs/vfs/admin";
     constexpr u64 vfs_admin_size = sizeof(vfs_admin) - 1;
     if (uri_size != vfs_admin_size || memcmp(uri, vfs_admin, vfs_admin_size) != 0)
         return true;
@@ -58,7 +59,89 @@ directory::directory()
     : kobject(type_e::service_directory)
     , entries_(memory::KernelCommonAllocatorV)
     , listeners_(memory::KernelCommonAllocatorV)
+    , view_uris_(memory::KernelCommonAllocatorV)
+    , view_publish_uris_(memory::KernelCommonAllocatorV)
 {
+}
+
+handle_t<directory> directory::make_scoped_view(const handle_t<directory> &parent, const char *const *uris,
+                                                u64 uri_count)
+{
+    if (!parent || !uri_allowlist_is_subset(uris, uri_count, parent_permits_uri, &*parent))
+        return {};
+    auto view = handle_t<directory>::make();
+    if (!view)
+        return {};
+    view->view_parent_ = parent;
+    view->view_uris_.ensure(uri_count);
+    if (view->view_uris_.capacity() < uri_count)
+        return {};
+    for (u64 index = 0; index < uri_count; index++)
+    {
+        const char *uri = uris[index];
+        if (uri == nullptr)
+            return {};
+        const u64 size = strlen(uri);
+        if (!valid_uri(uri, size))
+            return {};
+        freelibcxx::string stored(memory::KernelCommonAllocatorV, uri, static_cast<int>(size));
+        if (stored.size() != size)
+            return {};
+        view->view_uris_.push_back(std::move(stored));
+    }
+    return view;
+}
+
+handle_t<directory> directory::make_scoped_provider_view(const handle_t<directory> &parent, const char *const *uris,
+                                                         u64 uri_count, const char *const *publish_uris,
+                                                         u64 publish_uri_count)
+{
+    if (!parent || !uri_allowlist_is_subset(publish_uris, publish_uri_count, parent_permits_publish_uri, &*parent))
+        return {};
+    auto view = make_scoped_view(parent, uris, uri_count);
+    if (!view)
+        return {};
+    view->view_publish_uris_.ensure(publish_uri_count);
+    if (view->view_publish_uris_.capacity() < publish_uri_count)
+        return {};
+    for (u64 index = 0; index < publish_uri_count; index++)
+    {
+        const char *uri = publish_uris[index];
+        if (uri == nullptr)
+            return {};
+        const u64 size = strlen(uri);
+        if (!valid_uri(uri, size))
+            return {};
+        freelibcxx::string stored(memory::KernelCommonAllocatorV, uri, static_cast<int>(size));
+        if (stored.size() != size)
+            return {};
+        view->view_publish_uris_.push_back(std::move(stored));
+    }
+    return view;
+}
+
+handle_t<directory> directory::make_private_registry(u64 max_entries)
+{
+    if (max_entries == 0)
+        return {};
+    auto registry = handle_t<directory>::make();
+    if (!registry)
+        return {};
+    registry->private_registry_ = true;
+    registry->private_registry_entry_limit_ = max_entries;
+    return registry;
+}
+
+bool directory::parent_permits_uri(const void *context, const char *uri, u64 uri_size)
+{
+    const auto *parent = static_cast<const directory *>(context);
+    return parent != nullptr && parent->permits(uri, uri_size);
+}
+
+bool directory::parent_permits_publish_uri(const void *context, const char *uri, u64 uri_size)
+{
+    const auto *parent = static_cast<const directory *>(context);
+    return parent != nullptr && parent->permits_publish(uri, uri_size);
 }
 
 directory::~directory()
@@ -123,6 +206,39 @@ bool directory::valid_uri(const char *uri, u64 uri_size)
     return segment_has_value && !segment_is_dot;
 }
 
+bool directory::permits(const char *uri, u64 uri_size) const
+{
+    if (!view_parent_)
+        return true;
+    for (const auto &allowed : view_uris_)
+    {
+        if (allowed.size() == uri_size && memcmp(allowed.data(), uri, static_cast<size_t>(uri_size)) == 0)
+            return view_parent_->permits(uri, uri_size);
+    }
+    return false;
+}
+
+bool directory::permits_publish(const char *uri, u64 uri_size) const
+{
+    if (!view_parent_)
+        return true;
+    for (const auto &allowed : view_publish_uris_)
+    {
+        if (allowed.size() == uri_size && memcmp(allowed.data(), uri, static_cast<size_t>(uri_size)) == 0)
+            return view_parent_->permits_publish(uri, uri_size);
+    }
+    return false;
+}
+
+i64 directory::validate_view_uri(const char *uri, u64 uri_size) const
+{
+    if (!valid_uri(uri, uri_size))
+        return EINVAL;
+    if (!permits(uri, uri_size) || (!view_parent_ && requires_scoped_view_to_resolve(uri, uri_size)))
+        return EACCES;
+    return 0;
+}
+
 i64 directory::find_locked(const char *uri, u64 uri_size) const
 {
     const auto entries = entries_.cspan();
@@ -153,10 +269,7 @@ void release_table_root(khandle &value)
     value.reset();
 }
 
-void directory::release_entry(entry &value)
-{
-    release_table_root(value.object);
-}
+void directory::release_entry(entry &value) { release_table_root(value.object); }
 
 void directory::release_listener(listener_entry &value)
 {
@@ -167,6 +280,12 @@ void directory::release_listener(listener_entry &value)
 i64 directory::register_service(const char *uri, u64 uri_size, capability::transfer_record &record, bool one_shot,
                                 process_id owner)
 {
+    if (view_parent_)
+    {
+        if (!permits_publish(uri, uri_size))
+            return EACCES;
+        return view_parent_->register_service(uri, uri_size, record, one_shot, owner);
+    }
     if (!valid_uri(uri, uri_size) || !record.moved || !record.resource.valid())
         return EINVAL;
 
@@ -178,9 +297,17 @@ i64 directory::register_service(const char *uri, u64 uri_size, capability::trans
         return ENOMEM;
     allocation_lock_.lock();
     u64 required_capacity = 0;
+    bool full = false;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
         required_capacity = entries_.size() + 1;
+        full = private_registry_ && (entries_.size() >= private_registry_entry_limit_ ||
+                                     listeners_.size() >= private_registry_entry_limit_ - entries_.size());
+    }
+    if (full)
+    {
+        allocation_lock_.unlock();
+        return ENOSPC;
     }
     entries_.ensure(required_capacity);
     if (entries_.capacity() < required_capacity)
@@ -227,8 +354,22 @@ i64 directory::register_service(const char *uri, u64 uri_size, capability::trans
 
 i64 directory::resolve_service(const char *uri, u64 uri_size, capability::transferred_resource &resource)
 {
+    return resolve_service_inner(uri, uri_size, resource, false);
+}
+
+i64 directory::resolve_service_inner(const char *uri, u64 uri_size, capability::transferred_resource &resource,
+                                     bool scoped_view)
+{
     if (!valid_uri(uri, uri_size))
         return EINVAL;
+    if (view_parent_)
+    {
+        if (!permits(uri, uri_size))
+            return EACCES;
+        return view_parent_->resolve_service_inner(uri, uri_size, resource, true);
+    }
+    if (!resolve_uri_allowed(uri, uri_size, scoped_view))
+        return EACCES;
 
     khandle object;
     capability::metadata metadata{};
@@ -270,6 +411,15 @@ i64 directory::resolve_service(const char *uri, u64 uri_size, capability::transf
 i64 directory::listen_service(const char *uri, u64 uri_size, khandle send_endpoint, khandle descriptor, u64 max_pending,
                               process_id owner)
 {
+    if (view_parent_)
+    {
+        if (permits_publish(uri, uri_size))
+            return view_parent_->listen_service(uri, uri_size, std::move(send_endpoint), std::move(descriptor),
+                                                max_pending, owner);
+        release_table_root(send_endpoint);
+        release_table_root(descriptor);
+        return EACCES;
+    }
     auto release_transferred = [&]() {
         release_table_root(send_endpoint);
         release_table_root(descriptor);
@@ -296,9 +446,18 @@ i64 directory::listen_service(const char *uri, u64 uri_size, khandle send_endpoi
     }
     allocation_lock_.lock();
     u64 required_capacity = 0;
+    bool full = false;
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
         required_capacity = listeners_.size() + 1;
+        full = private_registry_ && (entries_.size() >= private_registry_entry_limit_ ||
+                                     listeners_.size() >= private_registry_entry_limit_ - entries_.size());
+    }
+    if (full)
+    {
+        allocation_lock_.unlock();
+        release_transferred();
+        return ENOSPC;
     }
     listeners_.ensure(required_capacity);
     if (listeners_.capacity() < required_capacity)
@@ -335,8 +494,8 @@ i64 directory::listen_service(const char *uri, u64 uri_size, khandle send_endpoi
                 }
             }
             if (result == 0)
-                listeners_.push_back(std::move(stored_uri), std::move(send_endpoint), std::move(descriptor), max_pending,
-                                             owner);
+                listeners_.push_back(std::move(stored_uri), std::move(send_endpoint), std::move(descriptor),
+                                     max_pending, owner);
         }
     }
     allocation_lock_.unlock();
@@ -355,11 +514,30 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
                                capability::transferred_resource &client_resource, u64 &selected_revision,
                                u64 &selected_features)
 {
+    return connect_service_inner(uri, uri_size, expected_uuid, requested_rights, requested_revision, requested_features,
+                                 caller, client_resource, selected_revision, selected_features, false);
+}
+
+i64 directory::connect_service_inner(const char *uri, u64 uri_size, const na_uuid_t &expected_uuid,
+                                     u64 requested_rights, u64 requested_revision, u64 requested_features,
+                                     task::process_t *caller, capability::transferred_resource &client_resource,
+                                     u64 &selected_revision, u64 &selected_features, bool scoped_view)
+{
     client_resource = {};
     selected_revision = 0;
     selected_features = 0;
     if (!valid_uri(uri, uri_size))
         return EINVAL;
+    if (view_parent_)
+    {
+        if (!permits(uri, uri_size))
+            return EACCES;
+        return view_parent_->connect_service_inner(uri, uri_size, expected_uuid, requested_rights, requested_revision,
+                                                   requested_features, caller, client_resource, selected_revision,
+                                                   selected_features, true);
+    }
+    if (!connect_uri_allowed(uri, uri_size, scoped_view))
+        return EACCES;
 
     khandle listener_endpoint;
     khandle listener_descriptor;
@@ -450,8 +628,8 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
     capability::transfer_record_list records(memory::KernelCommonAllocatorV);
     records.push_back(capability::transfer_record(
         NA_HANDLE_INVALID, true, capability::transferred_resource(std::move(server_object), server_metadata)));
-    auto *message = memory::New<naos::ipc::channel_message>(memory::KernelCommonAllocatorV,
-                                                            send->state()->core_channel(), 0, 1);
+    auto *message =
+        memory::New<naos::ipc::channel_message>(memory::KernelCommonAllocatorV, send->state()->core_channel(), 0, 1);
     if (message == nullptr || !message->valid())
     {
         if (message != nullptr)
@@ -482,6 +660,8 @@ i64 directory::connect_service(const char *uri, u64 uri_size, const na_uuid_t &e
 
 i64 directory::unregister_service(const char *uri, u64 uri_size, process_id owner)
 {
+    if (view_parent_)
+        return EACCES;
     if (!valid_uri(uri, uri_size))
         return EINVAL;
 
@@ -511,8 +691,9 @@ i64 directory::unregister_service(const char *uri, u64 uri_size, process_id owne
 i64 directory::list_services(const char *prefix, u64 prefix_size, u64 offset, u64 requested_bytes,
                              freelibcxx::vector<byte> &records, u64 &next, u64 &count) const
 {
-    if ((prefix == nullptr && prefix_size != 0) || prefix_size > 255 ||
-        requested_bytes > NA_CHANNEL_MAX_MESSAGE_BYTES)
+    if (view_parent_)
+        return EACCES;
+    if ((prefix == nullptr && prefix_size != 0) || prefix_size > 255 || requested_bytes > NA_CHANNEL_MAX_MESSAGE_BYTES)
         return EINVAL;
 
     // A trailing slash is accepted for a subtree prefix, but matching is
@@ -539,10 +720,10 @@ i64 directory::list_services(const char *prefix, u64 prefix_size, u64 offset, u6
         auto append_if_matching = [&](const freelibcxx::string &uri) {
             if (output_full)
                 return;
-            const bool prefix_matches = prefix_size == 0 ||
-                                         (uri.size() >= prefix_size &&
-                                          memcmp(uri.data(), prefix, static_cast<size_t>(prefix_size)) == 0 &&
-                                          (uri.size() == prefix_size || uri.data()[prefix_size] == '/'));
+            const bool prefix_matches =
+                prefix_size == 0 ||
+                (uri.size() >= prefix_size && memcmp(uri.data(), prefix, static_cast<size_t>(prefix_size)) == 0 &&
+                 (uri.size() == prefix_size || uri.data()[prefix_size] == '/'));
             if (!prefix_matches)
                 return;
             if (matching_index < offset)

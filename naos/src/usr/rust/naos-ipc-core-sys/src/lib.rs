@@ -43,6 +43,7 @@ pub const OUTCOME_REASON_RESPONDER_ABANDONED: u32 = 6;
 pub const OUTCOME_REASON_BROKER_FAILURE: u32 = 7;
 pub const OUTCOME_REASON_PROTOCOL_VIOLATION: u32 = 8;
 pub const OUTCOME_REASON_UNSUPPORTED: u32 = 9;
+pub const OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN: u32 = 10;
 
 pub type AllocateFn = unsafe extern "C" fn(*mut c_void, usize, usize) -> *mut c_void;
 pub type DeallocateFn = unsafe extern "C" fn(*mut c_void, *mut c_void, usize, usize);

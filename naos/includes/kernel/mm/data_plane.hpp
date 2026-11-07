@@ -3,6 +3,7 @@
 #include "freelibcxx/vector.hpp"
 #include "kernel/kobject.hpp"
 #include "kernel/lock.hpp"
+#include "kernel/mm/data_plane_dma.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/wait.hpp"
 #include "naos/abi.h"
@@ -25,6 +26,18 @@ struct fault_history_t;
 namespace naos::data_plane
 {
 
+constexpr bool memory_object_device_mmio_mapping_is_allowed(u32 object_flags, u32 mapping_flags) noexcept
+{
+    if ((object_flags & NA_MEMORY_FLAG_DEVICE_MMIO) == 0)
+        return true;
+    return (mapping_flags & NA_MEMORY_MAP_SHARED) != 0 && (mapping_flags & NA_MEMORY_MAP_EXEC) == 0;
+}
+
+constexpr bool memory_object_scalar_ipc_is_allowed(u32 object_flags) noexcept
+{
+    return (object_flags & NA_MEMORY_FLAG_DEVICE_MMIO) == 0;
+}
+
 enum class page_fault_result : u8
 {
     ready,
@@ -36,6 +49,7 @@ class memory_object final : public kobject
 {
   public:
     using release_callback = void (*)();
+    using context_release_callback = void (*)(u64 context);
     struct page_alias_tag
     {
     };
@@ -55,10 +69,16 @@ class memory_object final : public kobject
     /// physical pages with write-through/uncached semantics instead of
     /// copying through a shadow buffer.  The physical base must be
     /// page-aligned; the size is not limited by NA_MEMORY_OBJECT_MAX_BYTES.
-    memory_object(phy_addr_t physical, byte *kernel_view, u64 size, release_callback on_release = nullptr);
+    memory_object(phy_addr_t physical, byte *kernel_view, u64 size, release_callback on_release = nullptr,
+                  u64 release_context = 0);
+    /// Direct physical view with an explicit read-only/writeable object flag.
+    memory_object(phy_addr_t physical, byte *kernel_view, u64 size, u32 flags, release_callback on_release = nullptr,
+                  u64 release_context = 0);
+    memory_object(phy_addr_t physical, byte *kernel_view, u64 size, u32 flags, context_release_callback on_release,
+                  u64 release_context);
     ~memory_object() override;
 
-    static type_e type_of() { return type_e::memory_object; }
+    static constexpr type_e type_of() { return type_e::memory_object; }
 
     bool readable(u64 offset, u64 size) const;
     bool writable(u64 offset, u64 size) const;
@@ -70,6 +90,17 @@ class memory_object final : public kobject
     /// Non-null physical base when this object is direct-mapped device
     /// memory (framebuffer).  The kernel view remains valid for read/write.
     phy_addr_t physical() const { return physical_; }
+    /// Kernel ledger identity for a direct physical object, or zero for a
+    /// device view that is not backed by the physical-resource ledger.
+    u64 physical_resource_id() const
+    {
+        return physical_.get() != nullptr && ledger_managed_resource_ ? release_context_ : 0;
+    }
+    /// Account one address-space VMA using this direct physical object.
+    bool acquire_physical_mapping();
+    /// Drop one VMA after its page table and TLB entries are gone. Returns
+    /// true only for the final mapping of the object.
+    bool release_physical_mapping();
 
     /// Bind the object's owned bytes to page frames and make those frames the
     /// single source of truth for both the kernel view and every
@@ -81,6 +112,9 @@ class memory_object final : public kobject
     /// object is not page backed or the offset is outside the object, so a
     /// faulting mapping can fall back to a private page.
     phy_addr_t page_frame(u64 object_offset) const;
+    /// Resolve one full, owned RAM page for a DMA mapping. The caller must keep
+    /// a MemoryObject handle alive until the device mapping is invalidated.
+    na_status_t dma_page_frame(u64 object_offset, dma_direction direction, phy_addr_t &frame) const;
     /// True once publish_shared_pages() bound owned bytes to page frames.
     bool page_backed() const;
     /// True when pages are supplied lazily by a user-space File pager.
@@ -136,6 +170,9 @@ class memory_object final : public kobject
     /// and immutable boot-archive views.
     phy_addr_t physical_{nullptr};
     release_callback on_release_ = nullptr;
+    context_release_callback on_context_release_ = nullptr;
+    u64 release_context_ = 0;
+    bool ledger_managed_resource_ = false;
 };
 
 void init_pager_worker();

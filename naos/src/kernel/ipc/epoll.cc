@@ -46,9 +46,21 @@ bool epoll::target_events(const registration &registration, u64 &events)
 
 epoll::epoll()
     : kobject(type_e::epoll)
-    , registrations_(memory::MemoryAllocatorV)
-    , ready_ring_(memory::MemoryAllocatorV)
+    , registration_chunks_(memory::MemoryAllocatorV)
 {
+    // Keep only the chunk directory and first slot chunk resident initially.
+    // Further chunks are allocated by EPOLL_CTL_ADD before taking lock_.
+    registration_chunks_.ensure(max_registration_chunks);
+    if (registration_chunks_.capacity() < max_registration_chunks)
+        return;
+    registration_chunks_.expand(max_registration_chunks, static_cast<registration_chunk *>(nullptr));
+    registration_chunk *initial_chunk = allocate_registration_chunk();
+    if (initial_chunk == nullptr)
+        return;
+    registration_chunks_[0] = initial_chunk;
+    registration_chunk_count_ = 1;
+    registration_count_ = initial_chunk->size();
+    initialized_ = registration_count_ != 0;
 }
 
 epoll::~epoll()
@@ -57,14 +69,14 @@ epoll::~epoll()
     freelibcxx::vector<u64> tokens(memory::KernelCommonAllocatorV);
     // Reserve before taking the non-sleepable epoll lock.  The destructor is
     // the last owner, so the registration count cannot grow here.
-    const u64 registration_count = registrations_.size();
+    const u64 registration_count = registration_count_;
     targets.ensure(registration_count);
     tokens.ensure(registration_count);
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
-        for (u64 index = 0; index < registrations_.size(); index++)
+        for (u64 index = 0; index < registration_count_; index++)
         {
-            registration &slot = registrations_[index];
+            registration &slot = registration_at_locked(index);
             if (!slot.in_use)
                 continue;
             targets.push_back(slot.target);
@@ -73,9 +85,8 @@ epoll::~epoll()
             slot.queued = false;
             slot.retiring = false;
         }
-        registrations_.clear();
-        ready_ring_.clear();
-        ready_head_ = 0;
+        ready_head_ = invalid_slot;
+        ready_tail_ = invalid_slot;
         ready_count_ = 0;
     }
     for (u64 index = 0; index < targets.size(); index++)
@@ -83,6 +94,9 @@ epoll::~epoll()
         if (targets[index])
             targets[index]->remove_readiness_watcher(this, tokens[index]);
     }
+    for (u64 index = 0; index < registration_chunk_count_; index++)
+        memory::MemoryAllocatorV->Delete(registration_chunks_[index]);
+    registration_chunks_.clear();
     wait_queue_.do_wake_up();
 }
 
@@ -90,45 +104,130 @@ void epoll::notify() { wait_queue_.do_wake_up(); }
 
 u64 epoll::find_registration_locked(na_handle_t handle) const
 {
-    for (u64 index = 0; index < registrations_.size(); index++)
+    for (u64 index = 0; index < registration_count_; index++)
     {
-        if (registrations_.at(index).in_use && registrations_.at(index).handle == handle)
+        const registration &slot = registration_at_locked(index);
+        if (slot.in_use && slot.handle == handle)
             return index;
     }
     return invalid_slot;
 }
 
+epoll::registration &epoll::registration_at_locked(u64 index)
+{
+    CXXASSERT(index < registration_count_);
+    const u64 chunk_index = index / registration_chunk_size;
+    const u64 slot_index = index % registration_chunk_size;
+    return (*registration_chunks_.at(chunk_index))[slot_index];
+}
+
+const epoll::registration &epoll::registration_at_locked(u64 index) const
+{
+    CXXASSERT(index < registration_count_);
+    const u64 chunk_index = index / registration_chunk_size;
+    const u64 slot_index = index % registration_chunk_size;
+    return (*registration_chunks_.at(chunk_index))[slot_index];
+}
+
+bool epoll::has_free_registration_locked() const
+{
+    for (u64 index = 0; index < registration_count_; index++)
+    {
+        const registration &slot = registration_at_locked(index);
+        if (!slot.in_use && !slot.retiring)
+            return true;
+    }
+    return false;
+}
+
+epoll::registration_chunk *epoll::allocate_registration_chunk()
+{
+    auto *chunk = memory::MemoryAllocatorV->New<registration_chunk>(memory::MemoryAllocatorV);
+    if (chunk == nullptr)
+        return nullptr;
+    chunk->ensure(registration_chunk_size);
+    if (chunk->capacity() < registration_chunk_size)
+    {
+        memory::MemoryAllocatorV->Delete(chunk);
+        return nullptr;
+    }
+    chunk->expand(registration_chunk_size, registration{});
+    return chunk;
+}
+
+bool epoll::ensure_registration_capacity(na_handle_t target)
+{
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (find_registration_locked(target) != invalid_slot || has_free_registration_locked())
+            return true;
+        if (registration_count_ >= max_registrations)
+            return false;
+    }
+
+    registration_chunk *candidate = allocate_registration_chunk();
+    if (candidate == nullptr)
+        return false;
+
+    bool available = false;
+    bool attached = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(lock_);
+        if (find_registration_locked(target) != invalid_slot || has_free_registration_locked())
+        {
+            available = true;
+        }
+        else if (registration_count_ < max_registrations && registration_chunk_count_ < max_registration_chunks)
+        {
+            registration_chunks_[registration_chunk_count_++] = candidate;
+            registration_count_ += registration_chunk_size;
+            if (registration_count_ > max_registrations)
+                registration_count_ = max_registrations;
+            attached = true;
+            available = true;
+        }
+    }
+
+    if (!attached)
+        memory::MemoryAllocatorV->Delete(candidate);
+    return available;
+}
+
 void epoll::queue_ready_locked(u64 token)
 {
-    const u64 size = ready_ring_.size();
-    CXXASSERT(ready_count_ < size);
-    ready_ring_[(ready_head_ + ready_count_) % size] = token;
+    CXXASSERT(token < registration_count_);
+    registration &slot = registration_at_locked(token);
+    CXXASSERT(slot.queued);
+    CXXASSERT(ready_count_ < registration_count_);
+    slot.ready_previous = ready_tail_;
+    slot.ready_next = invalid_slot;
+    if (ready_tail_ == invalid_slot)
+        ready_head_ = token;
+    else
+        registration_at_locked(ready_tail_).ready_next = token;
+    ready_tail_ = token;
     ready_count_++;
 }
 
 void epoll::unqueue_ready_locked(u64 token)
 {
-    const u64 size = ready_ring_.size();
-    u64 position = invalid_slot;
-    for (u64 index = 0; index < ready_count_; index++)
-    {
-        if (ready_ring_[(ready_head_ + index) % size] == token)
-        {
-            position = index;
-            break;
-        }
-    }
-    if (position == invalid_slot)
+    if (token >= registration_count_)
         return;
-    // Shift logical queue entries in place.  The destination is always behind
-    // the source, including at the wrap boundary, so this needs no temporary
-    // allocation while lock_ is held.
-    for (u64 index = position; index + 1 < ready_count_; index++)
-    {
-        const u64 destination = (ready_head_ + index) % size;
-        const u64 source = (ready_head_ + index + 1) % size;
-        ready_ring_[destination] = ready_ring_[source];
-    }
+    registration &slot = registration_at_locked(token);
+    if (!slot.queued)
+        return;
+    if (slot.ready_previous == invalid_slot)
+        ready_head_ = slot.ready_next;
+    else
+        registration_at_locked(slot.ready_previous).ready_next = slot.ready_next;
+    if (slot.ready_next == invalid_slot)
+        ready_tail_ = slot.ready_previous;
+    else
+        registration_at_locked(slot.ready_next).ready_previous = slot.ready_previous;
+    slot.ready_previous = invalid_slot;
+    slot.ready_next = invalid_slot;
+    slot.queued = false;
+    CXXASSERT(ready_count_ != 0);
     ready_count_--;
 }
 
@@ -136,15 +235,13 @@ bool epoll::take_ready_locked(u64 &token, registration &snapshot)
 {
     if (ready_count_ == 0)
         return false;
-    token = ready_ring_[ready_head_];
-    ready_head_ = (ready_head_ + 1) % ready_ring_.size();
-    ready_count_--;
-    if (token < registrations_.size())
+    token = ready_head_;
+    unqueue_ready_locked(token);
+    if (token < registration_count_)
     {
-        registration &slot = registrations_[token];
-        if (slot.in_use && slot.queued)
+        registration &slot = registration_at_locked(token);
+        if (slot.in_use)
         {
-            slot.queued = false;
             snapshot = slot;
             return true;
         }
@@ -159,9 +256,9 @@ void epoll::on_readiness_change(u64 token)
 {
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
-        for (u64 index = 0; index < registrations_.size(); index++)
+        for (u64 index = 0; index < registration_count_; index++)
         {
-            registration &slot = registrations_[index];
+            registration &slot = registration_at_locked(index);
             if (slot.in_use && slot.watcher_token == token && !slot.queued)
             {
                 slot.queued = true;
@@ -180,6 +277,12 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
 {
     if (target == NA_HANDLE_INVALID)
         return NA_STATUS_INVALID_HANDLE;
+    if (!initialized_)
+        return NA_STATUS_RESOURCE_EXHAUSTED;
+    // Control operations may allocate a new slot chunk. Serialize them so
+    // concurrent ADD calls cannot consume the same final free slot between
+    // the capacity check and registration insertion.
+    uctx::LockGuard_t<lock::mutex_t> control_guard(registration_growth_lock_);
 
     capability::entry target_entry;
     if (!resources.lookup_native(target, target_entry) || !target_entry.object)
@@ -207,7 +310,7 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
             const u64 index = find_registration_locked(target);
             if (index != invalid_slot)
             {
-                registration &slot = registrations_[index];
+                registration &slot = registration_at_locked(index);
                 removed_target = slot.target;
                 if (slot.queued)
                     unqueue_ready_locked(index);
@@ -226,7 +329,7 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
             removed_target->remove_readiness_watcher(this, token);
         {
             uctx::RawSpinLockUninterruptibleContext guard(lock_);
-            registrations_[token].retiring = false;
+            registration_at_locked(token).retiring = false;
         }
         notify();
         return NA_STATUS_OK;
@@ -236,42 +339,19 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
         return NA_STATUS_INVALID_ARGUMENT;
     if (operation != NA_EPOLL_CTL_ADD && operation != NA_EPOLL_CTL_MOD)
         return NA_STATUS_INVALID_ARGUMENT;
+    if (operation == NA_EPOLL_CTL_ADD && !ensure_registration_capacity(target))
+        return NA_STATUS_RESOURCE_EXHAUSTED;
 
     na_status_t result = NA_STATUS_OK;
     khandle added_target;
     u64 added_slot = invalid_slot;
     u64 added_token = 0;
-    if (operation == NA_EPOLL_CTL_ADD)
-    {
-        // Serialize capacity preparation with the registration commit.  If
-        // two ADDs prepared against the same registration count, both could
-        // grow the ring by one and the second commit would enqueue into a
-        // full ring.
-        allocation_lock_.lock();
-        u64 required_capacity = 0;
-        {
-            uctx::RawSpinLockUninterruptibleContext guard(lock_);
-            required_capacity = registrations_.size() + 1;
-        }
-        // These are the only operations below that may grow a container.  Do
-        // them before acquiring lock_; the commit phase then only constructs
-        // elements in already allocated storage.
-        registrations_.ensure(required_capacity);
-        ready_ring_.expand(required_capacity, 0);
-        const bool capacity_ready =
-            registrations_.capacity() >= required_capacity && ready_ring_.size() >= required_capacity;
-        if (!capacity_ready)
-        {
-            allocation_lock_.unlock();
-            return NA_STATUS_RESOURCE_EXHAUSTED;
-        }
-    }
     {
         uctx::RawSpinLockUninterruptibleContext guard(lock_);
         const u64 index = find_registration_locked(target);
         if (index != invalid_slot)
         {
-            registration &slot = registrations_[index];
+            registration &slot = registration_at_locked(index);
             if (operation == NA_EPOLL_CTL_ADD)
                 result = NA_STATUS_ALREADY_CONSUMED;
             else if (!target_entry.object || slot.generation != target_entry.generation)
@@ -296,26 +376,12 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
         }
         else
         {
-            added_target = target_entry.object;
-            registration slot{};
-            slot.handle = target;
-            slot.watcher_token = next_watcher_token_++;
-            if (slot.watcher_token == 0)
-                slot.watcher_token = next_watcher_token_++;
-            added_token = slot.watcher_token;
-            slot.generation = target_entry.generation;
-            slot.event = *event;
-            slot.last_ready = 0;
-            slot.last_readiness_epoch = added_target->readiness_epoch();
-            slot.target = added_target;
-            slot.in_use = true;
-            slot.queued = false;
-            slot.retiring = false;
             // Reuse a fully retired slot so repeated add/remove cycles do not
             // grow the table; otherwise append a new stable index.
-            for (u64 candidate = 0; candidate < registrations_.size(); candidate++)
+            for (u64 candidate = 0; candidate < registration_count_; candidate++)
             {
-                if (!registrations_[candidate].in_use && !registrations_[candidate].retiring)
+                const registration &slot = registration_at_locked(candidate);
+                if (!slot.in_use && !slot.retiring)
                 {
                     added_slot = candidate;
                     break;
@@ -323,21 +389,43 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
             }
             if (added_slot == invalid_slot)
             {
-                registrations_.push_back(std::move(slot));
-                added_slot = registrations_.size() - 1;
+                if (registration_count_ >= max_registrations)
+                {
+                    result = NA_STATUS_RESOURCE_EXHAUSTED;
+                }
+                else
+                {
+                    // Capacity is prepared outside lock_ before entering this
+                    // registration transaction.
+                    CXXASSERT(false);
+                }
             }
-            else
+            if (result == NA_STATUS_OK)
             {
-                registrations_[added_slot] = std::move(slot);
+                added_target = target_entry.object;
+                registration slot{};
+                slot.handle = target;
+                slot.watcher_token = next_watcher_token_++;
+                if (slot.watcher_token == 0)
+                    slot.watcher_token = next_watcher_token_++;
+                added_token = slot.watcher_token;
+                slot.generation = target_entry.generation;
+                slot.event = *event;
+                slot.last_ready = 0;
+                slot.last_readiness_epoch = added_target->readiness_epoch();
+                slot.target = added_target;
+                slot.in_use = true;
+                slot.queued = false;
+                slot.retiring = false;
+                registration_at_locked(added_slot) = std::move(slot);
+
+                // Queue links live in the stable slot, so enqueue cannot
+                // allocate or overflow.
+                registration_at_locked(added_slot).queued = true;
+                queue_ready_locked(added_slot);
             }
-            // The target may already be ready; queue the new slot so the first
-            // wait observes it without waiting for a fresh notification.
-            registrations_[added_slot].queued = true;
-            queue_ready_locked(added_slot);
         }
     }
-    if (operation == NA_EPOLL_CTL_ADD)
-        allocation_lock_.unlock();
     if (result != NA_STATUS_OK)
         return result;
     if (added_target)
@@ -351,16 +439,16 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
             // target object alive until the rollback is complete.
             {
                 uctx::RawSpinLockUninterruptibleContext guard(lock_);
-                if (added_slot < registrations_.size() && registrations_[added_slot].in_use &&
-                    registrations_[added_slot].watcher_token == added_token &&
-                    registrations_[added_slot].target.operator->() == added_object)
+                if (added_slot < registration_count_ && registration_at_locked(added_slot).in_use &&
+                    registration_at_locked(added_slot).watcher_token == added_token &&
+                    registration_at_locked(added_slot).target.operator->() == added_object)
                 {
-                    if (registrations_[added_slot].queued)
+                    if (registration_at_locked(added_slot).queued)
                         unqueue_ready_locked(added_slot);
-                    registrations_[added_slot].target.reset();
-                    registrations_[added_slot].in_use = false;
-                    registrations_[added_slot].queued = false;
-                    registrations_[added_slot].retiring = false;
+                    registration_at_locked(added_slot).target.reset();
+                    registration_at_locked(added_slot).in_use = false;
+                    registration_at_locked(added_slot).queued = false;
+                    registration_at_locked(added_slot).retiring = false;
                 }
             }
             notify();
@@ -376,9 +464,9 @@ na_status_t epoll::control(task::resource_table_t &resources, na_handle_t target
         bool still_registered = false;
         {
             uctx::RawSpinLockUninterruptibleContext guard(lock_);
-            if (added_slot < registrations_.size())
+            if (added_slot < registration_count_)
             {
-                const auto &slot = registrations_[added_slot];
+                const auto &slot = registration_at_locked(added_slot);
                 still_registered = slot.in_use && !slot.retiring && slot.watcher_token == added_token &&
                                    slot.target.operator->() == added_object;
             }
@@ -472,9 +560,9 @@ bool epoll::process_ready(freelibcxx::vector<na_epoll_event_t> *events)
 
         {
             uctx::RawSpinLockUninterruptibleContext guard(lock_);
-            if (token < registrations_.size())
+            if (token < registration_count_)
             {
-                registration &slot = registrations_[token];
+                registration &slot = registration_at_locked(token);
                 if (slot.in_use && slot.watcher_token == snapshot.watcher_token && slot.handle == snapshot.handle &&
                     slot.generation == snapshot.generation)
                 {
@@ -504,7 +592,8 @@ bool epoll::has_ready() { return process_ready(nullptr); }
 
 void epoll::collect_ready(freelibcxx::vector<na_epoll_event_t> &events) { (void)process_ready(&events); }
 
-na_status_t epoll::wait(freelibcxx::vector<na_epoll_event_t> &events, timeclock::microsecond_t deadline)
+na_status_t epoll::wait(freelibcxx::vector<na_epoll_event_t> &events, timeclock::microsecond_t deadline,
+                        freelibcxx::function_ref<void()> exit_cleanup)
 {
     for (;;)
     {
@@ -513,7 +602,7 @@ na_status_t epoll::wait(freelibcxx::vector<na_epoll_event_t> &events, timeclock:
         if (!events.empty())
             return NA_STATUS_OK;
 
-        const auto status = wait_for_condition(wait_queue_, [&] { return has_ready(); }, deadline);
+        const auto status = wait_for_condition(wait_queue_, [&] { return has_ready(); }, deadline, exit_cleanup);
         if (status != NA_STATUS_OK)
             return status;
 

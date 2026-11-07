@@ -20,6 +20,10 @@
 KLOG_MODULE(arch);
 namespace arch::paging
 {
+namespace
+{
+constexpr u64 deferred_unmap_marker = 1ull << 9;
+}
 
 static_assert(sizeof(pml4t) == 0x1000 && sizeof(pdpt) == 0x1000 && sizeof(pdt) == 0x1000 && sizeof(pt) == 0x1000,
               "sizeof paging struct is not 4KB.");
@@ -45,6 +49,19 @@ T *new_page_table()
     auto p = memory::New<T, freelibcxx::Allocator *, 0x1000>(memory::KernelBuddyAllocatorV);
     memory::global_zones->get_page(p)->set_page_table_counter(0);
     return p;
+}
+
+template <typename T>
+    requires page_table<T>
+T *try_new_page_table()
+{
+    static_assert(sizeof(T) == 0x1000, "type _T must be a page table");
+    void *storage = memory::KernelBuddyAllocatorV->try_allocate(sizeof(T), memory::page_size);
+    if (storage == nullptr)
+        return nullptr;
+    auto *table = new (storage) T();
+    memory::global_zones->get_page(table)->set_page_table_counter(0);
+    return table;
 }
 
 template <typename T>
@@ -163,6 +180,61 @@ int counter(PageTable &base)
         }
     }
     return n;
+}
+
+bool split_huge_page(pdpt_entry &entry)
+{
+    if (!entry.is_present() || !entry.is_big_page())
+        return false;
+
+    auto *directory = try_new_page_table<pdt>();
+    if (directory == nullptr)
+        return false;
+
+    const u64 old_flags = entry.flags();
+    const bool huge_page_pat = (entry.data & (1ull << 12)) != 0;
+    const u64 physical_base = reinterpret_cast<u64>(entry.get_phy_addr().get()) & ~(frame_size::size_1gb - 1);
+    for (u64 index = 0; index < 512; ++index)
+    {
+        auto &child = (*directory)[index];
+        child.set_phy_addr(reinterpret_cast<void *>(physical_base + index * frame_size::size_2mb));
+        child.set_flags(old_flags);
+        if (huge_page_pat)
+            child.data |= 1ull << 12;
+    }
+    page_table2page(*directory)->set_page_table_counter(512);
+
+    entry.set_next(directory);
+    entry.set_flags(flags::present | flags::writable);
+    return true;
+}
+
+bool split_big_page(pd_entry &entry)
+{
+    if (!entry.is_present() || !entry.is_big_page())
+        return false;
+
+    auto *table = try_new_page_table<pt>();
+    if (table == nullptr)
+        return false;
+
+    const u64 old_flags = entry.flags();
+    const bool large_page_pat = (entry.data & (1ull << 12)) != 0;
+    const u64 physical_base = reinterpret_cast<u64>(entry.get_phy_addr().get()) & ~(frame_size::size_2mb - 1);
+    u64 leaf_flags = old_flags & ~flags::big_page;
+    if (large_page_pat)
+        leaf_flags |= flags::attribute_ext;
+    for (u64 index = 0; index < 512; ++index)
+    {
+        auto &child = (*table)[index];
+        child.set_phy_addr(reinterpret_cast<void *>(physical_base + index * frame_size::size_4kb));
+        child.set_flags(leaf_flags);
+    }
+    page_table2page(*table)->set_page_table_counter(512);
+
+    entry.set_next(table);
+    entry.set_flags(flags::present | flags::writable);
+    return true;
 }
 
 Unpaged_Text_Section u64 get_bits_unpaged(u64 addr, u8 start_bit, u8 bit_count)
@@ -304,9 +376,102 @@ void temp_update_uncached(void *virt, u64 pages)
     __asm__ __volatile__("movq %0, %%cr3	\n\t" : : "r"(temp_pml4_addr) : "memory");
 }
 
+namespace
+{
+bool configure_non_available_physical_aliases_uncacheable(page_table_t &paging, u64 mapped_bytes)
+{
+    if (kernel_args == nullptr || kernel_args->mmap == 0 || kernel_args->mmap_count == 0)
+        return false;
+    const auto *map = memory::pa2va<const kernel_memory_map_item *>(phy_addr_t::from(kernel_args->mmap));
+    if (map == nullptr)
+        return false;
+
+    constexpr u64 uncacheable_flags = flags::write_through | flags::cache_disable;
+    const auto set_uncacheable_bytes = [&](u64 base, u64 end) {
+        if (base >= end)
+            return true;
+        if (end > ~u64{0} - (memory::page_size - 1))
+            return false;
+        const u64 page_base = base & ~(memory::page_size - 1);
+        const u64 page_end = (end + memory::page_size - 1) & ~(memory::page_size - 1);
+        return page_end <= mapped_bytes && page_end >= page_base &&
+               paging.set_linear_cache_flags(phy_addr_t::from(page_base),
+                                             static_cast<size_t>((page_end - page_base) / memory::page_size),
+                                             uncacheable_flags);
+    };
+
+    for (u64 index = 0; index < kernel_args->mmap_count; ++index)
+    {
+        const auto &left = map[index];
+        if (left.len == 0)
+            continue;
+        if (left.addr > ~u64{0} - left.len)
+            return false;
+        if (left.addr >= mapped_bytes)
+            continue;
+        const u64 left_end = left.addr + (left.len > mapped_bytes - left.addr ? mapped_bytes - left.addr : left.len);
+        for (u64 other_index = index + 1; other_index < kernel_args->mmap_count; ++other_index)
+        {
+            const auto &right = map[other_index];
+            if (right.len == 0)
+                continue;
+            if (right.addr > ~u64{0} - right.len)
+                return false;
+            if (right.addr >= mapped_bytes)
+                continue;
+            const u64 right_end =
+                right.addr + (right.len > mapped_bytes - right.addr ? mapped_bytes - right.addr : right.len);
+            if (left.addr < right_end && right.addr < left_end &&
+                (left.map_type == map_type_t::available || right.map_type == map_type_t::available))
+                return false;
+        }
+    }
+
+    u64 available_ranges = 0;
+    for (u64 index = 0; index < kernel_args->mmap_count; ++index)
+    {
+        const auto &item = map[index];
+        if (item.len == 0 || item.map_type != map_type_t::available || item.addr >= mapped_bytes)
+            continue;
+        if (item.addr > ~u64{0} - item.len)
+            return false;
+        available_ranges++;
+    }
+
+    u64 cursor = 0;
+    u64 visited_ranges = 0;
+    while (visited_ranges < available_ranges)
+    {
+        const kernel_memory_map_item *next_range = nullptr;
+        for (u64 index = 0; index < kernel_args->mmap_count; ++index)
+        {
+            const auto &item = map[index];
+            if (item.len == 0 || item.map_type != map_type_t::available || item.addr < cursor ||
+                item.addr >= mapped_bytes)
+                continue;
+            if (next_range == nullptr || item.addr < next_range->addr)
+                next_range = &item;
+        }
+        if (next_range == nullptr)
+            return false;
+
+        if (!set_uncacheable_bytes(cursor, next_range->addr))
+            return false;
+        const u64 available_length =
+            next_range->len > mapped_bytes - next_range->addr ? mapped_bytes - next_range->addr : next_range->len;
+        cursor = next_range->addr + available_length;
+        visited_ranges++;
+    }
+    return set_uncacheable_bytes(cursor, mapped_bytes);
+}
+} // namespace
+
+void flush_caches_for_kernel_mapping_transition() { __asm__ __volatile__("mfence\n\twbinvd\n\tmfence" : : : "memory"); }
+
 void init_ap()
 {
     auto &kernel_paging = memory::kernel_vm_info->paging();
+    flush_caches_for_kernel_mapping_transition();
     kernel_paging.load();
 }
 
@@ -337,6 +502,8 @@ void init()
         kernel_paging.big_page_map_to(virt_start, pages, phy_addr_t::from(0), arch::paging::flags::writable, 0);
         KLOG_DEBUG("Paging at 2MB granularity");
     }
+    if (!configure_non_available_physical_aliases_uncacheable(kernel_paging, max_maped_memory))
+        KLOG_PANIC("Unable to establish consistent cache types for reserved physical aliases");
     KLOG_DEBUG("Map address {}-{} -> {}-{}", log::hex(0), log::hex(max_maped_memory), virt_start,
                log::hex(memory::minimum_kernel_addr + max_maped_memory));
 }
@@ -402,6 +569,76 @@ void page_table_t::reload()
                          : "+g"(c)
                          :
                          : "memory");
+}
+
+bool page_table_t::set_linear_cache_flags(phy_addr_t physical_base, size_t pages, u64 cache_flags)
+{
+    constexpr u64 cache_mask = flags::write_through | flags::cache_disable;
+    u64 physical = reinterpret_cast<u64>(physical_base());
+    if ((physical & (frame_size::size_4kb - 1)) != 0 || (cache_flags & ~cache_mask) != 0 ||
+        pages > (~u64{0} - physical) / frame_size::size_4kb || physical > ~u64{0} - memory::minimum_kernel_addr)
+        return false;
+
+    size_t remaining_pages = pages;
+    while (remaining_pages != 0)
+    {
+        const u64 virtual_address = memory::minimum_kernel_addr + physical;
+        auto index = from_virt_addr(virtual_address);
+        auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
+        auto &pml4e = (*base_)[pml4e_index];
+        if (!pml4e.is_present())
+            return false;
+        auto &pdpe = pml4e[pdpe_index];
+        if (!pdpe.is_present())
+            return false;
+
+        if (pdpe.is_big_page())
+        {
+            const u64 huge_base = reinterpret_cast<u64>(pdpe.get_phy_addr().get()) & ~(frame_size::size_1gb - 1);
+            const u64 huge_offset = virtual_address & (frame_size::size_1gb - 1);
+            if (huge_base > ~u64{0} - huge_offset || huge_base + huge_offset != physical)
+                return false;
+            if (huge_offset == 0 && remaining_pages >= huge_pages)
+            {
+                pdpe.set_flags((pdpe.flags() & ~cache_mask) | cache_flags);
+                physical += frame_size::size_1gb;
+                remaining_pages -= huge_pages;
+                continue;
+            }
+            if (!split_huge_page(pdpe))
+                return false;
+            continue;
+        }
+
+        auto &pde = pdpe[pde_index];
+        if (!pde.is_present())
+            return false;
+        if (pde.is_big_page())
+        {
+            const u64 big_base = reinterpret_cast<u64>(pde.get_phy_addr().get()) & ~(frame_size::size_2mb - 1);
+            const u64 big_offset = virtual_address & (frame_size::size_2mb - 1);
+            if (big_base > ~u64{0} - big_offset || big_base + big_offset != physical)
+                return false;
+            if (big_offset == 0 && remaining_pages >= big_pages)
+            {
+                pde.set_flags((pde.flags() & ~cache_mask) | cache_flags);
+                physical += frame_size::size_2mb;
+                remaining_pages -= big_pages;
+                continue;
+            }
+            if (!split_big_page(pde))
+                return false;
+            continue;
+        }
+
+        auto &pte = pde[pte_index];
+        if (!pte.is_present() || reinterpret_cast<u64>(pte.get_phy_addr().get()) != physical)
+            return false;
+        pte.set_flags((pte.flags() & ~cache_mask) | cache_flags);
+        physical += frame_size::size_4kb;
+        remaining_pages--;
+    }
+    return true;
 }
 
 void page_table_t::map(void *virt_start, size_t pages, u64 flags, u64 actions)
@@ -616,6 +853,22 @@ void page_table_t::map_kernel_space()
 
 void page_table_t::unmap(void *virt_start, size_t pages, bool release_frames)
 {
+    unmap_impl(virt_start, pages, release_frames, false, false);
+}
+
+void page_table_t::unmap_deferred_reclaim(void *virt_start, size_t pages)
+{
+    unmap_impl(virt_start, pages, false, true, false);
+}
+
+void page_table_t::reclaim_unmapped(void *virt_start, size_t pages, bool release_frames)
+{
+    unmap_impl(virt_start, pages, release_frames, false, true);
+}
+
+void page_table_t::unmap_impl(void *virt_start, size_t pages, bool release_frames, bool defer_reclaim,
+                              bool reclaim_deferred)
+{
     auto p = reinterpret_cast<uintptr_t>(virt_start);
     if (p & (frame_size::size_4kb - 1))
     {
@@ -700,30 +953,32 @@ void page_table_t::unmap(void *virt_start, size_t pages, bool release_frames)
         if (!skip)
         {
             pte = &(*pde)[pte_index];
-            if (pte->is_present())
+            const bool deferred_leaf = (pte->data & deferred_unmap_marker) != 0;
+            if ((reclaim_deferred && deferred_leaf) || (!reclaim_deferred && pte->is_present()))
             {
-                // An upper-level x86 page-table entry may be writable even
-                // when this leaf is read-only; the leaf is the authority for
-                // the actual access.  Preserve that invariant while making
-                // the path private for removal.  Reusing a read-only leaf's
-                // flags here would clear the shared user PML4 writable bit
-                // and make an unrelated stack page fault with PRESENT|WRITE.
-                u64 ancestor_flags = pte->flags();
-                if (pml4e_index < 256)
-                    ancestor_flags |= flags::writable;
-                const bool shared_path = memory::global_zones->get_page_reference(pml4e->get_addr()) > 1 ||
-                                          memory::global_zones->get_page_reference(pdpe->get_addr()) > 1 ||
-                                          memory::global_zones->get_page_reference(pde->get_addr()) > 1;
-                if (shared_path)
+                if (!reclaim_deferred)
                 {
-                    ensure(pml4e_index, pdpe_index, pde_index, ancestor_flags,
-                           action_flags::cow | action_flags::override | action_flags::copy_all);
+                    // An upper-level x86 page-table entry may be writable
+                    // even when this leaf is read-only; the leaf is the
+                    // authority for the access. Preserve that invariant when
+                    // making a shared path private for removal.
+                    u64 ancestor_flags = pte->flags();
+                    if (pml4e_index < 256)
+                        ancestor_flags |= flags::writable;
+                    const bool shared_path = memory::global_zones->get_page_reference(pml4e->get_addr()) > 1 ||
+                                             memory::global_zones->get_page_reference(pdpe->get_addr()) > 1 ||
+                                             memory::global_zones->get_page_reference(pde->get_addr()) > 1;
+                    if (shared_path)
+                    {
+                        ensure(pml4e_index, pdpe_index, pde_index, ancestor_flags,
+                               action_flags::cow | action_flags::override | action_flags::copy_all);
 
-                    pml4e = &(*base_)[pml4e_index];
-                    pdpe = &(*pml4e)[pdpe_index];
-                    pde = &(*pdpe)[pde_index];
-                    pte = &(*pde)[pte_index];
-                    need_check = true;
+                        pml4e = &(*base_)[pml4e_index];
+                        pdpe = &(*pml4e)[pdpe_index];
+                        pde = &(*pdpe)[pde_index];
+                        pte = &(*pde)[pte_index];
+                        need_check = true;
+                    }
                 }
 
                 auto addr = to_virt_addr(index_t::from_pack(pml4e_index, pdpe_index, pde_index, pte_index));
@@ -736,38 +991,48 @@ void page_table_t::unmap(void *virt_start, size_t pages, bool release_frames)
                         log::hex(addr));
 
                 const phy_addr_t leaf_physical = memory::va2pa(pte->get_addr());
-                if (release_frames && memory::global_zones->which(leaf_physical) != nullptr)
-                    memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
-                pte->set_flags(0);
-
-                auto pde_page = page_table2page(pde->next());
-                auto pdpe_page = page_table2page(pdpe->next());
-                auto pml4e_page = page_table2page(pml4e->next());
-
-                kassert(pde_page->page_table_counter() > 0, "invalid status");
-                pde_page->sub_page_table_counter();
-                if (pde_page->page_table_counter() == 0)
+                if (defer_reclaim)
                 {
-                    delete_page_table(&pde->next());
-                    pde->set_flags(0);
-
-                    kassert(pdpe_page->page_table_counter() > 0, "invalid status");
-                    pdpe_page->sub_page_table_counter();
+                    // Keep the data frame and every page-table page alive
+                    // until remote CPUs have acknowledged the TLB shootdown.
+                    pte->clear_present();
+                    pte->data |= deferred_unmap_marker;
                 }
-
-                if (pdpe_page->page_table_counter() == 0)
+                else
                 {
-                    delete_page_table(&pdpe->next());
-                    pdpe->set_flags(0);
+                    if (release_frames && memory::global_zones->which(leaf_physical) != nullptr)
+                        memory::KernelBuddyAllocatorV->deallocate(pte->get_addr());
+                    pte->set_flags(0);
 
-                    kassert(pml4e_page->page_table_counter() > 0, "invalid status");
-                    pml4e_page->sub_page_table_counter();
-                }
+                    auto pde_page = page_table2page(pde->next());
+                    auto pdpe_page = page_table2page(pdpe->next());
+                    auto pml4e_page = page_table2page(pml4e->next());
 
-                if (pml4e_page->page_table_counter() == 0)
-                {
-                    delete_page_table(&pml4e->next());
-                    pml4e->set_flags(0);
+                    kassert(pde_page->page_table_counter() > 0, "invalid status");
+                    pde_page->sub_page_table_counter();
+                    if (pde_page->page_table_counter() == 0)
+                    {
+                        delete_page_table(&pde->next());
+                        pde->set_flags(0);
+
+                        kassert(pdpe_page->page_table_counter() > 0, "invalid status");
+                        pdpe_page->sub_page_table_counter();
+                    }
+
+                    if (pdpe_page->page_table_counter() == 0)
+                    {
+                        delete_page_table(&pdpe->next());
+                        pdpe->set_flags(0);
+
+                        kassert(pml4e_page->page_table_counter() > 0, "invalid status");
+                        pml4e_page->sub_page_table_counter();
+                    }
+
+                    if (pml4e_page->page_table_counter() == 0)
+                    {
+                        delete_page_table(&pml4e->next());
+                        pml4e->set_flags(0);
+                    }
                 }
             }
         }
@@ -1006,8 +1271,11 @@ void page_table_t::clone_readonly_to(void *virt_start, size_t pages, page_table_
     auto index = from_virt_addr(p);
     auto [pml4e_index, pdpe_index, pde_index, pte_index] = index.unpack();
 
+    // One PML4 entry covers 512 GB of 4K pages; advance both the page cursor
+    // and the PML4 index together, and never index past the PML4 itself.
+    constexpr size_t pages_per_pml4e = huge_pages * 512;
     auto to_page = page_table2page(*to->base_);
-    for (size_t i = 0; i < pages; i += huge_pages)
+    for (size_t i = 0; i < pages && pml4e_index < 512; i += pages_per_pml4e, pml4e_index++)
     {
         // clone pml4e
         auto &src = (*base_)[pml4e_index];
@@ -1026,8 +1294,6 @@ void page_table_t::clone_readonly_to(void *virt_start, size_t pages, page_table_
 
         dst = src;
         to_page->add_page_table_counter();
-
-        pml4e_index++;
     }
     kassert(counter(*to->base_) == to_page->page_table_counter(), "counter not match");
 }

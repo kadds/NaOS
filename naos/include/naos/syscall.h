@@ -94,10 +94,6 @@ na_status_t _na_process_handle_open(int64_t pid, na_handle_t *result);
 na_status_t _na_process_spawn(const na_process_spawn_frame_t *frame);
 na_status_t _na_pipe_create(na_pipe_create_frame_t *frame);
 na_status_t _na_memory_create(uint64_t size, uint64_t flags, na_handle_t *result);
-/* Power off the platform. Only an opt-in smoke runner calls this: normal
-   init supervision never powers the machine down on its own. */
-na_status_t _na_power_off(void);
-
 #ifdef __cplusplus
 }
 #endif

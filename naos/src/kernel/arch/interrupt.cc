@@ -6,14 +6,53 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/io.hpp"
 #include "kernel/arch/klib.hpp"
+#include "kernel/irq.hpp"
+#include "kernel/irq/soft_irq_drain.hpp"
 #include "kernel/log.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/zone.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/ucontext.hpp"
 KLOG_MODULE(arch);
 extern volatile char interrupt_code_end[], interrupt_code_start[];
+
+namespace irq
+{
+namespace
+{
+u32 irq_context_depth[arch::cpu::max_cpu_support]{};
+}
+
+bool in_irq_context()
+{
+    if (!arch::cpu::has_init())
+        return true;
+    const u32 cpu_id = arch::cpu::current().get_id();
+    return cpu_id >= arch::cpu::max_cpu_support || irq_context_depth[cpu_id] != 0;
+}
+
+struct irq_context_guard
+{
+    bool active;
+    u32 cpu;
+    irq_context_guard()
+        : active(arch::cpu::has_init())
+        , cpu(active ? arch::cpu::current().get_id() : 0)
+    {
+        if (active && cpu < arch::cpu::max_cpu_support)
+            irq_context_depth[cpu]++;
+        else
+            active = false;
+    }
+    ~irq_context_guard()
+    {
+        if (active)
+            irq_context_depth[cpu]--;
+    }
+};
+} // namespace irq
 
 namespace arch::interrupt
 {
@@ -53,10 +92,23 @@ ExportC void on_intr_exit(const regs_t *regs) {}
 
 ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
 {
+    irq::irq_context_guard irq_depth_guard;
     ::task::disable_preempt();
-    if (likely(global_call_func))
-        global_call_func(regs, 0);
-    APIC::EOI(regs->vector);
+    if (regs->vector == irq::hard_vector::interrupt_drain)
+    {
+        // This reserved vector has a dedicated path: EOI first, then inspect
+        // the MSI vector with interrupts temporarily enabled. It must not run
+        // under the generic IRQ callback-list lock because the target MSI can
+        // nest while being drained.
+        APIC::EOI(regs->vector);
+        SMP::handle_interrupt_drain_ipi();
+    }
+    else
+    {
+        if (likely(global_call_func))
+            global_call_func(regs, 0);
+        APIC::EOI(regs->vector);
+    }
     kassert(!idt::is_enable(), "Should never enable interrupt");
     // void *intr_stack = cpu::current().get_interrupt_rsp();
 
@@ -69,9 +121,14 @@ ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
         if (!cpu::current().in_soft_irq())
         {
             cpu::current().enter_soft_irq();
-            idt::enable();
+            // Soft handlers already run under their registration lock with
+            // interrupts masked. Keep them masked between handlers too, so a
+            // one-shot IRQ cannot requeue work after the final drain but
+            // before in_soft_irq is cleared.
             global_soft_irq_func(regs, 0);
-            idt::disable();
+            irq::detail::drain_soft_interrupts_at_exit_barrier([] { idt::disable(); },
+                                                               [] { return cpu::current().has_irq_pending(); },
+                                                               [regs] { global_soft_irq_func(regs, 0); });
             cpu::current().exit_soft_irq();
         }
     }
@@ -80,6 +137,7 @@ ExportC _ctx_interrupt_ void do_irq(const regs_t *regs)
 
 ExportC _ctx_interrupt_ void __do_irq(const regs_t *regs)
 {
+    irq::irq_context_guard irq_depth_guard;
     kassert(!idt::is_enable(), "Should never enable interrupt");
 
     if (!cpu::current().is_in_interrupt_context())

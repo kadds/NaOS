@@ -18,7 +18,7 @@ use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use alloc::format;
 use alloc::string::String;
 use naos_idl::stream;
-use naos_idl::{CallError, ProtocolClientEndpoint, ResourceTable};
+use naos_idl::{CallError, ProtocolClientEndpoint, ResourceTransferBuilder};
 use naos_sys as sys;
 
 /// Fixed wire overhead of one `Stream.write` request: the generated header
@@ -175,9 +175,7 @@ impl StreamRegion {
             self.object = Some(object);
             self.window = allocation;
         }
-        self.object
-            .as_ref()
-            .ok_or(WriteFailure::SubmitFailed(-1))
+        self.object.as_ref().ok_or(WriteFailure::SubmitFailed(-1))
     }
 }
 
@@ -215,7 +213,7 @@ impl StreamOps for NativeStreamOps {
                 // report the failure instead of inventing a descriptor here.
                 return Err(WriteFailure::SubmitFailed(-1));
             };
-            let mut resources = ResourceTable::new();
+            let mut resources = ResourceTransferBuilder::new();
             let Ok(buffer) = resources.push_duplicate(owner) else {
                 return Err(WriteFailure::SubmitFailed(-1));
             };
@@ -227,16 +225,11 @@ impl StreamOps for NativeStreamOps {
             // The request envelope is the generated fixed header only; the
             // payload travel is the region.
             let mut request_wire = [0_u8; STREAM_WRITE_HEADER_BYTES];
-            let mut invocation = match stream::submit_write(
-                &client,
-                &request,
-                resources,
-                &mut request_wire,
-                0,
-            ) {
-                Ok(invocation) => invocation,
-                Err(error) => return Err(WriteFailure::SubmitFailed(call_error_code(error))),
-            };
+            let mut invocation =
+                match stream::submit_write(&client, &request, resources, &mut request_wire, 0) {
+                    Ok(invocation) => invocation,
+                    Err(error) => return Err(WriteFailure::SubmitFailed(call_error_code(error))),
+                };
 
             let completed = crate::wait_for_completion(invocation.get(), u64::MAX);
             if !completed {

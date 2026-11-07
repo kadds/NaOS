@@ -1,4 +1,5 @@
 #![no_std]
+#![cfg_attr(target_os = "naos", feature(allocator_api))]
 
 #[cfg(test)]
 extern crate std;
@@ -13,6 +14,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(feature = "alloc")]
 mod mimalloc;
+
+#[cfg(feature = "alloc")]
+pub use mimalloc::{HeapQuota, HeapQuotaAllocator, HeapQuotaScope, HeapQuotaScopeError};
 
 #[cfg(all(test, feature = "alloc"))]
 mod mimalloc_tests;
@@ -438,10 +442,7 @@ fn distinct(left: sys::Handle, right: sys::Handle) -> bool {
 }
 
 fn validate_bootstrap(frame: &sys::BootstrapFrame) -> bool {
-    if frame.struct_size < size_of::<sys::BootstrapFrame>() as u32
-        || frame.reserved0 != 0
-        || frame.reserved0 != 0
-    {
+    if frame.struct_size < size_of::<sys::BootstrapFrame>() as u32 || frame.reserved0 != 0 {
         return false;
     }
 

@@ -1605,6 +1605,39 @@ void pty_shell_smoke()
     close(master);
 }
 
+int service_directory_scope_smoke()
+{
+    constexpr const char *protected_uris[] = {
+        NAOS_SERVICE_FIRMWARE_ROOT, NAOS_SERVICE_ACPI_FIXED_HARDWARE,   NAOS_SERVICE_ACPI_RESOURCE_AUTHORITY,
+        NAOS_SERVICE_PCI_DISCOVERY, NAOS_SERVICE_PLATFORM_PCI_TOPOLOGY,
+    };
+    bool ok = true;
+    for (const auto *uri : protected_uris)
+    {
+        na_handle_t handle = NA_HANDLE_INVALID;
+        const int error = naos_service_resolve(uri, &handle);
+        if (error == EACCES && handle == NA_HANDLE_INVALID)
+            continue;
+        if (handle != NA_HANDLE_INVALID)
+            (void)_na_handle_close(handle);
+        smoke_printf("service-directory-scope: denied %s error=%d\n", uri, error);
+        ok = false;
+    }
+
+    na_handle_t vfs = NA_HANDLE_INVALID;
+    const int vfs_error = naos_service_resolve(NAOS_SERVICE_VFS, &vfs);
+    if (vfs_error != 0 || vfs == NA_HANDLE_INVALID)
+    {
+        smoke_printf("service-directory-scope: public VFS resolve failed error=%d\n", vfs_error);
+        ok = false;
+    }
+    if (vfs != NA_HANDLE_INVALID)
+        (void)_na_handle_close(vfs);
+
+    smoke_log(ok ? "service-directory-scope: PASS\n" : "service-directory-scope: FAIL\n");
+    return ok ? 0 : 1;
+}
+
 int run_smoke_suite()
 {
     ttyd_smoke();
@@ -1652,6 +1685,8 @@ extern "C" int main(int argc, char **argv)
     // it owns machine teardown, so returning here never ends the boot.
     if (argc == 2 && strcmp(argv[1], "--vfs-data") == 0)
         return vfs_data_plane_smoke();
+    if (argc == 2 && strcmp(argv[1], "--service-directory-scope") == 0)
+        return service_directory_scope_smoke();
     if (argc == 2 && strcmp(argv[1], "--mobj-share") == 0)
         return mobj_share_smoke();
     if (argc == 2 && strcmp(argv[1], "--mobj-protect") == 0)

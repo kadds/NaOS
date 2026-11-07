@@ -41,7 +41,7 @@ NaOS 的目录树、路径解析、inode/dentry、具体文件系统、挂载策
 
 ### 3.1 目标
 
-- `vfsd` 是 `/` 根目录、路径解析和 boot archive 中常规文件的唯一实现者；通过 ServiceDirectory 发布 `naos://service/fs/vfs/0` listener。
+- `vfsd` 是 `/` 根目录、路径解析和 boot archive 中常规文件的唯一实现者；通过 ServiceDirectory 发布 `naos://service/fs/vfs` listener。
 - mlibc 的普通文件操作仅保留 typed `Directory`/`File` client invocation；相同的代码可调用 `CLIENT_END`。
 - kernel 以 boot module 启动 `vfsd`，并将 `rootfsd`、`init` 和
   `rootimage` 以只读 `MemoryObject` 发布为一次性 ServiceDirectory 资源；
@@ -108,7 +108,7 @@ init / mlibc / BusyBox
 - kernel 以固定 boot module 启动它，使它不依赖尚未存在的文件系统；它获得最小诊断 stream 与受限的 ServiceDirectory 注册权限，并通过 boot-module resources 启动 worker。
 - 它是 root namespace 和 mount policy 的系统策略 TCB；失效会导致根目录服务失效。MVP 将其视为受控系统级故障，不承诺透明重启。
 - 它仍是普通用户态保护域：不链接 kernel target、不包含 `naos/includes/kernel`、没有直接页表/调度器/硬件访问权；它只能通过 capability 与 syscall 使用 kernel mechanism。
-- `vfsd` 只需要获得能注册 `naos://service/fs/vfs/0` 的最小权限。后续 service manager 接管 namespace policy 时，应进一步从它剥离全局服务管理权。
+- `vfsd` 只需要获得能注册 `naos://service/fs/vfs` 的最小权限。后续 service manager 接管 namespace policy 时，应进一步从它剥离全局服务管理权。
 
 ### 4.3 绑定规则
 
@@ -132,7 +132,7 @@ init / mlibc / BusyBox
    bootstrap 模式没有 root/cwd，不能作为普通应用运行时。
 5. vfsd 在用户态建立根 namespace，创建 `Directory`/`File` protocol
    descriptor 和 listener，启动 rootfsd，等待 mounted route commit 后发布
-   `naos://service/fs/vfs/0`。
+   `naos://service/fs/vfs`。
 6. vfsd 从独立 `init` boot module 创建 bootstrap channel，调用
    process-spawn，并向子进程发送 root/cwd、ServiceDirectory 和 stdio。
 
@@ -166,12 +166,12 @@ MVP RAM backend 仍必须：
 
 现有 `File`/`Directory` schema 是迁移基础，但在首次发布前做以下受控演进：
 
-1. 为 `File` 增加 `materialize`：`File` 现为 revision 3（方法至 `writev @id(16)`），`materialize` 以 **revision 4 / `@id(17)`** 冻结——请求为空，响应含 MOVE 的只读 `handle<memory_object>`、`u64 length`、`u64 generation` 三个字段。只允许 regular file（否则 `EISDIR`），且拒绝超过上限的文件（`EFBIG`）。不引入新 named right，与 File 现行 read/write 同为 INVOKE-only 面。
+1. 为 `File` 增加 `materialize @id(17)`：整个 File 协议以 revision 1 发布；请求为空，响应含 MOVE 的只读 `handle<memory_object>`、`u64 length`、`u64 generation` 三个字段。只允许 regular file（否则 `EISDIR`），且拒绝超过上限的文件（`EFBIG`）。不引入新 named right，与 File 现行 read/write 同为 INVOKE-only 面。
 2. 新增 `MemoryObject` 创建 syscall/frame。创建者获得 read/write/map/transfer rights；vfsd 写完 executable 后以 `handle_restrict` 派生只读、只读-map 的对象并 MOVE 给调用者。禁止 vfsd 用 caller 提供的普通 MObj 作为 executable backing。
 3. `na_process_exec_frame` 和 `na_process_spawn_frame` 的 executable 接受 `NA_BINDING_MEMORY_OBJECT + NA_SCOPE_MEMORY_OBJECT`；相应 process loader 接收 MObj，而不是 `fs::vfs::file`。`path` 只用于 argv/诊断名称，不能再次被 kernel 打开。
 4. `Directory.set_current` 与 `set_root` 保留为兼容性 no-op（user-service endpoint 固定返回 `ENOTSUP`，method id 12/13 冻结保留）；mlibc 更新自身 root/cwd binding，不允许 invocation 改写 `process_t` 的目录状态。`chroot` 通过 `Directory.open(..., NA_DIRECTORY_OPEN_FLAG_CHROOT)` 向 vfsd 请求一个以目标目录为 visible root/current 的受限 Directory endpoint；同进程 root/cwd 共享该 binding，fork/spawn 通过协议级 `Directory.clone_binding` 取得新的 unique endpoint。
-5. 新增 `NA_BOOTSTRAP_FLAG_EARLY_SERVICE`。常规 bootstrap 仅要求 root/cwd/ServiceDirectory/stdio；early service bootstrap 复用 ServiceDirectory 与 STDIN/STDOUT/STDERR 资源槽（root/cwd 槽缺省），vfsd 通过 `naos://service/rootdir/0` 查询 boot archive，诊断流即 stdout/stderr，kernel 校验的最小资源数在该 flag 下按分支生效。
-6. **Directory revision 2：POSIX 接口完备性**（与 `clone_binding @id(14)` 同一 revision 冻结）。补齐四组缺口：无跟随查询、目录 fsync、双 dirfd 原子 rename/link。各方法不引入新 named right，沿用 Directory 现行 INVOKE-only 面（与既有 rename/link/remove 同级，possession-is-authority）；`stat_node` 对不存在的路径返回 `ENOENT`；`stat_node` 的 NOFOLLOW、`rename_at` 的 NOREPLACE/EXCHANGE 预留位、`link_at` 的 FOLLOW 位随 schema 同步定名 UAPI 宏；末尾的 `reserved @uapi_name("DIRECTORY_SET_METADATA") @id(19)` 为未来 metadata 类操作（chmod/utimens 方向）保留 ordinal 防止复用（名称持久化进 manifest 并生成占位宏），Phase 0 落 schema 时以生成器支持的保留形式表达：
+5. 新增 `NA_BOOTSTRAP_FLAG_EARLY_SERVICE`。常规 bootstrap 仅要求 root/cwd/ServiceDirectory/stdio；early service bootstrap 复用 ServiceDirectory 与 STDIN/STDOUT/STDERR 资源槽（root/cwd 槽缺省），vfsd 通过 `naos://service/rootdir` 查询 boot archive，诊断流即 stdout/stderr，kernel 校验的最小资源数在该 flag 下按分支生效。
+6. **Directory revision 1：POSIX 接口完备性**（与 `clone_binding @id(14)` 同一 revision 冻结）。补齐四组缺口：无跟随查询、目录 fsync、双 dirfd 原子 rename/link。各方法不引入新 named right，沿用 Directory 现行 INVOKE-only 面（与既有 rename/link/remove 同级，possession-is-authority）；`stat_node` 对不存在的路径返回 `ENOENT`；`stat_node` 的 NOFOLLOW、`rename_at` 的 NOREPLACE/EXCHANGE 预留位、`link_at` 的 FOLLOW 位随 schema 同步定名 UAPI 宏；末尾的 `reserved @uapi_name("DIRECTORY_SET_METADATA") @id(19)` 为未来 metadata 类操作（chmod/utimens 方向）保留 ordinal 防止复用（名称持久化进 manifest 并生成占位宏），Phase 0 落 schema 时以生成器支持的保留形式表达：
 
    ```naidl
    method stat_node @id(15) @max_bytes(65536) {
@@ -255,7 +255,7 @@ daemon service state machine / lease / VFS / FAT semantics
   the early-service runtime.
 - 生成的 client/server 以 `RpcTransport` 为参数；service handler 只依赖平台无关的 async trait/Future、`Endpoint`、`CallError` 和 `ResourceSet`。`RpcTransport` 是区分 Linux/NaOS 的唯一系统边界，daemon 的 lease、路径、FAT 和错误语义不得出现 target-specific 分支。
 - Linux 版本使用正常 `std` 和 Tokio runtime。控制面使用本机 UDS（优先 `SOCK_SEQPACKET`；stream 方案必须使用长度前缀），或可替换的 Linux queue transport（POSIX mqueue，或 eventfd + shared-memory ring）。这些接口只允许本机进程 IPC，不引入 TCP/UDP/HTTP/DNS 或网络文件系统逻辑。
-- ServiceDirectory 使用统一的层级 URI：文件系统服务位于 `naos://service/fs/...`，块设备服务位于 `naos://service/block/...`；当前 host slice 的三个实例是 `naos://service/fs/vfs/0`、`naos://service/fs/exfat/0` 和 `naos://service/block/ramdiskd/0`。`list_prefix` 按 URI segment 边界分页返回匹配的所有实例，不能把 bulk 注册 sidecar 当成服务。
+- ServiceDirectory 使用统一的层级 URI：文件系统服务位于 `naos://service/fs/...`，块设备服务位于 `naos://service/block/...`；当前 host slice 的三个实例是 `naos://service/fs/vfs`、`naos://service/fs/exfat` 和 `naos://service/block/ramdiskd`。`list_prefix` 按 URI segment 边界分页返回匹配的所有实例，不能把 bulk 注册 sidecar 当成服务。
 - NaOS 版本使用 Rust fork 提供的 `std`/`naos_runtime`；Tokio 通过 NaOS 专用 Mio selector/waker 将 capability handle 的 epoll readiness 接入统一 runtime selector，transport 仍通过 Kernel Channel、NaoIDL invocation 和 capability MOVE/DUP 实现。Linux 的 opaque resource id 只模拟 capability contract，不宣称具有 kernel capability 的安全强度。
 - service 的入口仍是同一个 crate：Linux 和 NaOS 都使用普通 Rust `fn main()`；NaOS 的
   `_start`、TLS、bootstrap 和 `std` 初始化由 `naos-runtime`/custom `std` 完成，业务入口只
@@ -301,7 +301,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 
 ### Phase 0：契约冻结与可测试接口
 
-冻结本 ADR 的 MVP 范围、error mapping、early-service bootstrap 和 MObj executable 设计。补齐 NaoIDL schema——含 Directory revision 2 全部方法与 File `materialize` 的 schema 冻结及 C++/Rust 双侧 binding 生成（实现落地分别在后续 phase）——生成式 server skeleton 和 C++ protocol contract tests。
+冻结本 ADR 的 MVP 范围、error mapping、early-service bootstrap 和 MObj executable 设计。补齐 NaoIDL schema——含 Directory revision 1 全部方法与 File `materialize` 的 schema 冻结及 C++/Rust 双侧 binding 生成（实现落地分别在后续 phase）——生成式 server skeleton 和 C++ protocol contract tests。
 
 > 依赖注记（r5）：本 phase 及 Phase 2 的 Rust server binding 依赖 [VFS ADR](VFS_BLOCK_DEVICE_ADR.md) §10 定义的 generator/Rust-server 前置交付；该 ADR 的前置条件已按阶段分解，其 Phase 0 与本 phase 为共享前置，二者不构成顺序循环。
 
@@ -323,7 +323,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 
 移除 mlibc 对 File/Directory 必为 kernel view 的假设；root/cwd 只保存在 runtime；将 spawn/exec 和 private file mmap 切换到 sized MemoryObject + File pager。
 
-退出条件：BusyBox 文件基本操作、relative/absolute/chroot path、symlink loop、open flags、fd offset sharing、fork/spawn bootstrap 在 QEMU 上通过；revision 2 的 `stat_node`/`sync`/`rename_at`/`link_at` 在 mlibc 与 Rust std 两侧同时可用，`lstat`、`fsync(dirfd)` 与跨目录 `renameat` 不再依赖被删除的模拟路径。
+退出条件：BusyBox 文件基本操作、relative/absolute/chroot path、symlink loop、open flags、fd offset sharing、fork/spawn bootstrap 在 QEMU 上通过；revision 1 的 `stat_node`/`sync`/`rename_at`/`link_at` 在 mlibc 与 Rust std 两侧同时可用，`lstat`、`fsync(dirfd)` 与跨目录 `renameat` 不再依赖被删除的模拟路径。
 
 ### Phase 4：删除内核 VFS
 
@@ -361,7 +361,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 
 - 服务端 protocol/domain error 使用现有负 errno；transport failure 保留 `NOT_DELIVERED` 与 `OUTCOME_UNKNOWN`，mlibc 映射为确定的 POSIX error。写入、create、rename 等非幂等操作不得对 `OUTCOME_UNKNOWN` 自动重试。
 - vfsd crash 后已发出的 client endpoint 必须 `PEER_CLOSED`；新的服务实例只可通过显式 ServiceDirectory connect 获得，旧 fd 不得静默改绑。
-- boot archive service 注册为一次性资源，只有 vfsd 能在启动阶段消费；init 和一般进程不会获得该 MemoryObject。vfsd 获得的 ServiceDirectory 权限仅允许 `naos://service/fs/vfs/0` 注册，或由独立 service manager 进一步缩小。
+- boot archive service 注册为一次性资源，只有 vfsd 能在启动阶段消费；init 和一般进程不会获得该 MemoryObject。vfsd 获得的 ServiceDirectory 权限仅允许 `naos://service/fs/vfs` 注册，或由独立 service manager 进一步缩小。
 - 所有 archive offset/length、path length、symlink depth、directory cursor、channel bytes/resources 和 MObj size 必须做溢出及硬上限校验。
 - kernel 不信任 vfsd 的 `Stat`、file type 或 executable 名称；它只验证 MemoryObject capability、rights、范围和 ELF bytes。ELF 无效只终止本次 exec/spawn，不破坏调用者现有地址空间。
 
@@ -372,7 +372,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 | NaoIDL / client-server | File/Directory request/response、resource metadata、错误/peer close、inline 64 KiB bound、bulk descriptor/shared-region ownership、畸形 payload |
 | vfsd | TAR 边界/overflow、普通文件/目录/link/symlink、RAM backend 语义、open offset、rename/unlink、materialize immutable snapshot |
 | kernel | MObj rights、exec 的 ELF segment load、private mmap、bootstrap resource transaction、vfsd crash 后 capability/waiter cleanup |
-| mlibc | `openat`、`readv/writev`、`getdents`、`chdir/chroot/getcwd`、`dup` offset sharing、spawn/exec、错误映射；revision 2 后加 `lstat/fstatat`、`fsync(dirfd)`、双 dirfd `renameat/linkat`（含 EXDEV 负向） |
+| mlibc | `openat`、`readv/writev`、`getdents`、`chdir/chroot/getcwd`、`dup` offset sharing、spawn/exec、错误映射；revision 1 包含 `lstat/fstatat`、`fsync(dirfd)`、双 dirfd `renameat/linkat`（含 EXDEV 负向） |
 | Rust std | 与 mlibc 行等价的同一操作集：`fs::metadata/symlink_metadata/rename/hard_link/symlink/read_dir`、`File::sync_all`、`chdir/current_dir`；错误 `ErrorKind` 映射与 manifest 一致 |
 | Linux service transport | 三个独立 daemon 进程、UDS/queue round-trip、memory/file block backend、bulk 4 KiB/64 KiB/大于 64 KiB、backpressure/cancellation、服务重启；不依赖 QEMU |
 | QEMU | cold boot、BusyBox smoke、文件服务故障、超限 executable、serial log 中无 VFS fallback |
@@ -392,7 +392,7 @@ Linux 版本先在无 QEMU 环境完成三个独立进程的基础链路：`ramd
 | TAR 被误当成长期开机依赖 | MVP 只把 TAR 视为当前镜像格式的用户态导入器；`tarfsd` 是可选拆分，不阻塞后续 FAT/ext2 等 backend。 |
 | `/dev` path 仍在 mlibc 特判 | 明确标为过渡债务，后续由 DevFS 统一；本期不把它伪装成 kernel VFS。 |
 | mlibc 仍调用 `SET_CURRENT`/`SET_ROOT` 并对 Directory 使用 `_na_handle_duplicate` | Phase 3 清偿：`clone_binding` 冻结后删除 kernel `process_t` 目录改写路径，runtime 只保存引用计数 binding。 |
-| mlibc 路径 stat 用 open+stat 模拟且忽略 `AT_SYMLINK_NOFOLLOW`；`fsync` 固定发 FILE_SYNC 使目录 fd 错配失败；`renameat/linkat` 对不同 handle 直接 EXDEV | 三者均为登记债务，由 revision 2 的 `stat_node`/`sync`/`rename_at`/`link_at` 清偿（§5.3 第 6 条）；清偿前不得宣称对应 POSIX 特性受支持。 |
+| mlibc 路径 stat 用 open+stat 模拟且忽略 `AT_SYMLINK_NOFOLLOW`；`fsync` 固定发 FILE_SYNC 使目录 fd 错配失败；`renameat/linkat` 对不同 handle 直接 EXDEV | 三者均为登记债务，由 revision 1 的 `stat_node`/`sync`/`rename_at`/`link_at` 清偿（§5.3 第 6 条）；清偿前不得宣称对应 POSIX 特性受支持。 |
 | Rust std / platform transport 分叉 | Linux 先用完整 `std + Tokio + RpcTransport`（UDS 或 Linux queue）完成无 QEMU 的独立进程验证；NaOS 复用同一 service/codec，以 `naos_std + naos_runtime + Kernel Channel` adapter 接入。Linux 的 std PAL、opaque resource id 和 `MemoryObject` 私有 fd backing 仅是本机 contract 模拟，不得误称为 NaOS capability 安全边界；大段数据必须走共享 data-plane，不能退化为 inline 全量复制。 |
 
 ## 10. 首个实现切片

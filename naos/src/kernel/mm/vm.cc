@@ -1,4 +1,5 @@
 #include "kernel/mm/vm.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/exception.hpp"
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/mm.hpp"
@@ -8,9 +9,11 @@
 #include "kernel/irq.hpp"
 #include "kernel/log.hpp"
 #include "kernel/mm/data_plane.hpp"
+#include "kernel/mm/fork_mapping_policy.hpp"
 #include "kernel/mm/memory.hpp"
 #include "kernel/mm/new.hpp"
 #include "kernel/signal.hpp"
+#include "kernel/smp.hpp"
 #include "kernel/task.hpp"
 #include "kernel/types.hpp"
 #include "kernel/ucontext.hpp"
@@ -24,13 +27,48 @@ namespace memory::vm
 struct map_t;
 bool write_back_memory_object(arch::paging::page_table_t &paging, const vm_t &vm, map_t &mapping);
 
+namespace
+{
+info_t *record_page_fault(task::thread_t *thread, const irq::interrupt_info *inter, u64 address)
+{
+    const auto *regs = inter == nullptr ? nullptr : static_cast<const regs_t *>(inter->regs);
+    if (thread == nullptr || thread->process == nullptr)
+        KLOG_PANIC_STACK(regs, "page fault without a current process thread={} at {}", log::hex(thread),
+                         log::hex(address));
+
+    auto *const process = thread->process;
+    auto *const info = static_cast<info_t *>(process->mm_info);
+    if (info == nullptr)
+    {
+        // The address space may already be released while a pending kernel
+        // user copy still targets this process (for example a reply to a
+        // dying process). Treat it as an unhandled fault so the usercopy
+        // fixup can fail the copy instead of panicking the kernel.
+        return nullptr;
+    }
+
+    info->record_page_fault();
+    return info;
+}
+} // namespace
+
+void release_physical_mapping(map_t &mapping)
+{
+    if (!mapping.physical_mapping_acquired || mapping.memory_object == nullptr)
+        return;
+    if (!mapping.memory_object->release_physical_mapping())
+        KLOG_WARN("physical memory object mapping lease release failed");
+    mapping.physical_mapping_acquired = false;
+}
+
 irq::request_result _ctx_interrupt_ page_fault_cow(const irq::interrupt_info *inter, u64 extra_data)
 {
     auto *thread = cpu::current().get_task();
     if (thread != nullptr)
     {
-        auto info = (info_t *)thread->process->mm_info;
-        info->record_page_fault();
+        auto *const info = record_page_fault(thread, inter, extra_data);
+        if (info == nullptr)
+            return irq::request_result::no_handled;
 
         if (is_kernel_space_pointer(extra_data))
         {
@@ -60,12 +98,13 @@ irq::request_result _ctx_interrupt_ page_fault_present(const irq::interrupt_info
     auto *thread = cpu::current().get_task();
     if (thread != nullptr)
     {
+        auto *info = record_page_fault(thread, inter, extra_data);
+        if (info == nullptr)
+            return irq::request_result::no_handled;
         if (extra_data == 0)
         {
             KLOG_WARN("null pointer access pid {} tid {}", thread->process->pid, thread->tid);
         }
-        auto info = (info_t *)thread->process->mm_info;
-        info->record_page_fault();
 
         if (is_kernel_space_pointer(extra_data))
         {
@@ -135,7 +174,11 @@ irq::request_result _ctx_interrupt_ page_fault_func(const irq::interrupt_info *i
     }
     if (!(inter->error_code & flags::present))
     {
-        return page_fault_present(inter, extra_data);
+        const auto result = page_fault_present(inter, extra_data);
+        if (result == irq::request_result::no_handled &&
+            naos::usercopy::recover_page_fault(static_cast<regs_t *>(inter->regs)))
+            return irq::request_result::ok;
+        return result;
     }
     if (inter->error_code & flags::instruction_fetch)
     {
@@ -282,7 +325,7 @@ vm_t *vm_allocator::get_vm_area(u64 p)
     // KLOG_INFO("not find {} {}-{}", log::hex(p), log::hex(it->start), log::hex(it->end));
     return nullptr;
 }
-void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
+bool vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
 {
     // The source page table is made read-only by share_to().  Both address
     // spaces therefore need the COW VMA marker so a write in either process
@@ -290,14 +333,53 @@ void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
     uctx::RawWriteLockUninterruptibleContext ctx(list_lock);
     to.range_bottom = this->range_bottom;
     to.range_top = this->range_top;
+    const auto rollback = [&]() {
+        auto iter = to.list.begin();
+        while (iter != to.list.end())
+        {
+            const vm_t copied = *iter;
+            iter = to.list.remove(iter);
+            if ((copied.flags & flags::memory_object) == 0)
+                continue;
+            auto *mapping = reinterpret_cast<map_t *>(copied.user_data);
+            if (mapping != nullptr)
+            {
+                release_physical_mapping(*mapping);
+                memory::Delete<>(memory::KernelCommonAllocatorV, mapping);
+            }
+        }
+    };
     for (auto &item : list)
     {
-        item.flags |= flag;
+        if (item.method == page_fault_method::unmapping)
+        {
+            rollback();
+            return false;
+        }
         auto new_item = item;
+        new_item.flags |= flag;
         if (item.flags & flags::memory_object)
         {
             map_t *mt = (map_t *)item.user_data;
+            if (mt == nullptr || mt->memory_object == nullptr ||
+                !fork_policy::can_inherit_mapping(mt->memory_object->physical().get() != nullptr))
+            {
+                rollback();
+                return false;
+            }
             new_item.user_data = (u64)memory::New<map_t>(memory::KernelCommonAllocatorV, *mt, info);
+            auto *cloned_mapping = reinterpret_cast<map_t *>(new_item.user_data);
+            if (cloned_mapping == nullptr ||
+                (mt->memory_object->physical().get() != nullptr && !cloned_mapping->physical_mapping_acquired))
+            {
+                if (cloned_mapping != nullptr)
+                {
+                    release_physical_mapping(*cloned_mapping);
+                    memory::Delete<>(memory::KernelCommonAllocatorV, cloned_mapping);
+                }
+                rollback();
+                return false;
+            }
         }
         else
         {
@@ -305,6 +387,9 @@ void vm_allocator::clone(info_t *info, vm_allocator &to, flag_t flag)
         }
         to.list.insert(new_item);
     }
+    for (auto &item : list)
+        item.flags |= flag;
+    return true;
 }
 
 u64 to_paging_flags(u64 flags)
@@ -342,6 +427,11 @@ info_t::info_t(arch::paging::page_table_t paging)
 
 info_t::~info_t()
 {
+    // Process address spaces are destroyed only after their threads have
+    // exited. Flush any translations they left on remote CPUs once, before
+    // taking uninterruptible VMA/page-table locks; flushing once per VMA
+    // while interrupts are disabled can deadlock two concurrent teardowns.
+    SMP::flush_all_tlb();
     uctx::RawWriteLockUninterruptibleContext ctx(vma_.get_lock());
     uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
     auto &list = vma_.get_list();
@@ -356,10 +446,17 @@ info_t::~info_t()
                 KLOG_WARN("memory object write-back failed during address-space teardown");
             // Shared-page mappings point straight at the object's page cache;
             // those frames belong to the object, not to this address space.
-            release_frames = !mapping->pages_shared;
+            // A direct physical view borrows device/firmware frames and must
+            // never return them to the buddy allocator during teardown.
+            release_frames = !mapping->pages_shared && mapping->memory_object->physical().get() == nullptr;
+            paging_.unmap(reinterpret_cast<void *>(it->start), (it->end - it->start) / page_size, release_frames);
+            arch::paging::page_table_t::reload();
+            release_physical_mapping(*mapping);
             memory::Delete<>(memory::KernelCommonAllocatorV, mapping);
+            continue;
         }
         paging_.unmap(reinterpret_cast<void *>(it->start), (it->end - it->start) / page_size, release_frames);
+        arch::paging::page_table_t::reload();
     }
 }
 
@@ -400,6 +497,23 @@ bool write_back_memory_object(arch::paging::page_table_t &paging, const vm_t &vm
         }
     }
     return true;
+}
+
+map_t::map_t(const map_t &rhs, info_t *vmi)
+    : memory_object(rhs.memory_object)
+    , backing(rhs.backing)
+    , file_offset(rhs.file_offset)
+    , file_length(rhs.file_length)
+    , data_offset(rhs.data_offset)
+    , data_length(rhs.data_length)
+    , mmap_length(rhs.mmap_length)
+    , shared(rhs.shared)
+    , pages_shared(rhs.pages_shared)
+    , fault_history(rhs.fault_history)
+    , vm_info(vmi)
+{
+    if (memory_object != nullptr && memory_object->physical().get() != nullptr)
+        physical_mapping_acquired = memory_object->acquire_physical_mapping();
 }
 
 bool info_t::init_brk(u64 start)
@@ -559,11 +673,13 @@ bool info_t::expand_memory_object(u64 alignment_page, u64 access_address, vm_t *
         const u64 relative = alignment_page - item->start;
         if (relative >= mapping->file_length)
             return false;
+        if (mapping->file_offset > std::numeric_limits<u64>::max() - relative)
+            return false;
         const u64 page_flags =
             to_paging_flags(item->flags) | arch::paging::flags::write_through | arch::paging::flags::cache_disable;
         uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
-        paging_.map_to(reinterpret_cast<void *>(alignment_page), 1, physical + relative, page_flags,
-                       arch::paging::action_flags::override);
+        paging_.map_to(reinterpret_cast<void *>(alignment_page), 1, physical + mapping->file_offset + relative,
+                       page_flags, arch::paging::action_flags::override);
         return true;
     }
 
@@ -685,13 +801,25 @@ const vm_t *info_t::map_memory_object(u64 start, khandle backing, naos::data_pla
     if (mapping == nullptr)
         return nullptr;
     mapping->pages_shared = pages_shared;
+    if (object->physical().get() != nullptr)
+    {
+        if (!object->acquire_physical_mapping())
+        {
+            memory::Delete<>(memory::KernelCommonAllocatorV, mapping);
+            return nullptr;
+        }
+        mapping->physical_mapping_acquired = true;
+    }
 
     const vm_t *vm = start == 0 ? vma().allocate_map(aligned_length, mapping_flags, page_fault_method::memory_object,
                                                      reinterpret_cast<u64>(mapping))
                                 : vma().add_map(start, start + aligned_length, mapping_flags,
                                                 page_fault_method::memory_object, reinterpret_cast<u64>(mapping));
     if (vm == nullptr)
+    {
+        release_physical_mapping(*mapping);
         memory::Delete<>(memory::KernelCommonAllocatorV, mapping);
+    }
     return vm;
 }
 
@@ -699,92 +827,123 @@ bool info_t::unmap(u64 addr, u64 size)
 {
     if (size == 0 || (addr & (memory::page_size - 1)) != 0 || (size & (memory::page_size - 1)) != 0)
         return false;
-    auto vm = vma_.get_vm_area(addr);
-    if (!vm)
-        return false;
-    if ((vm->start & (memory::page_size - 1)) != 0 || vm->end <= vm->start ||
-        (vm->end - vm->start) % memory::page_size != 0)
-        return false;
     const u64 end = addr > std::numeric_limits<u64>::max() - size ? 0 : addr + size;
     if (end == 0)
         return false;
-    if (size != vm->end - vm->start)
-    {
-        // MemoryObject mappings carry backing metadata and write-back state;
-        // keep their unmap operation whole until the mapping metadata can be
-        // split together with the VMA. Anonymous native mappings are safe to
-        // split and are used by the user-space allocators.
-        if ((vm->flags & flags::memory_object) != 0 || vm->method != page_fault_method::common)
-            return false;
 
-        // Keep the page-table and VMA mutation atomic with respect to page
-        // faults. The VMA remains present while the selected pages are
-        // removed, then is replaced by the surviving left/right ranges.
-        // Match page_fault_present()'s lock order: VMA first, then the page
-        // table. This prevents a page fault from waiting on paging_spin_ while
-        // an unmap waits for the VMA writer lock.
+    vm_t vm_snapshot(0, 0, 0);
+    map_t *map_data = nullptr;
+    u64 vm_pages = 0;
+    flag_t vm_flags = 0;
+    bool release_frames = false;
+    {
+        // Keep the VMA stable from lookup through the first-phase PTE removal.
+        // The unmapping VMA remains as a reservation until remote TLBs are
+        // flushed and deferred frames/page tables can safely be reclaimed.
         uctx::RawWriteLockUninterruptibleContext vma_context(vma_.get_lock());
-        uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
-        bool found = false;
-        for (auto &item : vma_.get_list())
-        {
-            if (item.end <= addr || item.start >= end)
-                continue;
-            found = true;
-            if ((item.flags & flags::memory_object) != 0 || item.method != page_fault_method::common)
-                return false;
-        }
-        if (!found)
+        auto &vma_list = vma_.get_list();
+        vm_t lookup(addr, addr, 0);
+        auto vm = vma_list.upper_find(lookup);
+        if (vm == vma_list.end() || vm->start > addr || vm->end <= addr || vm->method == page_fault_method::unmapping)
+            return false;
+        if ((vm->start & (memory::page_size - 1)) != 0 || vm->end <= vm->start ||
+            (vm->end - vm->start) % memory::page_size != 0)
             return false;
 
-        paging_.unmap(reinterpret_cast<void *>(addr), size / page_size, true);
-        while (true)
+        if (addr != vm->start || end != vm->end)
         {
-            vm_t *overlap = nullptr;
-            for (auto &item : vma_.get_list())
+            // MemoryObject mappings carry backing metadata and write-back
+            // state; keep their unmap operation whole until the mapping
+            // metadata can be split together with the VMA. Anonymous native
+            // mappings are safe to split and used by the user-space allocators.
+            if ((vm->flags & flags::memory_object) != 0 || vm->method != page_fault_method::common)
+                return false;
+
+            // Keep the page-table and VMA mutation atomic with respect to page
+            // faults. Match page_fault_present()'s VMA -> page-table lock order.
+            uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+            bool found = false;
+            for (auto &item : vma_list)
             {
-                if (item.end > addr && item.start < end)
-                {
-                    overlap = &item;
-                    break;
-                }
+                if (item.end <= addr || item.start >= end)
+                    continue;
+                found = true;
+                if ((item.flags & flags::memory_object) != 0 || item.method != page_fault_method::common)
+                    return false;
             }
-            if (overlap == nullptr)
-                break;
-            const vm_t original = *overlap;
-            vma_.get_list().remove(*overlap);
-            if (original.start < addr)
-                vma_.get_list().insert(vm_t(original.start, addr, original.flags, original.method, original.user_data));
-            if (end < original.end)
-                vma_.get_list().insert(vm_t(end, original.end, original.flags, original.method, original.user_data));
+            if (!found)
+                return false;
+
+            paging_.unmap_deferred_reclaim(reinterpret_cast<void *>(addr), size / page_size);
+            while (true)
+            {
+                vm_t *overlap = nullptr;
+                for (auto &item : vma_list)
+                {
+                    if (item.end > addr && item.start < end)
+                    {
+                        overlap = &item;
+                        break;
+                    }
+                }
+                if (overlap == nullptr)
+                    break;
+                const vm_t original = *overlap;
+                vma_list.remove(*overlap);
+                if (original.start < addr)
+                    vma_list.insert(vm_t(original.start, addr, original.flags, original.method, original.user_data));
+                if (end < original.end)
+                    vma_list.insert(vm_t(end, original.end, original.flags, original.method, original.user_data));
+            }
+            vma_list.insert(vm_t(addr, end, flags::lock, page_fault_method::unmapping, 0));
+            deferred_unmap_count_.fetch_add(1, std::memory_order_release);
+            release_frames = true;
+            vm_pages = size / page_size;
         }
-        arch::paging::page_table_t::reload();
-        return true;
-    }
-    const u64 vm_start = vm->start;
-    const u64 vm_pages = (vm->end - vm->start) / page_size;
-    const flag_t vm_flags = vm->flags;
-    auto *map_data = reinterpret_cast<map_t *>(vm->user_data);
+        else
+        {
+            vm_snapshot = *vm;
+            vm_pages = (vm_snapshot.end - vm_snapshot.start) / page_size;
+            vm_flags = vm_snapshot.flags;
+            map_data = reinterpret_cast<map_t *>(vm_snapshot.user_data);
+            if ((vm_flags & flags::memory_object) != 0 && (vm_flags & flags::writeable) != 0 &&
+                !write_back_memory_object(paging_, vm_snapshot, *map_data))
+                return false;
 
-    if ((vm_flags & flags::memory_object) != 0 && (vm_flags & flags::writeable) != 0 &&
-        !write_back_memory_object(paging_, *vm, *map_data))
-        return false;
-
-    // A shared-page mapping only borrows the object's frames; the object's
-    // page cache frees them when the last capability closes.
-    const bool release_frames = (vm_flags & flags::memory_object) == 0 || !map_data->pages_shared;
-    {
-        uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
-        paging_.unmap(reinterpret_cast<void *>(vm_start), vm_pages, release_frames);
-    }
-
-    vma_.deallocate_map(vm);
-    if ((vm_flags & flags::memory_object) != 0)
-    {
-        memory::Delete<>(memory::KernelCommonAllocatorV, map_data);
+            // A shared-page mapping only borrows the object's frames; the
+            // object's page cache frees them when the last capability closes.
+            release_frames = (vm_flags & flags::memory_object) == 0 ||
+                             (!map_data->pages_shared && map_data->memory_object->physical().get() == nullptr);
+            {
+                uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+                paging_.unmap_deferred_reclaim(reinterpret_cast<void *>(vm_snapshot.start), vm_pages);
+            }
+            vm->method = page_fault_method::unmapping;
+            deferred_unmap_count_.fetch_add(1, std::memory_order_release);
+        }
     }
 
     arch::paging::page_table_t::reload();
+    SMP::flush_all_tlb();
+
+    {
+        uctx::RawWriteLockUninterruptibleContext vma_context(vma_.get_lock());
+        uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+        paging_.reclaim_unmapped(reinterpret_cast<void *>(addr), vm_pages, release_frames);
+        vm_t tombstone_lookup(addr, addr, 0);
+        auto &vma_list = vma_.get_list();
+        auto tombstone = vma_list.upper_find(tombstone_lookup);
+        if (tombstone == vma_list.end() || tombstone->start != addr || tombstone->end != end ||
+            tombstone->method != page_fault_method::unmapping)
+            KLOG_PANIC("deferred VM unmap lost its VMA reservation");
+        vma_list.remove(*tombstone);
+    }
+
+    if ((vm_flags & flags::memory_object) != 0 && map_data != nullptr)
+        release_physical_mapping(*map_data);
+    if ((vm_flags & flags::memory_object) != 0)
+        memory::Delete<>(memory::KernelCommonAllocatorV, map_data);
+    deferred_unmap_count_.fetch_sub(1, std::memory_order_release);
     return true;
 }
 
@@ -795,22 +954,50 @@ bool info_t::decommit(u64 addr, u64 size)
         return false;
     const u64 end = addr + size;
 
-    // Decommit is deliberately restricted to the anonymous VMA class.  An
-    // object mapping owns its backing/cache independently of this page table;
-    // treating it like anonymous storage would corrupt that ownership model.
-    uctx::RawReadLockUninterruptibleContext vma_context(vma_.get_lock());
-    vm_t lookup(addr, addr, 0);
-    auto item = vma_.get_list().upper_find(lookup);
-    if (item == vma_.get_list().end() || item->start > addr || item->end < end ||
-        item->method != page_fault_method::common || (item->flags & flags::memory_object) != 0)
-        return false;
+    vm_t original(0, 0, 0);
+    {
+        // Decommit is restricted to anonymous mappings. Reserve the range as
+        // temporarily non-faultable while its old frames await remote TLB
+        // acknowledgement; then restore the original VMA metadata.
+        uctx::RawWriteLockUninterruptibleContext vma_context(vma_.get_lock());
+        auto &vma_list = vma_.get_list();
+        vm_t lookup(addr, addr, 0);
+        auto item = vma_list.upper_find(lookup);
+        if (item == vma_list.end() || item->start > addr || item->end < end ||
+            item->method != page_fault_method::common || (item->flags & flags::memory_object) != 0)
+            return false;
 
-    // Keep the same VMA -> page-table lock order as page_fault_present().
-    // The VMA remains in place, so a concurrent fault will either see the
-    // old mapping or fault a new zero page after this operation.
-    uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
-    paging_.unmap(reinterpret_cast<void *>(addr), size / memory::page_size, true);
+        original = *item;
+        {
+            uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+            paging_.unmap_deferred_reclaim(reinterpret_cast<void *>(addr), size / memory::page_size);
+        }
+        vma_list.remove(*item);
+        if (original.start < addr)
+            vma_list.insert(vm_t(original.start, addr, original.flags, original.method, original.user_data));
+        vma_list.insert(vm_t(addr, end, flags::lock, page_fault_method::unmapping, 0));
+        if (end < original.end)
+            vma_list.insert(vm_t(end, original.end, original.flags, original.method, original.user_data));
+        deferred_unmap_count_.fetch_add(1, std::memory_order_release);
+    }
+
     arch::paging::page_table_t::reload();
+    SMP::flush_all_tlb();
+
+    {
+        uctx::RawWriteLockUninterruptibleContext vma_context(vma_.get_lock());
+        uctx::RawSpinLockUninterruptibleContext paging_context(paging_spin_);
+        paging_.reclaim_unmapped(reinterpret_cast<void *>(addr), size / memory::page_size, true);
+        auto &vma_list = vma_.get_list();
+        vm_t tombstone_lookup(addr, addr, 0);
+        auto tombstone = vma_list.upper_find(tombstone_lookup);
+        if (tombstone == vma_list.end() || tombstone->start != addr || tombstone->end != end ||
+            tombstone->method != page_fault_method::unmapping)
+            KLOG_PANIC("deferred VM decommit lost its VMA reservation");
+        vma_list.remove(*tombstone);
+        vma_list.insert(vm_t(addr, end, original.flags, original.method, original.user_data));
+    }
+    deferred_unmap_count_.fetch_sub(1, std::memory_order_release);
     return true;
 }
 
@@ -832,13 +1019,19 @@ bool info_t::commit(u64 addr, u64 size)
            item->method == page_fault_method::common && (item->flags & flags::memory_object) == 0;
 }
 
-void info_t::share_to(process_id from_id, process_id to_id, info_t *info)
+
+bool info_t::share_to(process_id from_id, process_id to_id, info_t *info)
 {
     (void)from_id;
     (void)to_id;
-    vma_.clone(info, info->vma_, flags::cow);
+    if (deferred_unmap_count_.load(std::memory_order_acquire) != 0)
+        return false;
+    if (!vma_.clone(info, info->vma_, flags::cow))
+        return false;
     {
         uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+        if (deferred_unmap_count_.load(std::memory_order_acquire) != 0)
+            return false;
         paging_.clone_readonly_to((void *)0, memory::user_mmap_top_address / memory::page_size, &info->paging_);
         restore_fork_disallowed_mappings();
         arch::paging::page_table_t::reload();
@@ -850,6 +1043,44 @@ void info_t::share_to(process_id from_id, process_id to_id, info_t *info)
     restore_shared_memory_mappings();
     info->restore_shared_memory_mappings();
     info->remove_fork_disallowed_mappings();
+    return true;
+}
+
+void info_t::revoke_physical_mappings()
+{
+    for (;;)
+    {
+        map_t *mapping = nullptr;
+        {
+            uctx::RawWriteLockUninterruptibleContext vma_guard(vma_.get_lock());
+            uctx::RawSpinLockUninterruptibleContext paging_guard(paging_spin_);
+            auto &list = vma_.get_list();
+            for (auto iter = list.begin(); iter != list.end(); ++iter)
+            {
+                if ((iter->flags & flags::memory_object) == 0)
+                    continue;
+                auto *candidate = reinterpret_cast<map_t *>(iter->user_data);
+                if (candidate == nullptr || candidate->memory_object == nullptr ||
+                    candidate->memory_object->physical().get() == nullptr)
+                    continue;
+
+                const u64 pages = (iter->end - iter->start) / page_size;
+                paging_.unmap(reinterpret_cast<void *>(iter->start), pages, false);
+                mapping = candidate;
+                list.remove(iter);
+                break;
+            }
+        }
+        if (mapping == nullptr)
+            return;
+
+        // The VMA is no longer discoverable before the shootdown starts, so
+        // no new access can race the physical mapping release.
+        arch::paging::page_table_t::reload();
+        SMP::flush_all_tlb();
+        release_physical_mapping(*mapping);
+        memory::Delete<>(memory::KernelCommonAllocatorV, mapping);
+    }
 }
 
 void info_t::restore_shared_memory_mappings()
@@ -862,12 +1093,30 @@ void info_t::restore_shared_memory_mappings()
         {
             if (!(item.flags & flags::memory_object))
                 continue;
+            auto *mapping = reinterpret_cast<map_t *>(item.user_data);
+            if (mapping == nullptr || mapping->memory_object == nullptr)
+                continue;
+            const phy_addr_t physical = mapping->memory_object->physical();
+            if (physical.get() != nullptr)
+            {
+                const u64 length = item.end - item.start;
+                if (mapping->file_length < length)
+                    continue;
+                const u64 page_flags = to_paging_flags(item.flags) | arch::paging::flags::write_through |
+                                       arch::paging::flags::cache_disable;
+                for (u64 offset = 0; offset < length; offset += memory::page_size)
+                    paging_.map_to(reinterpret_cast<void *>(item.start + offset), 1,
+                                   physical + mapping->file_offset + offset, page_flags,
+                                   arch::paging::action_flags::override);
+                item.flags &= ~flags::cow;
+                remapped = true;
+                continue;
+            }
             // A read-only mapping never faults on write, so COW is harmless
             // there and the PTE must stay read-only.
             if (!(item.flags & flags::writeable))
                 continue;
-            auto *mapping = reinterpret_cast<map_t *>(item.user_data);
-            if (mapping == nullptr || !mapping->pages_shared)
+            if (!mapping->pages_shared)
                 continue;
             // A mapping whose object range does not cover the whole VMA has
             // private pages past the object end; leave it entirely to COW
@@ -921,6 +1170,22 @@ bool info_t::copy_at(u64 virt_addr)
             auto *mapping = reinterpret_cast<map_t *>(vm->user_data);
             if (mapping != nullptr && mapping->pages_shared)
                 return false;
+            if (mapping != nullptr && mapping->memory_object != nullptr &&
+                mapping->memory_object->physical().get() != nullptr)
+            {
+                const u64 alignment_page = align_down(virt_addr, page_size);
+                const u64 relative = alignment_page - vm->start;
+                if (relative >= mapping->file_length ||
+                    mapping->file_offset > std::numeric_limits<u64>::max() - relative)
+                    return false;
+                const u64 page_flags = to_paging_flags(vm->flags) | arch::paging::flags::write_through |
+                                       arch::paging::flags::cache_disable;
+                uctx::RawSpinLockUninterruptibleContext icu(paging_spin_);
+                paging_.map_to(reinterpret_cast<void *>(alignment_page), 1,
+                               mapping->memory_object->physical() + mapping->file_offset + relative, page_flags,
+                               arch::paging::action_flags::override);
+                return true;
+            }
         }
         // TODO: big page COW
         u64 alignment_page = align_down(virt_addr, memory::page_size);

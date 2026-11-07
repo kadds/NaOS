@@ -1,0 +1,35 @@
+[package]
+name = "platformd"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+acpi-global-lock-wake-smoke = []
+acpi-global-lock-owner-exit-smoke = ["acpi-global-lock-wake-smoke"]
+acpi-global-lock-release-failure-smoke = ["acpi-global-lock-wake-smoke"]
+
+[[bin]]
+name = "platformd"
+path = "src/main.rs"
+
+[dependencies]
+naos-idl = { path = "../naos-idl", features = ["alloc"] }
+naos-sys = { path = "../naos-sys" }
+servicekit = { path = "../servicekit" }
+rust-acpi-naos = { path = "../rust-acpi-naos" }
+log = { version = "0.4.34", default-features = false }
+tokio = { version = "1.47", default-features = false, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+
+[target.'cfg(target_os = "naos")'.dependencies]
+acpi = { path = "../../../../third_party/rust-acpi-naos", default-features = false, features = ["alloc", "aml"] }
+rust-acpi-naos = { path = "../rust-acpi-naos" }
+
+[dev-dependencies]
+pretty_assertions = "1"

@@ -1,4 +1,5 @@
 #include "kernel/log.hpp"
+#include "kernel/irq.hpp"
 #include "freelibcxx/string.hpp"
 #include "kernel/arch/com.hpp"
 #include "kernel/arch/cpu.hpp"
@@ -1177,7 +1178,10 @@ void detail::emit_message(level severity, module source, const char *file, u32 l
             term::write_to_klog(freelibcxx::const_string_view(console_buffer, console_rendered));
         }
     }
-    wake_workers();
+    // Waking log workers runs the scheduler and list code; never do that from
+    // an interrupt-disabled or exception/IRQ context (page fault, IRQ).
+    if (arch::idt::interrupts_enabled() && !arch::cpu::in_exception_depth() && !::irq::in_irq_context())
+        wake_workers();
 }
 
 void detail::emit_user_message(const char *process_name, const char *file, u32 line, bool raw, const char *message,
@@ -1217,7 +1221,10 @@ void detail::emit_user_message(const char *process_name, const char *file, u32 l
             term::write_to_klog(freelibcxx::const_string_view(console_buffer, console_rendered));
         }
     }
-    wake_workers();
+    // Waking log workers runs the scheduler and list code; never do that from
+    // an interrupt-disabled or exception/IRQ context (page fault, IRQ).
+    if (arch::idt::interrupts_enabled() && !arch::cpu::in_exception_depth() && !::irq::in_irq_context())
+        wake_workers();
 }
 
 void detail::emit_nmi_message(module source, const char *file, u32 line, const char *message, u64 length)

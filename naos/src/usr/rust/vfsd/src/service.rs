@@ -146,16 +146,15 @@ pub async fn run(context: Context) -> i64 {
             return 1;
         }
     };
-    let mut cwd_endpoint = match EndpointResource::from_owned(
-        cwd_handle,
-        &naos_idl::directory::protocol_descriptor(),
-    ) {
-        Ok(endpoint) => endpoint,
-        Err(error) => {
-            log::error!("cwd endpoint descriptor failed: {error:?}");
-            return 1;
-        }
-    };
+    let mut cwd_endpoint =
+        match EndpointResource::from_owned(cwd_handle, &naos_idl::directory::protocol_descriptor())
+        {
+            Ok(endpoint) => endpoint,
+            Err(error) => {
+                log::error!("cwd endpoint descriptor failed: {error:?}");
+                return 1;
+            }
+        };
     match boot::spawn_init(&context, &init, &mut root_endpoint, &mut cwd_endpoint) {
         Ok(pid) => log::info!("init spawned pid={pid}"),
         Err(error) => {

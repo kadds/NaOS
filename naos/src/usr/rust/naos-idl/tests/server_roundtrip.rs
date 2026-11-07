@@ -6,7 +6,7 @@
 
 use naos_idl::loopback::{self, install};
 use naos_idl::{
-    CallError, DispatchOutcome, FailInvocation, MethodReply, ResourceTable, block_device, echo,
+    CallError, DispatchOutcome, FailInvocation, MethodReply, ResourceTransferBuilder, block_device, echo,
 };
 use naos_sys as sys;
 
@@ -78,6 +78,7 @@ impl block_device::BlockDeviceHandler for TestDevice {
     fn read<'s>(
         &'s mut self,
         _request: block_device::read_request,
+        _request_resources: &mut naos_idl::ReceivedResources,
     ) -> Result<MethodReply<'s, block_device::read_response>, FailInvocation> {
         match self.mode {
             DeviceMode::Ok => Ok(MethodReply::new(block_device::read_response {})),
@@ -88,6 +89,7 @@ impl block_device::BlockDeviceHandler for TestDevice {
     fn write<'s>(
         &'s mut self,
         _request: block_device::write_request,
+        _request_resources: &mut naos_idl::ReceivedResources,
     ) -> Result<MethodReply<'s, block_device::write_response>, FailInvocation> {
         unreachable!("tests do not call write");
     }
@@ -134,7 +136,7 @@ fn echo_round_trip_matches_dispatcher() {
     let mut wire = [0u8; 4096];
 
     let mut invocation =
-        echo::submit_echo(&client, &request, ResourceTable::new(), &mut wire, 1024).unwrap();
+        echo::submit_echo(&client, &request, ResourceTransferBuilder::new(), &mut wire, 1024).unwrap();
 
     // Server side: generic receive, then protocol dispatch.
     let mut server_wire = [0u8; 4096];
@@ -161,7 +163,7 @@ fn echo_payload_survives_the_full_client_server_cycle() {
     };
     let mut wire = [0u8; 4096];
     let mut invocation =
-        echo::submit_echo(&client, &request, ResourceTable::new(), &mut wire, 1024).unwrap();
+        echo::submit_echo(&client, &request, ResourceTransferBuilder::new(), &mut wire, 1024).unwrap();
 
     let mut server_wire = [0u8; 4096];
     let mut reply_wire = [0u8; 4096];
@@ -185,7 +187,7 @@ fn serial_serve_loop_drains_pending_requests_then_reports_would_block() {
         let payload = vec![round; round as usize + 1];
         let request = echo::echo_request { payload: &payload };
         invocations.push(
-            echo::submit_echo(&client, &request, ResourceTable::new(), &mut wire, 1024).unwrap(),
+            echo::submit_echo(&client, &request, ResourceTransferBuilder::new(), &mut wire, 1024).unwrap(),
         );
     }
 
@@ -218,7 +220,7 @@ fn block_device_read_round_trip_transfers_duplicate_resource() {
 
     let buffer = memory_buffer(WRITE_RIGHT | MAP_RIGHT, MEMORY_OBJECT_SCOPE);
 
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources.push_duplicate(&buffer).unwrap();
     let request = block_device::read_request {
         lba: 0,
@@ -257,7 +259,7 @@ fn object_identity_survives_move_transfer() {
     let buffer = memory_buffer(WRITE_RIGHT | MAP_RIGHT, MEMORY_OBJECT_SCOPE);
     let identity = naos_idl::object_id(buffer.get()).unwrap();
 
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources.push_move(buffer).unwrap();
     let _invocation = loopback::raw_invoke_submit_with_resources(
         client.get(),
@@ -283,7 +285,7 @@ fn block_device_domain_error_maps_to_negative_errno_outcome() {
     let (client, server) = block_device::create_endpoints(None).unwrap();
 
     let buffer = memory_buffer(WRITE_RIGHT | MAP_RIGHT, MEMORY_OBJECT_SCOPE);
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources.push_duplicate(&buffer).unwrap();
     let request = block_device::read_request {
         lba: 4,
@@ -382,7 +384,7 @@ fn received_resource_metadata_is_enforced_by_the_dispatcher() {
     // memory_object buffer requirement.
     let (client, server) = block_device::create_endpoints(None).unwrap();
     let buffer = memory_buffer(WRITE_RIGHT | MAP_RIGHT, 17);
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources.push_duplicate(&buffer).unwrap();
     let request = block_device::read_request {
         lba: 0,
@@ -410,7 +412,7 @@ fn received_resource_metadata_is_enforced_by_the_dispatcher() {
     // rejected even though the scope matches.
     let (client, server) = block_device::create_endpoints(None).unwrap();
     let buffer = memory_buffer(0, MEMORY_OBJECT_SCOPE);
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let slot = resources.push_duplicate(&buffer).unwrap();
     let request = block_device::read_request {
         lba: 0,

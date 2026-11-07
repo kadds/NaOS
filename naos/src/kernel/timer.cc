@@ -1,8 +1,9 @@
 #include "kernel/timer.hpp"
+#include "kernel/timer_work_budget.hpp"
 
 #include "freelibcxx/skip_list.hpp"
 #include "freelibcxx/vector.hpp"
-#include "kernel/arch/acpipm.hpp"
+#include "kernel/arch/acpi/acpipm.hpp"
 #include "kernel/arch/cpu.hpp"
 #include "kernel/arch/hpet.hpp"
 #include "kernel/arch/io_apic.hpp"
@@ -25,6 +26,8 @@ namespace timer
 {
 namespace
 {
+constexpr u32 max_due_timer_callbacks_per_tick = 32;
+
 struct watcher_lifetime
 {
     watcher_id id = invalid_watcher_id;
@@ -212,45 +215,47 @@ void on_tick(u64 vector) noexcept
         increment_saturated(stale_interrupts);
         return;
     }
-
     if (selected_clock_kind == clock_kind::pvclock &&
         static_cast<arch::kvm_pvclock::clock *>(clock)->take_retry_warning())
         KLOG_WARN("KVM pvclock seqlock remained unstable; using cached conversion parameters");
 
-    for (;;)
-    {
-        timer_handler handler;
-        watcher_lifetime *lifetime = nullptr;
-        timeclock::nanosecond_t expires_ns = 0;
-        const auto now_ns = clock->now_ns();
-        {
-            uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-            auto it = queue->watchers.begin();
-            if (it == queue->watchers.end() || it->expires_ns > now_ns)
+    detail::drain_bounded_due_work(
+        max_due_timer_callbacks_per_tick,
+        [&] {
+            timer_handler handler;
+            watcher_lifetime *lifetime = nullptr;
+            timeclock::nanosecond_t expires_ns = 0;
+            const auto current_ns = clock->now_ns();
             {
-                rearm_current_cpu_locked(*queue);
-                break;
+                uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+                auto it = queue->watchers.begin();
+                if (it == queue->watchers.end() || it->expires_ns > current_ns)
+                {
+                    rearm_current_cpu_locked(*queue);
+                    return false;
+                }
+                handler = it->handler;
+                lifetime = it->lifetime;
+                expires_ns = it->expires_ns;
+                add_active_watcher_locked(lifetime);
+                queue->watchers.remove(it);
+                if (current_ns > expires_ns)
+                    increment_saturated(late_deadlines);
             }
-            handler = it->handler;
-            lifetime = it->lifetime;
-            expires_ns = it->expires_ns;
-            add_active_watcher_locked(lifetime);
-            queue->watchers.remove(it);
-            if (now_ns > expires_ns)
-                increment_saturated(late_deadlines);
-        }
-        // Removing before invoking is what makes cancellation safe when a
-        // callback races with a caller on another CPU.
-        active_callbacks[cpu::current().id()] = lifetime;
-        handler(expires_ns / timeclock::nanoseconds_per_microsecond);
-        active_callbacks[cpu::current().id()] = nullptr;
-        lifetime->completed.store(true, std::memory_order_release);
-        {
-            uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
-            remove_active_watcher_locked(lifetime);
-        }
-        release_watcher(lifetime);
-    }
+            // Removing before invoking is what makes cancellation safe when a
+            // callback races with a caller on another CPU.
+            active_callbacks[cpu::current().id()] = lifetime;
+            handler(expires_ns / timeclock::nanoseconds_per_microsecond);
+            active_callbacks[cpu::current().id()] = nullptr;
+            lifetime->completed.store(true, std::memory_order_release);
+            {
+                uctx::RawSpinLockUninterruptibleContext guard(timer_queue_lock);
+                remove_active_watcher_locked(lifetime);
+            }
+            release_watcher(lifetime);
+            return true;
+        },
+        [] { irq::raise_soft_irq(irq::soft_vector::timer); });
 }
 
 timeclock::event_clock *make_platform_clock() noexcept
@@ -419,6 +424,12 @@ timeclock::nanosecond_t get_high_resolution_time_ns() noexcept
 {
     auto *clock = get_event_clock();
     return clock == nullptr ? 0 : clock->now_ns();
+}
+
+bool high_resolution_time_is_cross_cpu_monotonic() noexcept
+{
+    auto *clock = get_event_clock();
+    return clock != nullptr && clock->cross_cpu_monotonic();
 }
 
 timeclock::microsecond_t get_high_resolution_time()

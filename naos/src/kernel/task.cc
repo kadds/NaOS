@@ -1,8 +1,16 @@
 #include "kernel/task.hpp"
+#include "kernel/acpi/fixed_hardware.hpp"
+#include "kernel/acpi/resource_authority.hpp"
+#include "kernel/arch/acpi/acpi.hpp"
 #include "kernel/arch/klib.hpp"
 #include "kernel/arch/mm.hpp"
 #include "kernel/arch/paging.hpp"
 #include "kernel/arch/task.hpp"
+#include "kernel/arch/tss.hpp"
+#include "kernel/firmware_root.hpp"
+#include "kernel/pci/discovery_fabric.hpp"
+#include "kernel/pci/platform.hpp"
+#include "kernel/task/process_start_lifecycle.hpp"
 
 #include "kernel/handle.hpp"
 #include "kernel/ipc/channel.hpp"
@@ -24,8 +32,12 @@
 #include "kernel/time.hpp"
 #include "kernel/types.hpp"
 #include "kernel/util/id_generator.hpp"
+#include "naos/generated/system/AcpiFixedHardware.hpp"
+#include "naos/generated/system/AcpiResourceAuthority.hpp"
+#include "naos/generated/system/FirmwareRoot.hpp"
 #include "naos/generated/system/Framebuffer.hpp"
 #include "naos/generated/system/InputEventSource.hpp"
+#include "naos/generated/system/PciDiscoveryFabric.hpp"
 #include "naos/generated/system/SystemStatus.hpp"
 #include "naos/generated/system/TerminalDriverFactory.hpp"
 #include "naos/generated/system_uapi.h"
@@ -46,6 +58,7 @@
 #include "kernel/task/binary_handle/elf.hpp"
 #include "kernel/task/builtin/idle_task.hpp"
 #include "kernel/task/builtin/soft_irq_task.hpp"
+#include "kernel/task/io_lease_lifecycle.hpp"
 #include "kernel/wait.hpp"
 #include "naos/generated/system/Stream.hpp"
 #include <utility>
@@ -74,6 +87,12 @@ using thread_id_generator_t = util::seq_generator;
 memory::SlabObjectAllocator *thread_t_allocator;
 memory::SlabObjectAllocator *process_t_allocator;
 memory::SlabObjectAllocator *mm_info_t_allocator;
+
+namespace
+{
+void complete_process_exit_if_threads_gone(process_t *process);
+void reap_exited_process_threads(process_t *process);
+} // namespace
 
 struct process_hash
 {
@@ -466,20 +485,46 @@ inline process_t *copy_process(process_t *p)
     process->signal_pack.inherit_mask_from(p->signal_pack);
     process->foreground_process_group = 0;
     process->thread_list = memory::New<thread_list_t>(memory::KernelCommonAllocatorV, memory::KernelCommonAllocatorV);
-    auto info = memory::New<mm_info_t>(mm_info_t_allocator);
-    reinterpret_cast<mm_info_t *>(p->mm_info)->share_to(p->pid, id, info);
-    process->mm_info = info;
     process->thread_id_gen = memory::New<thread_id_generator_t>(memory::KernelCommonAllocatorV, 0, 1);
+    auto info = memory::New<mm_info_t>(mm_info_t_allocator);
+    if (process->thread_list == nullptr || process->thread_id_gen == nullptr || info == nullptr ||
+        !reinterpret_cast<mm_info_t *>(p->mm_info)->share_to(p->pid, id, info))
+    {
+        if (info != nullptr)
+            memory::Delete(mm_info_t_allocator, info);
+        memory::Delete<thread_list_t>(memory::KernelCommonAllocatorV,
+                                      reinterpret_cast<thread_list_t *>(process->thread_list));
+        memory::KernelCommonAllocatorV->Delete(reinterpret_cast<thread_id_generator_t *>(process->thread_id_gen));
+        memory::Delete<>(process_t_allocator, process);
+        return nullptr;
+    }
+    process->mm_info = info;
     global_process_map->insert(id, process);
     register_process_job_control_unlocked(process);
 
     return process;
 }
 
+void revoke_process_physical_mappings(process_t *p)
+{
+    if (p->mm_info != nullptr && p->mm_info != memory::kernel_vm_info)
+        reinterpret_cast<mm_info_t *>(p->mm_info)->revoke_physical_mappings();
+
+    // Remove the remaining process-owned leases only after address-space
+    // teardown has removed every direct physical MemoryObject VMA and
+    // completed its TLB shootdown. Do this at last-thread exit, not final
+    // object destruction: process handles may keep zombie metadata alive.
+    (void)arch::ACPI::revoke_owner_resources(p->pid);
+}
+
 void finalize_process(process_t *p)
 {
     if (p->mm_info != nullptr)
+    {
         memory::Delete(mm_info_t_allocator, (mm_info_t *)p->mm_info);
+        p->mm_info = nullptr;
+    }
+    (void)arch::ACPI::revoke_owner_resources(p->pid);
 
     memory::KernelCommonAllocatorV->Delete(reinterpret_cast<thread_id_generator_t *>(p->thread_id_gen));
 
@@ -489,7 +534,9 @@ void finalize_process(process_t *p)
 
 void maybe_finalize_process(process_t *p)
 {
-    if (p == nullptr || !p->reap_pending.load())
+    if (p == nullptr || !p->reaped())
+        return;
+    if (p->internal_refs.load(std::memory_order_acquire) != 0)
         return;
     const auto capability_refs = p->capability_refs.load();
     if (capability_refs != 0)
@@ -500,27 +547,43 @@ void maybe_finalize_process(process_t *p)
         finalize_process(p);
 }
 
+void retain_process_internal(process_t *process) { process->internal_refs.fetch_add(1, std::memory_order_acq_rel); }
+
+void release_process_internal(process_t *process)
+{
+    if (process->internal_refs.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        maybe_finalize_process(process);
+}
+
 inline void delete_process(process_t *p)
 {
     if (p == nullptr)
         return;
 
+    // Publishing the reaped state permits the last capability to finalize
+    // storage. Keep the object alive until its table/session unlink is done.
+    retain_process_internal(p);
     {
         uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
-        if (p->reap_pending.exchange(true))
-            return;
-        p->attributes |= process_attributes::destroy;
-        unregister_process_job_control_unlocked(p);
-        global_process_map->remove(p->pid);
-        // process_id_generator->collect(p->pid);
+        const auto previous = p->attributes.fetch_or(process_attributes::destroy, std::memory_order_acq_rel);
+        if (!(previous & process_attributes::destroy))
+        {
+            unregister_process_job_control_unlocked(p);
+            global_process_map->remove(p->pid);
+            // process_id_generator->collect(p->pid);
+        }
     }
-    maybe_finalize_process(p);
+    release_process_internal(p);
 }
 
 inline thread_t *new_thread(process_t *p)
 {
     using arch::task::register_info_t;
     uctx::RawSpinLockUninterruptibleContext icu(p->thread_list_lock);
+
+    const auto process_flags = p->attributes.load(std::memory_order_acquire);
+    if (process_flags & (process_attributes::destroy | process_attributes::no_thread | process_attributes::exiting))
+        return nullptr;
 
     auto id = ((thread_id_generator_t *)p->thread_id_gen)->next();
     if (unlikely(id == util::null_id))
@@ -536,6 +599,7 @@ inline thread_t *new_thread(process_t *p)
     thd->tid = id;
     thd->attributes = 0;
     thd->cpumask.mask = cpumask_none;
+    p->thread_count.fetch_add(1, std::memory_order_release);
 
     void *stack = new_kernel_stack();
     void *stack_top = (char *)stack + memory::kernel_stack_size;
@@ -544,9 +608,25 @@ inline thread_t *new_thread(process_t *p)
     return thd;
 }
 
-void delete_thread(thread_t *thd)
+bool claim_thread_deletion_locked(process_t *process, thread_t *thread)
+{
+    auto &threads = *(thread_list_t *)process->thread_list;
+    if (threads.find(thread) == threads.end())
+        return false;
+
+    if (!thread->exit_lifecycle.try_begin_reap())
+        return false;
+    retain_process_internal(process);
+    return true;
+}
+
+void delete_thread_claimed(thread_t *thd)
 {
     kassert(thd->state == thread_state::destroy, "thread state check failed.");
+    kassert(thd->schedule_data == nullptr, "thread deleted before scheduler metadata was released");
+    auto *process = thd->process;
+    arch::ACPI::on_thread_exit(thd->process->pid, thd->tid);
+    revoke_direct_io_lease(thd);
     if (thd->sleep_watcher != timer::invalid_watcher_id)
     {
         const auto watcher = thd->sleep_watcher;
@@ -564,20 +644,22 @@ void delete_thread(thread_t *thd)
     while (thd->wait_queue_wake_refs.load(std::memory_order_acquire) != 0)
         cpu_pause();
 
-    uctx::RawSpinLockUninterruptibleContext icu(thd->process->thread_list_lock);
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
 
-    thd->process->statistics.user_time += thd->statistics.user_time;
-    thd->process->statistics.sys_time += thd->statistics.sys_time;
-    thd->process->statistics.iowait_time += thd->statistics.iowait_time;
-    thd->process->statistics.intr_time += thd->statistics.intr_time;
-    thd->process->statistics.soft_intr_time += thd->statistics.soft_intr_time;
-    thd->process->statistics.voluntary_context_switches += thd->statistics.voluntary_context_switches;
-    thd->process->statistics.involuntary_context_switches += thd->statistics.involuntary_context_switches;
+        process->statistics.user_time += thd->statistics.user_time;
+        process->statistics.sys_time += thd->statistics.sys_time;
+        process->statistics.iowait_time += thd->statistics.iowait_time;
+        process->statistics.intr_time += thd->statistics.intr_time;
+        process->statistics.soft_intr_time += thd->statistics.soft_intr_time;
+        process->statistics.voluntary_context_switches += thd->statistics.voluntary_context_switches;
+        process->statistics.involuntary_context_switches += thd->statistics.involuntary_context_switches;
 
-    using arch::task::register_info_t;
-
-    auto thd_list = ((thread_list_t *)thd->process->thread_list);
-    thd_list->remove(thd_list->find(thd));
+        auto &threads = *(thread_list_t *)process->thread_list;
+        auto node = threads.find(thd);
+        kassert(node != threads.end(), "thread missing from process list during deletion");
+        threads.remove(node);
+    }
 
     if (likely((u64)thd->kernel_stack_top != 0))
         delete_kernel_stack((void *)((u64)thd->kernel_stack_top - memory::kernel_stack_size));
@@ -585,6 +667,29 @@ void delete_thread(thread_t *thd)
     // ((thread_id_generator_t *)thd->process->thread_id_gen)->collect(thd->tid);
     arch::task::delete_register(thd->register_info);
     memory::Delete<>(thread_t_allocator, thd);
+
+    {
+        uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
+        const auto previous_thread_count = process->thread_count.fetch_sub(1, std::memory_order_acq_rel);
+        if (previous_thread_count == 0)
+            KLOG_PANIC("process thread count underflow");
+    }
+
+    if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+        complete_process_exit_if_threads_gone(process);
+    release_process_internal(process);
+}
+
+void delete_thread(thread_t *thd)
+{
+    auto *process = thd->process;
+    bool claimed = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        claimed = claim_thread_deletion_locked(process, thd);
+    }
+    if (claimed)
+        delete_thread_claimed(thd);
 }
 
 process_t::process_t()
@@ -593,8 +698,9 @@ process_t::process_t()
     , wait_claimed(false)
     , child_wait_generation(0)
     , capability_refs(0)
-    , reap_pending(false)
     , storage_released(false)
+    , thread_count(0)
+    , exit_cleanup_started(false)
     , main_thread(nullptr)
     , ret_val(0)
     , thread_list(nullptr)
@@ -666,8 +772,25 @@ process_object::process_object(process_t *process)
 
 process_object::~process_object()
 {
-    if (process_ != nullptr && process_->capability_refs.fetch_sub(1) == 1)
-        maybe_finalize_process(process_);
+    if (process_ == nullptr)
+        return;
+
+    // The capability reference stops protecting storage as soon as it is
+    // decremented. Retain an internal reference while choosing the action.
+    retain_process_internal(process_);
+    const auto previous_capability_refs = process_->capability_refs.fetch_sub(1);
+    switch (process_capability_release_action_for(previous_capability_refs, process_->start_state.load(),
+                                                  process_->reaped()))
+    {
+        case process_capability_release_action::none:
+            break;
+        case process_capability_release_action::abort_unstarted:
+            abort_unstarted_process(process_);
+            break;
+        case process_capability_release_action::finalize_reaped:
+            break;
+    }
+    release_process_internal(process_);
 }
 
 na_signal_t process_object::capability_signals() const
@@ -680,7 +803,18 @@ na_signal_t process_object::capability_signals() const
 u64 process_object::capability_state() const { return process_ == nullptr ? 0 : static_cast<u64>(process_->ret_val); }
 
 thread_t::thread_t()
-    : wait_counter(0)
+    : state(thread_state::destroy)
+    , attributes(0)
+    , tid(0)
+    , process(nullptr)
+    , scheduler(nullptr)
+    , schedule_data(nullptr)
+    , register_info(nullptr)
+    , kernel_stack_top(nullptr)
+    , user_stack_top(nullptr)
+    , user_stack_bottom(nullptr)
+    , cpuid(0)
+    , wait_counter(0)
     , do_wait_queue_now(nullptr)
 {
 }
@@ -737,6 +871,7 @@ void init()
     thd->cpumask = current_cpu_mask();
     thd->cpuid = cpu::current().id();
     process->main_thread = thd;
+    process->start_state.store(process_start_state::started, std::memory_order_release);
     thd->attributes |= thread_attributes::main;
 
     arch::task::init(thd, thd->register_info);
@@ -835,6 +970,83 @@ void init()
         const auto system_status_capability =
             init_process->resource.install_native(std::move(system_status_handle), system_status_meta);
         kassert(system_status_capability != NA_HANDLE_INVALID, "unable to install system status capability");
+
+        // FirmwareRoot is published through the kernel service directory. It
+        // is intentionally not installed into init's bootstrap table; a
+        // service-specific directory view will be the authority for
+        // platformd once the platform services are started.
+        auto firmware_root_handle = arch::ACPI::firmware_root();
+        if (firmware_root_handle)
+        {
+            capability::metadata firmware_root_meta;
+            firmware_root_meta.binding = NA_BINDING_KERNEL_VIEW;
+            firmware_root_meta.protocol_uuid = naos::system::FirmwareRoot::protocol_uuid;
+            firmware_root_meta.scope = NA_SCOPE_FIRMWARE_ROOT;
+            firmware_root_meta.revision = naos::system::FirmwareRoot::revision;
+            firmware_root_meta.features = naos::system::FirmwareRoot::features;
+            firmware_root_meta.meta_rights = NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+            firmware_root_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+            if (service::register_kernel_service(service::firmware_root_uri, sizeof(service::firmware_root_uri) - 1,
+                                                 handle_t<kobject>(firmware_root_handle.get_control()),
+                                                 firmware_root_meta) != 0)
+                KLOG_PANIC("unable to publish FirmwareRoot service");
+            KLOG_INFO("FirmwareRoot service published");
+        }
+        else
+        {
+            KLOG_WARN("FirmwareRoot service unavailable; ACPI snapshot was not built");
+        }
+
+        auto pci_discovery_handle = pci::get_discovery_fabric();
+        if (pci_discovery_handle)
+        {
+            capability::metadata pci_meta;
+            pci_meta.binding = NA_BINDING_KERNEL_VIEW;
+            pci_meta.protocol_uuid = naos::system::PciDiscoveryFabric::protocol_uuid;
+            pci_meta.scope = NA_SCOPE_PCI_DISCOVERY_FABRIC;
+            pci_meta.revision = naos::system::PciDiscoveryFabric::revision;
+            pci_meta.features = naos::system::PciDiscoveryFabric::features;
+            pci_meta.meta_rights = NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+            pci_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+            if (service::register_kernel_service(service::pci_discovery_uri, sizeof(service::pci_discovery_uri) - 1,
+                                                 handle_t<kobject>(pci_discovery_handle.get_control()), pci_meta) != 0)
+                KLOG_PANIC("unable to publish PciDiscoveryFabric service");
+            KLOG_INFO("PciDiscoveryFabric service published");
+        }
+        auto acpi_fixed_handle = arch::ACPI::fixed_hardware();
+        if (acpi_fixed_handle)
+        {
+            capability::metadata fixed_meta;
+            fixed_meta.binding = NA_BINDING_KERNEL_VIEW;
+            fixed_meta.protocol_uuid = naos::system::AcpiFixedHardware::protocol_uuid;
+            fixed_meta.scope = NA_SCOPE_ACPI_FIXED_HARDWARE;
+            fixed_meta.revision = naos::system::AcpiFixedHardware::revision;
+            fixed_meta.features = naos::system::AcpiFixedHardware::features;
+            fixed_meta.meta_rights = NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+            fixed_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+            if (service::register_kernel_service(service::acpi_fixed_hardware_uri,
+                                                 sizeof(service::acpi_fixed_hardware_uri) - 1,
+                                                 handle_t<kobject>(acpi_fixed_handle.get_control()), fixed_meta) != 0)
+                KLOG_PANIC("unable to publish AcpiFixedHardware service");
+            KLOG_INFO("AcpiFixedHardware service published");
+        }
+        auto resource_authority_handle = arch::ACPI::resource_authority();
+        if (resource_authority_handle)
+        {
+            capability::metadata authority_meta;
+            authority_meta.binding = NA_BINDING_KERNEL_VIEW;
+            authority_meta.protocol_uuid = naos::system::AcpiResourceAuthority::protocol_uuid;
+            authority_meta.scope = NA_SCOPE_ACPI_RESOURCE_AUTHORITY;
+            authority_meta.revision = naos::system::AcpiResourceAuthority::revision;
+            authority_meta.features = naos::system::AcpiResourceAuthority::features;
+            authority_meta.meta_rights = NA_RIGHT_WAIT | NA_RIGHT_INSPECT;
+            authority_meta.protocol_rights = NA_PROTOCOL_RIGHT_INVOKE;
+            if (service::register_kernel_service(
+                    service::acpi_resource_authority_uri, sizeof(service::acpi_resource_authority_uri) - 1,
+                    handle_t<kobject>(resource_authority_handle.get_control()), authority_meta) != 0)
+                KLOG_PANIC("unable to publish AcpiResourceAuthority service");
+            KLOG_INFO("AcpiResourceAuthority service published");
+        }
         const auto metadata = stream_capability_metadata();
         init_process->console_in_handle =
             init_process->resource.install_native(khandle(tty0read.get_control()), metadata);
@@ -872,16 +1084,22 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
 
     if (process->mm_info != memory::kernel_vm_info)
     {
-        auto stack_vm = vma.allocate_map(memory::user_stack_maximum_size,
-                                         memory::vm::flags::readable | memory::vm::flags::writeable |
-                                             memory::vm::flags::expand | memory::vm::flags::user_mode |
-                                             memory::vm::flags::user_stack,
-                                         memory::vm::page_fault_method::common, 0);
+        auto stack_vm =
+            vma.allocate_map(memory::user_stack_maximum_size,
+                             memory::vm::flags::readable | memory::vm::flags::writeable | memory::vm::flags::expand |
+                                 memory::vm::flags::user_mode | memory::vm::flags::user_stack,
+                             memory::vm::page_fault_method::common, 0);
 
         if (stack_vm == nullptr)
         {
             thd->state = thread_state::destroy;
+            if (!thd->exit_lifecycle.discard_unstarted())
+                KLOG_PANIC("invalid unpublished thread discard");
+            retain_process_internal(process);
             delete_thread(thd);
+            if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+                complete_process_exit_if_threads_gone(process);
+            release_process_internal(process);
             return nullptr;
         }
 
@@ -903,7 +1121,13 @@ thread_t *create_thread(process_t *process, thread_start_func start_func, void *
                                      reinterpret_cast<u64>(thd->user_stack_bottom));
         }
         thd->state = thread_state::destroy;
+        if (!thd->exit_lifecycle.discard_unstarted())
+            KLOG_PANIC("invalid unpublished thread discard");
+        retain_process_internal(process);
         delete_thread(thd);
+        if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+            complete_process_exit_if_threads_gone(process);
+        release_process_internal(process);
         return nullptr;
     }
     info->args = arg;
@@ -1205,42 +1429,83 @@ process_t *create_process(handle_t<naos::data_plane::memory_object> object, khan
 
     if (flags & create_process_flags::real_time_rr)
         thd->attributes |= thread_attributes::real_time;
-    if ((flags & create_process_flags::deferred_start) == 0)
-        start_process(process);
+    if ((flags & create_process_flags::deferred_start) == 0 && !start_process(process))
+        return nullptr;
 
     return process;
 }
 
-void start_process(process_t *process)
+bool start_process(process_t *process)
 {
     if (process == nullptr || process->main_thread == nullptr)
-        return;
-    bool expected = false;
-    if (!process->main_thread_started.compare_exchange_strong(expected, true))
-        return;
+        return false;
 
-    auto *thread = process->main_thread;
-    if (thread->attributes & thread_attributes::real_time)
-        scheduler::add(thread, scheduler::scheduler_class::round_robin);
-    else
-        scheduler::add(thread, scheduler::scheduler_class::cfs);
+    bool abort_unstarted = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+        {
+            abort_unstarted = process->start_state.load(std::memory_order_acquire) == process_start_state::unstarted;
+        }
+        else
+        {
+            if (!claim_process_start(process->start_state))
+                return false;
+
+            auto *thread = process->main_thread;
+            if (thread->attributes & thread_attributes::real_time)
+                scheduler::add(thread, scheduler::scheduler_class::round_robin);
+            else
+                scheduler::add(thread, scheduler::scheduler_class::cfs);
+            return true;
+        }
+    }
+
+    if (abort_unstarted)
+        abort_unstarted_process(process);
+    return false;
 }
 
 void abort_unstarted_process(process_t *process)
 {
-    if (process == nullptr || process->main_thread_started.load())
+    if (process == nullptr)
         return;
 
+    bool abort_claimed = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        if (process->start_state.load(std::memory_order_acquire) != process_start_state::unstarted)
+            return;
+
+        auto *main_thread = process->main_thread;
+        if (main_thread != nullptr && (main_thread->scheduler != nullptr || main_thread->schedule_data != nullptr))
+        {
+            // A scheduled thread proves that the one-shot start transition
+            // was already committed. Preserve the running process instead
+            // of treating it as an unstarted object whose stack can be freed.
+            process->start_state.store(process_start_state::started, std::memory_order_release);
+            return;
+        }
+
+        abort_claimed = claim_unstarted_process_abort(process->start_state);
+    }
+    if (!abort_claimed)
+        return;
+
+    retain_process_internal(process);
     process->resource.clear();
     if (process->main_thread != nullptr)
     {
         process->main_thread->state = thread_state::destroy;
+        if (!process->main_thread->exit_lifecycle.discard_unstarted())
+            KLOG_PANIC("invalid unstarted process discard");
         delete_thread(process->main_thread);
         process->main_thread = nullptr;
     }
     process->attributes |= process_attributes::no_thread;
     process->wait_queue.do_wake_up();
     delete_process(process);
+    release_process_internal(process);
 }
 
 process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t flags)
@@ -1271,6 +1536,8 @@ process_t *create_kernel_process(thread_start_func start_func, void *arg, flag_t
     thd->user_stack_top = 0;
     thd->user_stack_bottom = 0;
 
+    if (!claim_process_start(process->start_state))
+        KLOG_PANIC("kernel process start state is invalid");
     if (flags & create_process_flags::real_time_rr)
     {
         thd->attributes |= thread_attributes::real_time;
@@ -1334,10 +1601,14 @@ int fork()
     if (current()->attributes & thread_attributes::real_time)
     {
         thd->attributes |= thread_attributes::real_time;
+        if (!claim_process_start(process->start_state))
+            KLOG_PANIC("forked process start state is invalid");
         scheduler::add(thd, scheduler::scheduler_class::round_robin);
     }
     else
     {
+        if (!claim_process_start(process->start_state))
+            KLOG_PANIC("forked process start state is invalid");
         scheduler::add(thd, scheduler::scheduler_class::cfs);
     }
 
@@ -1429,6 +1700,11 @@ int execve(handle_t<naos::data_plane::memory_object> object, khandle backing, na
     process_args->program_header_count = exec_info.program_header_count;
     process_args->base_address = exec_info.base_address;
     process_args->hwcap = exec_info.hwcap;
+    // A successful exec replaces the code running on this execution thread.
+    // Revoke its thread-bound port authority and advance the generation before
+    // switching address spaces so queued authorization from the old image
+    // cannot reinstall the bitmap.
+    revoke_direct_io_lease(thd);
     {
         uctx::UninterruptibleContext ctx;
         process->mm_info = new_mm_info;
@@ -1483,115 +1759,160 @@ bool do_sleep(timeclock::microsecond_t duration)
     return true;
 }
 
-struct process_data_t
-{
-    thread_t *thd;
-};
+bool claim_thread_exit(thread_t *thd) { return thd->exit_lifecycle.try_begin_exit(); }
 
-bool claim_thread_exit(thread_t *thd)
-{
-    const auto previous = thd->attributes.fetch_or(thread_attributes::exit_pending, std::memory_order_acq_rel);
-    return (previous & thread_attributes::exit_pending) == 0;
-}
-
-void exit_process_inner(thread_t *thd);
 namespace
 {
 void cleanup_process_job_control(process_t *process);
 void notify_parent_of_child_state_change(process_t *process);
-} // namespace
+void complete_process_exit_if_threads_gone(process_t *process)
+{
+    if (process == nullptr || process->thread_list == nullptr)
+        return;
+
+    bool expected = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        if (process->thread_count.load(std::memory_order_acquire) != 0)
+            return;
+
+        if (!((thread_list_t *)process->thread_list)->empty())
+            KLOG_PANIC("process thread count/list mismatch at exit");
+        if (!process->exit_cleanup_started.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
+            return;
+    }
+
+    auto services = service::get_global_service_directory();
+    if (services)
+        services->cleanup_owner(process->pid);
+    // Drop user capability entries and revoke process-owned mappings only
+    // after every thread has left its syscall stack and scheduler state.
+    process->resource.clear();
+    revoke_process_physical_mappings(process);
+    naos::ipc::collect_orphaned_channels();
+    if (process == get_init_process())
+        KLOG_PANIC("init process startup fail");
+
+    // The last child-wait wake can let a parent reap this process immediately.
+    // Hold an internal reference until all exit notifications finish using
+    // the process object and its embedded wait queues.
+    retain_process_internal(process);
+    process->attributes.fetch_or(process_attributes::no_thread, std::memory_order_release);
+    notify_parent_of_child_state_change(process);
+    process->wait_queue.do_wake_up();
+    release_process_internal(process);
+}
+
+void reap_exited_process_threads(process_t *process)
+{
+    if (process == nullptr || process->thread_list == nullptr)
+        return;
+
+    for (;;)
+    {
+        thread_t *zombie = nullptr;
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+            auto &threads = *(thread_list_t *)process->thread_list;
+            for (auto *candidate : threads)
+            {
+                if (candidate->state == thread_state::destroy && candidate->schedule_data == nullptr &&
+                    candidate->exit_lifecycle.can_reap() &&
+                    candidate->wait_counter.load(std::memory_order_acquire) == 0)
+                {
+                    if (claim_thread_deletion_locked(process, candidate))
+                    {
+                        zombie = candidate;
+                        break;
+                    }
+                }
+            }
+        }
+        if (zombie == nullptr)
+            break;
+        delete_thread_claimed(zombie);
+    }
+
+    complete_process_exit_if_threads_gone(process);
+}
+
+void request_process_thread_exit(process_t *process)
+{
+    if (process == nullptr || process->thread_list == nullptr)
+        return;
+
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        auto &threads = *(thread_list_t *)process->thread_list;
+        for (auto *candidate : threads)
+        {
+            const auto attributes = candidate->attributes.load(std::memory_order_acquire);
+            const bool blocked =
+                candidate->state == thread_state::stop ||
+                (candidate->state == thread_state::running && (attributes & thread_attributes::block_to_stop));
+            if (blocked && !candidate->exit_lifecycle.started())
+                candidate->attributes |= thread_attributes::exit_wakeup_pending;
+        }
+    }
+
+    for (;;)
+    {
+        thread_t *wake = nullptr;
+        bool found_pending = false;
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+            auto &threads = *(thread_list_t *)process->thread_list;
+            for (auto *candidate : threads)
+            {
+                const auto attributes = candidate->attributes.load(std::memory_order_acquire);
+                if (!(attributes & thread_attributes::exit_wakeup_pending))
+                    continue;
+
+                found_pending = true;
+                const auto previous =
+                    candidate->attributes.fetch_and(~thread_attributes::exit_wakeup_pending, std::memory_order_acq_rel);
+                const bool blocked =
+                    candidate->state == thread_state::stop ||
+                    (candidate->state == thread_state::running && (previous & thread_attributes::block_to_stop));
+                if (blocked && !candidate->exit_lifecycle.started())
+                {
+                    candidate->attributes.fetch_and(~thread_attributes::job_control_stopped, std::memory_order_acq_rel);
+                    candidate->wait_queue_wake_refs.fetch_add(1, std::memory_order_relaxed);
+                    wake = candidate;
+                }
+                break;
+            }
+        }
+
+        if (!found_pending)
+            break;
+        if (wake != nullptr)
+            scheduler::update_state_async(wake, thread_state::ready, &wake->wait_queue_wake_refs);
+    }
+}
 
 void exit_process_thread(process_t *process)
 {
-    uctx::RawSpinLockUninterruptibleController icu(process->thread_list_lock);
-    auto &list = *(thread_list_t *)process->thread_list;
-
-    icu.begin();
-    thread_t *next = nullptr;
-    for (auto candidate : list)
-    {
-        if (candidate->state != thread_state::destroy)
-        {
-            next = candidate;
-            break;
-        }
-    }
-    if (next != nullptr)
-    {
-        icu.end();
-        exit_process_inner(next);
-    }
-    else if (list.empty())
-    {
-        icu.end();
-        auto services = service::get_global_service_directory();
-        if (services)
-            services->cleanup_owner(process->pid);
-        process->resource.clear();
-        naos::ipc::collect_orphaned_channels();
-        process->attributes |= process_attributes::no_thread;
-        if (process == get_init_process())
-        {
-            KLOG_PANIC("init process startup fail");
-        }
-        notify_parent_of_child_state_change(process);
-        process->wait_queue.do_wake_up();
-    }
-    else
-    {
-        // A concurrent thread-exit callback has already marked every
-        // remaining thread destroy, but has not removed the last one yet.
-        // Its callback will retry exit_process_thread after delete_thread().
-        icu.end();
+    if (process == nullptr)
         return;
-    }
+    retain_process_internal(process);
+    reap_exited_process_threads(process);
+    release_process_internal(process);
 }
-
-void exit_process_inner(thread_t *thd)
-{
-    if (thd->state != thread_state::destroy)
-    {
-        if (!claim_thread_exit(thd))
-            return;
-        process_data_t *data = memory::New<process_data_t>(memory::KernelCommonAllocatorV);
-        if (data == nullptr)
-        {
-            thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
-            KLOG_WARN("unable to allocate process-exit cleanup for pid {} tid {}", thd->process->pid, thd->tid);
-            return;
-        }
-        data->thd = thd;
-
-        scheduler::remove(
-            thd,
-            [](u64 data) {
-                auto *dt = reinterpret_cast<process_data_t *>(data);
-                auto process = dt->thd->process;
-
-                dt->thd->state = thread_state::destroy;
-                dt->thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
-                dt->thd->wait_queue.do_wake_up();
-                delete_thread(dt->thd);
-
-                memory::Delete<>(memory::KernelCommonAllocatorV, dt);
-                exit_process_thread(process);
-            },
-            (u64)data);
-    }
-    else
-    {
-        // The process-exit walk is concurrent with a thread-exit callback.
-        // The callback owns the eventual list removal and will retry the
-        // process walk after it has completed.
-        return;
-    }
-}
+} // namespace
 
 void exit_process(process_t *process, i64 ret, flag_t flags)
 {
-    const auto previous = process->attributes.fetch_or(process_attributes::exiting, std::memory_order_acq_rel);
-    if (previous & process_attributes::exiting)
+    if (process == nullptr)
         return;
+    const auto previous = process->attributes.fetch_or(process_attributes::exiting, std::memory_order_acq_rel);
+    if (previous & (process_attributes::exiting | process_attributes::no_thread))
+        return;
+
+    // Revoke firmware and fixed-hardware state before further task cleanup.
+    // An SCI owner that exits is sticky-degraded; a restarted platformd must
+    // not silently inherit the old interpreter's event state.
+    arch::ACPI::on_process_exit(process->pid);
 
     // TODO: write core_dump from flags
     if (ret != 0)
@@ -1600,6 +1921,7 @@ void exit_process(process_t *process, i64 ret, flag_t flags)
     }
     process->ret_val = ret;
     cleanup_process_job_control(process);
+    request_process_thread_exit(process);
     exit_process_thread(process);
 }
 
@@ -1607,11 +1929,7 @@ NoReturn void do_exit(i64 ret)
 {
     process_t *process = current_process();
     exit_process(process, ret, 0);
-    for (;;)
-    {
-        scheduler::schedule();
-        cpu_pause();
-    }
+    do_exit_thread(ret);
 }
 
 process_t *init_process = nullptr;
@@ -1757,10 +2075,28 @@ u64 reap_waited_child(process_t *process, i64 &ret, process_id &waited_pid, stat
     if (--process->wait_counter == 0)
     {
         notify_parent_of_child_state_change(process);
-        process->attributes |= process_attributes::destroy;
         delete_process(process);
     }
     return 0;
+}
+
+wait_result wait_for_process_state(wait_queue_t &queue, freelibcxx::function_ref<bool()> condition,
+                                   freelibcxx::function_ref<bool()> interrupted,
+                                   freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue,
+                                   freelibcxx::function_ref<void()> exit_cleanup = nullptr)
+{
+    if (register_wait_queue)
+        register_wait_queue(&queue);
+    const auto result = queue.do_wait_result(condition, nullptr, nullptr, nullptr, false, interrupted);
+    if (register_wait_queue)
+        register_wait_queue(nullptr);
+    if (result == wait_result::process_exit)
+    {
+        if (exit_cleanup)
+            exit_cleanup();
+        do_exit_thread(0);
+    }
+    return result;
 }
 
 } // namespace
@@ -1776,7 +2112,7 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
                         freelibcxx::function_ref<void(wait_queue_t *)> register_wait_queue)
 {
     statistics = {};
-    if (parent == nullptr || target == nullptr || target->parent_pid != parent->pid || target->reap_pending.load())
+    if (parent == nullptr || target == nullptr || target->parent_pid != parent->pid || target->reaped())
         return ECHILD;
 
     uctx::UninterruptibleContext icu;
@@ -1812,18 +2148,19 @@ i64 wait_process_handle(process_t *parent, process_t *target, flag_t flags, i64 
     auto *reserved = reserve_child(parent, target->pid, false);
     if (reserved == nullptr)
         return ECHILD;
-    if (register_wait_queue)
-        register_wait_queue(&reserved->wait_queue);
-    reserved->wait_queue.do_wait([reserved, stopped_unreported, interrupted] {
-        return (reserved->attributes.load() & process_attributes::no_thread) != 0 || stopped_unreported() ||
-               interrupted();
-    });
-    if (register_wait_queue)
-        register_wait_queue(nullptr);
-    if (interrupted())
-    {
+    auto release_reservation = [&] {
         reserved->wait_claimed.store(false);
-        --reserved->wait_counter;
+        reserved->wait_counter.fetch_sub(1, std::memory_order_acq_rel);
+    };
+    const auto result = wait_for_process_state(
+        reserved->wait_queue,
+        [reserved, stopped_unreported] {
+            return (reserved->attributes.load() & process_attributes::no_thread) != 0 || stopped_unreported();
+        },
+        interrupted, register_wait_queue, release_reservation);
+    if (result == wait_result::interrupted || interrupted())
+    {
+        release_reservation();
         return EINTR;
     }
     if (reserved->attributes.load() & process_attributes::no_thread)
@@ -1856,7 +2193,7 @@ i64 open_process_handle(process_t *caller, i64 requested_pid, khandle &object)
     uctx::RawSpinLockUninterruptibleContext icu(process_list_lock);
     auto *target =
         requested_pid == 0 ? caller : global_process_map->get(static_cast<process_id>(requested_pid)).value_or(nullptr);
-    if (target == nullptr || target->reap_pending.load() || (target != caller && target->parent_pid != caller->pid))
+    if (target == nullptr || target->reaped() || (target != caller && target->parent_pid != caller->pid))
         return ECHILD;
     object = handle_t<process_object>::make(target);
     return object ? 0 : EFAILED;
@@ -1916,32 +2253,32 @@ i64 wait_process_children(process_t *parent, i64 requested_pid, flag_t flags, i6
 
         if (wait_any)
         {
-            if (register_wait_queue)
-                register_wait_queue(&parent->child_wait_queue);
-            parent->child_wait_queue.do_wait(
-                [&context, interrupted] { return child_wait_generation_changed(&context) || interrupted(); });
-            if (register_wait_queue)
-                register_wait_queue(nullptr);
+            const auto result = wait_for_process_state(
+                parent->child_wait_queue, [&context] { return child_wait_generation_changed(&context); }, interrupted,
+                register_wait_queue);
+            if (result == wait_result::interrupted || interrupted())
+                return EINTR;
         }
         else
         {
             auto target = reserve_child(parent, requested_pid, false);
             if (target == nullptr)
                 return ECHILD;
-            if (register_wait_queue)
-                register_wait_queue(&target->wait_queue);
-            target->wait_queue.do_wait([target, want_stop, interrupted] {
-                return (target->attributes.load() & process_attributes::no_thread) != 0 ||
-                       (want_stop && (target->attributes.load() & process_attributes::job_control_stopped) != 0 &&
-                        !target->wait_stop_reported.load()) ||
-                       interrupted();
-            });
-            if (register_wait_queue)
-                register_wait_queue(nullptr);
-            if (interrupted())
-            {
+            auto release_reservation = [&] {
                 target->wait_claimed.store(false);
-                --target->wait_counter;
+                target->wait_counter.fetch_sub(1, std::memory_order_acq_rel);
+            };
+            const auto result = wait_for_process_state(
+                target->wait_queue,
+                [target, want_stop] {
+                    return (target->attributes.load() & process_attributes::no_thread) != 0 ||
+                           (want_stop && (target->attributes.load() & process_attributes::job_control_stopped) != 0 &&
+                            !target->wait_stop_reported.load());
+                },
+                interrupted, register_wait_queue, release_reservation);
+            if (result == wait_result::interrupted || interrupted())
+            {
+                release_reservation();
                 return EINTR;
             }
             if (target->attributes.load() & process_attributes::no_thread)
@@ -1967,7 +2304,8 @@ void exit_thread(thread_t *thd, i64 ret)
     data_t *data = memory::New<data_t>(memory::KernelCommonAllocatorV);
     if (data == nullptr)
     {
-        thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
+        if (!thd->exit_lifecycle.cancel_exit())
+            KLOG_PANIC("invalid thread exit rollback");
         KLOG_WARN("unable to allocate thread-exit cleanup for pid {} tid {}", thd->process->pid, thd->tid);
         return;
     }
@@ -1978,6 +2316,7 @@ void exit_thread(thread_t *thd, i64 ret)
         [](u64 data) {
             auto *dt = reinterpret_cast<data_t *>(data);
             auto *process = dt->thd->process;
+            retain_process_internal(process);
             if (!(dt->thd->attributes & thread_attributes::main) && process->mm_info != memory::kernel_vm_info &&
                 dt->thd->user_stack_bottom != nullptr && dt->thd->user_stack_top != nullptr &&
                 dt->thd->user_stack_top > dt->thd->user_stack_bottom)
@@ -1988,29 +2327,48 @@ void exit_thread(thread_t *thd, i64 ret)
                                          reinterpret_cast<u64>(dt->thd->user_stack_bottom));
             }
             dt->thd->user_stack_top = (void *)dt->ret;
+            dt->thd->scheduler->remove(dt->thd);
             dt->thd->state = thread_state::destroy;
-            dt->thd->attributes.fetch_and(~thread_attributes::exit_pending, std::memory_order_release);
-            if (dt->thd->attributes & thread_attributes::detached)
-            {
-                delete_thread(dt->thd);
-            }
-            else
-            {
+            const bool process_exiting =
+                (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting) != 0;
+            const bool detached = (dt->thd->attributes & thread_attributes::detached) != 0;
+            if (process_exiting || !detached)
                 dt->thd->wait_queue.do_wake_up();
+
+            bool deletion_claimed = false;
+            {
+                uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+                if (!dt->thd->exit_lifecycle.complete_exit())
+                    KLOG_PANIC("invalid thread exit completion");
+                const auto waiters = dt->thd->wait_counter.load(std::memory_order_acquire);
+                const bool should_delete =
+                    detached || (process_exiting && waiters == 0) ||
+                    (!process_exiting && dt->thd->join_requested.load(std::memory_order_acquire) && waiters == 0);
+                if (should_delete)
+                    deletion_claimed = claim_thread_deletion_locked(process, dt->thd);
             }
+
+            if (deletion_claimed)
+                delete_thread_claimed(dt->thd);
             memory::Delete<>(memory::KernelCommonAllocatorV, dt);
             if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
                 exit_process_thread(process);
+            release_process_internal(process);
         },
         reinterpret_cast<u64>(data));
 }
 
 NoReturn void do_exit_thread(i64 ret)
 {
+    // Exit can be requested from userland_return or a wait path whose caller
+    // disabled interrupts. The thread will never resume, so restore delivery
+    // before scheduling it away and running post-switch cleanup.
+    arch::idt::enable();
     auto thd = current();
-    exit_thread(thd, ret);
     for (;;)
     {
+        if (thd != nullptr && !thd->exit_lifecycle.started())
+            exit_thread(thd, ret);
         scheduler::schedule();
         cpu_pause();
     }
@@ -2022,6 +2380,10 @@ u64 detach_thread(thread_t *thd)
         return 1;
     if (thd == current())
         return 3;
+
+    uctx::RawSpinLockUninterruptibleContext guard(thd->process->thread_list_lock);
+    if (thd->exit_lifecycle.is_reaping())
+        return 1;
     if (thd->attributes & thread_attributes::detached)
         return 2;
     if (thd->attributes & thread_attributes::main)
@@ -2031,28 +2393,77 @@ u64 detach_thread(thread_t *thd)
     return 0;
 }
 
+namespace
+{
+void release_thread_join_wait(thread_t *thread);
+}
+
 u64 join_thread(thread_t *thd, i64 &ret)
 {
     if (thd == nullptr)
         return 1;
     if (thd == current())
         return 3;
-    if (thd->attributes & thread_attributes::detached)
-        return 2;
-    if (thd->attributes & thread_attributes::main)
-        return 4;
+
+    auto *process = thd->process;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        if (thd->exit_lifecycle.is_reaping())
+            return 1;
+        if (thd->attributes & thread_attributes::detached)
+            return 2;
+        if (thd->attributes & thread_attributes::main)
+            return 4;
+        thd->join_requested.store(true, std::memory_order_release);
+        thd->wait_counter.fetch_add(1, std::memory_order_acq_rel);
+    }
+
     uctx::UninterruptibleContext icu;
-    thd->wait_counter++;
-    thd->wait_queue.do_wait([thd] { return thd->state == thread_state::destroy; });
+    const auto wait_result = thd->wait_queue.do_wait_result([thd] { return thd->state == thread_state::destroy; });
+    if (wait_result == task::wait_result::process_exit)
+    {
+        release_thread_join_wait(thd);
+        do_exit_thread(0);
+    }
+    if (wait_result == task::wait_result::interrupted)
+    {
+        release_thread_join_wait(thd);
+        return 1;
+    }
 
     ret = (i64)thd->user_stack_top;
-    thd->wait_counter--;
-    if (thd->wait_counter == 0)
-    {
-        delete_thread(thd);
-    }
+    release_thread_join_wait(thd);
     return 0;
 }
+
+namespace
+{
+void release_thread_join_wait(thread_t *thread)
+{
+    if (thread == nullptr)
+        return;
+
+    auto *process = thread->process;
+    retain_process_internal(process);
+    bool deletion_claimed = false;
+    {
+        uctx::RawSpinLockUninterruptibleContext guard(process->thread_list_lock);
+        auto waiters = thread->wait_counter.load(std::memory_order_acquire);
+        while (waiters != 0 &&
+               !thread->wait_counter.compare_exchange_weak(waiters, waiters - 1, std::memory_order_acq_rel))
+        {
+        }
+        if (waiters == 1 && thread->state == thread_state::destroy && thread->exit_lifecycle.can_reap())
+            deletion_claimed = claim_thread_deletion_locked(process, thread);
+    }
+
+    if (deletion_claimed)
+        delete_thread_claimed(thread);
+    if (process->attributes.load(std::memory_order_acquire) & process_attributes::exiting)
+        exit_process_thread(process);
+    release_process_internal(process);
+}
+} // namespace
 
 thread_t *find_kernel_stack_thread(void *stack_ptr)
 {
@@ -2523,7 +2934,7 @@ i64 open_process_snapshot(process_id after_pid, u64 limit, freelibcxx::vector<pr
             for (auto item : *global_process_map)
             {
                 auto *candidate = item.value;
-                if (candidate == nullptr || candidate->reap_pending.load() || candidate->pid <= cursor)
+                if (candidate == nullptr || candidate->reaped() || candidate->pid <= cursor)
                     continue;
                 if (selected == nullptr || candidate->pid < selected->pid)
                     selected = candidate;
@@ -2543,7 +2954,7 @@ i64 open_process_snapshot(process_id after_pid, u64 limit, freelibcxx::vector<pr
             for (auto item : *global_process_map)
             {
                 auto *candidate = item.value;
-                if (candidate != nullptr && !candidate->reap_pending.load() && candidate->pid > cursor)
+                if (candidate != nullptr && !candidate->reaped() && candidate->pid > cursor)
                 {
                     next_pid = cursor;
                     break;
@@ -2556,12 +2967,14 @@ i64 open_process_snapshot(process_id after_pid, u64 limit, freelibcxx::vector<pr
 
 thread_t *find_tid(process_t *process, thread_id tid)
 {
+    if (process == nullptr || process->thread_list == nullptr)
+        return nullptr;
     uctx::RawSpinLockUninterruptibleContext icu(process->thread_list_lock);
     auto &list = *(thread_list_t *)process->thread_list;
-    for (auto thd : list)
+    for (auto thread : list)
     {
-        if (thd->tid == tid)
-            return thd;
+        if (thread->tid == tid)
+            return thread;
     }
     return nullptr;
 }
@@ -2595,7 +3008,7 @@ i64 open_thread_snapshot(process_t *process, thread_id after_tid, u64 limit,
         thread_snapshot_entry snapshot;
         snapshot.tid = selected->tid;
         snapshot.state = selected->state;
-        snapshot.attributes = selected->attributes.load();
+        snapshot.attributes = selected->status_attributes();
         snapshot.cpu_id = selected->cpuid;
         snapshot.static_priority = selected->static_priority;
         snapshot.dynamic_priority = selected->dynamic_priority;
@@ -2644,19 +3057,27 @@ void get_process_memory_accounting(const process_t *process, memory_accounting_t
         accounting.peak_rss_pages = vm_status.peak_rss_pages;
     }
 
-    auto *mutable_process = const_cast<process_t *>(process);
-    uctx::RawSpinLockUninterruptibleContext guard(mutable_process->thread_list_lock);
     accounting.user_time_us = process->statistics.user_time;
     accounting.system_time_us = process->statistics.sys_time;
-    const auto &threads = *(thread_list_t *)process->thread_list;
-    for (auto *thread : threads)
+
+    // A destroyed or last-thread-exited process may already have released its
+    // thread list; a retained process capability can still observe it.
+    const auto attributes = process->attributes.load(std::memory_order_acquire);
+    if ((attributes & (process_attributes::destroy | process_attributes::no_thread)) == 0 &&
+        process->thread_list != nullptr)
     {
-        accounting.thread_count++;
-        if (thread->state != thread_state::destroy)
+        auto *mutable_process = const_cast<process_t *>(process);
+        uctx::RawSpinLockUninterruptibleContext guard(mutable_process->thread_list_lock);
+        const auto &threads = *(thread_list_t *)process->thread_list;
+        for (auto *thread : threads)
         {
-            accounting.live_thread_count++;
-            accounting.user_time_us += thread->statistics.user_time;
-            accounting.system_time_us += thread->statistics.sys_time;
+            accounting.thread_count++;
+            if (thread->state != thread_state::destroy)
+            {
+                accounting.live_thread_count++;
+                accounting.user_time_us += thread->statistics.user_time;
+                accounting.system_time_us += thread->statistics.sys_time;
+            }
         }
     }
     accounting.kernel_stack_pages = accounting.thread_count * (memory::kernel_stack_size / memory::page_size);
@@ -2699,6 +3120,69 @@ void get_system_memory_accounting(memory_accounting_t &accounting)
     }
 }
 
+namespace
+{
+bool install_thread_io_leases(thread_t *thread)
+{
+    if (thread == nullptr || cpu::current().get_task() != thread)
+        return false;
+
+    arch::tss::io_range ranges[thread_t::direct_io_lease_capacity]{};
+    uctx::RawSpinLockUninterruptibleContext guard(thread->direct_io_lease_lock);
+    for (u32 index = 0; index < thread->direct_io_lease_count; index++)
+    {
+        ranges[index].first_port = thread->direct_io_leases[index].first_port;
+        ranges[index].port_count = thread->direct_io_leases[index].port_count;
+    }
+    return arch::tss::install_io_leases(cpu::current().id(), ranges, thread->direct_io_lease_count);
+}
+
+struct io_lease_sync_request
+{
+    thread_t *thread;
+    std::atomic_uint32_t remaining;
+};
+
+void install_io_leases_on_cpu(u64 context) noexcept
+{
+    auto &request = *reinterpret_cast<io_lease_sync_request *>(context);
+    if (cpu::current().get_task() == request.thread)
+    {
+        if (!install_thread_io_leases(request.thread))
+            KLOG_PANIC("invalid direct I/O lease during remote synchronization");
+    }
+    request.remaining.fetch_sub(1, std::memory_order_release);
+}
+
+void synchronize_thread_io_leases(thread_t *thread)
+{
+    const u32 cpu_count = static_cast<u32>(cpu::count());
+    if (cpu_count == 0)
+        return;
+
+    const u32 current_cpu = cpu::current().id();
+    for (u32 cpu_id = 0; cpu_id < cpu_count; cpu_id++)
+    {
+        if (cpu::get(cpu_id).get_task() != thread)
+            continue;
+        if (cpu_id == current_cpu)
+        {
+            if (!install_thread_io_leases(thread))
+                KLOG_PANIC("invalid direct I/O lease during local synchronization");
+            return;
+        }
+
+        io_lease_sync_request request{thread, 1};
+        SMP::call_cpu(cpu_id, &install_io_leases_on_cpu, reinterpret_cast<u64>(&request));
+        while (request.remaining.load(std::memory_order_acquire) != 0)
+            cpu_pause();
+        return;
+    }
+    // No CPU currently executes this thread. switch_thread() installs the
+    // latest lease set before the thread can return to user mode.
+}
+} // namespace
+
 void switch_thread(thread_t *old, thread_t *new_task)
 {
     kassert(!arch::idt::is_enable(), "expect failed");
@@ -2714,13 +3198,113 @@ void switch_thread(thread_t *old, thread_t *new_task)
 
     cpu::current().set_task(new_task);
 
-    if (old->process != new_task->process && old->process->mm_info != new_task->process->mm_info)
+    if (!install_thread_io_leases(new_task))
+        KLOG_PANIC("invalid direct I/O lease during context switch");
+
+    // A thread of an exiting process can be scheduled after its address space
+    // has been released (mm_info == nullptr); do not reload page tables for it.
+    if (old->process != nullptr && new_task->process != nullptr && old->process != new_task->process &&
+        new_task->process->mm_info != nullptr && old->process->mm_info != new_task->process->mm_info)
     {
         ((mm_info_t *)new_task->process->mm_info)->paging().load();
     }
 
     arch::task::update_fs(new_task);
     _switch_task(old->register_info, new_task->register_info);
+}
+
+u64 direct_io_lease_generation(const thread_t *thread)
+{
+    return thread == nullptr ? 0 : thread->direct_io_lease_generation.load(std::memory_order_acquire);
+}
+
+bool direct_io_lease_generation_is_current(const thread_t *thread, u64 generation)
+{
+    return thread != nullptr && detail::io_lease_generation_is_current(
+                                    thread->direct_io_lease_generation.load(std::memory_order_acquire), generation);
+}
+
+bool set_direct_io_lease(thread_t *thread, u64 generation, u16 first_port, u32 port_count)
+{
+    if (thread == nullptr || generation == 0 || port_count == 0 ||
+        port_count > 0x1'0000u - static_cast<u32>(first_port))
+        return false;
+    {
+        uctx::LockGuard_t<lock::mutex_t> update_guard(thread->direct_io_lease_update_lock);
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(thread->direct_io_lease_lock);
+            if (!detail::io_lease_generation_is_current(
+                    thread->direct_io_lease_generation.load(std::memory_order_relaxed), generation))
+                return false;
+            for (u32 index = 0; index < thread->direct_io_lease_count; index++)
+            {
+                if (thread->direct_io_leases[index].first_port == first_port &&
+                    thread->direct_io_leases[index].port_count == port_count)
+                    return true;
+            }
+            if (thread->direct_io_lease_count >= thread_t::direct_io_lease_capacity)
+                return false;
+            thread->direct_io_leases[thread->direct_io_lease_count++] = {first_port, port_count};
+        }
+        synchronize_thread_io_leases(thread);
+    }
+    return true;
+}
+
+bool release_direct_io_lease(thread_t *thread, u64 generation, u16 first_port, u32 port_count)
+{
+    if (thread == nullptr || generation == 0)
+        return false;
+    {
+        uctx::LockGuard_t<lock::mutex_t> update_guard(thread->direct_io_lease_update_lock);
+        bool found = false;
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(thread->direct_io_lease_lock);
+            if (!detail::io_lease_generation_is_current(
+                    thread->direct_io_lease_generation.load(std::memory_order_relaxed), generation))
+                return false;
+            for (u32 index = 0; index < thread->direct_io_lease_count; index++)
+            {
+                if (thread->direct_io_leases[index].first_port != first_port ||
+                    thread->direct_io_leases[index].port_count != port_count)
+                    continue;
+                for (u32 move = index + 1; move < thread->direct_io_lease_count; move++)
+                    thread->direct_io_leases[move - 1] = thread->direct_io_leases[move];
+                thread->direct_io_leases[--thread->direct_io_lease_count] = {};
+                found = true;
+                break;
+            }
+            if (!found)
+                return false;
+        }
+        synchronize_thread_io_leases(thread);
+    }
+    return true;
+}
+
+void revoke_direct_io_lease(thread_t *thread)
+{
+    if (thread == nullptr)
+        return;
+    bool had_leases = false;
+    {
+        uctx::LockGuard_t<lock::mutex_t> update_guard(thread->direct_io_lease_update_lock);
+        {
+            uctx::RawSpinLockUninterruptibleContext guard(thread->direct_io_lease_lock);
+            had_leases = thread->direct_io_lease_count != 0;
+            const auto next_generation = detail::revoke_direct_io_lease_state(
+                thread->direct_io_leases, thread->direct_io_lease_count,
+                thread->direct_io_lease_generation.load(std::memory_order_relaxed), [&] {
+                    if (cpu::current().get_task() == thread)
+                        arch::tss::revoke_io_lease(cpu::current().id());
+                });
+            thread->direct_io_lease_generation.store(next_generation, std::memory_order_release);
+        }
+        if (had_leases)
+            synchronize_thread_io_leases(thread);
+    }
+    if (thread->process != nullptr)
+        (void)arch::ACPI::revoke_thread_resources(thread->process->pid, thread->tid);
 }
 
 void set_cpu_mask(thread_t *thd, cpu_mask_t mask)
@@ -2751,7 +3335,16 @@ ExportC void userland_return()
     // away through scheduler::remove(), but this guard also covers the case
     // where scheduling returned without changing the current context.
     auto thd = current();
-    if (thd != nullptr && thd->state == thread_state::running && !(thd->attributes & thread_attributes::block_to_stop))
+    if (thd != nullptr && thd->process != nullptr &&
+        (thd->process->attributes.load(std::memory_order_acquire) & process_attributes::exiting) != 0)
+        task::do_exit_thread(0);
+
+    const bool userspace =
+        thd != nullptr && thd->process != nullptr &&
+        (thd->process->attributes.load(std::memory_order_acquire) & process_attributes::userspace) != 0;
+    const bool address_space_live = !userspace || thd->process->mm_info != nullptr;
+    if (thd != nullptr && thd->state == thread_state::running &&
+        !(thd->attributes & thread_attributes::block_to_stop) && address_space_live)
         return;
 
     for (;;)

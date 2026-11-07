@@ -33,7 +33,12 @@ slab *slab_group::new_memory_node()
 
 void slab_group::delete_memory_node(slab *s)
 {
-    kassert(s->rest == node_pre_slab, "slab error rest:{} target:{}", s->rest, node_pre_slab);
+    if (unlikely(s == nullptr || s->rest != node_pre_slab || all_obj_count < node_pre_slab ||
+                 all_obj_used > all_obj_count - node_pre_slab))
+    {
+        KLOG_PANIC("slab release with live objects slab={} rest={} target={}", log::hex(s), s == nullptr ? 0 : s->rest,
+                   node_pre_slab);
+    }
     all_obj_count -= node_pre_slab;
     s->~slab();
     // page *p = memory::global_zones->get_page(s);
@@ -103,10 +108,26 @@ void *slab_group::alloc()
     }
     slab *slab = free_head;
     auto &bitmap = slab->bitmap;
+    if (unlikely(slab->rest == 0 || all_obj_used >= all_obj_count))
+    {
+        KLOG_PANIC("slab free-list/accounting corruption slab={} rest={} used={} total={}", log::hex(slab), slab->rest,
+                   all_obj_used, all_obj_count);
+    }
     u64 i = bitmap.scan_zero();
-    kassert(i < bitmap.count() && i < node_pre_slab, "Memory corruption in slab");
+    if (unlikely(i >= bitmap.count() || i >= node_pre_slab))
+    {
+        KLOG_PANIC("slab bitmap has no free slot slab={} index={} bitmap_count={} slab_count={}", log::hex(slab), i,
+                   bitmap.count(), node_pre_slab);
+    }
+    if (unlikely(bitmap.get_bit(i)))
+    {
+        KLOG_PANIC("slab bitmap scan returned an occupied slot slab={} index={}", log::hex(slab), i);
+    }
     bitmap.set_bit(i);
-    kassert(bitmap.get_bit(i), "Can't allocate an address. index: {}", i);
+    if (unlikely(!bitmap.get_bit(i)))
+    {
+        KLOG_PANIC("slab bitmap failed to mark allocated slot slab={} index={}", log::hex(slab), i);
+    }
 
     slab->rest--;
     all_obj_used++;
@@ -138,11 +159,40 @@ void slab_group::free(void *ptr)
 {
     uctx::RawWriteLockUninterruptibleContext ctx(slab_lock);
 
+    if (unlikely(ptr == nullptr))
+    {
+        KLOG_PANIC("free null slab pointer");
+    }
     byte *page_addr = reinterpret_cast<byte *>(reinterpret_cast<u64>(ptr) & ~(memory::page_size * page_pre_slab - 1));
     slab *s = reinterpret_cast<slab *>(page_addr);
-    u64 index = ((char *)ptr - s->data_ptr) / obj_align_size;
-    kassert(index < s->bitmap.count(), "s->data_ptr={}", log::hex(s->data_ptr));
-    kassert(s->bitmap.get_bit(index), "Not an assigned address or double free. {}", log::hex(ptr));
+    const u64 address = reinterpret_cast<u64>(ptr);
+    const u64 data_address = reinterpret_cast<u64>(s->data_ptr);
+    if (unlikely(address < data_address))
+    {
+        KLOG_PANIC("free pointer precedes slab objects ptr={} data={}", log::hex(ptr), log::hex(s->data_ptr));
+    }
+    const u64 offset = address - data_address;
+    if (unlikely(offset % obj_align_size != 0))
+    {
+        KLOG_PANIC("free pointer is not a slab object boundary ptr={} offset={} object_size={}", log::hex(ptr), offset,
+                   obj_align_size);
+    }
+    const u64 index = offset / obj_align_size;
+    if (unlikely(index >= node_pre_slab || index >= s->bitmap.count()))
+    {
+        KLOG_PANIC("free pointer is outside slab objects ptr={} index={} slab_count={} bitmap_count={}", log::hex(ptr),
+                   index, node_pre_slab, s->bitmap.count());
+    }
+    if (unlikely(!s->bitmap.get_bit(index)))
+    {
+        KLOG_PANIC("free of unallocated slab slot or double free ptr={} index={}", log::hex(ptr), index);
+    }
+    if (unlikely(s->rest >= node_pre_slab || all_obj_used == 0 || all_obj_used > all_obj_count))
+    {
+        KLOG_PANIC("slab free accounting corruption slab={} rest={} used={} total={}", log::hex(s), s->rest,
+                   all_obj_used, all_obj_count);
+    }
+
     s->bitmap.reset_bit(index);
     s->rest++;
     all_obj_used--;
@@ -150,6 +200,12 @@ void slab_group::free(void *ptr)
     {
         slab *p = s->prev;
         slab *n = s->next;
+        if (unlikely((p == nullptr && used_head != s) || (p != nullptr && p->next != s) ||
+                     (n != nullptr && n->prev != s)))
+        {
+            KLOG_PANIC("full slab is missing from used list slab={} prev={} next={}", log::hex(s), log::hex(p),
+                       log::hex(n));
+        }
         if (n != nullptr)
         {
             n->prev = p;
@@ -166,8 +222,14 @@ void slab_group::free(void *ptr)
         s->next = free_head;
         if (free_head)
         {
+            if (unlikely(free_head->prev != nullptr))
+            {
+                KLOG_PANIC("slab free-list head has a predecessor head={} prev={}", log::hex(free_head),
+                           log::hex(free_head->prev));
+            }
             free_head->prev = s;
         }
+        free_head = s;
     }
 }
 

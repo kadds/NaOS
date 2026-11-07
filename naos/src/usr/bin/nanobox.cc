@@ -26,25 +26,22 @@ entry(env);
 entry(simd_test);
 entry(poweroff);
 
-#define entry_p(name)                                                                                                  \
-    {                                                                                                                  \
-#name, name                                                                                                    \
-    }
+#define entry_p(name) {#name, name}
 
 struct
 {
     const char *name;
     entry_function *fn;
 } static_commands[] = {
-    entry_p(nsh),   entry_p(cat),  entry_p(ls),  entry_p(mkdir),     entry_p(rmdir),
-    entry_p(touch), entry_p(rm),   entry_p(env), entry_p(simd_test), entry_p(poweroff),
+    entry_p(nsh),   entry_p(cat), entry_p(ls),  entry_p(mkdir),     entry_p(rmdir),
+    entry_p(touch), entry_p(rm),  entry_p(env), entry_p(simd_test), entry_p(poweroff),
 };
 
 using namespace freelibcxx;
 DefaultAllocator alloc;
 
 extern "C" int main(int argc, char **argv)
-{ 
+{
     if (strstr(argv[0], "nanobox") != nullptr)
     {
         if (argc == 1)

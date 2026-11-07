@@ -29,6 +29,7 @@ inline int result_errno(const na_result_frame_t &result)
             return ENOTSUP;
         case NA_OUTCOME_REASON_OBJECT_REVOKED:
         case NA_OUTCOME_REASON_BROKER_FAILURE:
+        case NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN:
         default:
             return EIO;
     }

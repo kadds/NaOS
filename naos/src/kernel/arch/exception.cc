@@ -10,6 +10,33 @@
 #include "kernel/ucontext.hpp"
 
 KLOG_MODULE(arch);
+namespace arch::cpu
+{
+namespace
+{
+u32 exception_depth[64];
+}
+
+bool in_exception_depth()
+{
+    if (!has_init())
+        return true;
+    return exception_depth[current().get_id() % 64] != 0;
+}
+
+void exception_context_enter()
+{
+    if (has_init())
+        exception_depth[current().get_id() % 64]++;
+}
+
+void exception_context_leave()
+{
+    if (has_init())
+        exception_depth[current().get_id() % 64]--;
+}
+} // namespace arch::cpu
+
 namespace arch::exception
 {
 
@@ -233,9 +260,11 @@ entry_func exceptions[] = {
 };
 ExportC _ctx_interrupt_ void __do_exception(regs_t *regs)
 {
+    arch::cpu::exception_context_enter();
     // call exception handler first
     exceptions[regs->vector](regs);
     dispatch_exception(regs);
+    arch::cpu::exception_context_leave();
 }
 
 void init()

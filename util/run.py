@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import re
 import shlex
 import shutil
 import subprocess
@@ -32,12 +33,70 @@ KVM_DEVICE = Path("/dev/kvm")
 # the concrete implementation names: blockd is currently ramdiskd and rootfsd
 # is currently exfatd.
 BOOT_MODULE_SOURCES = (
+    ("platformd", "platformd"),
+    ("pcied", "pcied"),
     ("vfsd", "vfsd"),
     ("blockd", "ramdiskd"),
     ("rootfsd", "rootfsd"),
     ("init", "init"),
     ("rootimage", "root.img"),
 )
+OPTIONAL_BOOT_MODULE_TOKENS = frozenset({"pdrv-edud", "pdrv-vblk"})
+MAX_BOOT_MODULES = 12
+PCI_DRIVER_BOOT_MODULES = (("pdrv-edud", "edud"), ("pdrv-vblk", "virtioblkd"))
+
+
+def boot_module_sources() -> tuple[tuple[str, str], ...]:
+    """Return fixed boot modules plus explicitly configured PCI driver images.
+
+    A configured image named ``pdrv-<name>`` is both the GRUB module token and
+    its one-shot ServiceDirectory image URI suffix. Keeping the list explicit
+    prevents stale files in a reused build directory from becoming boot modules.
+    """
+    modules = list(BOOT_MODULE_SOURCES) + list(PCI_DRIVER_BOOT_MODULES)
+    tokens = [token for token, _ in modules]
+    if len(tokens) != len(set(tokens)):
+        raise RunError("duplicate Multiboot module token")
+    for token, source in PCI_DRIVER_BOOT_MODULES:
+        if (
+            len(token) > 15
+            or re.fullmatch(r"pdrv-[a-z0-9_-]{1,10}", token, flags=re.ASCII) is None
+            or not source
+            or Path(source).name != source
+        ):
+            raise RunError(f"invalid PCI driver boot module mapping: {token!r} -> {source!r}")
+    if len(modules) > MAX_BOOT_MODULES:
+        raise RunError(
+            f"boot image has {len(modules)} modules; kernel limit is {MAX_BOOT_MODULES}"
+        )
+    return tuple(modules)
+
+
+def _append_pci_driver_modules(config: str, modules: tuple[tuple[str, str], ...], root: str) -> str:
+    drivers = [(token, source) for token, source in modules if token.startswith("pdrv-")]
+    if not drivers or not any(token == "pcied" for token, _ in modules):
+        return config
+    prefix = f"{root}/" if root else "/"
+    anchor = f"    module2 {prefix}pcied pcied\n"
+    if anchor not in config:
+        raise RunError("GRUB config is missing the PCIED boot module")
+    lines = "".join(f"    module2 {prefix}{source} {token}\n" for token, source in drivers)
+    return config.replace(anchor, anchor + lines)
+
+
+def _remove_missing_module_entries(
+    config: str,
+    modules: tuple[tuple[str, str], ...],
+    system_dir: Path,
+    allow_missing: tuple[str, ...] = (),
+) -> str:
+    allowed = set(allow_missing)
+    for token, source_name in modules:
+        if (system_dir / source_name).is_file():
+            continue
+        if token in OPTIONAL_BOOT_MODULE_TOKENS or _is_allowed_missing(token, source_name, allowed):
+            config = config.replace(f"    module2 /{source_name} {token}\n", "")
+    return config
 
 
 class RunError(RuntimeError):
@@ -88,27 +147,75 @@ def build_qemu_argv(args: argparse.Namespace, paths: BuildPaths | None = None) -
     cores = int(args.cores)
     if cores < 1:
         raise ValueError("CPU core count must be positive")
+    max_cpus = getattr(args, "max_cpus", None)
+    if max_cpus is None:
+        smp_config = f"{cores},sockets=1,cores={cores}"
+    else:
+        max_cpus = int(max_cpus)
+        if max_cpus < cores:
+            raise ValueError("maximum CPU count cannot be smaller than the boot CPU count")
+        smp_config = f"{cores},sockets=1,cores={max_cpus},maxcpus={max_cpus}"
+    use_kvm = kvm_available()
+    machine = getattr(args, "machine", "q35")
+    intel_iommu = getattr(args, "intel_iommu", False)
+    intel_iommu_ir = getattr(args, "intel_iommu_ir", False)
+    if intel_iommu and machine != "q35":
+        raise ValueError("--intel-iommu requires --machine q35")
+    if intel_iommu_ir and machine != "q35":
+        raise ValueError("--intel-iommu-ir requires --machine q35")
+    if intel_iommu_ir:
+        intel_iommu = True
+        irqchip_mode = "split" if use_kvm else "off"
+        machine = f"q35,kernel-irqchip={irqchip_mode}"
 
     argv = [
         "qemu-system-x86_64",
+        "-machine",
+        machine,
         "-serial",
         f"file:{paths.serial_log}",
         "-cpu",
-        "host" if kvm_available() else "Haswell-v4,pdpe1gb",
+        "host" if use_kvm else "Haswell-v4,pdpe1gb",
         "-smp",
-        f"{cores},sockets=1,cores={cores}",
+        smp_config,
         "-m",
         str(args.memory),
     ]
-    if kvm_available():
+    if use_kvm:
         argv[1:1] = ["-accel", "kvm"]
+    if intel_iommu:
+        iommu_device = "intel-iommu,intremap=on" if intel_iommu_ir else "intel-iommu"
+        argv.extend(["-device", iommu_device])
+    for drive in getattr(args, "qemu_drive", ()):
+        if not drive:
+            raise ValueError("QEMU drive arguments must not be empty")
+        argv.extend(["-drive", drive])
+    for event in getattr(args, "qemu_trace_event", ()):
+        if not re.fullmatch(r"[A-Za-z0-9_.*]+", event):
+            raise ValueError(f"invalid QEMU trace event pattern: {event!r}")
+        argv.extend(["-trace", f"enable={event}"])
+    for device in getattr(args, "qemu_device", ()):
+        if not device:
+            raise ValueError("QEMU device arguments must not be empty")
+        argv.extend(["-device", device])
 
-    port = _gdb_port(args.gdb_port)
-    if args.gdb_port is None:
-        argv.append("-s")
-    else:
-        argv.extend(["-gdb", f"tcp::{port}"])
-    if args.wait_gdb:
+    acpi_ssdt = getattr(args, "acpi_ssdt", None)
+    if acpi_ssdt is not None:
+        ssdt_path = Path(acpi_ssdt).expanduser().resolve()
+        if not ssdt_path.is_file():
+            raise FileNotFoundError(f"ACPI SSDT fixture does not exist: {ssdt_path}")
+        argv.extend(["-acpitable", f"sig=SSDT,file={ssdt_path}"])
+
+    no_gdb = getattr(args, "no_gdb", False)
+    if no_gdb and (args.gdb_port is not None or args.wait_gdb):
+        raise ValueError("--no-gdb cannot be combined with --gdb-port or --wait-gdb")
+    if not no_gdb:
+        port = _gdb_port(args.gdb_port)
+        if args.gdb_port is None:
+            argv.append("-s")
+        else:
+            argv.extend(["-gdb", f"tcp::{port}"])
+    if args.wait_gdb and not no_gdb:
         argv.append("-S")
 
     if args.uefi:
@@ -152,8 +259,8 @@ def require_boot_artifacts(paths: BuildPaths, allow_missing: tuple[str, ...] = (
         for path in [paths.system_dir / "kernel"]
         + [
             paths.system_dir / source
-            for token, source in BOOT_MODULE_SOURCES
-            if not _is_allowed_missing(token, source, allowed)
+            for token, source in boot_module_sources()
+            if token not in OPTIONAL_BOOT_MODULE_TOKENS and not _is_allowed_missing(token, source, allowed)
         ]
         if not path.is_file()
     ]
@@ -180,22 +287,29 @@ def prepare_iso(paths: BuildPaths, allow_missing: tuple[str, ...] = ()) -> None:
         shutil.copy2(source, paths.iso_dir / name)
 
     omitted_modules: list[tuple[str, str]] = []
-    for token, source_name in BOOT_MODULE_SOURCES:
+    modules = boot_module_sources()
+    for token, source_name in modules:
         source = paths.system_dir / source_name
         if not source.is_file():
-            if not _is_allowed_missing(token, source_name, allowed):
+            if token not in OPTIONAL_BOOT_MODULE_TOKENS and not _is_allowed_missing(token, source_name, allowed):
                 raise FileNotFoundError(f"{source} does not exist; build NaOS before starting QEMU")
             (paths.iso_dir / source_name).unlink(missing_ok=True)
             omitted_modules.append((token, source_name))
             continue
         shutil.copy2(source, paths.iso_dir / source_name)
 
+    grub_config = paths.iso_dir / "boot" / "grub" / "grub.cfg"
+    content = grub_config.read_text(encoding="utf-8")
     if omitted_modules:
-        grub_config = paths.iso_dir / "boot" / "grub" / "grub.cfg"
-        content = grub_config.read_text(encoding="utf-8")
         for token, source_name in omitted_modules:
             content = content.replace(f"    module2 /{source_name} {token}\n", "")
-        grub_config.write_text(content, encoding="utf-8")
+    staged_modules = tuple(
+        (token, source_name)
+        for token, source_name in modules
+        if (paths.system_dir / source_name).is_file()
+    )
+    content = _append_pci_driver_modules(content, staged_modules, "")
+    grub_config.write_text(content, encoding="utf-8")
 
     # Obsolete prefixed names must never survive from an older build tree.
     for obsolete in ("naos-vfsd", "naos-ramdiskd", "naos-blockd", "naos-exfatd", "exfatd"):
@@ -207,7 +321,7 @@ def prepare_iso(paths: BuildPaths, allow_missing: tuple[str, ...] = ()) -> None:
     )
 
 
-def prepare_disk_image(paths: BuildPaths) -> None:
+def prepare_disk_image(paths: BuildPaths, allow_missing: tuple[str, ...] = ()) -> None:
     """Refresh /boot directly in the build-local prepared disk image."""
     if not paths.disk_image.is_file():
         disk.create(paths.disk_image)
@@ -218,8 +332,16 @@ def prepare_disk_image(paths: BuildPaths) -> None:
         if source.is_file():
             disk.add_file(paths.disk_image, source, f"/boot/{source.name}", replace=True)
     config = (REPOSITORY_ROOT / "run/iso/boot/grub/grub.cfg").read_text(encoding="utf-8")
-    for source_name in ("kernel", "vfsd", "ramdiskd", "rootfsd", "init", "root.img"):
+    modules = boot_module_sources()
+    config = _remove_missing_module_entries(config, modules, paths.system_dir, allow_missing)
+    for source_name in ("kernel",) + tuple(source_name for _, source_name in modules):
         config = config.replace(f"/{source_name}", f"/boot/{source_name}")
+    staged_modules = tuple(
+        (token, source_name)
+        for token, source_name in modules
+        if (paths.system_dir / source_name).is_file()
+    )
+    config = _append_pci_driver_modules(config, staged_modules, "/boot")
     disk.install_bios_grub(paths.disk_image, config.encode("utf-8"))
     disk.umount(paths.disk_image)
 
@@ -257,19 +379,31 @@ def run_qemu(args: argparse.Namespace, paths: BuildPaths) -> QemuResult:
     """Run QEMU with an optional wall-clock bound."""
     paths.serial_log.parent.mkdir(parents=True, exist_ok=True)
     paths.serial_log.write_text("", encoding="utf-8")
-    process = subprocess.Popen(
-        build_qemu_argv(args, paths),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    trace_events = getattr(args, "qemu_trace_event", ())
+    trace_log = None
+    if trace_events:
+        trace_log = paths.qemu_trace_log.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            build_qemu_argv(args, paths),
+            stdout=subprocess.PIPE,
+            stderr=trace_log if trace_log is not None else subprocess.PIPE,
+            text=True,
+        )
+    except BaseException:
+        if trace_log is not None:
+            trace_log.close()
+        raise
     try:
         stdout, stderr = process.communicate(timeout=args.timeout)
-        return QemuResult(process.returncode, stdout, stderr, False)
+        return QemuResult(process.returncode, stdout, stderr or "", False)
     except subprocess.TimeoutExpired:
         process.kill()
         stdout, stderr = process.communicate()
-        return QemuResult(124, stdout, stderr, True)
+        return QemuResult(124, stdout, stderr or "", True)
+    finally:
+        if trace_log is not None:
+            trace_log.close()
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -278,13 +412,54 @@ def parse_arguments() -> argparse.Namespace:
         "--build-dir",
         help="CMake build directory owning all boot artifacts and emulator state",
     )
+    parser.add_argument(
+        "--machine",
+        default="q35",
+        help="QEMU machine type (default: q35; use pc for the legacy i440FX platform)",
+    )
+    parser.add_argument(
+        "--intel-iommu",
+        action="store_true",
+        help="attach QEMU's Intel VT-d device (requires --machine q35)",
+    )
+    parser.add_argument(
+        "--intel-iommu-ir",
+        action="store_true",
+        help="enable QEMU VT-d interrupt remapping with the user-mode irqchip (requires --machine q35)",
+    )
+    parser.add_argument(
+        "--qemu-device",
+        action="append",
+        default=[],
+        help="attach one additional QEMU device; may be repeated",
+    )
+    parser.add_argument(
+        "--qemu-drive",
+        action="append",
+        default=[],
+        help="attach one additional QEMU drive backend; may be repeated",
+    )
+    parser.add_argument(
+        "--qemu-trace-event",
+        action="append",
+        default=[],
+        help="enable one QEMU trace event or wildcard; trace output goes to qemu-trace.log",
+    )
+    parser.add_argument(
+        "--acpi-ssdt",
+        type=Path,
+        help="inject one complete SSDT table for an opt-in firmware integration test",
+    )
     parser.add_argument("-n", "--nographic", action="store_true", help="run without a graphical display")
     parser.add_argument("-u", "--uefi", action="store_true", help="boot QEMU with UEFI firmware")
     parser.add_argument("--iso", action="store_true", help="build and boot an ISO from this build")
     parser.add_argument("-m", "--memory", default="128", help="guest memory in MiB")
     parser.add_argument("-c", "--cores", default="2", help="guest CPU core count")
+    parser.add_argument("--max-cpus", type=int, help="maximum CPU slots; enables CPU hotplug when greater than -c")
     parser.add_argument("--wait-gdb", action="store_true", help="pause QEMU until GDB connects")
-    parser.add_argument("--gdb-port", help="GDB TCP port; replaces the default -s/1234 listener")
+    gdb_group = parser.add_mutually_exclusive_group()
+    gdb_group.add_argument("--gdb-port", help="GDB TCP port; replaces the default -s/1234 listener")
+    gdb_group.add_argument("--no-gdb", action="store_true", help="do not start a GDB server")
     parser.add_argument("--qemu-debug", action="store_true", help="write QEMU debug output into the build dir")
     parser.add_argument("--monitor", help="QEMU monitor Unix socket path")
     parser.add_argument("--no-reboot", action="store_true", help="keep QEMU stopped after guest shutdown or reset")
@@ -302,6 +477,8 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("emulator_name", choices=["q", "b", "v"], help="q: QEMU, b: Bochs, v: VirtualBox")
     args = parser.parse_args()
+    if args.no_gdb and args.wait_gdb:
+        parser.error("--no-gdb cannot be combined with --wait-gdb")
     return args
 
 
@@ -369,7 +546,7 @@ def run_with_init_script(args: argparse.Namespace, paths: BuildPaths) -> int:
                 else:
                     prepare_iso(paths)
             else:
-                prepare_disk_image(paths)
+                prepare_disk_image(paths, tuple(getattr(args, "allow_missing_artifact", ())))
             return run_checked_qemu(args, paths)
         finally:
             if target_existed:
@@ -388,8 +565,9 @@ def main() -> int:
 
         if args.emulator_name == "q":
             allowed_missing = tuple(args.allow_missing_artifact)
-            known_modules = {name for token, name in BOOT_MODULE_SOURCES} | {
-                token for token, _ in BOOT_MODULE_SOURCES
+            modules = boot_module_sources()
+            known_modules = {name for token, name in modules} | {
+                token for token, _ in modules
             }
             unknown = sorted(set(allowed_missing) - known_modules)
             if unknown:
@@ -401,7 +579,7 @@ def main() -> int:
                 if args.iso:
                     prepare_iso(paths, allowed_missing)
                 else:
-                    prepare_disk_image(paths)
+                    prepare_disk_image(paths, allowed_missing)
                 return run_checked_qemu(args, paths)
 
         if args.emulator_name == "b":

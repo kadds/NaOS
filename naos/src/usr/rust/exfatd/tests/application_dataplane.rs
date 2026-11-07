@@ -4,13 +4,14 @@
 #![cfg(feature = "test-loopback")]
 
 use exfatd::block::RamBlockDevice;
-use exfatd::mount_control::{METHOD_BIND_ROOT, MountControlServer};
+use exfatd::mount_control::MountControlServer;
 use exfatd::worker::FatWorker;
 use naos_idl::directory;
 use naos_idl::file;
 use naos_idl::loopback;
+use naos_idl::mount_control::METHOD_BIND_ROOT;
 use naos_idl::{
-    Invocation, ProtocolClientEndpoint, ReceivedResources, ResourceSlot, ResourceTable,
+    Invocation, ProtocolClientEndpoint, ReceivedResources, ResourceSlot, ResourceTransferBuilder,
 };
 use naos_sys as sys;
 
@@ -91,8 +92,14 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 0,
         path: b"old.txt",
     };
-    let mut invocation =
-        directory::submit_create(&directory, &create, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = directory::submit_create(
+        &directory,
+        &create,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
     let mut response = [0_u8; 64];
     directory::take_create(&mut invocation, &mut response).unwrap();
@@ -102,8 +109,14 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 0,
         path: b"old.txt",
     };
-    let mut invocation =
-        directory::submit_open(&directory, &open, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = directory::submit_open(
+        &directory,
+        &open,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
     let mut response = [0_u8; 64];
     let (open_response, mut resources) =
@@ -116,7 +129,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     // service reads the bytes straight out of that region.
     const PAYLOAD: &[u8] = b"abcdef";
     let write_region = memory_region(PAYLOAD, false);
-    let mut write_resources = ResourceTable::new();
+    let mut write_resources = ResourceTransferBuilder::new();
     let write = file::write_request {
         size: PAYLOAD.len() as u64,
         flags: 0,
@@ -138,7 +151,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     // starts zeroed so the read-back proves the service wrote it.
     let blank = vec![0_u8; PAYLOAD.len()];
     let read_region = memory_region(&blank, true);
-    let mut read_resources = ResourceTable::new();
+    let mut read_resources = ResourceTransferBuilder::new();
     let read = file::pread_request {
         offset: 0,
         size: PAYLOAD.len() as u64,
@@ -171,13 +184,24 @@ fn directory_and_file_requests_reach_fat_worker() {
         offset: 0,
         whence: 1,
     };
-    let mut invocation =
-        file::submit_seek(&file_endpoint, &rewind, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = file::submit_seek(
+        &file_endpoint,
+        &rewind,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
-    assert_eq!(file::take_seek(&mut invocation, &mut response).unwrap().offset, 0);
+    assert_eq!(
+        file::take_seek(&mut invocation, &mut response)
+            .unwrap()
+            .offset,
+        0
+    );
 
     let writev_region = memory_region(PAYLOAD, false);
-    let mut writev_resources = ResourceTable::new();
+    let mut writev_resources = ResourceTransferBuilder::new();
     let writev = file::writev_request {
         layout,
         size: PAYLOAD.len() as u64,
@@ -194,13 +218,24 @@ fn directory_and_file_requests_reach_fat_worker() {
         PAYLOAD.len() as u64
     );
 
-    let mut invocation =
-        file::submit_seek(&file_endpoint, &rewind, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = file::submit_seek(
+        &file_endpoint,
+        &rewind,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
-    assert_eq!(file::take_seek(&mut invocation, &mut response).unwrap().offset, 0);
+    assert_eq!(
+        file::take_seek(&mut invocation, &mut response)
+            .unwrap()
+            .offset,
+        0
+    );
 
     let readv_region = memory_region(&[0_u8; PAYLOAD.len()], true);
-    let mut readv_resources = ResourceTable::new();
+    let mut readv_resources = ResourceTransferBuilder::new();
     let readv = file::readv_request {
         layout,
         size: PAYLOAD.len() as u64,
@@ -219,7 +254,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     assert_eq!(region_bytes(&readv_region), PAYLOAD.to_vec());
 
     let pwritev_region = memory_region(b"ghijkl", false);
-    let mut pwritev_resources = ResourceTable::new();
+    let mut pwritev_resources = ResourceTransferBuilder::new();
     let pwritev = file::pwritev_request {
         offset: 0,
         layout,
@@ -227,14 +262,8 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 0,
         buffer: pwritev_resources.push_duplicate(&pwritev_region).unwrap(),
     };
-    let mut invocation = file::submit_pwritev(
-        &file_endpoint,
-        &pwritev,
-        pwritev_resources,
-        &mut wire,
-        0,
-    )
-    .unwrap();
+    let mut invocation =
+        file::submit_pwritev(&file_endpoint, &pwritev, pwritev_resources, &mut wire, 0).unwrap();
     server.serve_once().unwrap();
     assert_eq!(
         file::take_pwritev(&mut invocation, &mut response)
@@ -244,7 +273,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     );
 
     let preadv_region = memory_region(&[0_u8; 6], true);
-    let mut preadv_resources = ResourceTable::new();
+    let mut preadv_resources = ResourceTransferBuilder::new();
     let preadv = file::preadv_request {
         offset: 0,
         layout,
@@ -266,7 +295,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     // Directory.list names the region the same way: the records are encoded
     // straight into the caller's region and only counts travel in the reply.
     let records_region = memory_region(&[0_u8; 256], true);
-    let mut list_resources = ResourceTable::new();
+    let mut list_resources = ResourceTransferBuilder::new();
     let list = directory::list_request {
         offset: 0,
         requested_bytes: 256,
@@ -277,7 +306,10 @@ fn directory_and_file_requests_reach_fat_worker() {
     server.serve_once().unwrap();
     let list_response = directory::take_list(&mut invocation, &mut response).unwrap();
     assert!(list_response.count >= 1, "the open file must be listed");
-    assert!(list_response.bytes <= 256, "records must fit the region window");
+    assert!(
+        list_response.bytes <= 256,
+        "records must fit the region window"
+    );
     let records = region_bytes(&records_region);
     let written = list_response.bytes as usize;
     assert!(
@@ -290,7 +322,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     let mut invocation = file::submit_stat(
         &file_endpoint,
         &file::stat_request {},
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -308,7 +340,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     let mut invocation = file::submit_truncate(
         &file_endpoint,
         &truncate,
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -319,7 +351,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     let mut invocation = file::submit_stat(
         &file_endpoint,
         &file::stat_request {},
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -341,7 +373,7 @@ fn directory_and_file_requests_reach_fat_worker() {
             first: b"old.txt",
             second: b"new.txt",
         },
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -354,8 +386,14 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 1,
         path: b"new.txt",
     };
-    let mut invocation =
-        directory::submit_open(&directory, &excl, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = directory::submit_open(
+        &directory,
+        &excl,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
     let error = match directory::take_open(&mut invocation, &mut response) {
         Err(error) => error,
@@ -374,7 +412,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     let mut invocation = file::submit_stat(
         &file_endpoint,
         &file::stat_request {},
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -395,7 +433,7 @@ fn directory_and_file_requests_reach_fat_worker() {
             path_size: 8,
             path: b"new.txt\0",
         },
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -417,8 +455,14 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 0,
         path: b"new.txt",
     };
-    let mut invocation =
-        directory::submit_open(&directory, &open, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = directory::submit_open(
+        &directory,
+        &open,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
     let (open_response, mut resources) =
         directory::take_open(&mut invocation, &mut response).unwrap();
@@ -428,7 +472,7 @@ fn directory_and_file_requests_reach_fat_worker() {
     let mut invocation = file::submit_stat(
         &renamed_file,
         &file::stat_request {},
-        ResourceTable::new(),
+        ResourceTransferBuilder::new(),
         &mut wire,
         0,
     )
@@ -450,8 +494,14 @@ fn directory_and_file_requests_reach_fat_worker() {
         flags: 0,
         path: b"new.txt",
     };
-    let mut invocation =
-        directory::submit_remove(&directory, &remove, ResourceTable::new(), &mut wire, 0).unwrap();
+    let mut invocation = directory::submit_remove(
+        &directory,
+        &remove,
+        ResourceTransferBuilder::new(),
+        &mut wire,
+        0,
+    )
+    .unwrap();
     server.serve_once().unwrap();
     let error = match directory::take_remove(&mut invocation, &mut response) {
         Err(error) => error,
@@ -474,9 +524,14 @@ fn directory_and_file_requests_reach_fat_worker() {
             flags: 1,
             path,
         };
-        let mut invocation =
-            directory::submit_create(&directory, &create, ResourceTable::new(), &mut wire, 0)
-                .unwrap();
+        let mut invocation = directory::submit_create(
+            &directory,
+            &create,
+            ResourceTransferBuilder::new(),
+            &mut wire,
+            0,
+        )
+        .unwrap();
         server.serve_once().unwrap();
         directory::take_create(&mut invocation, &mut response).unwrap();
     }
@@ -491,7 +546,8 @@ fn directory_and_file_requests_reach_fat_worker() {
             path: name,
         };
         let mut invocation =
-            directory::submit_open(directory, &request, ResourceTable::new(), wire, 0).unwrap();
+            directory::submit_open(directory, &request, ResourceTransferBuilder::new(), wire, 0)
+                .unwrap();
         server.serve_once().unwrap();
         let (value, mut resources) = directory::take_open(&mut invocation, response).unwrap();
         unsafe {
@@ -506,14 +562,15 @@ fn directory_and_file_requests_reach_fat_worker() {
         path: b"move.txt",
     };
     let mut invocation =
-        directory::submit_create(&left, &create, ResourceTable::new(), &mut wire, 0).unwrap();
+        directory::submit_create(&left, &create, ResourceTransferBuilder::new(), &mut wire, 0)
+            .unwrap();
     server.serve_once().unwrap();
     directory::take_create(&mut invocation, &mut response).unwrap();
     let clone = {
         let mut invocation = directory::submit_clone_binding(
             &right,
             &directory::clone_binding_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut wire,
             0,
         )
@@ -523,7 +580,7 @@ fn directory_and_file_requests_reach_fat_worker() {
             directory::take_clone_binding(&mut invocation, &mut response).unwrap();
         resources.take(value.directory).unwrap()
     };
-    let mut resources = ResourceTable::new();
+    let mut resources = ResourceTransferBuilder::new();
     let new_parent = resources.push_move(clone).unwrap();
     let request = directory::rename_at_request {
         flags: 0,
@@ -543,7 +600,8 @@ fn directory_and_file_requests_reach_fat_worker() {
         path: b"move.txt",
     };
     let mut invocation =
-        directory::submit_stat_node(&right, &moved, ResourceTable::new(), &mut wire, 0).unwrap();
+        directory::submit_stat_node(&right, &moved, ResourceTransferBuilder::new(), &mut wire, 0)
+            .unwrap();
     server.serve_once().unwrap();
     assert_eq!(
         directory::take_stat_node(&mut invocation, &mut [0_u8; 256])

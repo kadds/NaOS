@@ -58,7 +58,7 @@ class cpu_data_t
 {
     static constexpr u32 call_cpu_queue_capacity = 64;
 
-    task::thread_t *current_task = nullptr;
+    std::atomic<task::thread_t *> current_task{nullptr};
     task::thread_t *idle_task = nullptr;
     u32 smp_id;
     void *schedule_data[2];
@@ -92,11 +92,11 @@ class cpu_data_t
     u32 id();
     void set_task(task::thread_t *task);
 
-    task::thread_t *get_task() { return current_task; }
+    task::thread_t *get_task() { return current_task.load(std::memory_order_acquire); }
     void set_idle_task(::task::thread_t *task) { idle_task = task; }
     task::thread_t *get_idle_task() { return idle_task; }
 
-    bool has_task() { return current_task != nullptr; }
+    bool has_task() { return current_task.load(std::memory_order_acquire) != nullptr; }
 
     void set_schedule_data(u64 index, void *data) { schedule_data[index] = data; }
 

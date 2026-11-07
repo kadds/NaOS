@@ -5,6 +5,8 @@
 #include "kernel/arch/idt.hpp"
 #include "kernel/arch/interrupt.hpp"
 #include "kernel/cpu.hpp"
+#include "kernel/irq/soft_irq_drain.hpp"
+#include "kernel/irq/vector_pool.hpp"
 #include "kernel/lock.hpp"
 #include "kernel/mm/list_node_cache.hpp"
 #include "kernel/mm/memory.hpp"
@@ -16,6 +18,24 @@
 KLOG_MODULE(kernel);
 namespace irq
 {
+namespace
+{
+vector_pool interrupt_vector_pool;
+lock::spinlock_t interrupt_vector_pool_lock;
+
+bool release_msi_vector(u8 vector) noexcept
+{
+    uctx::RawSpinLockUninterruptibleContext guard(interrupt_vector_pool_lock);
+    return interrupt_vector_pool.release_msi_vector(vector);
+}
+
+bool quarantine_msi_vector(u8 vector) noexcept
+{
+    uctx::RawSpinLockUninterruptibleContext guard(interrupt_vector_pool_lock);
+    return interrupt_vector_pool.quarantine_msi_vector(vector);
+}
+} // namespace
+
 struct request_entry
 {
     u64 id;
@@ -49,6 +69,7 @@ struct soft_request_entry
 
 using request_list_t = freelibcxx::linked_list<request_entry>;
 using soft_request_list_t = freelibcxx::linked_list<soft_request_entry>;
+constexpr int irq_count = 256;
 
 template <typename Entry> struct request_lock_list_t
 {
@@ -73,7 +94,25 @@ irq_info_t<soft_request_entry> *soft_irq_info_list;
 
 std::atomic_uint64_t next_registration_id{1};
 
-const int irq_count = 256;
+static request_result absorb_quarantined_msi(const interrupt_info *, u64) noexcept { return request_result::ok; }
+
+static bool quarantine_hard_registration(u32 vector, u64 id) noexcept
+{
+    if (vector >= irq_count || id == 0 || irq_info_list == nullptr)
+        return false;
+    auto &locked_list = irq_info_list[vector].list;
+    uctx::RawWriteLockUninterruptibleContext guard(locked_list.lock);
+    for (auto &entry : *locked_list.list)
+    {
+        if (entry.id != id)
+            continue;
+        entry.handler = hard_handler::bind<&absorb_quarantined_msi>();
+        return true;
+    }
+    return false;
+}
+
+constexpr u32 max_soft_irq_drain_passes = 8;
 
 bool _ctx_interrupt_ do_irq(const regs_t *regs, u64 extra_data)
 {
@@ -114,30 +153,33 @@ bool wakeup_condition();
 void do_soft_irq()
 {
     auto &cpu = arch::cpu::current();
-    for (int i = 0; i < soft_vector::COUNT; i++)
-    {
-        if (cpu.is_irq_pending(i))
-        {
-            uctx::RawReadLockUninterruptibleController ctr(soft_irq_info_list[i].list.lock);
+    detail::drain_requeued_soft_interrupts(
+        static_cast<u32>(soft_vector::COUNT), max_soft_irq_drain_passes,
+        [&cpu](u32 vector) {
+            auto &locked_list = soft_irq_info_list[vector].list;
+            uctx::RawReadLockUninterruptibleController ctr(locked_list.lock);
             ctr.begin();
-            if (cpu.is_irq_pending(i))
+            bool consumed = false;
+            if (cpu.is_irq_pending(vector))
             {
-                cpu.clean_irq_pending(i);
-                soft_request_list_t &list = *soft_irq_info_list[i].list.list;
-                for (auto &it : list)
-                {
-                    it.invoke(i);
-                }
+                cpu.clean_irq_pending(vector);
+                soft_request_list_t &list = *locked_list.list;
+                for (auto &entry : list)
+                    entry.invoke(vector);
+                consumed = true;
             }
             ctr.end();
-        }
-    }
+            return consumed;
+        },
+        [] { return wakeup_condition(); });
     if (unlikely(wakeup_condition()))
         cpu::current().get_soft_irq_wait_queue()->do_wake_up();
 }
 
 bool check_and_wakeup_soft_irq(const regs_t *regs, u64 extra_data)
 {
+    (void)regs;
+    (void)extra_data;
     do_soft_irq();
     return true;
 }
@@ -253,9 +295,72 @@ void registration::reset() noexcept
         unregister_soft_handler(vector, id);
 }
 
+bool registration::quarantine() noexcept
+{
+    if (kind_ != kind::hard || id_ == 0 || !quarantine_hard_registration(vector_, id_))
+        return false;
+    kind_ = kind::none;
+    vector_ = 0;
+    id_ = 0;
+    return true;
+}
+
+msi_vector_lease::msi_vector_lease(msi_vector_lease &&other) noexcept
+    : vector_(other.vector_)
+{
+    other.vector_ = 0;
+}
+
+msi_vector_lease &msi_vector_lease::operator=(msi_vector_lease &&other) noexcept
+{
+    if (this != &other)
+    {
+        reset();
+        vector_ = other.vector_;
+        other.vector_ = 0;
+    }
+    return *this;
+}
+
+msi_vector_lease::~msi_vector_lease() { reset(); }
+
+void msi_vector_lease::reset() noexcept
+{
+    const u8 vector = vector_;
+    vector_ = 0;
+    if (vector != 0)
+        (void)release_msi_vector(vector);
+}
+
+bool msi_vector_lease::quarantine() noexcept
+{
+    if (vector_ == 0 || !quarantine_msi_vector(vector_))
+        return false;
+    vector_ = 0;
+    return true;
+}
+
+u8 allocate_ioapic_vector() noexcept
+{
+    uctx::RawSpinLockUninterruptibleContext guard(interrupt_vector_pool_lock);
+    return interrupt_vector_pool.allocate_ioapic_vector();
+}
+
+bool release_ioapic_vector(u8 vector) noexcept
+{
+    uctx::RawSpinLockUninterruptibleContext guard(interrupt_vector_pool_lock);
+    return interrupt_vector_pool.release_ioapic_vector(vector);
+}
+
+msi_vector_lease allocate_msi_vector() noexcept
+{
+    uctx::RawSpinLockUninterruptibleContext guard(interrupt_vector_pool_lock);
+    return msi_vector_lease(interrupt_vector_pool.allocate_msi_vector());
+}
+
 registration register_handler(u32 vector, hard_handler handler)
 {
-    if (!handler)
+    if (!handler || vector >= irq_count)
         return {};
     const auto id = next_registration_id.fetch_add(1);
     auto &locked_list = irq_info_list[vector].list;

@@ -1095,7 +1095,7 @@ struct deadline_wakeup
 } // namespace
 
 na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_ref<bool()> condition,
-                               timeclock::microsecond_t deadline)
+                               timeclock::microsecond_t deadline, freelibcxx::function_ref<void()> exit_cleanup)
 {
     if (condition())
         return NA_STATUS_OK;
@@ -1132,7 +1132,14 @@ na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_r
             disarm_deadline();
             return NA_STATUS_WAIT_TIMED_OUT;
         }
-        queue.do_wait(condition);
+        const auto result = queue.do_wait_result(condition);
+        if (result == task::wait_result::process_exit)
+        {
+            disarm_deadline();
+            if (exit_cleanup)
+                exit_cleanup();
+            task::do_exit_thread(0);
+        }
     }
 
     disarm_deadline();
@@ -1160,8 +1167,13 @@ na_status_t wait_for_raw_channel(task::resource_table_t &resources, na_handle_t 
     // becomes the normal peer-closed signal instead of invalidating a raw
     // pointer under the waiter.
     auto object = entry.object;
+    auto exit_cleanup = [&] {
+        object.reset();
+        entry.object.reset();
+    };
     return wait_for_condition(
-        endpoint->state()->wait_queue(), [&] { return (object->capability_signals() & signals) != 0; }, deadline);
+        endpoint->state()->wait_queue(), [&] { return (object->capability_signals() & signals) != 0; }, deadline,
+        exit_cleanup);
 }
 
 void collect_orphaned_channels()

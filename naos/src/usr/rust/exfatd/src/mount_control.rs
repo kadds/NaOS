@@ -16,27 +16,17 @@ use crate::worker::{FatWorker, NodeKind};
 use alloc::{rc::Rc, string::String, vec, vec::Vec};
 use naos_idl::directory::{self, DirectoryHandler};
 use naos_idl::file::{self, FileHandler};
+use naos_idl::mount_control as control;
+use naos_idl::namespace_binding as namespace_wire;
 use naos_idl::{
-    CallError, CodecError, Encoder, FailInvocation, Invocation, MAX_RESOURCES, MethodReply,
-    OwnedHandle, ProtocolClientEndpoint, ProtocolServerEndpoint, ReceivedResources, ResourceSlot,
-    ResourceTable, receive_request,
+    CallError, DispatchOutcome, FailInvocation, MethodReply, OwnedHandle, ProtocolClientEndpoint,
+    ProtocolServerEndpoint, ReceivedResources, ResourceSlot, ResourceTransferBuilder,
+    receive_request,
 };
 use naos_sys as sys;
 
-pub const PROTOCOL_UUID: [u8; 16] = [
-    43, 158, 60, 46, 140, 125, 79, 177, 158, 33, 76, 75, 14, 10, 16, 38,
-];
-pub const PROTOCOL_SCOPE: u64 = 21;
-pub const PROTOCOL_RIGHTS: u64 = (1 << 22) | 1;
-pub const METHOD_BIND_ROOT: u64 = 1;
-pub const METHOD_BIND_NODE: u64 = 2;
-pub const METHOD_SYNC: u64 = 3;
-pub const METHOD_PREPARE_UNMOUNT: u64 = 4;
-pub const METHOD_SHUTDOWN: u64 = 5;
-pub const METHOD_LOOKUP_TARGET: u64 = 6;
+pub use control::{PROTOCOL_RIGHTS, PROTOCOL_SCOPE, PROTOCOL_UUID};
 
-const BIND_NODE_HEADER: usize = 28;
-const LOOKUP_REQUEST_HEADER: usize = 24;
 const MAX_WIRE_BYTES: usize = 65_536;
 const LOOKUP_NOFOLLOW: u64 = 1;
 const OPEN_CHROOT: u64 = 1 << 63;
@@ -51,53 +41,6 @@ impl NodeKey {
         node_id: 0,
         generation: 0,
     };
-
-    fn encode(self, e: &mut naos_idl::Encoder<'_>) -> Result<(), CodecError> {
-        e.put_u64(self.node_id)?;
-        e.put_u64(self.generation)
-    }
-    fn decode(d: &mut naos_idl::Decoder<'_>) -> Result<Self, CodecError> {
-        Ok(Self {
-            node_id: d.get_u64()?,
-            generation: d.get_u64()?,
-        })
-    }
-}
-fn decode_bind(w: &[u8]) -> Result<(NodeKey, u64, ResourceSlot), CodecError> {
-    if w.len() != BIND_NODE_HEADER {
-        return Err(CodecError::InvalidMessage);
-    }
-    let mut d = naos_idl::Decoder::new(w);
-    let node = NodeKey::decode(&mut d)?;
-    let flags = d.get_u64()?;
-    let slot = ResourceSlot::new(d.get_u32()?).ok_or(CodecError::InvalidResource)?;
-    Ok((node, flags, slot))
-}
-fn decode_lookup(w: &[u8]) -> Result<&[u8], CodecError> {
-    if w.len() < LOOKUP_REQUEST_HEADER {
-        return Err(CodecError::Truncated);
-    }
-    let mut d = naos_idl::Decoder::new(w);
-    let _ = d.get_u64()?;
-    let _ = d.get_u32()?;
-    let _ = d.get_u32()?;
-    let size = d.get_u64()? as usize;
-    let end = LOOKUP_REQUEST_HEADER
-        .checked_add(size)
-        .ok_or(CodecError::Overflow)?;
-    if size > 4095 {
-        return Err(CodecError::BoundExceeded);
-    }
-    if end != w.len() {
-        return Err(CodecError::InvalidMessage);
-    }
-    Ok(&w[LOOKUP_REQUEST_HEADER..end])
-}
-fn last_component(p: &[u8]) -> &[u8] {
-    let p = p.strip_suffix(&[0]).unwrap_or(p);
-    p.rsplit(|b| *b == b'/')
-        .find(|x| !x.is_empty())
-        .unwrap_or(b"/")
 }
 fn fail(e: FsError) -> FailInvocation {
     FailInvocation::domain(-(e.errno.to_i32() as i64))
@@ -132,8 +75,8 @@ fn transfer_bytes(size: u64) -> Result<usize, FailInvocation> {
 /// malformed layout must not make the worker read or write past the granted
 /// window.
 fn iov_segment_count(layout: &file::IOVLayout, size: u64) -> Result<usize, FailInvocation> {
-    let count = usize::try_from(layout.segment_count)
-        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
+    let count =
+        usize::try_from(layout.segment_count).map_err(|_| fail(FsError::new(Errno::EInval)))?;
     if count > layout.lengths.len() {
         return Err(fail(FsError::new(Errno::EInval)));
     }
@@ -208,71 +151,34 @@ fn resolve_absolute(
     if path.is_empty() || path[0] != b'/' || path.len() > 4095 {
         return Err(fail(FsError::new(Errno::EInval)));
     }
-    let mut request_wire = vec![0_u8; 24 + path.len()];
-    let mut encoder = Encoder::new(&mut request_wire);
-    encoder
-        .put_u64(open_flags)
-        .and_then(|_| encoder.put_u32(8))
-        .and_then(|_| encoder.put_u32(0))
-        .and_then(|_| encoder.put_u64(path.len() as u64))
-        .and_then(|_| encoder.put_bounded_bytes(path, 4095))
-        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
-    let request_bytes = encoder.written();
-    let frame = sys::SubmitFrame {
-        struct_size: core::mem::size_of::<sys::SubmitFrame>() as u32,
-        method_id: 1,
-        request: request_wire.as_ptr() as u64,
-        request_bytes: request_bytes as u64,
-        operation_budget: 0,
-        ..sys::SubmitFrame::default()
+    let request = namespace_wire::resolve_absolute_request {
+        walk: namespace_wire::WalkContext {
+            open_flags,
+            remaining_symlinks: 8,
+            reserved: 0,
+        },
+        path_size: path.len() as u64,
+        path,
     };
-    let mut raw_invocation = sys::HANDLE_INVALID;
-    let status = unsafe { sys::_na_invoke_submit(namespace.get(), &frame, &mut raw_invocation) };
-    if status != sys::STATUS_OK || raw_invocation == sys::HANDLE_INVALID {
-        return Err(call_failure(CallError::Status(status)));
-    }
-    let mut invocation = unsafe { Invocation::from_raw(raw_invocation) };
+    let mut request_wire =
+        vec![0_u8; namespace_wire::RESOLVE_ABSOLUTE_REQUEST_HEADER_BYTES + path.len()];
+    let mut invocation = namespace_wire::submit_resolve_absolute(
+        namespace,
+        &request,
+        ResourceTransferBuilder::new(),
+        &mut request_wire,
+        0,
+    )
+    .map_err(call_failure)?;
     if !servicekit::wait_for_completion(invocation.get(), u64::MAX) {
         return Err(fail(FsError::new(Errno::EIo)));
     }
-    let mut response_wire = [0_u8; 4];
-    let mut raw_resources = [sys::HANDLE_INVALID; MAX_RESOURCES];
-    let mut result = sys::ResultFrame {
-        struct_size: core::mem::size_of::<sys::ResultFrame>() as u32,
-        bytes: response_wire.as_mut_ptr() as u64,
-        byte_capacity: response_wire.len() as u64,
-        resources: raw_resources.as_mut_ptr() as u64,
-        resource_capacity: MAX_RESOURCES as u64,
-        ..sys::ResultFrame::default()
-    };
-    let status = unsafe { sys::_na_invocation_take_result(invocation.get(), &mut result) };
-    if status != sys::STATUS_OK {
-        return Err(call_failure(CallError::Status(status)));
-    }
-    invocation.mark_completed();
-    if result.method_id != 1
-        || result.actual_bytes != 4
-        || result.actual_resources != 1
-        || result.execution_outcome != 0
-        || result.protocol_error != 0
-    {
-        for handle in raw_resources.iter().take(result.actual_resources as usize) {
-            if *handle != sys::HANDLE_INVALID {
-                let _ = unsafe { sys::_na_handle_close(*handle) };
-            }
-        }
-        return Err(if result.protocol_error != 0 {
-            FailInvocation::domain(result.protocol_error)
-        } else {
-            fail(FsError::new(Errno::EIo))
-        });
-    }
-    let mut resources = unsafe { ReceivedResources::from_raw(&raw_resources[..1]) }
-        .map_err(|_| fail(FsError::new(Errno::EIo)))?;
-    let slot = u32::from_le_bytes(response_wire);
-    let slot = ResourceSlot::new(slot).ok_or_else(|| fail(FsError::new(Errno::EIo)))?;
+    let mut response_wire = [0_u8; namespace_wire::RESOLVE_ABSOLUTE_RESPONSE_HEADER_BYTES];
+    let (response, mut resources) =
+        namespace_wire::take_resolve_absolute(&mut invocation, &mut response_wire)
+            .map_err(call_failure)?;
     resources
-        .take(slot)
+        .take(response.object)
         .ok_or_else(|| fail(FsError::new(Errno::EIo)))
 }
 
@@ -316,7 +222,9 @@ pub struct MountControlServer<D: BlockClient + Clone> {
     backend_generation: u64,
     request_wire: Vec<u8>,
     reply_wire: Vec<u8>,
+    lookup_name: Vec<u8>,
     next_generation: u64,
+    shutdown_pending: bool,
     stopped: bool,
 }
 
@@ -335,7 +243,9 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
             backend_generation: 0,
             request_wire: vec![0; MAX_WIRE_BYTES],
             reply_wire: vec![0; MAX_WIRE_BYTES],
+            lookup_name: Vec::new(),
             next_generation: 1,
+            shutdown_pending: false,
             stopped: false,
         }
     }
@@ -468,8 +378,12 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
                         backend_generation: self.backend_generation,
                         region,
                     };
-                    if let Err(error) = directory::dispatch(&mut h, incoming, &mut self.reply_wire) {
-                        log::error!("directory dispatch failed method={} error={error:?}", method_id);
+                    if let Err(error) = directory::dispatch(&mut h, incoming, &mut self.reply_wire)
+                    {
+                        log::error!(
+                            "directory dispatch failed method={} error={error:?}",
+                            method_id
+                        );
                     }
                     i += 1;
                 }
@@ -545,24 +459,16 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
             let _ = responder.fail(fail(FsError::new(Errno::EIo)));
             return;
         };
-        let old_side = match lookup_mutation_side(
-            worker,
-            &old_path,
-            self.backend_generation,
-            true,
-        ) {
+        let old_side = match lookup_mutation_side(worker, &old_path, self.backend_generation, true)
+        {
             Ok(side) => side,
             Err(error) => {
                 let _ = responder.fail(fail(error));
                 return;
             }
         };
-        let new_side = match lookup_mutation_side(
-            worker,
-            &new_path,
-            self.backend_generation,
-            false,
-        ) {
+        let new_side = match lookup_mutation_side(worker, &new_path, self.backend_generation, false)
+        {
             Ok(side) => side,
             Err(error) => {
                 let _ = responder.fail(fail(error));
@@ -603,7 +509,7 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
         let mut invocation = directory::submit_path(
             endpoint,
             &directory::path_request {},
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut request_wire,
             0,
         )
@@ -683,131 +589,37 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
     }
     fn serve_control(
         &mut self,
-        mut incoming: naos_idl::IncomingRequest<'_>,
+        incoming: naos_idl::IncomingRequest<'_>,
     ) -> Result<(), sys::Status> {
-        let Some(mut responder) = incoming.responder.take() else {
-            return Ok(());
-        };
-        match incoming.method_id {
-            METHOD_BIND_ROOT => self.bind_directory(&mut responder, "/".into(), None, true),
-            METHOD_BIND_NODE => {
-                let (node, flags, slot) = match decode_bind(incoming.wire) {
-                    Ok(x) => x,
-                    Err(_) => return responder.fail(FailInvocation::protocol_violation()),
-                };
-                if flags != 0
-                    || node.node_id == 0
-                    || node.generation == 0
-                    || incoming.resources.len() != 1
-                    || slot.index() != 0
-                {
-                    return responder.fail(fail(FsError::new(Errno::EInval)));
-                }
-                if naos_idl::validate_received_resource(
-                    &incoming.resources,
-                    slot,
-                    sys::BINDING_CLIENT_END,
-                    18,
-                    sys::RIGHT_TRANSFER,
-                    (1 << 21) | 1,
-                )
-                .is_err()
-                {
-                    return responder.fail(fail(FsError::new(Errno::EInval)));
-                }
-                let Some(ns) = incoming.resources.take(slot).map(|resource| {
-                    let raw = resource.into_raw();
-                    Rc::new(unsafe { naos_idl::ProtocolClientEndpoint::from_raw(raw) })
-                }) else {
-                    return responder.fail(fail(FsError::new(Errno::EInval)));
-                };
-                self.backend_generation = node.generation;
-                self.mutation_namespace = Some(ns);
-                // The moved NamespaceBinding is the vfsd-issued proof that
-                // this worker root may be published.  The returned Directory
-                // is the mounted filesystem's own root, however: absolute
-                // application paths must stay inside that root rather than
-                // being sent back to vfsd's placeholder system tree.
-                self.bind_directory(&mut responder, "/".into(), None, true)
-            }
-            METHOD_SYNC => {
-                let Some(worker) = self.service.as_ref() else {
-                    return responder.fail(fail(FsError::new(Errno::EIo)));
-                };
-                worker.sync(true).map_err(|_| sys::STATUS_IO_ERROR)?;
-                responder.reply(&[], &[])
-            }
-            METHOD_PREPARE_UNMOUNT => {
-                if self.directories.iter().any(|directory| !directory.anchor)
-                    || !self.files.is_empty()
-                    || !self.pending_directories.is_empty()
-                    || !self.pending_files.is_empty()
-                {
-                    responder.fail(fail(FsError::new(Errno::EBusy)))
-                } else {
-                    responder.reply(&[], &[])
-                }
-            }
-            METHOD_SHUTDOWN => {
-                let result = responder.reply(&[], &[]);
-                if result.is_ok() {
-                    self.stopped = true;
-                }
-                result
-            }
-            METHOD_LOOKUP_TARGET => {
-                let p = match decode_lookup(incoming.wire) {
-                    Ok(x) => x,
-                    Err(_) => return responder.fail(FailInvocation::protocol_violation()),
-                };
-                let path = match core::str::from_utf8(strip_nul(p)) {
-                    Ok(path) => path,
-                    Err(_) => return responder.fail(fail(FsError::new(Errno::EInval))),
-                };
-                let Some(worker) = self.service.as_ref() else {
-                    return responder.fail(fail(FsError::new(Errno::EIo)));
-                };
-                let side = match lookup_mutation_side(
-                    worker,
-                    path,
-                    self.backend_generation,
-                    true,
-                ) {
-                    Ok(side) => side,
-                    Err(error) => return responder.fail(fail(error)),
-                };
-                let mut e = naos_idl::Encoder::new(&mut self.reply_wire);
-                let target = side.target.unwrap_or(NodeKey::ZERO);
-                if side.parent.encode(&mut e)
-                    .and_then(|_| target.encode(&mut e))
-                    .and_then(|_| e.put_u64(side.name.len() as u64))
-                    .and_then(|_| e.put_bounded_bytes(&side.name, 255))
-                    .is_err()
-                {
-                    return responder.fail(FailInvocation::domain(-5));
-                }
-                let written = e.written();
-                drop(e);
-                responder.reply(&self.reply_wire[..written], &[])
-            }
-            _ => responder.fail(FailInvocation::unsupported()),
+        let mut reply_wire = core::mem::take(&mut self.reply_wire);
+        let result = control::dispatch(self, incoming, &mut reply_wire);
+        self.reply_wire = reply_wire;
+
+        if self.shutdown_pending {
+            self.stopped = matches!(&result, Ok(DispatchOutcome::Completed));
+            self.shutdown_pending = false;
         }
-        .map(|_| ())
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(CallError::Status(status)) => Err(status),
+            Err(_) => Err(sys::STATUS_INVALID_ARGUMENT),
+        }
     }
-    fn bind_directory(
+
+    fn add_directory_binding(
         &mut self,
-        responder: &mut naos_idl::ResponderHandle,
         path: String,
         namespace: Option<Rc<naos_idl::ProtocolClientEndpoint>>,
         anchor: bool,
-    ) -> Result<(), sys::Status> {
+    ) -> Result<(ResourceSlot, ResourceTransferBuilder<'static>), FailInvocation> {
         let (client, server) =
-            directory::create_endpoints(None).map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)?;
+            directory::create_endpoints(None).map_err(|_| fail(FsError::new(Errno::EIo)))?;
         let client = unsafe { OwnedHandle::from_raw(client.into_raw()) };
-        let mut t = ResourceTable::new();
+        let mut t = ResourceTransferBuilder::new();
         let slot = t
             .push_move(client)
-            .map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)?;
+            .map_err(|_| fail(FsError::new(Errno::EIo)))?;
         self.pending_directories.push(DirectoryBinding {
             endpoint: server,
             path,
@@ -816,10 +628,110 @@ impl<D: BlockClient + Clone> MountControlServer<D> {
             anchor,
             scratch: Vec::new(),
         });
-        let response = slot.index().to_le_bytes();
-        responder.reply(&response, t.as_slice())?;
-        t.commit_move();
-        Ok(())
+        Ok((slot, t))
+    }
+}
+
+impl<D: BlockClient + Clone> control::MountControlHandler for MountControlServer<D> {
+    fn bind_root<'s>(
+        &'s mut self,
+        _request: control::bind_root_request,
+    ) -> Result<MethodReply<'s, control::bind_root_response>, FailInvocation> {
+        let (directory, resources) = self.add_directory_binding("/".into(), None, true)?;
+        Ok(MethodReply::with_resources(
+            control::bind_root_response { directory },
+            resources,
+        ))
+    }
+
+    fn bind_node<'s>(
+        &'s mut self,
+        request: control::bind_node_request,
+        request_resources: &mut ReceivedResources,
+    ) -> Result<MethodReply<'s, control::bind_node_response>, FailInvocation> {
+        if request.flags != 0 || request.node.node_id == 0 || request.node.generation == 0 {
+            return Err(fail(FsError::new(Errno::EInval)));
+        }
+        let binding = request_resources
+            .take(request.binding)
+            .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+        self.mutation_namespace = Some(Rc::new(unsafe {
+            ProtocolClientEndpoint::from_raw(binding.into_raw())
+        }));
+        self.backend_generation = request.node.generation;
+
+        // The moved NamespaceBinding is the vfsd-issued proof that this worker
+        // root may be published. Absolute application paths stay inside this
+        // mounted FAT root instead of returning to vfsd's placeholder tree.
+        let (directory, resources) = self.add_directory_binding("/".into(), None, true)?;
+        Ok(MethodReply::with_resources(
+            control::bind_node_response { directory },
+            resources,
+        ))
+    }
+
+    fn sync<'s>(
+        &'s mut self,
+        _request: control::sync_request,
+    ) -> Result<MethodReply<'s, control::sync_response>, FailInvocation> {
+        let worker = self
+            .service
+            .as_ref()
+            .ok_or_else(|| fail(FsError::new(Errno::EIo)))?;
+        worker
+            .sync(true)
+            .map_err(|_| fail(FsError::new(Errno::EIo)))?;
+        Ok(MethodReply::new(control::sync_response {}))
+    }
+
+    fn prepare_unmount<'s>(
+        &'s mut self,
+        _request: control::prepare_unmount_request,
+    ) -> Result<MethodReply<'s, control::prepare_unmount_response>, FailInvocation> {
+        if self.directories.iter().any(|directory| !directory.anchor)
+            || !self.files.is_empty()
+            || !self.pending_directories.is_empty()
+            || !self.pending_files.is_empty()
+        {
+            return Err(fail(FsError::new(Errno::EBusy)));
+        }
+        Ok(MethodReply::new(control::prepare_unmount_response {}))
+    }
+
+    fn shutdown<'s>(
+        &'s mut self,
+        _request: control::shutdown_request,
+    ) -> Result<MethodReply<'s, control::shutdown_response>, FailInvocation> {
+        self.shutdown_pending = true;
+        Ok(MethodReply::new(control::shutdown_response {}))
+    }
+
+    fn lookup_target<'s>(
+        &'s mut self,
+        request: control::lookup_target_request<'_>,
+    ) -> Result<MethodReply<'s, control::lookup_target_response<'s>>, FailInvocation> {
+        let path = core::str::from_utf8(strip_nul(request.path))
+            .map_err(|_| fail(FsError::new(Errno::EInval)))?;
+        let worker = self
+            .service
+            .as_ref()
+            .ok_or_else(|| fail(FsError::new(Errno::EIo)))?;
+        let side =
+            lookup_mutation_side(worker, path, self.backend_generation, true).map_err(fail)?;
+        self.lookup_name = side.name;
+        let target = side.target.unwrap_or(NodeKey::ZERO);
+        Ok(MethodReply::new(control::lookup_target_response {
+            parent_dir: control::NodeKey {
+                node_id: side.parent.node_id,
+                generation: side.parent.generation,
+            },
+            node: control::NodeKey {
+                node_id: target.node_id,
+                generation: target.generation,
+            },
+            name_size: self.lookup_name.len() as u64,
+            name: &self.lookup_name,
+        }))
     }
 }
 
@@ -927,13 +839,7 @@ fn with_mutation<T>(
     let ticket = match namespace {
         Some(namespace) => Some(
             crate::namespace_binding::begin_mutation(
-                namespace,
-                operation,
-                old_parent,
-                old_target,
-                new_parent,
-                new_target,
-                old_name,
+                namespace, operation, old_parent, old_target, new_parent, new_target, old_name,
                 new_name,
             )
             .map_err(|error| {
@@ -1005,11 +911,11 @@ impl<D: BlockClient + Clone> DirectoryContext<'_, D> {
         &mut self,
         path: String,
         confined: bool,
-    ) -> Result<(ResourceSlot, ResourceTable<'static>), FailInvocation> {
+    ) -> Result<(ResourceSlot, ResourceTransferBuilder<'static>), FailInvocation> {
         let (c, s) =
             directory::create_endpoints(None).map_err(|_| fail(FsError::new(Errno::EIo)))?;
         let c = unsafe { OwnedHandle::from_raw(c.into_raw()) };
-        let mut t = ResourceTable::new();
+        let mut t = ResourceTransferBuilder::new();
         let slot = t.push_move(c).map_err(|_| fail(FsError::new(Errno::EIo)))?;
         self.pending.push(DirectoryBinding {
             endpoint: s,
@@ -1025,10 +931,10 @@ impl<D: BlockClient + Clone> DirectoryContext<'_, D> {
         &mut self,
         path: String,
         flags: u64,
-    ) -> Result<(ResourceSlot, ResourceTable<'static>), FailInvocation> {
+    ) -> Result<(ResourceSlot, ResourceTransferBuilder<'static>), FailInvocation> {
         let (c, s) = file::create_endpoints(None).map_err(|_| fail(FsError::new(Errno::EIo)))?;
         let c = unsafe { OwnedHandle::from_raw(c.into_raw()) };
-        let mut t = ResourceTable::new();
+        let mut t = ResourceTransferBuilder::new();
         let slot = t.push_move(c).map_err(|_| fail(FsError::new(Errno::EIo)))?;
         let description = self.service.open_description(path, flags);
         self.pending_files.push(FileBinding {
@@ -1053,7 +959,7 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
         {
             let namespace = self.state.namespace.as_ref().expect("checked above");
             let object = resolve_absolute(namespace, raw_path, r.flags)?;
-            let mut resources = ResourceTable::new();
+            let mut resources = ResourceTransferBuilder::new();
             let slot = resources
                 .push_move(object)
                 .map_err(|_| fail(FsError::new(Errno::EIo)))?;
@@ -1063,7 +969,11 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
             ));
         }
         let p = self.join_path(r.path).map_err(|error| {
-            log::error!("directory open path join failed base={} errno={:?}", self.state.path, error);
+            log::error!(
+                "directory open path join failed base={} errno={:?}",
+                self.state.path,
+                error
+            );
             error
         })?;
         let n = match self.service.lookup(&p) {
@@ -1097,7 +1007,11 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
                 }
             }
             Err(e) => {
-                log::error!("directory open lookup failed path={} errno={:?}", p, e.errno);
+                log::error!(
+                    "directory open lookup failed path={} errno={:?}",
+                    p,
+                    e.errno
+                );
                 return Err(fail(e));
             }
         };
@@ -1130,6 +1044,7 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
     fn list<'s>(
         &'s mut self,
         r: directory::list_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::list_response>, FailInvocation> {
         // `requested_bytes == 0` means "fill the maximum page"; the granted
         // window still bounds the write.  A zero-byte window is a legal empty
@@ -1148,14 +1063,13 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
             }));
         }
         let handle = region_handle(self.region)?;
-        let (next, count, bytes) = servicekit::memory::with_region_write(
-            handle,
-            0,
-            window,
-            |out| self.service.list(&self.state.path, r.offset, r.requested_bytes, out),
-        )
-        .map_err(|_| fail(FsError::new(Errno::EInval)))?
-        .map_err(fail)?;
+        let (next, count, bytes) =
+            servicekit::memory::with_region_write(handle, 0, window, |out| {
+                self.service
+                    .list(&self.state.path, r.offset, r.requested_bytes, out)
+            })
+            .map_err(|_| fail(FsError::new(Errno::EInval)))?
+            .map_err(fail)?;
         Ok(MethodReply::new(directory::list_response {
             next,
             count,
@@ -1340,12 +1254,14 @@ impl<D: BlockClient + Clone> DirectoryHandler for DirectoryContext<'_, D> {
     fn rename_at<'s>(
         &'s mut self,
         _: directory::rename_at_request<'_>,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::rename_at_response>, FailInvocation> {
         Err(fail(FsError::new(Errno::EOpNotSupp)))
     }
     fn link_at<'s>(
         &'s mut self,
         _: directory::link_at_request<'_>,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, directory::link_at_response>, FailInvocation> {
         Err(fail(FsError::new(Errno::EOpNotSupp)))
     }
@@ -1397,6 +1313,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn pread<'s>(
         &'s mut self,
         r: file::pread_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pread_response>, FailInvocation> {
         self.readable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1407,12 +1324,9 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         }
         let handle = region_handle(self.region)?;
         let offset = r.offset;
-        let count = servicekit::memory::with_region_write(
-            handle,
-            0,
-            bytes,
-            |out| self.read_at(offset, out),
-        )
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            self.read_at(offset, out)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         Ok(MethodReply::new(file::pread_response {
             count: count as u64,
@@ -1421,6 +1335,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn pwrite<'s>(
         &'s mut self,
         r: file::pwrite_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pwrite_response>, FailInvocation> {
         self.writable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1433,12 +1348,9 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         let handle = region_handle(self.region)?;
         let description = self.description()?;
         let offset = r.offset as u64;
-        let count = servicekit::memory::with_region_read(
-            handle,
-            0,
-            bytes,
-            |data| self.service.write_at(&description.path, offset, data),
-        )
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            self.service.write_at(&description.path, offset, data)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))?
         .map_err(fail)?;
         Ok(MethodReply::new(file::pwrite_response {
@@ -1524,12 +1436,14 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn device_control<'s>(
         &'s mut self,
         _: file::device_control_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::device_control_response>, FailInvocation> {
         Err(fail(FsError::new(Errno::EOpNotSupp)))
     }
     fn read<'s>(
         &'s mut self,
         r: file::read_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::read_response>, FailInvocation> {
         self.readable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1538,12 +1452,9 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         }
         let handle = region_handle(self.region)?;
         let offset = self.description()?.offset;
-        let count = servicekit::memory::with_region_write(
-            handle,
-            0,
-            bytes,
-            |out| self.read_at(offset, out),
-        )
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            self.read_at(offset, out)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         if !self
             .service
@@ -1558,6 +1469,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn write<'s>(
         &'s mut self,
         r: file::write_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::write_response>, FailInvocation> {
         self.writable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1571,12 +1483,9 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         } else {
             description.offset
         };
-        let count = servicekit::memory::with_region_read(
-            handle,
-            0,
-            bytes,
-            |data| self.service.write_at(&description.path, o as u64, data),
-        )
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            self.service.write_at(&description.path, o as u64, data)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))?
         .map_err(fail)?;
         if !self
@@ -1592,6 +1501,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn preadv<'s>(
         &'s mut self,
         r: file::preadv_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::preadv_response>, FailInvocation> {
         self.readable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1604,34 +1514,29 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         }
         let handle = region_handle(self.region)?;
         let path = self.description()?.path;
-        let count = servicekit::memory::with_region_write(
-            handle,
-            0,
-            bytes,
-            |out| {
-                let mut copied = 0usize;
-                let mut offset = r.offset as u64;
-                for length in r.layout.lengths[..segment_count].iter().copied() {
-                    let length = usize::try_from(length)
-                        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
-                    let end = copied
-                        .checked_add(length)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    let read = self
-                        .service
-                        .read_at(&path, offset, &mut out[copied..end])
-                        .map_err(fail)?;
-                    copied += read;
-                    offset = offset
-                        .checked_add(read as u64)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    if read != length {
-                        break;
-                    }
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            let mut copied = 0usize;
+            let mut offset = r.offset as u64;
+            for length in r.layout.lengths[..segment_count].iter().copied() {
+                let length =
+                    usize::try_from(length).map_err(|_| fail(FsError::new(Errno::EInval)))?;
+                let end = copied
+                    .checked_add(length)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                let read = self
+                    .service
+                    .read_at(&path, offset, &mut out[copied..end])
+                    .map_err(fail)?;
+                copied += read;
+                offset = offset
+                    .checked_add(read as u64)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                if read != length {
+                    break;
                 }
-                Ok(copied)
-            },
-        )
+            }
+            Ok(copied)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         Ok(MethodReply::new(file::preadv_response {
             count: count as u64,
@@ -1640,6 +1545,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn pwritev<'s>(
         &'s mut self,
         r: file::pwritev_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::pwritev_response>, FailInvocation> {
         self.writable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1652,34 +1558,29 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         }
         let handle = region_handle(self.region)?;
         let path = self.description()?.path;
-        let count = servicekit::memory::with_region_read(
-            handle,
-            0,
-            bytes,
-            |data| {
-                let mut copied = 0usize;
-                let mut offset = r.offset as u64;
-                for length in r.layout.lengths[..segment_count].iter().copied() {
-                    let length = usize::try_from(length)
-                        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
-                    let end = copied
-                        .checked_add(length)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    let written = self
-                        .service
-                        .write_at(&path, offset, &data[copied..end])
-                        .map_err(fail)?;
-                    copied += written;
-                    offset = offset
-                        .checked_add(written as u64)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    if written != length {
-                        break;
-                    }
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            let mut copied = 0usize;
+            let mut offset = r.offset as u64;
+            for length in r.layout.lengths[..segment_count].iter().copied() {
+                let length =
+                    usize::try_from(length).map_err(|_| fail(FsError::new(Errno::EInval)))?;
+                let end = copied
+                    .checked_add(length)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                let written = self
+                    .service
+                    .write_at(&path, offset, &data[copied..end])
+                    .map_err(fail)?;
+                copied += written;
+                offset = offset
+                    .checked_add(written as u64)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                if written != length {
+                    break;
                 }
-                Ok(copied)
-            },
-        )
+            }
+            Ok(copied)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         Ok(MethodReply::new(file::pwritev_response {
             count: count as u64,
@@ -1688,6 +1589,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn readv<'s>(
         &'s mut self,
         r: file::readv_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::readv_response>, FailInvocation> {
         self.readable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1702,34 +1604,29 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         if offset < 0 {
             return Err(fail(FsError::new(Errno::EInval)));
         }
-        let count = servicekit::memory::with_region_write(
-            handle,
-            0,
-            bytes,
-            |out| {
-                let mut copied = 0usize;
-                let mut position = offset as u64;
-                for length in r.layout.lengths[..segment_count].iter().copied() {
-                    let length = usize::try_from(length)
-                        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
-                    let end = copied
-                        .checked_add(length)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    let read = self
-                        .service
-                        .read_at(&path, position, &mut out[copied..end])
-                        .map_err(fail)?;
-                    copied += read;
-                    position = position
-                        .checked_add(read as u64)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    if read != length {
-                        break;
-                    }
+        let count = servicekit::memory::with_region_write(handle, 0, bytes, |out| {
+            let mut copied = 0usize;
+            let mut position = offset as u64;
+            for length in r.layout.lengths[..segment_count].iter().copied() {
+                let length =
+                    usize::try_from(length).map_err(|_| fail(FsError::new(Errno::EInval)))?;
+                let end = copied
+                    .checked_add(length)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                let read = self
+                    .service
+                    .read_at(&path, position, &mut out[copied..end])
+                    .map_err(fail)?;
+                copied += read;
+                position = position
+                    .checked_add(read as u64)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                if read != length {
+                    break;
                 }
-                Ok(copied)
-            },
-        )
+            }
+            Ok(copied)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         let new_offset = offset
             .checked_add(count as i64)
@@ -1744,6 +1641,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
     fn writev<'s>(
         &'s mut self,
         r: file::writev_request,
+        _request_resources: &mut ReceivedResources,
     ) -> Result<MethodReply<'s, file::writev_response>, FailInvocation> {
         self.writable()?;
         let bytes = transfer_bytes(r.size)?;
@@ -1757,37 +1655,31 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         let offset = if description.flags & OPEN_APPEND != 0 {
             self.service.lookup(&path).map_err(fail)?.size
         } else {
-            u64::try_from(description.offset)
-                .map_err(|_| fail(FsError::new(Errno::EInval)))?
+            u64::try_from(description.offset).map_err(|_| fail(FsError::new(Errno::EInval)))?
         };
-        let count = servicekit::memory::with_region_read(
-            handle,
-            0,
-            bytes,
-            |data| {
-                let mut copied = 0usize;
-                let mut position = offset;
-                for length in r.layout.lengths[..segment_count].iter().copied() {
-                    let length = usize::try_from(length)
-                        .map_err(|_| fail(FsError::new(Errno::EInval)))?;
-                    let end = copied
-                        .checked_add(length)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    let written = self
-                        .service
-                        .write_at(&path, position, &data[copied..end])
-                        .map_err(fail)?;
-                    copied += written;
-                    position = position
-                        .checked_add(written as u64)
-                        .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
-                    if written != length {
-                        break;
-                    }
+        let count = servicekit::memory::with_region_read(handle, 0, bytes, |data| {
+            let mut copied = 0usize;
+            let mut position = offset;
+            for length in r.layout.lengths[..segment_count].iter().copied() {
+                let length =
+                    usize::try_from(length).map_err(|_| fail(FsError::new(Errno::EInval)))?;
+                let end = copied
+                    .checked_add(length)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                let written = self
+                    .service
+                    .write_at(&path, position, &data[copied..end])
+                    .map_err(fail)?;
+                copied += written;
+                position = position
+                    .checked_add(written as u64)
+                    .ok_or_else(|| fail(FsError::new(Errno::EInval)))?;
+                if written != length {
+                    break;
                 }
-                Ok(copied)
-            },
-        )
+            }
+            Ok(copied)
+        })
         .map_err(|_| fail(FsError::new(Errno::EInval)))??;
         let new_offset = offset
             .checked_add(count as u64)
@@ -1816,7 +1708,8 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
         if metadata.size > sys::MEMORY_OBJECT_MAX_BYTES {
             return Err(fail(FsError::new(Errno::EFbig)));
         }
-        let length = usize::try_from(metadata.size).map_err(|_| fail(FsError::new(Errno::EFbig)))?;
+        let length =
+            usize::try_from(metadata.size).map_err(|_| fail(FsError::new(Errno::EFbig)))?;
         #[cfg(target_os = "naos")]
         let object = {
             // Fill the final MemoryObject directly.  The old path held a
@@ -1831,7 +1724,11 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
                 let end = core::cmp::min(offset.saturating_add(64 * 1024), length);
                 let count = self
                     .service
-                    .read_at(&description.path, offset as u64, &mut mapping.as_mut_slice()[offset..end])
+                    .read_at(
+                        &description.path,
+                        offset as u64,
+                        &mut mapping.as_mut_slice()[offset..end],
+                    )
                     .map_err(fail)?;
                 if count != end - offset {
                     return Err(fail(FsError::new(Errno::EIo)));
@@ -1856,7 +1753,7 @@ impl<D: BlockClient + Clone> FileHandler for FileContext<'_, D> {
             servicekit::memory::create_and_fill_read_only(&snapshot)
                 .map_err(|_| fail(FsError::new(Errno::EIo)))?
         };
-        let mut resources = ResourceTable::new();
+        let mut resources = ResourceTransferBuilder::new();
         let slot = resources
             .push_move(object)
             .map_err(|_| fail(FsError::new(Errno::EIo)))?;
@@ -1900,12 +1797,6 @@ mod tests {
             ..layout
         };
         assert!(iov_segment_count(&too_many, 7).is_err());
-    }
-
-    #[test]
-    fn control_lookup_uses_final_component() {
-        assert_eq!(last_component(b"/etc/motd\0"), b"motd");
-        assert_eq!(last_component(b"/"), b"/");
     }
 
     #[test]

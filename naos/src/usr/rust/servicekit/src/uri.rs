@@ -9,27 +9,27 @@ pub const SERVICE_ROOT: &str = "naos://service";
 /// Prefix accepted by the service-directory locator.
 pub const SERVICE_PREFIX: &str = "naos://service/";
 /// Kernel-published one-shot executable image consumed by the boot manager.
-pub const BOOT_MODULE_ROOTFSD: &str = "naos://service/boot/module/rootfsd/0";
+pub const BOOT_MODULE_ROOTFSD: &str = "naos://service/boot/module/rootfsd";
 /// Kernel-published one-shot executable image consumed after root commit.
-pub const BOOT_MODULE_INIT: &str = "naos://service/boot/module/init/0";
+pub const BOOT_MODULE_INIT: &str = "naos://service/boot/module/init";
 /// Kernel-published one-shot prepared block image consumed by blockd.
-pub const BOOT_ROOT_IMAGE: &str = "naos://service/boot/root-image/0";
-pub const SYSTEM_STATUS: &str = "naos://service/system/status/0";
+pub const BOOT_ROOT_IMAGE: &str = "naos://service/boot/root-image";
+pub const SYSTEM_STATUS: &str = "naos://service/system/status";
 /// Kernel-owned terminal-driver factory.
-pub const TERMINAL_DRIVER_FACTORY: &str = "naos://service/terminal/driver/0";
+pub const TERMINAL_DRIVER_FACTORY: &str = "naos://service/terminal/driver";
 /// Kernel-owned console frontend capability.
-pub const CONSOLE_FRONTEND: &str = "naos://service/console/0";
+pub const CONSOLE_FRONTEND: &str = "naos://service/console";
 /// Kernel-owned input event source capability.
-pub const INPUT_EVENT_SOURCE: &str = "naos://service/input/0";
+pub const INPUT_EVENT_SOURCE: &str = "naos://service/input";
 /// Prefix for block-device providers.
 pub const BLOCK_PREFIX: &str = "naos://service/block";
 /// Prefix for filesystem providers.
 pub const FS_PREFIX: &str = "naos://service/fs";
 /// The in-memory block-device provider's factory endpoint.
-pub const BLOCK_RAMDISK: &str = "naos://service/block/ramdiskd/0";
+pub const BLOCK_RAMDISK: &str = "naos://service/block/ramdiskd";
 /// The ordinary VFS namespace endpoint.
-pub const FS_VFS: &str = "naos://service/fs/vfs/0";
+pub const FS_VFS: &str = "naos://service/fs/vfs";
 /// The VFS administrative endpoint used by mount managers.
-pub const FS_VFS_ADMIN: &str = "naos://service/fs/vfs/0/admin";
+pub const FS_VFS_ADMIN: &str = "naos://service/fs/vfs/admin";
 /// The FAT-family filesystem endpoint.
-pub const FS_EXFAT: &str = "naos://service/fs/exfat/0";
+pub const FS_EXFAT: &str = "naos://service/fs/exfat";

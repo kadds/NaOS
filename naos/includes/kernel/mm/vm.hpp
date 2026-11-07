@@ -21,6 +21,7 @@ class memory_object;
 /// virtual memory system
 namespace memory::vm
 {
+/// Temporary diagnostic: number of fork/share_to calls.
 /// page flags
 namespace flags
 {
@@ -75,6 +76,7 @@ enum class page_fault_method
     common,
     common_with_bss,
     memory_object,
+    unmapping,
 };
 
 struct fault_history_t
@@ -120,7 +122,7 @@ class vm_allocator
 
     list_t &get_list() { return list; }
     lock::rw_lock_t &get_lock() { return list_lock; }
-    void clone(info_t *info, vm_allocator &to, flag_t flag);
+    bool clone(info_t *info, vm_allocator &to, flag_t flag);
 
   private:
 };
@@ -167,7 +169,10 @@ class info_t
     /// Pages remain demand-zero and are materialized by the normal fault path.
     bool commit(u64 addr, u64 size);
 
-    void share_to(process_id from_id, process_id to_id, info_t *info);
+    bool share_to(process_id from_id, process_id to_id, info_t *info);
+    /// Remove direct physical MemoryObject mappings after the owning process
+    /// has stopped, then synchronize TLBs before their resource leases revoke.
+    void revoke_physical_mappings();
     void remove_fork_disallowed_mappings();
     /// Re-establish this address space's shared-page memory-object mappings
     /// after fork() made them read-only/COW.  The frames belong to the
@@ -198,6 +203,7 @@ class info_t
     const vm_t *heap_vm_;
     u64 heap_top_;
     lock::spinlock_t paging_spin_;
+    std::atomic_uint32_t deferred_unmap_count_{0};
     std::atomic_uint64_t page_faults_{0};
     std::atomic_uint64_t peak_rss_pages_{0};
 };
@@ -218,10 +224,11 @@ struct map_t
     /// of private COW pages.  Such mappings observe each other's writes
     /// directly, so they are never written back and never privatized on fork.
     bool pages_shared;
+    bool physical_mapping_acquired = false;
     fault_history_t fault_history;
     info_t *vm_info;
-    map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 data_offset,
-          u64 data_length, u64 map_length, bool shared, info_t *vmi)
+    map_t(khandle backing, naos::data_plane::memory_object *object, u64 object_offset, u64 data_offset, u64 data_length,
+          u64 map_length, bool shared, info_t *vmi)
         : memory_object(object)
         , backing(std::move(backing))
         , file_offset(object_offset)
@@ -233,18 +240,7 @@ struct map_t
         , pages_shared(false)
         , fault_history()
         , vm_info(vmi) {};
-    map_t(const map_t &rhs, info_t *vmi)
-        : memory_object(rhs.memory_object)
-        , backing(rhs.backing)
-        , file_offset(rhs.file_offset)
-        , file_length(rhs.file_length)
-        , data_offset(rhs.data_offset)
-        , data_length(rhs.data_length)
-        , mmap_length(rhs.mmap_length)
-        , shared(rhs.shared)
-        , pages_shared(rhs.pages_shared)
-        , fault_history(rhs.fault_history)
-        , vm_info(vmi) {};
+    map_t(const map_t &rhs, info_t *vmi);
 };
 
 struct vm_t

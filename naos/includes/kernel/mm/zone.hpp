@@ -76,6 +76,9 @@ class zones : public freelibcxx::Allocator
 
     // virtual address
     void *allocate(size_t size, size_t align) noexcept override;
+    /// Non-panicking contiguous allocation for hardware tables whose
+    /// admission path must fail closed when physical memory is unavailable.
+    void *try_allocate(size_t size, size_t align) noexcept;
     // virtual address
     void deallocate(void *ptr) noexcept override;
 

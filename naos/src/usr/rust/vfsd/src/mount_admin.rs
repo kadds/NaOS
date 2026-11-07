@@ -10,11 +10,10 @@
 //!   publish point (r7); abort/status reconcile without re-sending commit;
 //! * `MutationTicket` (scope 22) — reservation lease: commit admits
 //!   (`COMMITTING`, freezing expiry) and finishes (`COMMITTED`);
-//! * `NamespaceBinding` (scope 18, private wire codecs from
-//!   [`crate::internal`]) — resolve_absolute / route_above /
+//! * `NamespaceBinding` (scope 18, generated private IDL) — resolve_absolute / route_above /
 //!   enter_child_mount / derive_chroot / begin_mutation (§6.3 r6: entering a
 //!   child mount keeps the visible root; derive_chroot narrows it);
-//! * `MountControl` (scope 21, private wire codecs) — bind_root / bind_node /
+//! * `MountControl` (scope 21, generated private IDL) — bind_root / bind_node /
 //!   sync / prepare_unmount / shutdown / lookup_target.
 //!
 //! Production mounts are owned by an external worker and are published only
@@ -24,14 +23,18 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::mem::ManuallyDrop;
 
 use naos_idl::directory;
+use naos_idl::mount_control as mc_wire;
 use naos_idl::mount_ticket as mt_wire;
+use naos_idl::mutation_ticket as mutation_wire;
+use naos_idl::namespace_binding as namespace_wire;
 use naos_idl::vfs;
 use naos_idl::{
     CallError, DispatchOutcome, FailInvocation, IncomingRequest, Invocation, MethodReply,
-    OptionalResponder, OwnedHandle, ProtocolClientEndpoint, ProtocolServerEndpoint,
-    ReceivedResources, ReplySink, ResourceSlot, ResourceTable, reject_unsupported,
+    OwnedHandle, ProtocolClientEndpoint, ProtocolServerEndpoint, ReceivedResources, ResourceSlot,
+    ResourceTransferBuilder,
 };
 use naos_sys as sys;
 
@@ -403,22 +406,80 @@ struct VfsAdminService<'a> {
 impl VfsAdminService<'_> {
     /// Run one worker lifecycle RPC synchronously after the mount enters
     /// DRAINING. The worker is therefore the final admission barrier.
-    fn worker_lifecycle(&self, mount: u64, method_id: u64) -> Result<(), Errno> {
+    fn worker_lifecycle<R>(
+        &self,
+        mount: u64,
+        submit: impl FnOnce(&ProtocolClientEndpoint, &mut [u8]) -> Result<Invocation, CallError>,
+        take: impl FnOnce(&mut Invocation, &mut [u8]) -> Result<R, CallError>,
+    ) -> Result<(), Errno> {
         let ticket = control_mount_ticket_for_mount(mount).ok_or(Errno::ENodev)?;
         let control = self.mount_controls.get(&ticket).ok_or(Errno::ENodev)?;
-        let mut invocation = internal::mount_control::submit_lifecycle(control.get(), method_id, 0)
-            .map_err(lifecycle_error)?;
+        // The OwnedHandle retains authority; this temporary typed view must
+        // not close it when the call returns.
+        let endpoint =
+            ManuallyDrop::new(unsafe { ProtocolClientEndpoint::from_raw(control.get()) });
+        let mut request_wire = [0u8; 32];
+        let mut invocation = submit(&endpoint, &mut request_wire).map_err(lifecycle_error)?;
         if !wait_invocation(&invocation) {
             return Err(Errno::ENodev);
         }
-        let mut response_wire = [0_u8; 1];
-        internal::mount_control::take_lifecycle(&mut invocation, method_id, &mut response_wire)
+        let mut response_wire = [0u8; 64];
+        take(&mut invocation, &mut response_wire)
+            .map(|_| ())
             .map_err(lifecycle_error)
+    }
+
+    fn worker_sync(&self, mount: u64) -> Result<(), Errno> {
+        self.worker_lifecycle(
+            mount,
+            |endpoint, wire| {
+                mc_wire::submit_sync(
+                    endpoint,
+                    &mc_wire::sync_request {},
+                    ResourceTransferBuilder::new(),
+                    wire,
+                    0,
+                )
+            },
+            mc_wire::take_sync,
+        )
+    }
+
+    fn worker_prepare_unmount(&self, mount: u64) -> Result<(), Errno> {
+        self.worker_lifecycle(
+            mount,
+            |endpoint, wire| {
+                mc_wire::submit_prepare_unmount(
+                    endpoint,
+                    &mc_wire::prepare_unmount_request {},
+                    ResourceTransferBuilder::new(),
+                    wire,
+                    0,
+                )
+            },
+            mc_wire::take_prepare_unmount,
+        )
+    }
+
+    fn worker_shutdown(&self, mount: u64) -> Result<(), Errno> {
+        self.worker_lifecycle(
+            mount,
+            |endpoint, wire| {
+                mc_wire::submit_shutdown(
+                    endpoint,
+                    &mc_wire::shutdown_request {},
+                    ResourceTransferBuilder::new(),
+                    wire,
+                    0,
+                )
+            },
+            mc_wire::take_shutdown,
+        )
     }
 
     /// Roll back all state created after a `prepare_mount` reservation.  The
     /// endpoint registrations carry non-owning client raw handles; their
-    /// actual owners are the local `OwnedHandle`/`ResourceTable`, so dropping
+    /// actual owners are the local `OwnedHandle`/`ResourceTransferBuilder`, so dropping
     /// only the server ends here avoids both leaks and double-close races.
     fn rollback_prepare_mount(&mut self, ticket: u64, pending_start: usize) {
         let _ = self.topology.abort_mount(ticket);
@@ -443,9 +504,9 @@ impl VfsAdminService<'_> {
     fn spawn_directory_binding(
         &mut self,
         binding: Binding,
-    ) -> Result<(ResourceSlot, ResourceTable<'static>), FailInvocation> {
+    ) -> Result<(ResourceSlot, ResourceTransferBuilder<'static>), FailInvocation> {
         let client = self.mint_half(MintKind::Directory, Half::Client, Some(binding))?;
-        let mut resources: ResourceTable<'static> = ResourceTable::new();
+        let mut resources: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
         let slot = resources.push_move(client).map_err(|_| fail(Errno::EIo))?;
         Ok((slot, resources))
     }
@@ -608,7 +669,7 @@ impl vfs::VfsHandler for VfsAdminService<'_> {
                 return Err(error);
             }
         };
-        let mut resources: ResourceTable<'static> = ResourceTable::new();
+        let mut resources: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
         let ctl_slot = match resources.push_move(ctl_server) {
             Ok(slot) => slot,
             Err(_) => {
@@ -677,9 +738,7 @@ impl vfs::VfsHandler for VfsAdminService<'_> {
         // and wait for already admitted operations. The embedded fallback
         // has no second endpoint and keeps the historical local path.
         if self.external_workers {
-            if let Err(errno) =
-                self.worker_lifecycle(mount, internal::mount_control::METHOD_PREPARE_UNMOUNT)
-            {
+            if let Err(errno) = self.worker_prepare_unmount(mount) {
                 self.topology.rollback_drain(mount).map_err(fail)?;
                 return Err(fail(errno));
             }
@@ -689,7 +748,7 @@ impl vfs::VfsHandler for VfsAdminService<'_> {
         // The worker owns the persistence ordering domain.  Do not detach
         // vfsd's topology until its sync barrier has completed successfully.
         if self.external_workers {
-            if let Err(errno) = self.worker_lifecycle(mount, internal::mount_control::METHOD_SYNC) {
+            if let Err(errno) = self.worker_sync(mount) {
                 self.topology.rollback_drain(mount).map_err(fail)?;
                 return Err(fail(errno));
             }
@@ -699,9 +758,7 @@ impl vfs::VfsHandler for VfsAdminService<'_> {
         // the mount in ACTIVE so callers may retry; successful shutdown is
         // followed immediately by topology detach and control cleanup.
         if self.external_workers {
-            if let Err(errno) =
-                self.worker_lifecycle(mount, internal::mount_control::METHOD_SHUTDOWN)
-            {
+            if let Err(errno) = self.worker_shutdown(mount) {
                 self.topology.rollback_drain(mount).map_err(fail)?;
                 return Err(fail(errno));
             }
@@ -733,8 +790,7 @@ impl vfs::VfsHandler for VfsAdminService<'_> {
         }
         if request.mount_id != ROOT_MOUNT_ID {
             if self.external_workers {
-                self.worker_lifecycle(request.mount_id, internal::mount_control::METHOD_SYNC)
-                    .map_err(fail)?;
+                self.worker_sync(request.mount_id).map_err(fail)?;
             } else if !self.backends.contains_key(&request.mount_id) {
                 return Err(fail(Errno::ENoent));
             }
@@ -814,35 +870,34 @@ impl MountTicketService<'_> {
             .get(&self.ticket)
             .ok_or_else(|| fail(Errno::ENodev))?;
         let (binding_client, binding_server) =
-            internal::namespace_binding::create_endpoints().map_err(|_| fail(Errno::EIo))?;
+            namespace_wire::create_endpoints(None).map_err(|_| fail(Errno::EIo))?;
         let binding_client = unsafe { OwnedHandle::from_raw(binding_client.into_raw()) };
-        let mut resources = ResourceTable::new();
+        let mut resources = ResourceTransferBuilder::new();
         let binding_slot = resources
             .push_move(binding_client)
             .map_err(|_| fail(Errno::EIo))?;
-        let request = internal::mount_control::bind_node_request {
-            node: root_node,
+        let request = mc_wire::bind_node_request {
+            node: mc_wire::NodeKey {
+                node_id: root_node.node_id,
+                generation: root_node.generation,
+            },
             flags: 0,
             binding: binding_slot,
         };
+        let endpoint =
+            ManuallyDrop::new(unsafe { ProtocolClientEndpoint::from_raw(control.get()) });
         let mut request_wire = [0_u8; 128];
-        let mut invocation = internal::mount_control::submit_bind_node(
-            control.get(),
-            &request,
-            resources,
-            &mut request_wire,
-            0,
-        )
-        .map_err(|_| fail(Errno::EIo))?;
+        let mut invocation =
+            mc_wire::submit_bind_node(&endpoint, &request, resources, &mut request_wire, 0)
+                .map_err(|_| fail(Errno::EIo))?;
         if !wait_invocation(&invocation) {
             return Err(fail(Errno::ENodev));
         }
         let mut response_wire = [0_u8; 128];
-        let (directory_slot, mut received) =
-            internal::mount_control::take_bind_node(&mut invocation, &mut response_wire)
-                .map_err(|_| fail(Errno::EIo))?;
+        let (response, mut received) = mc_wire::take_bind_node(&mut invocation, &mut response_wire)
+            .map_err(|_| fail(Errno::EIo))?;
         let directory = received
-            .take(directory_slot)
+            .take(response.directory)
             .ok_or_else(|| fail(Errno::EIo))?;
         let state = NsBindingState {
             visible_root_mount: ROOT_MOUNT_ID,
@@ -990,57 +1045,59 @@ pub fn run_mutation_ticket(
     ticket: u64,
     incoming: IncomingRequest<'_>,
 ) -> Result<DispatchOutcome, CallError> {
-    let mut sink = OptionalResponder::from(incoming.responder);
-    serve_mutation_ticket(topology, ticket, incoming.method_id, &mut sink)
+    let mut handler = MutationTicketService { topology, ticket };
+    let mut reply_wire = [0u8; 16];
+    mutation_wire::dispatch(&mut handler, incoming, &mut reply_wire)
 }
 
-/// Sink-injected core of [`run_mutation_ticket`] (host-testable).
-fn serve_mutation_ticket<S: ReplySink>(
-    topology: &mut Topology,
+struct MutationTicketService<'a> {
+    topology: &'a mut Topology,
     ticket: u64,
-    method_id: u64,
-    sink: &mut S,
-) -> Result<DispatchOutcome, CallError> {
-    use internal::mutation_ticket as wire;
-    let mut reply_wire = [0u8; 8];
-    let delivered = match method_id {
-        wire::METHOD_COMMIT => match topology.admit_mutation(ticket) {
-            Ok(()) => match topology.finish_mutation(ticket, true) {
-                Ok(()) => sink.reply(&[], &[]),
-                Err(errno) => {
-                    log::error!(
-                        "mutation ticket finish rejected ticket={} errno={}",
-                        ticket,
-                        errno.to_i32()
-                    );
-                    sink.fail(fail(errno))
-                }
-            },
-            Err(errno) => {
+}
+
+impl mutation_wire::MutationTicketHandler for MutationTicketService<'_> {
+    fn commit<'s>(
+        &'s mut self,
+        _request: mutation_wire::commit_request,
+    ) -> Result<MethodReply<'s, mutation_wire::commit_response>, FailInvocation> {
+        self.topology.admit_mutation(self.ticket).map_err(|errno| {
+            log::error!(
+                "mutation ticket admit rejected ticket={} errno={}",
+                self.ticket,
+                errno.to_i32()
+            );
+            fail(errno)
+        })?;
+        self.topology
+            .finish_mutation(self.ticket, true)
+            .map_err(|errno| {
                 log::error!(
-                    "mutation ticket admit rejected ticket={} errno={}",
-                    ticket,
+                    "mutation ticket finish rejected ticket={} errno={}",
+                    self.ticket,
                     errno.to_i32()
                 );
-                sink.fail(fail(errno))
-            }
-        },
-        wire::METHOD_ABORT => match topology.abort_mutation(ticket) {
-            Ok(()) => sink.reply(&[], &[]),
-            Err(errno) => sink.fail(fail(errno)),
-        },
-        wire::METHOD_STATUS => match topology.mutation_status(ticket) {
-            Ok(state) => match wire::encode_status_response(state.wire(), &mut reply_wire) {
-                Ok(written) => sink.reply(&reply_wire[..written], &[]),
-                Err(_) => sink.fail(FailInvocation::protocol_violation()),
-            },
-            Err(errno) => sink.fail(fail(errno)),
-        },
-        _ => return reject_unsupported(sink),
-    };
-    delivered
-        .map(|_| DispatchOutcome::Completed)
-        .map_err(CallError::Status)
+                fail(errno)
+            })?;
+        Ok(MethodReply::new(mutation_wire::commit_response {}))
+    }
+
+    fn abort<'s>(
+        &'s mut self,
+        _request: mutation_wire::abort_request,
+    ) -> Result<MethodReply<'s, mutation_wire::abort_response>, FailInvocation> {
+        self.topology.abort_mutation(self.ticket).map_err(fail)?;
+        Ok(MethodReply::new(mutation_wire::abort_response {}))
+    }
+
+    fn status<'s>(
+        &'s mut self,
+        _request: mutation_wire::status_request,
+    ) -> Result<MethodReply<'s, mutation_wire::status_response>, FailInvocation> {
+        let state = self.topology.mutation_status(self.ticket).map_err(fail)?;
+        Ok(MethodReply::new(mutation_wire::status_response {
+            state: state.wire(),
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1120,6 +1177,251 @@ impl NamespaceCtx<'_> {
     }
 }
 
+fn internal_node_key(value: namespace_wire::NodeKey) -> NodeKey {
+    NodeKey {
+        node_id: value.node_id,
+        generation: value.generation,
+    }
+}
+
+#[cfg(test)]
+fn namespace_node_key(value: NodeKey) -> namespace_wire::NodeKey {
+    namespace_wire::NodeKey {
+        node_id: value.node_id,
+        generation: value.generation,
+    }
+}
+
+fn one_handle_reply<'s, Response>(
+    handle: OwnedHandle,
+    response: impl FnOnce(ResourceSlot) -> Response,
+) -> Result<MethodReply<'s, Response>, FailInvocation> {
+    let mut resources: ResourceTransferBuilder<'s> = ResourceTransferBuilder::new();
+    let slot = resources.push_move(handle).map_err(|_| fail(Errno::EIo))?;
+    Ok(MethodReply::with_resources(response(slot), resources))
+}
+
+impl namespace_wire::NamespaceBindingHandler for NamespaceCtx<'_> {
+    fn resolve_absolute<'s>(
+        &'s mut self,
+        request: namespace_wire::resolve_absolute_request<'_>,
+    ) -> Result<MethodReply<'s, namespace_wire::resolve_absolute_response>, FailInvocation> {
+        // Directories keep the visible root; regular files get a fresh open
+        // description over the owning backend.
+        let mut budget = request.walk.remaining_symlinks;
+        let resolved = resolve_route(
+            self.topology,
+            self.root_fs,
+            self.backends,
+            self.state,
+            request.path,
+            &mut budget,
+            true,
+        )
+        .map_err(fail)?;
+        let meta = self
+            .backend(resolved.mount)
+            .map_err(fail)?
+            .metadata_of(resolved.node)
+            .map_err(fail)?;
+        let handle = match meta.kind {
+            FileKind::Directory => {
+                // A direct Directory endpoint is local to the resolved
+                // worker. If routing crossed into a child mount, its root
+                // must be that backend's root.
+                let local_root = if resolved.mount == self.state.visible_root_mount {
+                    self.state.visible_root
+                } else {
+                    self.backend(resolved.mount).map_err(fail)?.root()
+                };
+                self.mint(
+                    MintKind::Directory,
+                    Binding::Directory {
+                        mount: resolved.mount,
+                        root: local_root,
+                        current: resolved.node,
+                    },
+                )
+                .map_err(fail)?
+            }
+            FileKind::Regular => {
+                let fd = self
+                    .backend_mut(resolved.mount)
+                    .map_err(fail)?
+                    .open_node(resolved.node)
+                    .map_err(fail)?;
+                self.mint(
+                    MintKind::Directory,
+                    Binding::File {
+                        mount: resolved.mount,
+                        fd,
+                        mode: routing_open_mode(),
+                    },
+                )
+                .map_err(fail)?
+            }
+            // resolve_route follows every symlink its budget allows, so an
+            // absolute route cannot stop on a symlink.
+            FileKind::Symlink => return Err(fail(Errno::EInval)),
+        };
+        one_handle_reply(handle, |object| namespace_wire::resolve_absolute_response {
+            object,
+        })
+    }
+
+    fn route_above<'s>(
+        &'s mut self,
+        _request: namespace_wire::route_above_request,
+    ) -> Result<MethodReply<'s, namespace_wire::route_above_response>, FailInvocation> {
+        let state = self.state;
+        if state.mount_stack == 0 {
+            return Err(fail(Errno::EInval));
+        }
+        let backend = self.backend(state.current_mount).map_err(fail)?;
+        if state.current != backend.root() {
+            return Err(fail(Errno::EInval));
+        }
+        let record = self
+            .topology
+            .mount(state.current_mount)
+            .ok_or_else(|| fail(Errno::ENoent))?;
+        let parent = record.parent.ok_or_else(|| fail(Errno::EInval))?;
+        let handle = self
+            .mint(
+                MintKind::Directory,
+                Binding::Directory {
+                    mount: parent,
+                    root: state.visible_root,
+                    current: record.mountpoint.node_id,
+                },
+            )
+            .map_err(fail)?;
+        one_handle_reply(handle, |directory| namespace_wire::route_above_response {
+            directory,
+        })
+    }
+
+    fn enter_child_mount<'s>(
+        &'s mut self,
+        request: namespace_wire::enter_child_mount_request,
+    ) -> Result<MethodReply<'s, namespace_wire::enter_child_mount_response>, FailInvocation> {
+        let state = self.state;
+        let mountpoint = internal_node_key(request.mountpoint);
+        let child = self
+            .topology
+            .child_at(state.current_mount, mountpoint)
+            .ok_or_else(|| fail(Errno::ENoent))?;
+        let root = self.backend(child).map_err(fail)?.root();
+        let next_state = NsBindingState {
+            visible_root_mount: state.visible_root_mount,
+            visible_root: state.visible_root,
+            current_mount: child,
+            current: root,
+            mount_stack: state.mount_stack + 1,
+        };
+        let handle = self
+            .mint(
+                MintKind::Directory,
+                Binding::Directory {
+                    mount: child,
+                    root,
+                    current: next_state.current,
+                },
+            )
+            .map_err(fail)?;
+        one_handle_reply(handle, |directory| {
+            namespace_wire::enter_child_mount_response { directory }
+        })
+    }
+
+    fn derive_chroot<'s>(
+        &'s mut self,
+        request: namespace_wire::derive_chroot_request,
+    ) -> Result<MethodReply<'s, namespace_wire::derive_chroot_response>, FailInvocation> {
+        let state = self.state;
+        let subtree_root = internal_node_key(request.subtree_root);
+        if !subtree_root.is_zero()
+            && subtree_root.generation
+                != self
+                    .topology
+                    .mount(state.current_mount)
+                    .ok_or_else(|| fail(Errno::ENoent))?
+                    .backend_generation
+        {
+            return Err(fail(Errno::EInval));
+        }
+        let backend = self.backend(state.current_mount).map_err(fail)?;
+        let meta = backend.metadata_of(subtree_root.node_id).map_err(fail)?;
+        if meta.kind != FileKind::Directory {
+            return Err(fail(Errno::ENotDir));
+        }
+        let next_state = NsBindingState {
+            visible_root_mount: state.current_mount,
+            visible_root: subtree_root.node_id,
+            current_mount: state.current_mount,
+            current: subtree_root.node_id,
+            mount_stack: 0,
+        };
+        let handle = self
+            .mint(
+                MintKind::NamespaceBinding,
+                Binding::NamespaceBinding(next_state),
+            )
+            .map_err(fail)?;
+        one_handle_reply(handle, |binding| namespace_wire::derive_chroot_response {
+            binding,
+        })
+    }
+
+    fn begin_mutation<'s>(
+        &'s mut self,
+        request: namespace_wire::begin_mutation_request<'_>,
+    ) -> Result<MethodReply<'s, namespace_wire::begin_mutation_response>, FailInvocation> {
+        let record = self
+            .topology
+            .mount(self.state.current_mount)
+            .ok_or_else(|| fail(Errno::ENoent))?;
+        let generation = record.backend_generation;
+        let old_parent = internal_node_key(request.old_parent);
+        let old_target = internal_node_key(request.old_target);
+        let new_parent = internal_node_key(request.new_parent);
+        let new_target = internal_node_key(request.new_target);
+        for key in [old_parent, old_target, new_parent, new_target] {
+            if !key.is_zero() && key.generation != generation {
+                return Err(fail(Errno::EInval));
+            }
+        }
+        let ticket = self
+            .topology
+            .begin_mutation(
+                self.state.current_mount,
+                request.operation,
+                old_parent,
+                old_target,
+                new_parent,
+                new_target,
+                request.old_name,
+                request.new_name,
+                servicekit::monotonic_ticks(),
+            )
+            .map_err(|errno| {
+                log::error!(
+                    "mutation reservation rejected mount={} operation={} errno={}",
+                    self.state.current_mount,
+                    request.operation,
+                    errno.to_i32()
+                );
+                fail(errno)
+            })?;
+        let handle = self
+            .mint(MintKind::MutationTicket, Binding::MutationTicket { ticket })
+            .map_err(fail)?;
+        one_handle_reply(handle, |ticket| namespace_wire::begin_mutation_response {
+            ticket,
+        })
+    }
+}
+
 /// Open-mode bits carried by File endpoints minted from routing (read/write,
 /// mirroring the data-plane `open` default).
 fn routing_open_mode() -> u64 {
@@ -1128,28 +1430,20 @@ fn routing_open_mode() -> u64 {
     READ | WRITE
 }
 
-/// Serve one request on a NamespaceBinding routing endpoint. Successful
-/// replies carry exactly one MOVE client end in slot 0, encoded by the
-/// private [`crate::internal`] codecs.
+/// Serve one request on a NamespaceBinding routing endpoint using its
+/// generated private-protocol binding.
 pub fn run_namespace_binding(
     ctx: NamespaceCtx<'_>,
     incoming: IncomingRequest<'_>,
     reply_wire: &mut [u8],
 ) -> Result<DispatchOutcome, CallError> {
-    // Production factories mint the private-scope endpoint pairs.
-    serve_namespace_binding(
-        NamespaceCtx {
-            mint_directory: mint_directory_fn,
-            mint_ns_binding: mint_namespace_fn,
-            mint_mutation_ticket: mint_mutation_fn,
-            ..ctx
-        },
-        incoming.method_id,
-        incoming.wire,
-        incoming.resources,
-        &mut OptionalResponder::from(incoming.responder),
-        reply_wire,
-    )
+    let mut service = NamespaceCtx {
+        mint_directory: mint_directory_fn,
+        mint_ns_binding: mint_namespace_fn,
+        mint_mutation_ticket: mint_mutation_fn,
+        ..ctx
+    };
+    namespace_wire::dispatch(&mut service, incoming, reply_wire)
 }
 
 /// Directory endpoint pairs are serviceable on the loopback kernel, so host
@@ -1157,6 +1451,21 @@ pub fn run_namespace_binding(
 pub fn real_directory_pair() -> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint), sys::Status>
 {
     mint(MintKind::Directory)
+}
+
+pub fn real_namespace_binding_pair()
+-> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint), sys::Status> {
+    namespace_wire::create_endpoints(None).map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)
+}
+
+pub(crate) fn real_mutation_ticket_pair()
+-> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint), sys::Status> {
+    mutation_wire::create_endpoints(None).map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)
+}
+
+fn real_mount_control_pair() -> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint), sys::Status>
+{
+    mc_wire::create_endpoints(None).map_err(|_| sys::STATUS_RESOURCE_EXHAUSTED)
 }
 
 /// Per-kind endpoint-pair factory overrides. Production leaves these unset;
@@ -1175,9 +1484,9 @@ fn mint(kind: MintKind) -> Result<(ProtocolClientEndpoint, ProtocolServerEndpoin
     let overridden = MINT_OVERRIDES.with(|slots| slots[index]);
     let factory = overridden.unwrap_or(match kind {
         MintKind::Directory => real_directory_pair_production as MintFn,
-        MintKind::NamespaceBinding => internal::namespace_binding::create_endpoints as MintFn,
-        MintKind::MutationTicket => internal::mutation_ticket::create_endpoints as MintFn,
-        MintKind::MountControl => internal::mount_control::create_endpoints as MintFn,
+        MintKind::NamespaceBinding => real_namespace_binding_pair as MintFn,
+        MintKind::MutationTicket => real_mutation_ticket_pair as MintFn,
+        MintKind::MountControl => real_mount_control_pair as MintFn,
     });
     factory()
 }
@@ -1198,270 +1507,6 @@ fn mint_namespace_fn() -> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint
 
 fn mint_mutation_fn() -> Result<(ProtocolClientEndpoint, ProtocolServerEndpoint), sys::Status> {
     mint(MintKind::MutationTicket)
-}
-
-/// Sink-injected core of [`run_namespace_binding`] (host-testable).
-fn serve_namespace_binding<S: ReplySink>(
-    mut ctx: NamespaceCtx<'_>,
-    method_id: u64,
-    request_wire: &[u8],
-    resources: ReceivedResources,
-    sink: &mut S,
-    reply_wire: &mut [u8],
-) -> Result<DispatchOutcome, CallError> {
-    use internal::namespace_binding as wire;
-    let _ = resources; // routing requests carry no resources
-
-    /// Decode-or-reject helper: wire garbage answers the canonical protocol
-    /// violation and the endpoint is closed by the caller.
-    macro_rules! decode {
-        ($expr:expr) => {
-            match $expr {
-                Ok(value) => value,
-                Err(_) => {
-                    let _ = sink.fail(FailInvocation::protocol_violation());
-                    return Ok(DispatchOutcome::Rejected);
-                }
-            }
-        };
-    }
-
-    let routed: Result<OwnedHandle, Errno> = match method_id {
-        wire::METHOD_RESOLVE_ABSOLUTE => {
-            let request = decode!(wire::decode_resolve_absolute_request(request_wire));
-            (|| -> Result<OwnedHandle, Errno> {
-                // Directories keep the visible root; regular files get a
-                // fresh open description over the owning backend.
-                let mut budget = request.walk.remaining_symlinks;
-                let resolved = resolve_route(
-                    ctx.topology,
-                    ctx.root_fs,
-                    ctx.backends,
-                    ctx.state,
-                    request.path,
-                    &mut budget,
-                    true,
-                )?;
-                let backend = ctx.backend(resolved.mount)?;
-                let meta = backend.metadata_of(resolved.node)?;
-                match meta.kind {
-                    FileKind::Directory => {
-                        // A direct Directory endpoint is local to the
-                        // resolved worker.  Once routing crossed into a
-                        // child mount, its root must be that backend's root;
-                        // retaining the ancestor's NodeId would make every
-                        // subsequent scoped lookup use a foreign node.
-                        let local_root = if resolved.mount == ctx.state.visible_root_mount {
-                            ctx.state.visible_root
-                        } else {
-                            backend.root()
-                        };
-                        ctx.mint(
-                            MintKind::Directory,
-                            Binding::Directory {
-                                mount: resolved.mount,
-                                root: local_root,
-                                current: resolved.node,
-                            },
-                        )
-                    }
-                    FileKind::Regular => {
-                        let fd = ctx.backend_mut(resolved.mount)?.open_node(resolved.node)?;
-                        ctx.mint(
-                            MintKind::Directory,
-                            Binding::File {
-                                mount: resolved.mount,
-                                fd,
-                                mode: routing_open_mode(),
-                            },
-                        )
-                    }
-                    // resolve_route follows every symlink its budget allows;
-                    // one here means follow_final stopped on it, which cannot
-                    // happen for absolute routes.
-                    FileKind::Symlink => Err(Errno::EInval),
-                }
-            })()
-        }
-        wire::METHOD_ROUTE_ABOVE => {
-            // Legal only at the local filesystem root of a non-empty mount
-            // stack; ascends to the parent's mountpoint with the stack popped
-            // and the visible root unchanged (§6.4).
-            let state = ctx.state;
-            let ascend = (|| {
-                if state.mount_stack == 0 {
-                    return Err(Errno::EInval);
-                }
-                let backend = ctx.backend(state.current_mount)?;
-                if state.current != backend.root() {
-                    return Err(Errno::EInval);
-                }
-                let record = ctx
-                    .topology
-                    .mount(state.current_mount)
-                    .ok_or(Errno::ENoent)?;
-                let parent = record.parent.ok_or(Errno::EInval)?;
-                let mountpoint = record.mountpoint.node_id;
-                Ok(Binding::Directory {
-                    mount: parent,
-                    root: state.visible_root,
-                    current: mountpoint,
-                })
-            })();
-            match ascend {
-                Ok(binding) => ctx.mint(MintKind::Directory, binding),
-                Err(errno) => Err(errno),
-            }
-        }
-        wire::METHOD_ENTER_CHILD_MOUNT => {
-            let mountpoint = decode!(wire::decode_enter_child_mount_request(request_wire));
-            let state = ctx.state;
-            let descend = (|| {
-                // ENOENT covers both "not a mountpoint" and stale keys whose
-                // generation no longer matches the published record.
-                let child = ctx
-                    .topology
-                    .child_at(state.current_mount, mountpoint)
-                    .ok_or(Errno::ENoent)?;
-                let root = ctx.backend(child)?.root();
-                // r6/r7: entering a mount never changes the visible root.
-                Ok((
-                    child,
-                    NsBindingState {
-                        visible_root_mount: state.visible_root_mount,
-                        visible_root: state.visible_root,
-                        current_mount: child,
-                        current: root,
-                        mount_stack: state.mount_stack + 1,
-                    },
-                ))
-            })();
-            match descend {
-                Ok((child, next_state)) => match ctx.backend(child) {
-                    Ok(backend) => ctx.mint(
-                        MintKind::Directory,
-                        Binding::Directory {
-                            mount: child,
-                            root: backend.root(),
-                            current: next_state.current,
-                        },
-                    ),
-                    Err(errno) => Err(errno),
-                },
-                Err(errno) => Err(errno),
-            }
-        }
-        wire::METHOD_DERIVE_CHROOT => {
-            let subtree_root = decode!(wire::decode_derive_chroot_request(request_wire));
-            let state = ctx.state;
-            let derived = (|| {
-                if !subtree_root.is_zero()
-                    && subtree_root.generation
-                        != ctx
-                            .topology
-                            .mount(state.current_mount)
-                            .ok_or(Errno::ENoent)?
-                            .backend_generation
-                {
-                    return Err(Errno::EInval);
-                }
-                let backend = ctx.backend(state.current_mount)?;
-                let meta = backend.metadata_of(subtree_root.node_id)?;
-                if meta.kind != FileKind::Directory {
-                    return Err(Errno::ENotDir);
-                }
-                Ok(NsBindingState {
-                    visible_root_mount: state.current_mount,
-                    visible_root: subtree_root.node_id,
-                    current_mount: state.current_mount,
-                    current: subtree_root.node_id,
-                    mount_stack: 0,
-                })
-            })();
-            match derived {
-                Ok(next_state) => ctx.mint(
-                    MintKind::NamespaceBinding,
-                    Binding::NamespaceBinding(next_state),
-                ),
-                Err(errno) => Err(errno),
-            }
-        }
-        wire::METHOD_BEGIN_MUTATION => {
-            let request = decode!(wire::decode_begin_mutation_request(request_wire));
-            let ticket_result = (|| {
-                let record = ctx
-                    .topology
-                    .mount(ctx.state.current_mount)
-                    .ok_or(Errno::ENoent)?;
-                let generation = record.backend_generation;
-                for key in [
-                    request.old_parent,
-                    request.old_target,
-                    request.new_parent,
-                    request.new_target,
-                ] {
-                    if !key.is_zero() && key.generation != generation {
-                        return Err(Errno::EInval);
-                    }
-                }
-                ctx.topology.begin_mutation(
-                    ctx.state.current_mount,
-                    request.operation,
-                    request.old_parent,
-                    request.old_target,
-                    request.new_parent,
-                    request.new_target,
-                    request.old_name,
-                    request.new_name,
-                    servicekit::monotonic_ticks(),
-                )
-            })();
-            match ticket_result {
-                Ok(ticket) => {
-                    ctx.mint(MintKind::MutationTicket, Binding::MutationTicket { ticket })
-                }
-                Err(errno) => {
-                    log::error!(
-                        "mutation reservation rejected mount={} operation={} errno={}",
-                        ctx.state.current_mount,
-                        request.operation,
-                        errno.to_i32()
-                    );
-                    Err(errno)
-                }
-            }
-        }
-        _ => {
-            return reject_unsupported(sink);
-        }
-    };
-
-    match routed {
-        Ok(client_handle) => {
-            let mut resources: ResourceTable<'static> = ResourceTable::new();
-            let written = match resources
-                .push_move(client_handle)
-                .map_err(|_| ())
-                .and_then(|slot| wire::encode_slot_response(slot, reply_wire).map_err(|_| ()))
-            {
-                Ok(written) => written,
-                Err(()) => {
-                    let _ = sink.fail(FailInvocation::protocol_violation());
-                    return Ok(DispatchOutcome::Rejected);
-                }
-            };
-            sink.reply(&reply_wire[..written], resources.as_slice())
-                .map(|_| {
-                    resources.commit_move();
-                    DispatchOutcome::Completed
-                })
-                .map_err(CallError::Status)
-        }
-        Err(errno) => {
-            let _ = sink.fail(fail(errno));
-            Ok(DispatchOutcome::Completed)
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1533,204 +1578,163 @@ fn walk_flat(
     Err(Errno::EInval)
 }
 
-/// What a control method produced before the shared reply step.
-enum ControlOutcome {
-    /// Empty success body (sync / prepare_unmount / shutdown).
-    Empty,
-    /// One MOVE Directory client end in slot 0 (bind_root / bind_node); the
-    /// single-slot wire shape is identical across the private protocols.
-    ClientEnd(OwnedHandle),
-    /// A response already encoded into `reply_wire` (lookup_target).
-    Encoded(usize),
+/// Serve one request on the worker-side control endpoint of a mount.
+struct MountControlService<'a> {
+    ctx: MountControlCtx<'a>,
+    lookup_name: Vec<u8>,
 }
 
-/// Serve one request on the worker-side control endpoint of a mount.
+impl mc_wire::MountControlHandler for MountControlService<'_> {
+    fn bind_root<'s>(
+        &'s mut self,
+        _request: mc_wire::bind_root_request,
+    ) -> Result<MethodReply<'s, mc_wire::bind_root_response>, FailInvocation> {
+        let mount = control_mount(self.ctx.ticket).ok_or_else(|| fail(Errno::ENoent))?;
+        let root = self
+            .ctx
+            .backends
+            .get(&mount)
+            .ok_or_else(|| fail(Errno::ENoent))?
+            .root();
+        let handle = mint_directory_end(
+            self.ctx.pending,
+            Binding::Directory {
+                mount,
+                root,
+                current: root,
+            },
+        )
+        .map_err(fail)?;
+        one_handle_reply(handle, |directory| mc_wire::bind_root_response {
+            directory,
+        })
+    }
+
+    fn bind_node<'s>(
+        &'s mut self,
+        request: mc_wire::bind_node_request,
+        request_resources: &mut ReceivedResources,
+    ) -> Result<MethodReply<'s, mc_wire::bind_node_response>, FailInvocation> {
+        let mount = control_mount(self.ctx.ticket).ok_or_else(|| fail(Errno::ENoent))?;
+        let inherited_state = request_resources
+            .get(request.binding)
+            .and_then(|resource| naos_idl::object_id(resource.get()).ok())
+            .and_then(|object_id| self.ctx.binding_clients.get(&object_id))
+            .copied();
+        if request.flags != 0 {
+            return Err(fail(Errno::EInval));
+        }
+        let generation = self
+            .ctx
+            .topology
+            .mount(mount)
+            .ok_or_else(|| fail(Errno::ENoent))?
+            .backend_generation;
+        if request.node.node_id != 0 || request.node.generation != 0 {
+            if request.node.generation != generation {
+                return Err(fail(Errno::EInval));
+            }
+        }
+        let backend = self
+            .ctx
+            .backends
+            .get(&mount)
+            .ok_or_else(|| fail(Errno::ENoent))?;
+        let meta = backend.metadata_of(request.node.node_id).map_err(fail)?;
+        if meta.kind != FileKind::Directory {
+            return Err(fail(Errno::ENotDir));
+        }
+
+        // The moved-in binding is consumed after its routing state is read.
+        drop(request_resources.take(request.binding));
+        let root = match inherited_state {
+            Some(state) if state.current_mount == mount => state.visible_root,
+            _ => backend.root(),
+        };
+        let handle = mint_directory_end(
+            self.ctx.pending,
+            Binding::Directory {
+                mount,
+                root,
+                current: request.node.node_id,
+            },
+        )
+        .map_err(fail)?;
+        one_handle_reply(handle, |directory| mc_wire::bind_node_response {
+            directory,
+        })
+    }
+
+    fn sync<'s>(
+        &'s mut self,
+        _request: mc_wire::sync_request,
+    ) -> Result<MethodReply<'s, mc_wire::sync_response>, FailInvocation> {
+        Ok(MethodReply::new(mc_wire::sync_response {}))
+    }
+
+    fn prepare_unmount<'s>(
+        &'s mut self,
+        _request: mc_wire::prepare_unmount_request,
+    ) -> Result<MethodReply<'s, mc_wire::prepare_unmount_response>, FailInvocation> {
+        Ok(MethodReply::new(mc_wire::prepare_unmount_response {}))
+    }
+
+    fn shutdown<'s>(
+        &'s mut self,
+        _request: mc_wire::shutdown_request,
+    ) -> Result<MethodReply<'s, mc_wire::shutdown_response>, FailInvocation> {
+        CONTROL_MOUNTS.with(|registry| registry.remove(&self.ctx.ticket));
+        Ok(MethodReply::new(mc_wire::shutdown_response {}))
+    }
+
+    fn lookup_target<'s>(
+        &'s mut self,
+        request: mc_wire::lookup_target_request<'_>,
+    ) -> Result<MethodReply<'s, mc_wire::lookup_target_response<'s>>, FailInvocation> {
+        let mount = control_mount(self.ctx.ticket).ok_or_else(|| fail(Errno::ENoent))?;
+        let backend = self
+            .ctx
+            .backends
+            .get(&mount)
+            .ok_or_else(|| fail(Errno::ENoent))?;
+        let mut budget = request.walk.remaining_symlinks;
+        let (parent, name, node) = walk_flat(backend, request.path, &mut budget).map_err(fail)?;
+        let generation = self
+            .ctx
+            .topology
+            .mount(mount)
+            .ok_or_else(|| fail(Errno::ENoent))?
+            .backend_generation;
+        self.lookup_name = name;
+        let response = mc_wire::lookup_target_response {
+            parent_dir: mc_wire::NodeKey {
+                node_id: parent,
+                generation,
+            },
+            node: mc_wire::NodeKey {
+                node_id: node,
+                generation,
+            },
+            name_size: self.lookup_name.len() as u64,
+            name: &self.lookup_name,
+        };
+        Ok(MethodReply::new(response))
+    }
+}
+
 pub fn run_mount_control(
     ctx: MountControlCtx<'_>,
     incoming: IncomingRequest<'_>,
     reply_wire: &mut [u8],
 ) -> Result<DispatchOutcome, CallError> {
-    serve_mount_control(
-        MountControlCtx {
+    let mut service = MountControlService {
+        ctx: MountControlCtx {
             mint_directory: mint_directory_fn,
             ..ctx
         },
-        incoming.method_id,
-        incoming.wire,
-        incoming.resources,
-        &mut OptionalResponder::from(incoming.responder),
-        reply_wire,
-    )
-}
-
-/// Sink-injected core of [`run_mount_control`] (host-testable).
-fn serve_mount_control<S: ReplySink>(
-    mut ctx: MountControlCtx<'_>,
-    method_id: u64,
-    request_wire: &[u8],
-    mut resources: ReceivedResources,
-    sink: &mut S,
-    reply_wire: &mut [u8],
-) -> Result<DispatchOutcome, CallError> {
-    use internal::mount_control as wire;
-    // The ticket link exists only after commit; before that every method
-    // answers ENOENT like an unknown mount record.
-    let mount = control_mount(ctx.ticket);
-
-    macro_rules! decode {
-        ($expr:expr) => {
-            match $expr {
-                Ok(value) => value,
-                Err(_) => {
-                    let _ = sink.fail(FailInvocation::protocol_violation());
-                    return Ok(DispatchOutcome::Rejected);
-                }
-            }
-        };
-    }
-
-    let outcome: Result<ControlOutcome, Errno> = match method_id {
-        wire::METHOD_BIND_ROOT => {
-            let bound = (|| {
-                let m = mount.ok_or(Errno::ENoent)?;
-                let root = ctx.backends.get(&m).ok_or(Errno::ENoent)?.root();
-                mint_directory_end(
-                    &mut ctx.pending,
-                    Binding::Directory {
-                        mount: m,
-                        root,
-                        current: root,
-                    },
-                )
-            })();
-            bound.map(ControlOutcome::ClientEnd)
-        }
-        wire::METHOD_BIND_NODE => {
-            let request = decode!(wire::decode_bind_node_request(request_wire));
-            let inherited_state = resources
-                .get(request.binding)
-                .and_then(|resource| naos_idl::object_id(resource.get()).ok())
-                .and_then(|object_id| ctx.binding_clients.get(&object_id))
-                .copied();
-            let validated = (|| {
-                if mount.is_none() {
-                    return Err(Errno::ENoent);
-                }
-                let m = mount.unwrap_or(ROOT_MOUNT_ID);
-                if request.flags != 0 {
-                    return Err(Errno::EInval);
-                }
-                let generation = ctx
-                    .topology
-                    .mount(m)
-                    .ok_or(Errno::ENoent)?
-                    .backend_generation;
-                if !request.node.is_zero() && request.node.generation != generation {
-                    return Err(Errno::EInval);
-                }
-                let backend = ctx.backends.get(&m).ok_or(Errno::ENoent)?;
-                let meta = backend.metadata_of(request.node.node_id)?;
-                if meta.kind != FileKind::Directory {
-                    return Err(Errno::ENotDir);
-                }
-                Ok(m)
-            })();
-            match validated {
-                Ok(m) => {
-                    // Consume the moved-in binding handle only after looking
-                    // up its state.  A known binding keeps its issuing
-                    // namespace ancestry; the local Directory endpoint still
-                    // uses the worker-local root because NodeId values are
-                    // backend-local and Directory has no wire field for the
-                    // ancestry itself.
-                    drop(resources.take(request.binding));
-                    let root = match inherited_state {
-                        Some(state) if state.current_mount == m => state.visible_root,
-                        _ => ctx
-                            .backends
-                            .get(&m)
-                            .map(|backend| backend.root())
-                            .unwrap_or(request.node.node_id),
-                    };
-                    mint_directory_end(
-                        &mut ctx.pending,
-                        Binding::Directory {
-                            mount: m,
-                            root,
-                            current: request.node.node_id,
-                        },
-                    )
-                    .map(ControlOutcome::ClientEnd)
-                }
-                Err(errno) => Err(errno),
-            }
-        }
-        // RAM backends hold no dirty data and the worker is this same process:
-        // quiescence is enforced by Vfs.unmount's busy scan and sync always
-        // succeeds. Shutdown drops the ticket link with the control channel.
-        wire::METHOD_SYNC | wire::METHOD_PREPARE_UNMOUNT => Ok(ControlOutcome::Empty),
-        wire::METHOD_SHUTDOWN => {
-            CONTROL_MOUNTS.with(|registry| registry.remove(&ctx.ticket));
-            Ok(ControlOutcome::Empty)
-        }
-        wire::METHOD_LOOKUP_TARGET => {
-            let request = decode!(wire::decode_lookup_target_request(request_wire));
-            let encoded = (|| {
-                let m = mount.ok_or(Errno::ENoent)?;
-                let backend = ctx.backends.get(&m).ok_or(Errno::ENoent)?;
-                let mut budget = request.walk.remaining_symlinks;
-                let (parent, name, node) = walk_flat(backend, request.path, &mut budget)?;
-                let generation = ctx
-                    .topology
-                    .mount(m)
-                    .ok_or(Errno::ENoent)?
-                    .backend_generation;
-                let response = wire::lookup_target_response {
-                    parent_dir: NodeKey {
-                        node_id: parent,
-                        generation,
-                    },
-                    node: NodeKey {
-                        node_id: node,
-                        generation,
-                    },
-                    name: &name,
-                };
-                wire::encode_lookup_target_response(&response, reply_wire).map_err(|_| Errno::EIo)
-            })();
-            encoded.map(ControlOutcome::Encoded)
-        }
-        _ => {
-            return reject_unsupported(sink);
-        }
+        lookup_name: Vec::new(),
     };
-
-    let delivered = match outcome {
-        Ok(ControlOutcome::Empty) => sink.reply(&[], &[]),
-        Ok(ControlOutcome::ClientEnd(client_handle)) => {
-            let mut resources: ResourceTable<'static> = ResourceTable::new();
-            match resources.push_move(client_handle) {
-                Ok(slot) => {
-                    match internal::namespace_binding::encode_slot_response(slot, reply_wire) {
-                        Ok(written) => {
-                            let sent = sink.reply(&reply_wire[..written], resources.as_slice());
-                            if sent.is_ok() {
-                                resources.commit_move();
-                            }
-                            sent
-                        }
-                        Err(_) => sink.fail(FailInvocation::protocol_violation()),
-                    }
-                }
-                Err(_) => sink.fail(fail(Errno::EIo)),
-            }
-        }
-        Ok(ControlOutcome::Encoded(written)) => sink.reply(&reply_wire[..written], &[]),
-        Err(errno) => sink.fail(fail(errno)),
-    };
-    delivered
-        .map(|_| DispatchOutcome::Completed)
-        .map_err(CallError::Status)
+    mc_wire::dispatch(&mut service, incoming, reply_wire)
 }
 
 /// Mint a Directory endpoint pair and register the server end; returns the
@@ -1756,7 +1760,6 @@ mod tests {
     extern crate std;
 
     use super::*;
-    use crate::server::run_pair_method;
     use alloc::vec;
     use core::mem::ManuallyDrop;
     use naos_idl::Invocation;
@@ -1933,7 +1936,7 @@ mod tests {
         bufs: &mut Buffers,
     ) -> Result<DispatchOutcome, CallError> {
         let endpoint = rig.server_ep(key);
-        let mut incoming = naos_idl::receive_request(&endpoint, &mut bufs.wire).unwrap();
+        let incoming = naos_idl::receive_request(&endpoint, &mut bufs.wire).unwrap();
         let mut incoming = incoming;
         let responder = incoming.responder.take();
         incoming.responder = responder;
@@ -2035,16 +2038,16 @@ mod tests {
 
     fn loopback_ns_pair() -> MintPair {
         scoped_pair(
-            internal::namespace_binding::PROTOCOL_UUID,
-            internal::namespace_binding::PROTOCOL_SCOPE,
+            namespace_wire::PROTOCOL_UUID,
+            namespace_wire::PROTOCOL_SCOPE,
             5,
         )
     }
 
     fn loopback_mutation_pair() -> MintPair {
         scoped_pair(
-            internal::mutation_ticket::PROTOCOL_UUID,
-            internal::mutation_ticket::PROTOCOL_SCOPE,
+            mutation_wire::PROTOCOL_UUID,
+            mutation_wire::PROTOCOL_SCOPE,
             3,
         )
     }
@@ -2058,11 +2061,7 @@ mod tests {
     }
 
     fn loopback_mount_control_pair() -> MintPair {
-        scoped_pair(
-            internal::mount_control::PROTOCOL_UUID,
-            internal::mount_control::PROTOCOL_SCOPE,
-            6,
-        )
+        scoped_pair(mc_wire::PROTOCOL_UUID, mc_wire::PROTOCOL_SCOPE, 6)
     }
 
     fn failing_mount_control_pair() -> MintPair {
@@ -2112,22 +2111,11 @@ mod tests {
     }
 
     fn take_mutation_status(invocation: &mut Invocation, bufs: &mut Buffers) -> Result<u32, i64> {
-        match mt_wire::take_status(invocation, &mut bufs.result_wire) {
+        match mutation_wire::take_status(invocation, &mut bufs.result_wire) {
             Ok(response) => Ok(response.state),
             Err(CallError::Outcome { protocol_error, .. }) => Err(protocol_error),
             Err(error) => panic!("unexpected mutation ticket result: {error:?}"),
         }
-    }
-
-    /// Submit an internal-protocol request from a raw client handle.
-    fn submit_internal(
-        client_raw: sys::Handle,
-        method_id: u64,
-        payload: &[u8],
-        wire: &mut [u8],
-    ) -> Invocation {
-        wire[..payload.len()].copy_from_slice(payload);
-        loopback::raw_invoke_submit(client_raw, method_id, &payload).unwrap()
     }
 
     #[test]
@@ -2145,7 +2133,7 @@ mod tests {
             flags: 0,
         };
         let mut invocation =
-            vfs::submit_prepare_mount(&admin, &request, ResourceTable::new(), &mut bufs.wire, 1024)
+            vfs::submit_prepare_mount(&admin, &request, ResourceTransferBuilder::new(), &mut bufs.wire, 1024)
                 .unwrap();
         pump_admin(&mut rig, admin_key, &mut bufs);
         let outcome = loopback::raw_take_result(invocation.get()).unwrap();
@@ -2154,6 +2142,64 @@ mod tests {
         assert_eq!(rig.topology.mount_status(1), Ok(TicketState::Aborted));
         assert!(rig.pending_backends.is_empty());
         assert!(rig.pending.is_empty());
+    }
+
+    #[test]
+    fn mount_control_bind_node_uses_generated_dispatch_and_transfers_endpoint() {
+        let _mint_guard = mint_test_guard();
+        install();
+        override_mints_with_loopback();
+        let mut rig = Rig::new();
+        let mut bufs = Buffers::new();
+        let (mount_id, ticket) = committed_mount(&mut rig, &mut bufs);
+
+        let (control_client, control_server) = loopback_mount_control_pair().unwrap();
+        let (binding_client, _binding_server) = loopback_ns_pair().unwrap();
+        let binding_handle = unsafe { OwnedHandle::from_raw(binding_client.into_raw()) };
+        let mut resources = ResourceTransferBuilder::new();
+        let binding_slot = resources.push_move(binding_handle).unwrap();
+        let root_node = rig.backends.get(&mount_id).unwrap().root();
+        let generation = rig.topology.mount(mount_id).unwrap().backend_generation;
+        let request = mc_wire::bind_node_request {
+            node: mc_wire::NodeKey {
+                node_id: root_node,
+                generation,
+            },
+            flags: 0,
+            binding: binding_slot,
+        };
+        let mut request_wire = [0u8; 128];
+        let mut invocation = mc_wire::submit_bind_node(
+            &control_client,
+            &request,
+            resources,
+            &mut request_wire,
+            1024,
+        )
+        .unwrap();
+        let outcome = {
+            let Buffers {
+                wire, reply_wire, ..
+            } = &mut bufs;
+            let incoming = naos_idl::receive_request(&control_server, wire).unwrap();
+            let ctx = MountControlCtx {
+                root_fs: &mut rig.root_fs,
+                backends: &mut rig.backends,
+                topology: &mut rig.topology,
+                pending: &mut rig.pending,
+                entries: &mut rig.entries,
+                binding_clients: &rig.binding_clients,
+                ticket,
+                mint_directory: loopback_directory_pair,
+            };
+            run_mount_control(ctx, incoming, reply_wire).unwrap()
+        };
+        assert_eq!(outcome, DispatchOutcome::Completed);
+
+        let (response, mut received) =
+            mc_wire::take_bind_node(&mut invocation, &mut bufs.result_wire).unwrap();
+        assert!(received.take(response.directory).is_some());
+        assert_eq!(rig.pending.len(), 1);
     }
     /// Full prepare_mount + MountTicket.commit round trip over the wire.
     /// Returns `(mount_id, ticket_id)`.
@@ -2166,7 +2212,7 @@ mod tests {
             flags: 0,
         };
         let mut invocation =
-            vfs::submit_prepare_mount(&admin, &request, ResourceTable::new(), &mut bufs.wire, 1024)
+            vfs::submit_prepare_mount(&admin, &request, ResourceTransferBuilder::new(), &mut bufs.wire, 1024)
                 .unwrap();
         pump_admin(rig, admin_key, bufs);
         let (response, mut resources) =
@@ -2237,7 +2283,7 @@ mod tests {
         let mut commit_invocation = mt_wire::submit_commit(
             &ticket_client,
             &commit,
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut bufs.wire,
             1024,
         )
@@ -2274,7 +2320,10 @@ mod tests {
 
     /// Register an internal NamespaceBinding endpoint served with `state`;
     /// returns the raw client handle for raw_invoke_submit.
-    fn namespace_client(rig: &mut Rig, state: NsBindingState) -> (sys::Handle, sys::Handle) {
+    fn namespace_client(
+        rig: &mut Rig,
+        state: NsBindingState,
+    ) -> (ManuallyDrop<naos_idl::ProtocolClientEndpoint>, sys::Handle) {
         let (client, server) = loopback_ns_pair().unwrap();
         let client_raw = client.into_raw();
         let server_raw = server.into_raw();
@@ -2287,7 +2336,10 @@ mod tests {
                 binding: Binding::NamespaceBinding(state),
             },
         );
-        (client_raw, server_raw)
+        (
+            ManuallyDrop::new(unsafe { naos_idl::ProtocolClientEndpoint::from_raw(client_raw) }),
+            server_raw,
+        )
     }
 
     fn ok_raw(invocation: &mut Invocation) {
@@ -2300,31 +2352,28 @@ mod tests {
     }
 
     fn submit_resolve(
-        ns_client: sys::Handle,
+        ns_client: &naos_idl::ProtocolClientEndpoint,
         path: &[u8],
         budget: u32,
         bufs: &mut Buffers,
     ) -> Invocation {
-        let request = internal::namespace_binding::resolve_absolute_request {
-            walk: crate::internal::WalkContext {
+        let request = namespace_wire::resolve_absolute_request {
+            walk: namespace_wire::WalkContext {
                 open_flags: 0,
                 remaining_symlinks: budget,
                 reserved: 0,
             },
+            path_size: path.len() as u64,
             path,
         };
-        let mut payload_wire = vec![0u8; 512];
-        let written = internal::namespace_binding::encode_resolve_absolute_request(
-            &request,
-            &mut payload_wire,
-        )
-        .unwrap();
-        submit_internal(
+        namespace_wire::submit_resolve_absolute(
             ns_client,
-            internal::namespace_binding::METHOD_RESOLVE_ABSOLUTE,
-            &payload_wire[..written],
+            &request,
+            ResourceTransferBuilder::new(),
             &mut bufs.wire,
+            1024,
         )
+        .unwrap()
     }
 
     #[test]
@@ -2341,7 +2390,7 @@ mod tests {
         // mount at /mnt and materializes a File endpoint over its backend.
         let root_state = rig.system_root_state();
         let (ns_client, ns_key) = namespace_client(&mut rig, root_state);
-        let mut invocation = submit_resolve(ns_client, b"/mnt/file", 4, &mut bufs);
+        let mut invocation = submit_resolve(&ns_client, b"/mnt/file", 4, &mut bufs);
         pump_namespace(&mut rig, ns_key, None, &mut bufs).unwrap();
         let outcome = take_raw(&mut invocation);
         assert_eq!(outcome.protocol_error, 0);
@@ -2364,7 +2413,7 @@ mod tests {
         let mut info_invocation = vfs::submit_get_mount_info(
             &admin,
             &info_request,
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut bufs.wire,
             1024,
         )
@@ -2379,7 +2428,7 @@ mod tests {
         let mut missing_invocation = vfs::submit_get_mount_info(
             &admin,
             &missing,
-            ResourceTable::new(),
+            ResourceTransferBuilder::new(),
             &mut bufs.wire,
             1024,
         )
@@ -2412,7 +2461,7 @@ mod tests {
 
         let root_state = rig.system_root_state();
         let (ns_client, ns_key) = namespace_client(&mut rig, root_state);
-        let mut invocation = submit_resolve(ns_client, b"/mnt/dir", 4, &mut bufs);
+        let mut invocation = submit_resolve(&ns_client, b"/mnt/dir", 4, &mut bufs);
         pump_namespace(&mut rig, ns_key, None, &mut bufs).unwrap();
         assert_eq!(take_raw(&mut invocation).protocol_error, 0);
 
@@ -2463,7 +2512,7 @@ mod tests {
             flags: 0,
         };
         let mut invocation =
-            vfs::submit_unmount(&admin, &request, ResourceTable::new(), &mut bufs.wire, 1024)
+            vfs::submit_unmount(&admin, &request, ResourceTransferBuilder::new(), &mut bufs.wire, 1024)
                 .unwrap();
         pump_admin(&mut rig, admin_key, &mut bufs);
         assert_eq!(
@@ -2485,7 +2534,7 @@ mod tests {
         });
         drop(rig.entries.remove(&busy_key).expect("busy endpoint"));
         let mut retry =
-            vfs::submit_unmount(&admin, &request, ResourceTable::new(), &mut bufs.wire, 1024)
+            vfs::submit_unmount(&admin, &request, ResourceTransferBuilder::new(), &mut bufs.wire, 1024)
                 .unwrap();
         pump_admin(&mut rig, admin_key, &mut bufs);
         ok_raw(&mut retry);
@@ -2549,7 +2598,7 @@ mod tests {
             },
         );
         let peer_handle = unsafe { OwnedHandle::from_raw(peer_client_raw) };
-        let mut table: ResourceTable<'static> = ResourceTable::new();
+        let mut table: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
         let slot = table.push_move(peer_handle).unwrap();
 
         let request = directory::rename_at_request {
@@ -2574,21 +2623,99 @@ mod tests {
         let moved_peer_id = naos_idl::object_id(moved_peer_raw).unwrap();
         rig.clients
             .insert(moved_peer_id, (ROOT_MOUNT_ID, root_of_root, root_of_root));
-        let mut incoming = incoming;
-        let responder = incoming.responder.take();
-        let outcome = run_pair_method(
+        let outcome = crate::server::dispatch_directory_for_test(
             rig.backends.get_mut(&mount_id).unwrap(),
             &mut rig.topology,
             &rig.entries,
             &rig.clients,
             (mount_id, child_root, child_root),
-            directory::METHOD_RENAME_AT,
-            incoming.wire,
-            responder,
-            &incoming.resources,
+            incoming,
             &mut bufs.reply_wire,
+        )
+        .unwrap();
+        assert_eq!(outcome, naos_idl::DispatchOutcome::Completed);
+        assert_eq!(
+            loopback::raw_take_result(invocation.get())
+                .unwrap()
+                .protocol_error,
+            -(Errno::EXdev.to_i32() as i64)
         );
-        assert!(outcome.is_err(), "EXDEV reports failure to the caller");
+    }
+
+    #[test]
+    fn link_across_mounts_fails_exdev_without_side_effects() {
+        let _mint_guard = mint_test_guard();
+        install();
+        override_mints_with_loopback();
+        let mut rig = Rig::new();
+        let mut bufs = Buffers::new();
+        let (mount_id, _) = committed_mount(&mut rig, &mut bufs);
+
+        let child_root = rig.backends.get(&mount_id).unwrap().root();
+        let (child_client, child_server) = directory::create_endpoints(None).unwrap();
+        rig.entries.insert(
+            child_server.get(),
+            Entry {
+                endpoint: child_server,
+                binding: Binding::Directory {
+                    mount: mount_id,
+                    root: child_root,
+                    current: child_root,
+                },
+            },
+        );
+
+        let (peer_client, peer_server) = loopback_directory_pair().unwrap();
+        let root_of_root = rig.root_fs.root();
+        let peer_client_raw = peer_client.into_raw();
+        rig.entries.insert(
+            peer_server.get(),
+            Entry {
+                endpoint: peer_server,
+                binding: Binding::Directory {
+                    mount: ROOT_MOUNT_ID,
+                    root: root_of_root,
+                    current: root_of_root,
+                },
+            },
+        );
+        let peer_handle = unsafe { OwnedHandle::from_raw(peer_client_raw) };
+        let mut table: ResourceTransferBuilder<'static> = ResourceTransferBuilder::new();
+        let slot = table.push_move(peer_handle).unwrap();
+
+        let request = directory::link_at_request {
+            flags: 0,
+            new_parent: slot,
+            first_size: 2,
+            second_size: 2,
+            first: b"/f",
+            second: b"/g",
+        };
+        let mut wire = vec![0u8; 512];
+        let mut invocation =
+            directory::submit_link_at(&child_client, &request, table, &mut wire, 1024).unwrap();
+
+        let child_key = rig.key_where(|binding| match binding {
+            Binding::Directory { mount, .. } => *mount == mount_id,
+            _ => false,
+        });
+        let endpoint = rig.server_ep(child_key);
+        let incoming = naos_idl::receive_request(&endpoint, &mut bufs.wire).unwrap();
+        let moved_peer_raw = incoming.resources.get(slot).unwrap().get();
+        let moved_peer_id = naos_idl::object_id(moved_peer_raw).unwrap();
+        rig.clients
+            .insert(moved_peer_id, (ROOT_MOUNT_ID, root_of_root, root_of_root));
+        let outcome = crate::server::dispatch_directory_for_test(
+            rig.backends.get_mut(&mount_id).unwrap(),
+            &mut rig.topology,
+            &rig.entries,
+            &rig.clients,
+            (mount_id, child_root, child_root),
+            incoming,
+            &mut bufs.reply_wire,
+        )
+        .unwrap();
+        assert_eq!(outcome, naos_idl::DispatchOutcome::Completed);
         assert_eq!(
             loopback::raw_take_result(invocation.get())
                 .unwrap()
@@ -2623,7 +2750,7 @@ mod tests {
 
         let root_state = rig.system_root_state();
         let (ns_client, ns_key) = namespace_client(&mut rig, root_state);
-        let looped = submit_resolve(ns_client, b"/loop-a", 5, &mut bufs);
+        let looped = submit_resolve(&ns_client, b"/loop-a", 5, &mut bufs);
         let root_state = rig.system_root_state();
         pump_namespace(&mut rig, ns_key, Some(root_state), &mut bufs).unwrap();
         assert_eq!(
@@ -2635,13 +2762,13 @@ mod tests {
 
         // Positive control: a real file below the mountpoint resolves with
         // budget to spare.
-        let mut resolved = submit_resolve(ns_client, b"/mnt/file", 5, &mut bufs);
+        let mut resolved = submit_resolve(&ns_client, b"/mnt/file", 5, &mut bufs);
         let root_state = rig.system_root_state();
         pump_namespace(&mut rig, ns_key, Some(root_state), &mut bufs).unwrap();
         ok_raw(&mut resolved);
 
         // A tight budget fails before any expansion completes.
-        let mut starved = submit_resolve(ns_client, b"/mnt/file", 0, &mut bufs);
+        let mut starved = submit_resolve(&ns_client, b"/mnt/file", 0, &mut bufs);
         let root_state = rig.system_root_state();
         pump_namespace(&mut rig, ns_key, Some(root_state), &mut bufs).unwrap();
         ok_raw(&mut starved); // no symlink involved: zero budget still works
@@ -2677,25 +2804,25 @@ mod tests {
         // begin_mutation over the NamespaceBinding endpoint issues the lease.
         let root_state = rig.system_root_state();
         let (ns_client, ns_key) = namespace_client(&mut rig, root_state);
-        let begin = internal::namespace_binding::begin_mutation_request {
+        let begin = namespace_wire::begin_mutation_request {
             operation: internal::namespace_binding::OP_RENAME,
-            old_parent: dir_key,
-            old_target: file_key,
-            new_parent: dir_key,
-            new_target: NodeKey::ZERO,
+            old_parent: namespace_node_key(dir_key),
+            old_target: namespace_node_key(file_key),
+            new_parent: namespace_node_key(dir_key),
+            new_target: namespace_node_key(NodeKey::ZERO),
+            old_name_size: 1,
             old_name: b"a",
+            new_name_size: 1,
             new_name: b"b",
         };
-        let mut payload_wire = vec![0u8; 512];
-        let written =
-            internal::namespace_binding::encode_begin_mutation_request(&begin, &mut payload_wire)
-                .unwrap();
-        let mut invocation = submit_internal(
-            ns_client,
-            internal::namespace_binding::METHOD_BEGIN_MUTATION,
-            &payload_wire[..written],
+        let mut invocation = namespace_wire::submit_begin_mutation(
+            &ns_client,
+            &begin,
+            ResourceTransferBuilder::new(),
             &mut bufs.wire,
-        );
+            1024,
+        )
+        .unwrap();
         pump_namespace(&mut rig, ns_key, None, &mut bufs).unwrap();
         ok_raw(&mut invocation);
         rig.join_pending();
@@ -2711,7 +2838,7 @@ mod tests {
 
         // Throwaway ticket endpoint pair for driving status/commit/abort.
         let (mt_client, mt_server) = loopback_mutation_pair().unwrap();
-        let mt_client_raw = mt_client.into_raw();
+        let mt_client = ManuallyDrop::new(mt_client);
         let mt_key = mt_server.get();
         rig.entries.insert(
             mt_key,
@@ -2722,10 +2849,14 @@ mod tests {
         );
 
         let raw_status = |rig: &mut Rig, bufs: &mut Buffers| -> Result<u32, i64> {
-            let mut invocation = loopback::raw_invoke_submit(
-                mt_client_raw,
-                internal::mutation_ticket::METHOD_STATUS,
-                internal::mutation_ticket::EMPTY_REQUEST,
+            let request = mutation_wire::status_request {};
+            let mut request_wire = [0u8; 16];
+            let mut invocation = mutation_wire::submit_status(
+                &mt_client,
+                &request,
+                ResourceTransferBuilder::new(),
+                &mut request_wire,
+                1024,
             )
             .unwrap();
             pump_mutation(rig, mt_key, ticket, bufs).unwrap();
@@ -2755,10 +2886,14 @@ mod tests {
         );
 
         // A second commit on the terminal ticket fails EINVAL.
-        let mut second_commit = loopback::raw_invoke_submit(
-            mt_client_raw,
-            internal::mutation_ticket::METHOD_COMMIT,
-            internal::mutation_ticket::EMPTY_REQUEST,
+        let request = mutation_wire::commit_request {};
+        let mut request_wire = [0u8; 16];
+        let mut second_commit = mutation_wire::submit_commit(
+            &mt_client,
+            &request,
+            ResourceTransferBuilder::new(),
+            &mut request_wire,
+            1024,
         )
         .unwrap();
         pump_mutation(&mut rig, mt_key, ticket, &mut bufs).unwrap();
@@ -2789,10 +2924,14 @@ mod tests {
             rig.topology.poll_expiry(crate::mount::TICKET_TIMEOUT_TICKS),
             1
         );
-        let mut stale_status = loopback::raw_invoke_submit(
-            mt_client_raw,
-            internal::mutation_ticket::METHOD_STATUS,
-            internal::mutation_ticket::EMPTY_REQUEST,
+        let request = mutation_wire::status_request {};
+        let mut request_wire = [0u8; 16];
+        let mut stale_status = mutation_wire::submit_status(
+            &mt_client,
+            &request,
+            ResourceTransferBuilder::new(),
+            &mut request_wire,
+            1024,
         )
         .unwrap();
         pump_mutation(&mut rig, mt_key, stale, &mut bufs).unwrap();

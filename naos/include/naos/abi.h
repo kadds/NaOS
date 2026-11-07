@@ -141,6 +141,12 @@ enum
     NA_SERVICE_DIRECTORY_RIGHT_ADMIN = ((uint64_t)1 << 1),
     /* Permit registry mutations only below the system/service namespaces. */
     NA_SERVICE_DIRECTORY_RIGHT_SYSTEM_MANAGER = ((uint64_t)1 << 3),
+    /* Permit deriving a child directory view restricted to an existing URI. */
+    NA_SERVICE_DIRECTORY_RIGHT_CREATE_VIEW = ((uint64_t)1 << 4),
+    /* Permit registration only in a kernel-created private service directory. */
+    NA_SERVICE_DIRECTORY_RIGHT_LOCAL_REGISTER = ((uint64_t)1 << 5),
+    /* Permit publish only through a kernel-scoped provider URI allowlist. */
+    NA_SERVICE_DIRECTORY_RIGHT_PROVIDER = ((uint64_t)1 << 6),
     /* Terminal protocol method rights.  They are checked by the invocation
      * layer against the generated per-method descriptor metadata. */
     NA_TERMINAL_RIGHT_READ = ((uint64_t)1 << 8),
@@ -226,6 +232,7 @@ typedef enum na_outcome_reason
     NA_OUTCOME_REASON_BROKER_FAILURE = 7,
     NA_OUTCOME_REASON_PROTOCOL_VIOLATION = 8,
     NA_OUTCOME_REASON_UNSUPPORTED = 9,
+    NA_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN = 10,
 } na_outcome_reason_t;
 
 enum
@@ -246,6 +253,7 @@ enum
 {
     NA_MEMORY_FLAG_READ_ONLY = ((uint32_t)1 << 0),
     NA_MEMORY_FLAG_ZEROED = ((uint32_t)1 << 1),
+    NA_MEMORY_FLAG_DEVICE_MMIO = ((uint32_t)1 << 2),
 };
 
 enum
@@ -687,9 +695,7 @@ enum
     NA_SYSCALL_MEMORY_CREATE = 44,
     /* Fill a user buffer with hardware-generated random bytes. */
     NA_SYSCALL_GETRANDOM = 45,
-    /* Power off the platform through ACPI S5. */
-    NA_SYSCALL_POWER_OFF = 46,
-    NA_SYSCALL_COUNT = 47,
+    NA_SYSCALL_COUNT = 46,
 };
 
 #ifdef __cplusplus

@@ -189,7 +189,7 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
                 waiter->wait_timeout_watcher = deadline_watcher;
         }
 
-        bucket.waiters.do_wait(
+        const auto wait_result = bucket.waiters.do_wait_result(
             [&timed_out, &wake_sequence, ptr, val] {
                 int current = 0;
                 if (naos::usercopy::copy_from(&current, reinterpret_cast<u64>(ptr), sizeof(current)) != NA_STATUS_OK)
@@ -198,12 +198,20 @@ int futex(int *ptr, int op, int val, const timeclock::time *timeout, int val2)
                        wake_sequence.load(std::memory_order_acquire) != 0 || current != val;
             },
             process, ptr, &wake_sequence, true);
-        if (deadline_watcher != timer::invalid_watcher_id)
-        {
+        const auto disarm_deadline = [&] {
+            if (deadline_watcher == timer::invalid_watcher_id)
+                return;
             (void)timer::cancel(deadline_watcher);
             if (waiter != nullptr && waiter->wait_timeout_watcher == deadline_watcher)
                 waiter->wait_timeout_watcher = timer::invalid_watcher_id;
+            deadline_watcher = timer::invalid_watcher_id;
+        };
+        if (wait_result == task::wait_result::process_exit)
+        {
+            disarm_deadline();
+            task::do_exit_thread(0);
         }
+        disarm_deadline();
 
         if (naos::usercopy::copy_from(&observed, reinterpret_cast<u64>(ptr), sizeof(observed)) != NA_STATUS_OK)
             return EFAULT;
@@ -760,8 +768,9 @@ na_status_t process_spawn(const na_process_spawn_frame_t *frame)
     auto dropped_executable = records[0].resource.take_object();
     dropped_executable.reset();
     parent->resource.commit_native_batch(records);
-    if ((values.flags & NA_PROCESS_SPAWN_DEFERRED_START) == 0)
-        task::start_process(child);
+    if ((values.flags & NA_PROCESS_SPAWN_DEFERRED_START) == 0 && !task::start_process(child) &&
+        child->start_state.load(std::memory_order_acquire) != task::process_start_state::started)
+        return NA_STATUS_OBJECT_REVOKED;
     return NA_STATUS_OK;
 }
 int yield()

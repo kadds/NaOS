@@ -73,7 +73,8 @@ bool start_ttyd()
         return false;
     }
     g_ttyd_pid = ttyd_pid;
-    for (int attempt = 0; attempt < 10; attempt++)
+    constexpr int terminal_startup_attempts = 10;
+    for (int attempt = 0; attempt < terminal_startup_attempts; attempt++)
     {
         na_handle_t manager = NA_HANDLE_INVALID;
         const int error = naos_service_connect_versioned(
@@ -305,10 +306,9 @@ bool script_has_work(const char *script)
             // `exit` (with or without a status) only ends the script, so a
             // script whose sole command is an exit is still a no-op.
             constexpr size_t exit_len = 4;
-            const bool is_exit = static_cast<size_t>(end - cursor) >= exit_len &&
-                                 memcmp(cursor, "exit", exit_len) == 0 &&
-                                 (static_cast<size_t>(end - cursor) == exit_len || cursor[exit_len] == ' ' ||
-                                  cursor[exit_len] == '\t');
+            const bool is_exit =
+                static_cast<size_t>(end - cursor) >= exit_len && memcmp(cursor, "exit", exit_len) == 0 &&
+                (static_cast<size_t>(end - cursor) == exit_len || cursor[exit_len] == ' ' || cursor[exit_len] == '\t');
             if (!is_exit)
                 return true;
         }

@@ -10,7 +10,7 @@ use std::vec::Vec;
 
 use exfatd::block::{BlockClient, BlockError, BlockInfo, FEATURE_FLUSH, FEATURE_READ_ONLY};
 use exfatd::core::{FatService, file_stat, path, stat_value};
-use exfatd::errno::{Errno, FsError};
+use exfatd::errno::FsError;
 use exfatd::worker::FatWorker;
 use naos_idl::block_device as block_idl;
 use naos_idl::block_device_factory as factory_idl;
@@ -18,14 +18,14 @@ use naos_idl::directory;
 use naos_idl::file;
 #[cfg(target_os = "naos")]
 use naos_idl::mount_ticket;
+use naos_idl::transport::{RpcMethodReply, RpcOutcome};
 #[cfg(target_os = "naos")]
 use naos_idl::vfs;
 use naos_idl::{CodecError, ResourceSlot};
-use naos_idl::transport::RpcRequestOwned;
 use servicekit::Context;
 use servicekit::client::{Client, ClientError, Response};
 use servicekit::memory::MemoryObject;
-use servicekit::server::{Request, Response as ServerResponse, ServeHandler, Server, ServerError};
+use servicekit::server::{EndpointResource, Request, ServeHandler, Server, ServerError};
 use servicekit::sys;
 
 #[cfg(target_os = "naos")]
@@ -41,65 +41,6 @@ const WIRE_BYTES: usize = 65_536;
 const WIRE_SEED_BYTES: usize = 64;
 const MAX_FILE_TRANSFER: u64 = 65_536;
 const HOST_RIGHTS: u64 = u64::MAX;
-
-fn validate_directory_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    macro_rules! check {
-        ($decode:ident, $validate:ident) => {{
-            let value = directory::$decode(&request.payload).map_err(|_| -22_i64)?;
-            directory::$validate(&value, &request.resources).map_err(|_| -22_i64)
-        }};
-    }
-    match request.method_id {
-        directory::METHOD_OPEN => check!(decode_open_request, validate_open_request_transport_resources),
-        directory::METHOD_LIST => check!(decode_list_request, validate_list_request_transport_resources),
-        directory::METHOD_STAT => check!(decode_stat_request, validate_stat_request_transport_resources),
-        directory::METHOD_CREATE => check!(decode_create_request, validate_create_request_transport_resources),
-        directory::METHOD_REMOVE => check!(decode_remove_request, validate_remove_request_transport_resources),
-        directory::METHOD_PATH => check!(decode_path_request, validate_path_request_transport_resources),
-        directory::METHOD_ACCESS => check!(decode_access_request, validate_access_request_transport_resources),
-        directory::METHOD_RENAME => check!(decode_rename_request, validate_rename_request_transport_resources),
-        directory::METHOD_LINK => check!(decode_link_request, validate_link_request_transport_resources),
-        directory::METHOD_SYMLINK => check!(decode_symlink_request, validate_symlink_request_transport_resources),
-        directory::METHOD_READLINK => check!(decode_readlink_request, validate_readlink_request_transport_resources),
-        directory::METHOD_SET_CURRENT => check!(decode_set_current_request, validate_set_current_request_transport_resources),
-        directory::METHOD_SET_ROOT => check!(decode_set_root_request, validate_set_root_request_transport_resources),
-        directory::METHOD_CLONE_BINDING => check!(decode_clone_binding_request, validate_clone_binding_request_transport_resources),
-        directory::METHOD_STAT_NODE => check!(decode_stat_node_request, validate_stat_node_request_transport_resources),
-        directory::METHOD_SYNC => check!(decode_sync_request, validate_sync_request_transport_resources),
-        directory::METHOD_RENAME_AT => check!(decode_rename_at_request, validate_rename_at_request_transport_resources),
-        directory::METHOD_LINK_AT => check!(decode_link_at_request, validate_link_at_request_transport_resources),
-        _ => Err(-38),
-    }
-}
-
-fn validate_file_request(request: &RpcRequestOwned) -> Result<(), i64> {
-    macro_rules! check {
-        ($decode:ident, $validate:ident) => {{
-            let value = file::$decode(&request.payload).map_err(|_| -22_i64)?;
-            file::$validate(&value, &request.resources).map_err(|_| -22_i64)
-        }};
-    }
-    match request.method_id {
-        file::METHOD_PREAD => check!(decode_pread_request, validate_pread_request_transport_resources),
-        file::METHOD_PWRITE => check!(decode_pwrite_request, validate_pwrite_request_transport_resources),
-        file::METHOD_SEEK => check!(decode_seek_request, validate_seek_request_transport_resources),
-        file::METHOD_STAT => check!(decode_stat_request, validate_stat_request_transport_resources),
-        file::METHOD_SYNC => check!(decode_sync_request, validate_sync_request_transport_resources),
-        file::METHOD_TRUNCATE => check!(decode_truncate_request, validate_truncate_request_transport_resources),
-        file::METHOD_ALLOCATE => check!(decode_allocate_request, validate_allocate_request_transport_resources),
-        file::METHOD_GET_FLAGS => check!(decode_get_flags_request, validate_get_flags_request_transport_resources),
-        file::METHOD_SET_FLAGS => check!(decode_set_flags_request, validate_set_flags_request_transport_resources),
-        file::METHOD_DEVICE_CONTROL => check!(decode_device_control_request, validate_device_control_request_transport_resources),
-        file::METHOD_READ => check!(decode_read_request, validate_read_request_transport_resources),
-        file::METHOD_WRITE => check!(decode_write_request, validate_write_request_transport_resources),
-        file::METHOD_PREADV => check!(decode_preadv_request, validate_preadv_request_transport_resources),
-        file::METHOD_PWRITEV => check!(decode_pwritev_request, validate_pwritev_request_transport_resources),
-        file::METHOD_READV => check!(decode_readv_request, validate_readv_request_transport_resources),
-        file::METHOD_WRITEV => check!(decode_writev_request, validate_writev_request_transport_resources),
-        file::METHOD_MATERIALIZE => check!(decode_materialize_request, validate_materialize_request_transport_resources),
-        _ => Err(-38),
-    }
-}
 
 fn encoded(encode: impl Fn(&mut [u8]) -> Result<usize, CodecError>) -> Vec<u8> {
     let mut wire = vec![0_u8; WIRE_SEED_BYTES];
@@ -215,8 +156,10 @@ impl RemoteBlockIo {
         }
         // The transfer window is bounded by the device's advertised limits, so
         // one region sized to them serves every I/O.
-        let window = usize::try_from(info.max_transfer_bytes).map_err(|_| BlockError::OutOfRange)?;
-        let window = servicekit::memory::page_aligned_size(window).map_err(|_| BlockError::OutOfRange)?;
+        let window =
+            usize::try_from(info.max_transfer_bytes).map_err(|_| BlockError::OutOfRange)?;
+        let window =
+            servicekit::memory::page_aligned_size(window).map_err(|_| BlockError::OutOfRange)?;
         if window == 0 {
             return Err(BlockError::OutOfRange);
         }
@@ -348,26 +291,544 @@ struct State {
     service: FatService<RemoteBlockIo>,
 }
 
-fn success(request: &Request, payload: Vec<u8>) -> ServerResponse {
-    ServerResponse::success(request, payload)
+struct FatServiceContext<'a> {
+    request: &'a Request,
+    server: &'a mut Server,
 }
 
-fn failure(request: &Request, errno: i32) -> ServerResponse {
-    ServerResponse::error(request, -i64::from(errno))
+fn rpc_failure(protocol_error: i64) -> RpcOutcome {
+    RpcOutcome {
+        execution: 0,
+        reason: 0,
+        protocol_error,
+    }
 }
 
-fn fs_failure(request: &Request, error: FsError) -> ServerResponse {
-    failure(request, error.errno.to_i32())
+fn errno_failure(errno: i32) -> RpcOutcome {
+    rpc_failure(-i64::from(errno))
 }
 
-fn endpoint_response(
-    request: &Request,
-    payload: Vec<u8>,
-    endpoint: servicekit::server::EndpointResource,
-) -> ServerResponse {
-    let mut response = success(request, payload);
-    response.push_resource(endpoint);
-    response
+fn filesystem_failure(error: FsError) -> RpcOutcome {
+    errno_failure(error.errno.to_i32())
+}
+
+fn validate_directory_bulk(context: &FatServiceContext<'_>) -> Result<(), RpcOutcome> {
+    if context.request.bulk.is_empty() {
+        Ok(())
+    } else {
+        Err(errno_failure(22))
+    }
+}
+
+macro_rules! unsupported_directory_method {
+    ($name:ident, $request:ty, $response:ty, $errno:expr) => {
+        async fn $name<'s>(
+            &'s mut self,
+            context: &mut FatServiceContext<'_>,
+            _request: $request,
+        ) -> Result<RpcMethodReply<$response, Self::Resource>, RpcOutcome> {
+            validate_directory_bulk(context)?;
+            Err(rpc_failure($errno))
+        }
+    };
+}
+
+macro_rules! unsupported_file_method {
+    ($name:ident, $request:ty, $response:ty, $bulk:expr) => {
+        async fn $name<'s>(
+            &'s mut self,
+            context: &mut FatServiceContext<'_>,
+            _request: $request,
+        ) -> Result<RpcMethodReply<$response, Self::Resource>, RpcOutcome> {
+            file_resource(context.request).map_err(errno_failure)?;
+            if !$bulk && !context.request.bulk.is_empty() {
+                return Err(errno_failure(22));
+            }
+            Err(rpc_failure(-38))
+        }
+    };
+}
+
+impl<'context, 'state> directory::DirectoryServiceKitHandler<FatServiceContext<'context>>
+    for FatHandler<'state>
+{
+    type Resource = EndpointResource;
+
+    async fn open<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: directory::open_request<'_>,
+    ) -> Result<RpcMethodReply<directory::open_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(context)?;
+        let name = path(value.path).map_err(errno_failure)?;
+        self.state
+            .service
+            .lookup(&name)
+            .map_err(filesystem_failure)?;
+        let endpoint = context
+            .server
+            .create_endpoint(
+                &file::protocol_descriptor(),
+                0,
+                file::PROTOCOL_SCOPE,
+                HOST_RIGHTS,
+                file::validate_request_transport_resources,
+            )
+            .map_err(|_| errno_failure(12))?;
+        self.state.service.open_description_with_id(
+            endpoint.descriptor().resource_id,
+            name,
+            value.mode,
+        );
+        let mut reply = RpcMethodReply::new(directory::open_response {
+            object: ResourceSlot::new(0).expect("resource slot zero is valid"),
+        });
+        reply.resources.push(endpoint);
+        Ok(reply)
+    }
+
+    async fn list<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        _request: directory::list_request,
+    ) -> Result<RpcMethodReply<directory::list_response, Self::Resource>, RpcOutcome> {
+        Err(rpc_failure(-38))
+    }
+
+    async fn stat<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        _request: directory::stat_request,
+    ) -> Result<RpcMethodReply<directory::stat_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let stat = self.state.service.lookup("/").map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(directory::stat_response {
+            value: stat_value(stat, self.state.service.device_id()),
+        }))
+    }
+
+    async fn create<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        value: directory::create_request<'_>,
+    ) -> Result<RpcMethodReply<directory::create_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let name = path(value.path).map_err(errno_failure)?;
+        if value.flags & 1 != 0 {
+            self.state
+                .service
+                .mkdir(&name)
+                .map_err(filesystem_failure)?;
+        } else {
+            self.state
+                .service
+                .create_file(&name)
+                .map_err(filesystem_failure)?;
+        }
+        Ok(RpcMethodReply::new(directory::create_response {}))
+    }
+
+    async fn remove<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        value: directory::remove_request<'_>,
+    ) -> Result<RpcMethodReply<directory::remove_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let name = path(value.path).map_err(errno_failure)?;
+        if value.mode & 1 != 0 {
+            self.state
+                .service
+                .rmdir(&name)
+                .map_err(filesystem_failure)?;
+        } else {
+            if self.state.service.has_open_path(&name) {
+                return Err(errno_failure(16));
+            }
+            self.state
+                .service
+                .unlink(&name)
+                .map_err(filesystem_failure)?;
+        }
+        Ok(RpcMethodReply::new(directory::remove_response {}))
+    }
+
+    unsupported_directory_method!(
+        path,
+        directory::path_request,
+        directory::path_response<'s>,
+        -38
+    );
+
+    async fn access<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        value: directory::access_request<'_>,
+    ) -> Result<RpcMethodReply<directory::access_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let name = path(value.path).map_err(errno_failure)?;
+        self.state
+            .service
+            .access(&name, value.mode as u32)
+            .map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(directory::access_response {}))
+    }
+
+    async fn rename<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        value: directory::rename_request<'_>,
+    ) -> Result<RpcMethodReply<directory::rename_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let first = path(value.first).map_err(errno_failure)?;
+        let second = path(value.second).map_err(errno_failure)?;
+        self.state
+            .service
+            .rename(&first, &second)
+            .map_err(filesystem_failure)?;
+        self.state.service.rewrite_open_paths(&first, &second);
+        Ok(RpcMethodReply::new(directory::rename_response {}))
+    }
+
+    unsupported_directory_method!(
+        link,
+        directory::link_request<'_>,
+        directory::link_response,
+        -95
+    );
+    unsupported_directory_method!(
+        symlink,
+        directory::symlink_request<'_>,
+        directory::symlink_response,
+        -95
+    );
+    unsupported_directory_method!(
+        readlink,
+        directory::readlink_request<'_>,
+        directory::readlink_response<'s>,
+        -95
+    );
+    unsupported_directory_method!(
+        set_current,
+        directory::set_current_request,
+        directory::set_current_response,
+        -38
+    );
+    unsupported_directory_method!(
+        set_root,
+        directory::set_root_request,
+        directory::set_root_response,
+        -38
+    );
+
+    async fn clone_binding<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        _request: directory::clone_binding_request,
+    ) -> Result<RpcMethodReply<directory::clone_binding_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(context)?;
+        let endpoint = context
+            .server
+            .create_endpoint(
+                &directory::protocol_descriptor(),
+                0,
+                directory::PROTOCOL_SCOPE,
+                HOST_RIGHTS,
+                directory::validate_request_transport_resources,
+            )
+            .map_err(|_| errno_failure(12))?;
+        self.state.service.open_description_with_id(
+            endpoint.descriptor().resource_id,
+            "/".to_owned(),
+            0,
+        );
+        let mut reply = RpcMethodReply::new(directory::clone_binding_response {
+            directory: ResourceSlot::new(0).expect("resource slot zero is valid"),
+        });
+        reply.resources.push(endpoint);
+        Ok(reply)
+    }
+
+    async fn stat_node<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        value: directory::stat_node_request<'_>,
+    ) -> Result<RpcMethodReply<directory::stat_node_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        let name = path(value.path).map_err(errno_failure)?;
+        let stat = self
+            .state
+            .service
+            .lookup(&name)
+            .map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(directory::stat_node_response {
+            value: stat_value(stat, self.state.service.device_id()),
+        }))
+    }
+
+    async fn sync<'s>(
+        &'s mut self,
+        _context: &mut FatServiceContext<'context>,
+        _request: directory::sync_request,
+    ) -> Result<RpcMethodReply<directory::sync_response, Self::Resource>, RpcOutcome> {
+        validate_directory_bulk(_context)?;
+        self.state.service.sync(true).map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(directory::sync_response {}))
+    }
+
+    unsupported_directory_method!(
+        rename_at,
+        directory::rename_at_request<'_>,
+        directory::rename_at_response,
+        -38
+    );
+    unsupported_directory_method!(
+        link_at,
+        directory::link_at_request<'_>,
+        directory::link_at_response,
+        -38
+    );
+}
+
+impl<'context, 'state> file::FileServiceKitHandler<FatServiceContext<'context>>
+    for FatHandler<'state>
+{
+    type Resource = EndpointResource;
+
+    async fn pread<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: file::pread_request,
+    ) -> Result<RpcMethodReply<file::pread_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let resource = file_resource(request).map_err(errno_failure)?;
+        let (name, _) = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| (description.path.clone(), description.offset))
+            .ok_or_else(|| errno_failure(9))?;
+        let size = checked_size(value.size).map_err(errno_failure)?;
+        let count = if size == 0 {
+            0
+        } else {
+            if !request.validate_memory(value.buffer, false) {
+                return Err(errno_failure(13));
+            }
+            region_outcome(request.with_write_memory(value.buffer, 0, size, |data| {
+                self.state
+                    .service
+                    .read_at(&name, value.offset.max(0) as u64, data)
+                    .map_err(domain_error)
+            }))
+            .map_err(errno_failure)?
+        };
+        Ok(RpcMethodReply::new(file::pread_response {
+            count: count as u64,
+        }))
+    }
+
+    async fn pwrite<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: file::pwrite_request,
+    ) -> Result<RpcMethodReply<file::pwrite_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let resource = file_resource(request).map_err(errno_failure)?;
+        let (name, _) = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| (description.path.clone(), description.offset))
+            .ok_or_else(|| errno_failure(9))?;
+        let size = checked_size(value.size).map_err(errno_failure)?;
+        let count = if size == 0 {
+            0
+        } else {
+            if !request.validate_memory(value.buffer, true) {
+                return Err(errno_failure(13));
+            }
+            region_outcome(request.with_read_memory(value.buffer, 0, size, |data| {
+                self.state
+                    .service
+                    .write_at(&name, value.offset.max(0) as u64, data)
+                    .map_err(domain_error)
+            }))
+            .map_err(errno_failure)?
+        };
+        Ok(RpcMethodReply::new(file::pwrite_response {
+            count: count as u64,
+        }))
+    }
+
+    unsupported_file_method!(seek, file::seek_request, file::seek_response, false);
+
+    async fn stat<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        _request: file::stat_request,
+    ) -> Result<RpcMethodReply<file::stat_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(errno_failure(22));
+        }
+        let resource = file_resource(context.request).map_err(errno_failure)?;
+        let (name, _) = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| (description.path.clone(), description.offset))
+            .ok_or_else(|| errno_failure(9))?;
+        let stat = self
+            .state
+            .service
+            .lookup(&name)
+            .map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(file::stat_response {
+            value: file_stat(stat, self.state.service.device_id()),
+        }))
+    }
+
+    async fn sync<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        _request: file::sync_request,
+    ) -> Result<RpcMethodReply<file::sync_response, Self::Resource>, RpcOutcome> {
+        file_resource(context.request).map_err(errno_failure)?;
+        if !context.request.bulk.is_empty() {
+            return Err(errno_failure(22));
+        }
+        self.state.service.sync(true).map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(file::sync_response {}))
+    }
+
+    async fn truncate<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: file::truncate_request,
+    ) -> Result<RpcMethodReply<file::truncate_response, Self::Resource>, RpcOutcome> {
+        if !context.request.bulk.is_empty() {
+            return Err(errno_failure(22));
+        }
+        let resource = file_resource(context.request).map_err(errno_failure)?;
+        let name = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| description.path.clone())
+            .ok_or_else(|| errno_failure(9))?;
+        self.state
+            .service
+            .truncate_to(&name, value.length)
+            .map_err(filesystem_failure)?;
+        Ok(RpcMethodReply::new(file::truncate_response {}))
+    }
+
+    unsupported_file_method!(
+        allocate,
+        file::allocate_request,
+        file::allocate_response,
+        false
+    );
+    unsupported_file_method!(
+        get_flags,
+        file::get_flags_request,
+        file::get_flags_response,
+        false
+    );
+    unsupported_file_method!(
+        set_flags,
+        file::set_flags_request,
+        file::set_flags_response,
+        false
+    );
+    unsupported_file_method!(
+        device_control,
+        file::device_control_request,
+        file::device_control_response,
+        true
+    );
+
+    async fn read<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: file::read_request,
+    ) -> Result<RpcMethodReply<file::read_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let resource = file_resource(request).map_err(errno_failure)?;
+        let (name, offset) = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| (description.path.clone(), description.offset))
+            .ok_or_else(|| errno_failure(9))?;
+        let size = checked_size(value.size).map_err(errno_failure)?;
+        let count = if size == 0 {
+            0
+        } else {
+            if !request.validate_memory(value.buffer, false) {
+                return Err(errno_failure(13));
+            }
+            region_outcome(request.with_write_memory(value.buffer, 0, size, |data| {
+                self.state
+                    .service
+                    .read_at(&name, offset.max(0) as u64, data)
+                    .map_err(domain_error)
+            }))
+            .map_err(errno_failure)?
+        };
+        self.state
+            .service
+            .set_offset(resource, offset.saturating_add(count as i64));
+        Ok(RpcMethodReply::new(file::read_response {
+            count: count as u64,
+        }))
+    }
+
+    async fn write<'s>(
+        &'s mut self,
+        context: &mut FatServiceContext<'context>,
+        value: file::write_request,
+    ) -> Result<RpcMethodReply<file::write_response, Self::Resource>, RpcOutcome> {
+        let request = context.request;
+        let resource = file_resource(request).map_err(errno_failure)?;
+        let (name, offset) = self
+            .state
+            .service
+            .description(resource)
+            .map(|description| (description.path.clone(), description.offset))
+            .ok_or_else(|| errno_failure(9))?;
+        let size = checked_size(value.size).map_err(errno_failure)?;
+        let count = if size == 0 {
+            0
+        } else {
+            if !request.validate_memory(value.buffer, true) {
+                return Err(errno_failure(13));
+            }
+            region_outcome(request.with_read_memory(value.buffer, 0, size, |data| {
+                self.state
+                    .service
+                    .write_at(&name, offset.max(0) as u64, data)
+                    .map_err(domain_error)
+            }))
+            .map_err(errno_failure)?
+        };
+        self.state
+            .service
+            .set_offset(resource, offset.saturating_add(count as i64));
+        Ok(RpcMethodReply::new(file::write_response {
+            count: count as u64,
+        }))
+    }
+
+    unsupported_file_method!(preadv, file::preadv_request, file::preadv_response, true);
+    unsupported_file_method!(pwritev, file::pwritev_request, file::pwritev_response, true);
+    unsupported_file_method!(readv, file::readv_request, file::readv_response, true);
+    unsupported_file_method!(writev, file::writev_request, file::writev_response, true);
+    unsupported_file_method!(
+        materialize,
+        file::materialize_request,
+        file::materialize_response,
+        false
+    );
 }
 
 fn checked_size(size: u64) -> Result<usize, i32> {
@@ -403,197 +864,6 @@ fn domain_error(error: FsError) -> i64 {
     -i64::from(error.errno.to_i32())
 }
 
-fn directory_request(request: &Request, state: &mut State, server: &mut Server) -> ServerResponse {
-    // Directory listing is a bulk method at this revision and the worker
-    // endpoint (MountControl) owns it; the standalone service never
-    // implemented it, so report it as unsupported rather than letting its
-    // mandatory region argument look like a malformed request.
-    if request.method_id == directory::METHOD_LIST {
-        return failure(request, 38);
-    }
-    if !request.resources.is_empty() || !request.bulk.is_empty() {
-        return failure(request, 22);
-    }
-    let service = &mut state.service;
-    match request.method_id {
-        directory::METHOD_OPEN => {
-            let value = match directory::decode_open_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let name = match path(value.path) {
-                Ok(name) => name,
-                Err(errno) => return failure(request, errno),
-            };
-            if let Err(error) = service.lookup(&name) {
-                return fs_failure(request, error);
-            }
-            let endpoint = match server.create_endpoint(
-                &file::protocol_descriptor(),
-                0,
-                file::PROTOCOL_SCOPE,
-                HOST_RIGHTS,
-                validate_file_request,
-            ) {
-                Ok(endpoint) => endpoint,
-                Err(_) => return failure(request, 12),
-            };
-            service.open_description_with_id(endpoint.descriptor().resource_id, name, value.mode);
-            let response = directory::open_response {
-                object: ResourceSlot::new(0).expect("resource slot zero is valid"),
-            };
-            endpoint_response(
-                request,
-                encoded(|wire| directory::encode_open_response(&response, wire)),
-                endpoint,
-            )
-        }
-        directory::METHOD_CREATE => {
-            let value = match directory::decode_create_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let name = match path(value.path) {
-                Ok(name) => name,
-                Err(errno) => return failure(request, errno),
-            };
-            if value.flags & 1 != 0 {
-                service.mkdir(&name).map_or_else(
-                    |error| fs_failure(request, error),
-                    |_| success(request, Vec::new()),
-                )
-            } else {
-                service.create_file(&name).map_or_else(
-                    |error| fs_failure(request, error),
-                    |_| success(request, Vec::new()),
-                )
-            }
-        }
-        directory::METHOD_REMOVE => {
-            let value = match directory::decode_remove_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let name = match path(value.path) {
-                Ok(name) => name,
-                Err(errno) => return failure(request, errno),
-            };
-            if value.mode & 1 != 0 {
-                service.rmdir(&name).map_or_else(
-                    |error| fs_failure(request, error),
-                    |_| success(request, Vec::new()),
-                )
-            } else {
-                if service.has_open_path(&name) {
-                    return failure(request, 16);
-                }
-                service.unlink(&name).map_or_else(
-                    |error| fs_failure(request, error),
-                    |_| success(request, Vec::new()),
-                )
-            }
-        }
-        directory::METHOD_STAT => service.lookup("/").map_or_else(
-            |error| fs_failure(request, error),
-            |stat| {
-                let response = directory::stat_response {
-                    value: stat_value(stat, service.device_id()),
-                };
-                success(
-                    request,
-                    encoded(|wire| directory::encode_stat_response(&response, wire)),
-                )
-            },
-        ),
-        directory::METHOD_STAT_NODE => {
-            let value = match directory::decode_stat_node_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let name = match path(value.path) {
-                Ok(name) => name,
-                Err(errno) => return failure(request, errno),
-            };
-            service.lookup(&name).map_or_else(
-                |error| fs_failure(request, error),
-                |stat| {
-                    let response = directory::stat_node_response {
-                        value: stat_value(stat, service.device_id()),
-                    };
-                    success(
-                        request,
-                        encoded(|wire| directory::encode_stat_node_response(&response, wire)),
-                    )
-                },
-            )
-        }
-        directory::METHOD_ACCESS => {
-            let value = match directory::decode_access_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let name = match path(value.path) {
-                Ok(name) => name,
-                Err(errno) => return failure(request, errno),
-            };
-            service.access(&name, value.mode as u32).map_or_else(
-                |error| fs_failure(request, error),
-                |_| success(request, Vec::new()),
-            )
-        }
-        directory::METHOD_RENAME => {
-            let value = match directory::decode_rename_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let first = match path(value.first) {
-                Ok(path) => path,
-                Err(errno) => return failure(request, errno),
-            };
-            let second = match path(value.second) {
-                Ok(path) => path,
-                Err(errno) => return failure(request, errno),
-            };
-            match service.rename(&first, &second) {
-                Ok(()) => {
-                    service.rewrite_open_paths(&first, &second);
-                    success(request, Vec::new())
-                }
-                Err(error) => fs_failure(request, error),
-            }
-        }
-        directory::METHOD_LINK | directory::METHOD_SYMLINK | directory::METHOD_READLINK => {
-            fs_failure(request, FsError::new(Errno::EOpNotSupp))
-        }
-        directory::METHOD_SYNC => service.sync(true).map_or_else(
-            |error| fs_failure(request, error),
-            |_| success(request, Vec::new()),
-        ),
-        directory::METHOD_CLONE_BINDING => {
-            let endpoint = match server.create_endpoint(
-                &directory::protocol_descriptor(),
-                0,
-                directory::PROTOCOL_SCOPE,
-                HOST_RIGHTS,
-                validate_directory_request,
-            ) {
-                Ok(endpoint) => endpoint,
-                Err(_) => return failure(request, 12),
-            };
-            service.open_description_with_id(endpoint.descriptor().resource_id, "/".to_owned(), 0);
-            let response = directory::clone_binding_response {
-                directory: ResourceSlot::new(0).expect("resource slot zero is valid"),
-            };
-            endpoint_response(
-                request,
-                encoded(|wire| directory::encode_clone_binding_response(&response, wire)),
-                endpoint,
-            )
-        }
-        _ => failure(request, 38),
-    }
-}
-
 fn file_resource(request: &Request) -> Result<u64, i32> {
     let resource = if let Some(target) = request.target {
         // A migrated bulk method names its region in slot 0; more than one
@@ -615,229 +885,6 @@ fn file_resource(request: &Request) -> Result<u64, i32> {
         return Err(13);
     }
     Ok(resource.resource_id)
-}
-
-fn file_request(request: &Request, state: &mut State) -> ServerResponse {
-    // Every payload method at this revision names a bulk region; the inline
-    // File methods (stat, seek, truncate, sync, flags, materialize) must not
-    // carry one, so a request that does is malformed.
-    let bulk_method = matches!(
-        request.method_id,
-        file::METHOD_PREAD
-            | file::METHOD_READ
-            | file::METHOD_PWRITE
-            | file::METHOD_WRITE
-            | file::METHOD_PREADV
-            | file::METHOD_PWRITEV
-            | file::METHOD_READV
-            | file::METHOD_WRITEV
-            | file::METHOD_DEVICE_CONTROL
-    );
-    if !bulk_method && !request.bulk.is_empty() {
-        return failure(request, 22);
-    }
-    let resource = match file_resource(request) {
-        Ok(resource) => resource,
-        Err(errno) => return failure(request, errno),
-    };
-    let (name, offset) = match state.service.description(resource).cloned() {
-        Some(value) => (value.path, value.offset),
-        None => return failure(request, 9),
-    };
-    let service = &mut state.service;
-    match request.method_id {
-        file::METHOD_PREAD => {
-            let value = match file::decode_pread_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let size = match checked_size(value.size) {
-                Ok(size) => size,
-                Err(errno) => return failure(request, errno),
-            };
-            if size == 0 {
-                let response = file::pread_response { count: 0 };
-                return success(
-                    request,
-                    encoded(|wire| file::encode_pread_response(&response, wire)),
-                );
-            }
-            // The region admission decision covers which rights the caller
-            // granted and which direction this operation needs; a caller that
-            // did not grant them is denied rather than reported as malformed.
-            if !request.validate_memory(value.buffer, false) {
-                return failure(request, 13);
-            }
-            let offset = value.offset.max(0) as u64;
-            let count = match region_outcome(request.with_write_memory(
-                value.buffer,
-                0,
-                size,
-                |data| service.read_at(&name, offset, data).map_err(domain_error),
-            )) {
-                Ok(count) => count,
-                Err(errno) => return failure(request, errno),
-            };
-            let response = file::pread_response {
-                count: count as u64,
-            };
-            success(
-                request,
-                encoded(|wire| file::encode_pread_response(&response, wire)),
-            )
-        }
-        file::METHOD_READ => {
-            let value = match file::decode_read_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            let size = match checked_size(value.size) {
-                Ok(size) => size,
-                Err(errno) => return failure(request, errno),
-            };
-            if size == 0 {
-                let response = file::read_response { count: 0 };
-                return success(
-                    request,
-                    encoded(|wire| file::encode_read_response(&response, wire)),
-                );
-            }
-            if !request.validate_memory(value.buffer, false) {
-                return failure(request, 13);
-            }
-            let start = offset.max(0) as u64;
-            let count = match region_outcome(request.with_write_memory(
-                value.buffer,
-                0,
-                size,
-                |data| service.read_at(&name, start, data).map_err(domain_error),
-            )) {
-                Ok(count) => count,
-                Err(errno) => return failure(request, errno),
-            };
-            let _ = service.set_offset(resource, offset.saturating_add(count as i64));
-            let response = file::read_response {
-                count: count as u64,
-            };
-            success(
-                request,
-                encoded(|wire| file::encode_read_response(&response, wire)),
-            )
-        }
-        file::METHOD_PWRITE | file::METHOD_WRITE => {
-            let (value_offset, size, buffer) =
-                if request.method_id == file::METHOD_PWRITE {
-                    let value = match file::decode_pwrite_request(&request.payload) {
-                        Ok(value) => value,
-                        Err(_) => return failure(request, 22),
-                    };
-                    (
-                        value.offset.max(0),
-                        value.size,
-                        value.buffer,
-                    )
-                } else {
-                    let value = match file::decode_write_request(&request.payload) {
-                        Ok(value) => value,
-                        Err(_) => return failure(request, 22),
-                    };
-                    (
-                        offset,
-                        value.size,
-                        value.buffer,
-                    )
-                };
-            let size = match checked_size(size) {
-                Ok(size) => size,
-                Err(errno) => return failure(request, errno),
-            };
-            let response = if size == 0 {
-                file::write_response { count: 0 }
-            } else {
-                if !request.validate_memory(buffer, true) {
-                    return failure(request, 13);
-                }
-                let count = match region_outcome(request.with_read_memory(
-                    buffer,
-                    0,
-                    size,
-                    |data| {
-                        service
-                            .write_at(&name, value_offset as u64, data)
-                            .map_err(domain_error)
-                    },
-                )) {
-                    Ok(count) => count,
-                    Err(errno) => return failure(request, errno),
-                };
-                let _ = service.set_offset(resource, value_offset.saturating_add(count as i64));
-                file::write_response {
-                    count: count as u64,
-                }
-            };
-            if request.method_id == file::METHOD_PWRITE {
-                let response = file::pwrite_response {
-                    count: response.count,
-                };
-                success(
-                    request,
-                    encoded(|wire| file::encode_pwrite_response(&response, wire)),
-                )
-            } else {
-                success(
-                    request,
-                    encoded(|wire| file::encode_write_response(&response, wire)),
-                )
-            }
-        }
-        file::METHOD_STAT => service.lookup(&name).map_or_else(
-            |error| fs_failure(request, error),
-            |stat| {
-                let response = file::stat_response {
-                    value: file_stat(stat, service.device_id()),
-                };
-                success(
-                    request,
-                    encoded(|wire| file::encode_stat_response(&response, wire)),
-                )
-            },
-        ),
-        file::METHOD_TRUNCATE => {
-            let value = match file::decode_truncate_request(&request.payload) {
-                Ok(value) => value,
-                Err(_) => return failure(request, 22),
-            };
-            service.truncate_to(&name, value.length).map_or_else(
-                |error| fs_failure(request, error),
-                |_| success(request, Vec::new()),
-            )
-        }
-        file::METHOD_SYNC => service.sync(true).map_or_else(
-            |error| fs_failure(request, error),
-            |_| success(request, Vec::new()),
-        ),
-        _ => failure(request, 38),
-    }
-}
-
-fn dispatch(request: &Request, state: &mut State, server: &mut Server) -> ServerResponse {
-    let expected_revision = if request.protocol_uuid == directory::PROTOCOL_UUID {
-        directory::PROTOCOL_REVISION
-    } else if request.protocol_uuid == file::PROTOCOL_UUID {
-        file::PROTOCOL_REVISION
-    } else {
-        return failure(request, 71);
-    };
-    if request.revision != expected_revision {
-        return failure(request, 71);
-    }
-    if request.protocol_uuid == directory::PROTOCOL_UUID {
-        directory_request(request, state, server)
-    } else if request.protocol_uuid == file::PROTOCOL_UUID {
-        file_request(request, state)
-    } else {
-        failure(request, 71)
-    }
 }
 
 async fn service(context: Context) -> i64 {
@@ -881,7 +928,7 @@ async fn service(context: Context) -> i64 {
         &directory,
         servicekit::uri::FS_EXFAT,
         &directory::protocol_descriptor(),
-        validate_directory_request,
+        directory::validate_request_transport_resources,
     )
     .await
     {
@@ -914,8 +961,27 @@ impl ServeHandler for FatHandler<'_> {
         // Keep that work off the Tokio worker that drives servicekit; otherwise
         // one slow medium operation can starve service discovery and the
         // reactor itself.
-        let response = tokio::task::block_in_place(|| dispatch(&request, self.state, server));
-        if let Err(error) = server.respond(request, response).await {
+        let protocol_uuid = request.protocol_uuid;
+        let dispatched = {
+            let rpc_request = request.rpc_request();
+            let mut context = FatServiceContext {
+                request: &request,
+                server,
+            };
+            tokio::task::block_in_place(|| {
+                let runtime = tokio::runtime::Handle::current();
+                runtime.block_on(async {
+                    if protocol_uuid == directory::PROTOCOL_UUID {
+                        directory::dispatch_servicekit(&rpc_request, &mut context, self).await
+                    } else if protocol_uuid == file::PROTOCOL_UUID {
+                        file::dispatch_servicekit(&rpc_request, &mut context, self).await
+                    } else {
+                        naos_idl::transport::RpcDispatchResult::failure(rpc_request.method_id, -71)
+                    }
+                })
+            })
+        };
+        if let Err(error) = server.respond_dispatch(request, dispatched).await {
             log::debug!("exfat service response failed: {error:?}");
         }
         tokio::task::yield_now().await;

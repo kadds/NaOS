@@ -10,7 +10,7 @@ use naos_sys as sys;
 use crate::kernel_ops::ops;
 use crate::{
     CallError, CodecError, MAX_RESOURCES, OwnedHandle, ProtocolServerEndpoint, RawHandleGuard,
-    ReceivedResources, ResourceTable,
+    ReceivedResources, ResourceTransferBuilder,
 };
 
 /// Execution outcomes of an invocation, mirroring `na_execution_outcome_t`
@@ -30,6 +30,7 @@ pub const REASON_RESPONDER_ABANDONED: u32 = 6;
 pub const REASON_BROKER_FAILURE: u32 = 7;
 pub const REASON_PROTOCOL_VIOLATION: u32 = 8;
 pub const REASON_UNSUPPORTED: u32 = 9;
+pub const REASON_HARDWARE_OUTCOME_UNKNOWN: u32 = 10;
 
 /// A typed failure a server handler wants delivered to the caller.
 ///
@@ -269,18 +270,18 @@ pub fn reject_unsupported(sink: &mut dyn ReplySink) -> Result<DispatchOutcome, C
 /// `response`; the generated dispatcher validates the pairing before sending.
 pub struct MethodReply<'a, R> {
     pub response: R,
-    pub resources: ResourceTable<'a>,
+    pub resources: ResourceTransferBuilder<'a>,
 }
 
 impl<'a, R> MethodReply<'a, R> {
     pub fn new(response: R) -> Self {
         Self {
             response,
-            resources: ResourceTable::new(),
+            resources: ResourceTransferBuilder::new(),
         }
     }
 
-    pub fn with_resources(response: R, resources: ResourceTable<'a>) -> Self {
+    pub fn with_resources(response: R, resources: ResourceTransferBuilder<'a>) -> Self {
         Self {
             response,
             resources,

@@ -39,14 +39,7 @@ source requires the `1.96.0` bootstrap compiler:
 git submodule update --init --recursive
 RUSTUP_DIST_SERVER=https://static.rust-lang.org \
     rustup toolchain install 1.96.0 --profile minimal
-rustup_home_dir="$(rustup show home)"
-bash naos/third_party/rust-naos/configure \
-    --enable-local-rust \
-    --local-rust-root="${rustup_home_dir}/toolchains/1.96.0-x86_64-unknown-linux-gnu" \
-    --enable-local-rebuild --disable-extended \
-    --set build.build-dir="${PWD}/build-debug/rust-naos" \
-    --set build.jobs=2 --set llvm.download-ci-llvm=true \
-    --set rust.deny-warnings=false
+python3 util/configure_rust_naos.py --build-dir build-debug/rust-naos --jobs 2
 python3 naos/third_party/rust-naos/x.py build --stage 1 library/std
 python3 naos/third_party/rust-naos/x.py build --stage 1 library/proc_macro
 python3 naos/third_party/rust-naos/x.py build --stage 1 src/tools/cargo
@@ -56,8 +49,9 @@ cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug \
 cmake --build build-debug --target naos_rust_smoke -j
 ```
 
-`configure` creates the machine-local, ignored `bootstrap.toml` inside the
-Rust submodule. `naos_rust_smoke` builds and installs the single Rust smoke
+`util/configure_rust_naos.py` generates the machine-local, ignored `bootstrap.toml`
+inside the Rust submodule from the installed bootstrap toolchain and selected
+build directory. `naos_rust_smoke` builds and installs the single Rust smoke
 ELF, `/bin/rust-smoke-suite`; it includes native bootstrap, alloc, NaoIDL,
 compiler TLS/thread, and NaOS `std` checks. `rust-tls-probe` is only a static
 library consumed by the C++ TLS smoke and is not a userland executable.

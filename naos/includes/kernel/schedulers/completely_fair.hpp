@@ -19,6 +19,7 @@ class completely_fair_scheduler : public scheduler
     void remove(thread_t *thread) override;
 
     void update_state(thread_t *thread, thread_state state) override;
+    void prepare_switch_out(thread_t *thread) override;
 
     bool schedule() override;
 

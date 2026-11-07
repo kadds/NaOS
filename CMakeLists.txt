@@ -4,6 +4,64 @@ project (Naos C CXX ASM)
 ENABLE_LANGUAGE( ASM)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+# Keep the standard QEMU EDU route suite available in developer builds. Release
+# images stay production-like unless the smoke is explicitly requested.
+set(NAOS_PCIED_MSI_ROUTE_SMOKE_DEFAULT OFF)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(NAOS_PCIED_MSI_ROUTE_SMOKE_DEFAULT ON)
+endif()
+option(NAOS_PCIED_MSI_ROUTE_SMOKE
+    "Build pcied with the QEMU EDU MSI route-prepare/teardown smoke"
+    ${NAOS_PCIED_MSI_ROUTE_SMOKE_DEFAULT})
+unset(NAOS_PCIED_MSI_ROUTE_SMOKE_DEFAULT)
+option(NAOS_PCIED_VIRTIO_BLOCK_FAULT_SMOKE
+    "Inject one unmapped DMA access in virtioblkd for its opt-in terminal-cleanup smoke"
+    OFF)
+option(NAOS_TEST_AMDVI_MEMORY_IOPF
+    "Expect an AMD-spec-conforming QEMU to deliver a memory I/O page fault in the EDU smoke"
+    OFF)
+option(NAOS_TEST_ACPI_FACS_RESERVATION_COLLISION
+    "Build the negative QEMU boot test with an isolated FACS reservation fixture"
+    OFF)
+option(NAOS_TEST_ACPI_INIT_CAPABILITY_ROLLBACK
+    "Fail ACPI initialization after private capability construction to verify atomic rollback"
+    OFF)
+option(NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE
+    "Exercise the QEMU PM1 GBL_STS/SCI waiter path with an external FACS Global Lock holder"
+    OFF)
+option(NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT
+    "Exit platformd while its AML worker owns the FACS Global Lock to test kernel owner teardown"
+    OFF)
+option(NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE
+    "Inject a FACS Global Lock release failure to verify sticky fail-closed behavior"
+    OFF)
+option(NAOS_TEST_ACPI_GLOBAL_LOCK_SOFTWARE_FALLBACK
+    "Force local software Global Lock arbitration for its opt-in QEMU boot test"
+    OFF)
+
+if(NAOS_PCIED_VIRTIO_BLOCK_FAULT_SMOKE AND NOT NAOS_PCIED_MSI_ROUTE_SMOKE)
+    message(FATAL_ERROR "NAOS_PCIED_VIRTIO_BLOCK_FAULT_SMOKE requires NAOS_PCIED_MSI_ROUTE_SMOKE")
+endif()
+if(NAOS_TEST_AMDVI_MEMORY_IOPF AND NOT NAOS_PCIED_MSI_ROUTE_SMOKE)
+    message(FATAL_ERROR "NAOS_TEST_AMDVI_MEMORY_IOPF requires NAOS_PCIED_MSI_ROUTE_SMOKE")
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE AND NOT NAOS_PCIED_MSI_ROUTE_SMOKE)
+    message(FATAL_ERROR "NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE requires NAOS_PCIED_MSI_ROUTE_SMOKE")
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT AND NOT NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE)
+    message(FATAL_ERROR "NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT requires NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE")
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE AND NOT NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE)
+    message(FATAL_ERROR "NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE requires NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE")
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT AND NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE)
+    message(FATAL_ERROR "Global Lock owner-exit and release-failure smokes require separate builds")
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_SOFTWARE_FALLBACK AND
+   (NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE OR NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT OR NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE))
+    message(FATAL_ERROR "Global Lock software-fallback smoke requires a hardware-event test-free build")
+endif()
+
 enable_testing ()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 

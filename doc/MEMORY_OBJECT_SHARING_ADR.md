@@ -174,9 +174,9 @@ ctest --test-dir build-debug -R boot_smoke_mobj_share --output-on-failure
 二进制的职责**，所以 smoke 只返回状态，由 opt-in 脚本结束这次启动。这样验证不再
 依赖启动器的挂钟上限（实测 ~90s 降到 ~38s）。
 
-`/bin/poweroff` 是 `nanobox` 的一个 applet，直接调用 `NA_SYSCALL_POWER_OFF`
-（kernel `syscall/power.cc` → `arch::ACPI::shutdown()`，即 ACPI S5，与电源键同一
-路径）。它不是特权操作：NaOS 没有启动权威 capability，该调用只能造成可用性损失。
+`/bin/poweroff` 是 `nanobox` 的一个 applet，通过 `ServiceDirectory` 调用
+`PlatformPowerControl` 服务。`platformd` 执行策略检查后，再通过受限的
+`AcpiFixedHardware` capability 请求内核提交 ACPI S5 转换。内核不再暴露直接关机 syscall。
 `util/ln.sh` 建立 `poweroff` 符号链接，`util/make_root_image.py` 的
 `BOOT_APPLET_ALIASES` 把符号链接实体化为普通文件（FAT 无符号链接）。
 

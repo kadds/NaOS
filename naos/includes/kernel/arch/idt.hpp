@@ -61,6 +61,12 @@ void set_interrupt_gate(int index, void *func, u8 ist);
 void enable();
 void disable();
 bool save_and_disable();
+inline bool interrupts_enabled()
+{
+    u64 flags;
+    __asm__ __volatile__("pushfq; popq %0" : "=r"(flags));
+    return (flags & (1ull << 9)) != 0;
+}
 
 bool is_enable();
 } // namespace arch::idt

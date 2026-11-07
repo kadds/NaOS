@@ -13,7 +13,7 @@ class object final : public kobject
     {
     }
 
-    static type_e type_of() { return type_e::system_status; }
+    static constexpr type_e type_of() { return type_e::system_status; }
 };
 
 } // namespace system_status_service

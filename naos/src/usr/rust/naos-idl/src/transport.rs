@@ -10,6 +10,29 @@ use core::future::Future;
 
 use crate::CodecError;
 
+/// Encode a generated bounded message into owned storage. The shared Linux
+/// service envelope caps frames at one MiB, which is also the largest reply
+/// the cross-platform generated dispatcher may materialize.
+#[cfg(feature = "alloc")]
+pub fn encode_bounded(
+    mut encode: impl FnMut(&mut [u8]) -> Result<usize, CodecError>,
+) -> Result<alloc::vec::Vec<u8>, CodecError> {
+    const MAX_BYTES: usize = 1 << 20;
+    let mut wire = alloc::vec![0; 64];
+    loop {
+        match encode(&mut wire) {
+            Ok(length) => {
+                wire.truncate(length);
+                return Ok(wire);
+            }
+            Err(CodecError::Overflow) if wire.len() < MAX_BYTES => {
+                wire.resize((wire.len() * 2).min(MAX_BYTES), 0);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Direction of a bulk region from the point of view of the invocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -91,6 +114,59 @@ pub struct RpcRequest<'a> {
     pub payload: &'a [u8],
     pub resources: &'a [ResourceDescriptor],
     pub bulk: &'a [BulkBuffer],
+}
+
+/// A transferable service resource returned by a generated ServiceKit
+/// dispatcher. The descriptor is used for schema validation; the platform
+/// object itself stays owned by the transport adapter.
+pub trait RpcDispatchResource {
+    fn descriptor(&self) -> ResourceDescriptor;
+}
+
+impl RpcDispatchResource for () {
+    fn descriptor(&self) -> ResourceDescriptor {
+        ResourceDescriptor::default()
+    }
+}
+
+/// Typed response produced by one generated protocol handler method.
+#[cfg(feature = "alloc")]
+pub struct RpcMethodReply<T, R> {
+    pub response: T,
+    pub resources: alloc::vec::Vec<R>,
+}
+
+#[cfg(feature = "alloc")]
+impl<T, R> RpcMethodReply<T, R> {
+    pub fn new(response: T) -> Self {
+        Self {
+            response,
+            resources: alloc::vec::Vec::new(),
+        }
+    }
+}
+
+/// Platform-neutral result of a generated request dispatch.
+#[cfg(feature = "alloc")]
+pub struct RpcDispatchResult<R> {
+    pub method_id: u64,
+    pub outcome: RpcOutcome,
+    pub payload: alloc::vec::Vec<u8>,
+    pub resources: alloc::vec::Vec<R>,
+}
+
+#[cfg(feature = "alloc")]
+impl<R> RpcDispatchResult<R> {
+    pub fn failure(method_id: u64, protocol_error: i64) -> Self {
+        let mut outcome = RpcOutcome::SUCCESS;
+        outcome.protocol_error = protocol_error;
+        Self {
+            method_id,
+            outcome,
+            payload: alloc::vec::Vec::new(),
+            resources: alloc::vec::Vec::new(),
+        }
+    }
 }
 
 /// Owned request used by service runners.  The type is available only with

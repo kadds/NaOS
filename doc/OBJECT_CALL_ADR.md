@@ -1009,10 +1009,14 @@ reason:
     RESPONDER_ABANDONED
     BROKER_FAILURE
     PROTOCOL_VIOLATION
+    HARDWARE_OUTCOME_UNKNOWN
 ```
 
 例如“operation deadline在dispatch后到期且server没有reply”是 `OUTCOME_UNKNOWN + OPERATION_DEADLINE`，而不是一个无法判断
 execution状态的扁平 ETIMEDOUT。
+硬件操作已触及设备/IOMMU、但无法确认执行或失效结果时使用
+`OUTCOME_UNKNOWN + HARDWARE_OUTCOME_UNKNOWN`，不得伪装成确定的 domain errno；POSIX errno 映射可以返回 `EIO`，但 result
+frame 中的 transport outcome/reason 必须保留。
 
 ### 15.3 Protocol result
 
@@ -1075,108 +1079,9 @@ v1不实现 priority donation。要求：
 
 Kernel raw channel不强制用户协议，但 system service generated binding必须执行上述策略。
 
-## 18. NaoIDL 与 Canonical Wire
+## 18. NaoIDL 规范位置
 
-### 18.1 Protocol identity
-
-每个 incompatible protocol major拥有一个稳定128-bit UUID：
-
-- UUID显式写入 schema并提交；
-- UUID不由名称或 schema hash临时计算；
-- 名称可以重构，不改变 identity；
-- incompatible major获得新 UUID；
-- repository registry记录 UUID、名称、owner和 stable/experimental状态；
-- capability acquisition后，kernel可映射为内部紧凑 scope index。
-
-Compatible revision和features在 connect/acquisition时协商，normal invocation不发送 UUID或version。同一 UUID 的
-revision 只能保持既有 method/field/type/rights contract 并作兼容扩展。任何删除、收窄或重解释都必须分配新 UUID，
-并从 revision 1 开始；generator 与 protocol contract tests 只验证当前 schema 的结构和 wire 行为。
-
-### 18.2 Canonical value rules
-
-所有 transport共享同一 canonical encoding：
-
-- primitive只使用固定宽度整数；
-- 第一版 little-endian；
-- 不使用 `bool`、native enum、bitfield、`long`、`size_t`、裸指针或引用；
-- enum/bits有显式底层类型和 unknown策略；
-- padding/reserved显式生成，输入必须为零；
-- struct alignment与offset由 NaoIDL compiler确定，不使用host C++ compiler的自然布局；
-- extensible struct只允许尾部追加安全默认字段；
-- bounded vector使用相对payload起点的offset + element count，string使用offset + byte length；
-- string为 UTF-8且不含隐式 NUL；
-- resource field为 `u32 resource_index`；
-- decoder验证 overflow、范围、alignment、count、overlap、padding与所有 bounds；
-- kernel/local transport不得用未验证的 `reinterpret_cast` 代替 decoder。
-
-### 18.3 Schema 构造
-
-NaoIDL v1 需要支持：
-
-- library；
-- protocol UUID、revision和features；
-- explicit method/field ordinal；
-- fixed struct、array、enum、bits；
-- bounded vector/string；
-- error set；
-- typed handle/resource；
-- protocol composition；
-- ClientEnd/ServerEnd类型；
-- explicit reserved IDs。
-
-Handle类型必须表达：
-
-- expected scope/type；
-- meta/protocol rights；
-- MOVE或DUPLICATE ownership；
-- export class。
-
-### 18.4 Method annotations
-
-至少包括：
-
-| Annotation | 含义 |
-| --- | --- |
-| `@id(N)` | Stable method/field ordinal。 |
-| `@rights(...)` | 调用所需 protocol rights。 |
-| `@max_bytes(N)` | Method更严格的 payload上限。 |
-| `@idempotent` | 允许按 retry policy安全重放。 |
-| `@concurrent` | 允许同 endpoint并发执行。 |
-| `@cancellable` | Handler接收 cancellation context。 |
-| `@oneway_best_effort` | 无 responder、允许无业务确认的通知。 |
-| `@experimental` | 不进入 stable ABI manifest。 |
-| `@extensible` | 允许尾部兼容扩展。 |
-| `@flexible` | 允许 schema未知值/method的指定兼容行为。 |
-
-默认 method是 two-way、non-idempotent、serialized、non-cancellable和 strict。
-
-### 18.5 Generated artifacts
-
-每个 stable protocol至少生成：
-
-```text
-protocol.naidl
-├── protocol_uapi.h
-├── protocol_types.hpp
-├── protocol_client.hpp/.cc
-├── protocol_server.hpp/.cc
-├── protocol_kernel_dispatcher.hpp/.cc   optional
-├── protocol_metadata.json
-├── protocol_abi_manifest.json
-├── protocol_abi_test.cc
-└── protocol_negative_tests.cc
-```
-
-Generated kernel code必须 freestanding、bounded、无异常、无 RTTI、无 host runtime，并且不访问用户地址。
-
-### 18.6 发布纪律
-
-- Handwritten Test/Echo protocol只用于 experimental mechanism验证。
-- NaoIDL compiler、deterministic codegen 和 generated contract tests 完成前，不发布 stable protocol。
-- Stable wire/layout/IDs不得人工在多处重复声明。
-- Compiler只在 host运行，不进入 kernel trusted computing base。
-- Same schema/compiler version必须产生 byte-identical output。
-- Build必须检测 stale generated files。
+NaoIDL 的语法、注解、wire 编码和当前生成器行为以 [idl/SPEC.md](../idl/SPEC.md) 为准。本文只定义调用与 capability 架构要求；不在此复制生成器规范或把尚未实现的注解行为写成事实。
 
 ## 19. 数据面边界
 

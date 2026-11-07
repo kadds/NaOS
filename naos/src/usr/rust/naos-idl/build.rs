@@ -3,12 +3,16 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-fn discover_schemas(repository_root: &PathBuf) -> Vec<PathBuf> {
+fn discover_schemas(repository_root: &PathBuf, include_internal: bool) -> Vec<PathBuf> {
     let mut schemas = Vec::new();
-    for directory in [
+    let mut directories = vec![
         repository_root.join("doc/examples"),
         repository_root.join("idl/system"),
-    ] {
+    ];
+    if include_internal {
+        directories.push(repository_root.join("idl/internal"));
+    }
+    for directory in directories {
         let entries = fs::read_dir(&directory)
             .unwrap_or_else(|error| panic!("failed to read {}: {error}", directory.display()));
         for entry in entries {
@@ -46,7 +50,10 @@ fn main() {
             .filter(|schema| !schema.is_empty())
             .map(PathBuf::from)
             .collect(),
-        Err(_) => discover_schemas(&repository_root),
+        Err(_) => discover_schemas(
+            &repository_root,
+            env::var_os("CARGO_FEATURE_INTERNAL").is_some(),
+        ),
     };
     if schemas.is_empty() {
         panic!("NAOS_IDL_SCHEMAS did not contain a schema");
@@ -57,6 +64,28 @@ fn main() {
     println!("cargo:rerun-if-env-changed=NAOS_IDL_COMPILER");
     println!("cargo:rerun-if-env-changed=NAOS_IDL_SCHEMAS");
     println!("cargo:rerun-if-env-changed=NAOS_PYTHON");
+    // Schema discovery is directory-based; watch the directories themselves
+    // so adding a new .naidl file regenerates the binding index and modules.
+    println!(
+        "cargo:rerun-if-changed={}",
+        repository_root.join("doc/examples").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        repository_root.join("idl/system").display()
+    );
+    if env::var_os("CARGO_FEATURE_INTERNAL").is_some() {
+        println!(
+            "cargo:rerun-if-changed={}",
+            repository_root.join("idl/internal").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            repository_root
+                .join("idl/internal/fragments/node.naidl")
+                .display()
+        );
+    }
     for template in [
         repository_root.join("idl/templates/rust/naoidl/binding.rs.htt"),
         repository_root.join("idl/templates/rust/naoidl/index.rs.htt"),

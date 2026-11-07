@@ -27,6 +27,12 @@ set(NAOS_RUST_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/rust-sm
 set(NAOS_VFS_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/vfsd)
 set(NAOS_RAMDISKD_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/ramdiskd)
 set(NAOS_EXFATD_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/exfatd)
+set(NAOS_PLATFORMD_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/platformd)
+set(NAOS_PCIED_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/pcied)
+set(NAOS_EDUD_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/edud)
+set(NAOS_VIRTIOBLKD_BINARY ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/virtioblkd)
+set(NAOS_VIRTIO_BLOCK_SMOKE_BINARY
+    ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/virtio-block-smoke)
 set(NAOS_RUST_TLS_PROBE_LIB ${NAOS_RUST_TARGET_DIR}/x86_64-unknown-naos/release/librust_tls_probe.a)
 set(NAOS_RUST_MAP ${CMAKE_CURRENT_BINARY_DIR}/rust-smoke.map)
 set(NAOS_RUST_BUILD_STAMP ${CMAKE_CURRENT_BINARY_DIR}/rust-build.stamp)
@@ -34,6 +40,35 @@ set(NAOS_RUST_INSTALL ${ROOT_FS_DIR}/bin/rust-smoke-suite)
 set(NAOS_VFS_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/vfsd)
 set(NAOS_RAMDISKD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/ramdiskd)
 set(NAOS_EXFATD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/exfatd)
+set(NAOS_PLATFORMD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/platformd)
+set(NAOS_PCIED_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/pcied)
+set(NAOS_EDUD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/edud)
+set(NAOS_VIRTIOBLKD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/virtioblkd)
+set(NAOS_VIRTIO_BLOCK_SMOKE_INSTALL ${ROOT_FS_DIR}/bin/virtio-block-smoke)
+set(NAOS_PCIED_CARGO_FEATURE_ARGS)
+if(NAOS_PCIED_MSI_ROUTE_SMOKE)
+    list(APPEND NAOS_PCIED_CARGO_FEATURE_ARGS --features pcied/pci-msi-route-smoke)
+endif()
+if(NAOS_TEST_AMDVI_MEMORY_IOPF)
+    list(APPEND NAOS_PCIED_CARGO_FEATURE_ARGS --features pcied/pci-amdvi-memory-iopf-smoke)
+endif()
+if(NAOS_PCIED_VIRTIO_BLOCK_FAULT_SMOKE)
+    list(APPEND NAOS_PCIED_CARGO_FEATURE_ARGS --features pcied/pci-virtio-block-fault-smoke)
+endif()
+set(NAOS_PLATFORMD_CARGO_FEATURE_ARGS)
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_WAKE)
+    list(APPEND NAOS_PLATFORMD_CARGO_FEATURE_ARGS --features platformd/acpi-global-lock-wake-smoke)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_OWNER_EXIT)
+    list(APPEND NAOS_PLATFORMD_CARGO_FEATURE_ARGS --features platformd/acpi-global-lock-owner-exit-smoke)
+endif()
+if(NAOS_TEST_ACPI_GLOBAL_LOCK_RELEASE_FAILURE)
+    list(APPEND NAOS_PLATFORMD_CARGO_FEATURE_ARGS --features platformd/acpi-global-lock-release-failure-smoke)
+endif()
+# Cargo feature switches are command-line inputs, so record them as a generated
+# dependency to rebuild and restage binaries when a build tree is reconfigured.
+set(NAOS_RUST_BUILD_CONFIG ${CMAKE_CURRENT_BINARY_DIR}/rust-build-config.txt)
+configure_file(rust-build-config.in ${NAOS_RUST_BUILD_CONFIG} @ONLY)
 set(NAOS_ROOTFSD_INSTALL ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system/rootfsd)
 set(NAOS_RUST_FORK_DIR ${PROJECT_SOURCE_DIR}/naos/third_party/rust-naos)
 set(NAOS_MIMALLOC_DIR ${PROJECT_SOURCE_DIR}/naos/third_party/mimalloc)
@@ -131,6 +166,14 @@ file(GLOB_RECURSE NAOS_RUST_ASYNC_RUNTIME_SOURCES CONFIGURE_DEPENDS
     "${PROJECT_SOURCE_DIR}/naos/third_party/tokio/*.toml"
     "${PROJECT_SOURCE_DIR}/naos/third_party/tokio/*.lock")
 
+# The ACPI interpreter is a pinned security-boundary submodule rather than a
+# crates.io source.  Its source files must participate in the Rust build
+# fingerprint so a fork change cannot leave an older interpreter binary
+# installed in the root image.
+file(GLOB_RECURSE NAOS_RUST_ACPI_SOURCES CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/naos/third_party/rust-acpi-naos/src/*.rs"
+    "${PROJECT_SOURCE_DIR}/naos/third_party/rust-acpi-naos/*.toml")
+
 # Cargo owns the Rust module graph.  CMake only needs a recursive watch list
 # to re-run this custom command when a crate file is added or edited; keep the
 # list itself free of one-entry-per-source-file maintenance.
@@ -141,6 +184,7 @@ set(NAOS_RUST_SOURCES
     ${NAOS_RUST_ROOT}/link.ld
     ${NAOS_RUST_ROOT}/rust-toolchain.toml
     ${NAOS_RUST_ROOT}/targets/x86_64-unknown-naos.json
+    ${NAOS_RUST_BUILD_CONFIG}
     ${NAOS_RUST_ROOT}/naos-idl/build.rs
     ${PROJECT_SOURCE_DIR}/idl/templates/rust/naoidl/binding.rs.htt
     ${PROJECT_SOURCE_DIR}/idl/templates/rust/naoidl/index.rs.htt
@@ -155,16 +199,24 @@ list(APPEND NAOS_RUST_SOURCES
     ${NAOS_RUST_CRATE_BUILD_INPUTS}
     ${NAOS_IPC_CORE_RUST_BUILD_INPUTS}
     ${NAOS_RUST_FORK_LIBRARY_SOURCES}
-    ${NAOS_RUST_ASYNC_RUNTIME_SOURCES})
+    ${NAOS_RUST_ASYNC_RUNTIME_SOURCES}
+    ${NAOS_RUST_ACPI_SOURCES})
 file(GLOB NAOS_RUST_IDL_SCHEMAS CONFIGURE_DEPENDS
     ${PROJECT_SOURCE_DIR}/doc/examples/*.naidl
     ${PROJECT_SOURCE_DIR}/idl/system/*.naidl)
 list(APPEND NAOS_RUST_SOURCES ${NAOS_RUST_IDL_SCHEMAS})
 
+set(NAOS_RUST_BYPRODUCTS
+    ${NAOS_RUST_BINARY} ${NAOS_VFS_BINARY} ${NAOS_RAMDISKD_BINARY} ${NAOS_EXFATD_BINARY}
+    ${NAOS_PLATFORMD_BINARY} ${NAOS_PCIED_BINARY} ${NAOS_VIRTIOBLKD_BINARY}
+    ${NAOS_RUST_TLS_PROBE_LIB} ${NAOS_RUST_MAP})
+if(NAOS_PCIED_MSI_ROUTE_SMOKE)
+    list(APPEND NAOS_RUST_BYPRODUCTS ${NAOS_EDUD_BINARY} ${NAOS_VIRTIO_BLOCK_SMOKE_BINARY})
+endif()
+
 add_custom_command(
     OUTPUT ${NAOS_RUST_BUILD_STAMP}
-    BYPRODUCTS ${NAOS_RUST_BINARY} ${NAOS_VFS_BINARY} ${NAOS_RAMDISKD_BINARY} ${NAOS_EXFATD_BINARY}
-               ${NAOS_RUST_TLS_PROBE_LIB} ${NAOS_RUST_MAP}
+    BYPRODUCTS ${NAOS_RUST_BYPRODUCTS}
     # A failed Cargo invocation must not leave an older stamp looking newer
     # than the source that caused the rebuild.  Remove it before invoking the
     # wrapper; the successful command below recreates it.
@@ -196,6 +248,10 @@ add_custom_command(
             --package vfsd
             --package ramdiskd
             --package exfatd
+            --package platformd
+            --package pcied
+            ${NAOS_PLATFORMD_CARGO_FEATURE_ARGS}
+            ${NAOS_PCIED_CARGO_FEATURE_ARGS}
             --target ${NAOS_RUST_TARGET_JSON}
             --target-dir ${NAOS_RUST_TARGET_DIR}
             -Z build-std=std,panic_abort,proc_macro
@@ -220,35 +276,66 @@ add_custom_command(
     OUTPUT ${NAOS_RUST_INSTALL}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
     COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_RUST_BINARY} ${NAOS_RUST_INSTALL}
-    DEPENDS naos_rust_build ${NAOS_RUST_BINARY}
+    DEPENDS naos_rust_build ${NAOS_RUST_BINARY} ${NAOS_RUST_BUILD_CONFIG}
     VERBATIM)
 
 add_custom_command(
     OUTPUT ${NAOS_VFS_INSTALL}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
     COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_VFS_BINARY} ${NAOS_VFS_INSTALL}
-    DEPENDS naos_rust_build ${NAOS_VFS_BINARY}
+    DEPENDS naos_rust_build ${NAOS_VFS_BINARY} ${NAOS_RUST_BUILD_CONFIG}
     VERBATIM)
 
 add_custom_command(
     OUTPUT ${NAOS_RAMDISKD_INSTALL}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
     COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_RAMDISKD_BINARY} ${NAOS_RAMDISKD_INSTALL}
-    DEPENDS naos_rust_build ${NAOS_RAMDISKD_BINARY}
+    DEPENDS naos_rust_build ${NAOS_RAMDISKD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
     VERBATIM)
 
 add_custom_command(
     OUTPUT ${NAOS_EXFATD_INSTALL}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
     COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_EXFATD_BINARY} ${NAOS_EXFATD_INSTALL}
-    DEPENDS naos_rust_build ${NAOS_EXFATD_BINARY}
+    DEPENDS naos_rust_build ${NAOS_EXFATD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
     VERBATIM)
+
+add_custom_command(
+    OUTPUT ${NAOS_PLATFORMD_INSTALL}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
+    COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_PLATFORMD_BINARY} ${NAOS_PLATFORMD_INSTALL}
+    DEPENDS naos_rust_build ${NAOS_PLATFORMD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
+    VERBATIM)
+
+add_custom_command(
+    OUTPUT ${NAOS_PCIED_INSTALL}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
+    COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_PCIED_BINARY} ${NAOS_PCIED_INSTALL}
+    DEPENDS naos_rust_build ${NAOS_PCIED_BINARY} ${NAOS_RUST_BUILD_CONFIG}
+    VERBATIM)
+
+if(NAOS_PCIED_MSI_ROUTE_SMOKE)
+    add_custom_command(
+        OUTPUT ${NAOS_EDUD_INSTALL}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
+        COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_EDUD_BINARY} ${NAOS_EDUD_INSTALL}
+        DEPENDS naos_rust_build ${NAOS_EDUD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
+        VERBATIM)
+    add_custom_target(edud ALL DEPENDS ${NAOS_EDUD_INSTALL})
+else()
+    # A build tree may be reconfigured from the EDU smoke option back to a
+    # production-like build. Do not leave the previous optional boot image
+    # available for util/run.py to package in that configuration.
+    add_custom_target(edud ALL
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${NAOS_EDUD_INSTALL}
+        VERBATIM)
+endif()
 
 add_custom_command(
     OUTPUT ${NAOS_ROOTFSD_INSTALL}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
     COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_EXFATD_BINARY} ${NAOS_ROOTFSD_INSTALL}
-    DEPENDS naos_rust_build ${NAOS_EXFATD_BINARY}
+    DEPENDS naos_rust_build ${NAOS_EXFATD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
     VERBATIM)
 
 
@@ -266,6 +353,30 @@ add_custom_target(ramdiskd ALL DEPENDS ${NAOS_RAMDISKD_INSTALL})
 # kernel/userland handoff does not depend on an archive path.
 add_custom_target(exfatd ALL DEPENDS ${NAOS_EXFATD_INSTALL})
 add_custom_target(rootfsd ALL DEPENDS ${NAOS_ROOTFSD_INSTALL})
+add_custom_target(platformd ALL DEPENDS ${NAOS_PLATFORMD_INSTALL})
+add_custom_target(pcied ALL DEPENDS ${NAOS_PCIED_INSTALL})
+
+add_custom_command(
+    OUTPUT ${NAOS_VIRTIOBLKD_INSTALL}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/system
+    COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_VIRTIOBLKD_BINARY} ${NAOS_VIRTIOBLKD_INSTALL}
+    DEPENDS naos_rust_build ${NAOS_VIRTIOBLKD_BINARY} ${NAOS_RUST_BUILD_CONFIG}
+    VERBATIM)
+add_custom_target(virtioblkd ALL DEPENDS ${NAOS_VIRTIOBLKD_INSTALL})
+
+if(NAOS_PCIED_MSI_ROUTE_SMOKE)
+    add_custom_command(
+        OUTPUT ${NAOS_VIRTIO_BLOCK_SMOKE_INSTALL}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${ROOT_FS_DIR}/bin
+        COMMAND ${CMAKE_COMMAND} -E copy ${NAOS_VIRTIO_BLOCK_SMOKE_BINARY} ${NAOS_VIRTIO_BLOCK_SMOKE_INSTALL}
+        DEPENDS naos_rust_build ${NAOS_VIRTIO_BLOCK_SMOKE_BINARY} ${NAOS_RUST_BUILD_CONFIG}
+        VERBATIM)
+    add_custom_target(virtio-block-smoke ALL DEPENDS ${NAOS_VIRTIO_BLOCK_SMOKE_INSTALL})
+else()
+    add_custom_target(virtio-block-smoke ALL
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${NAOS_VIRTIO_BLOCK_SMOKE_INSTALL}
+        VERBATIM)
+endif()
 
 add_custom_target(naos_rust_smoke ALL DEPENDS ${NAOS_RUST_INSTALL})
 

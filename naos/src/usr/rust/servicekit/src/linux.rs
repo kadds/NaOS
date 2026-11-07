@@ -68,7 +68,10 @@ impl ReadinessSet {
         Ok(())
     }
 
-    pub async fn wait(&mut self, _timeout_us: Option<u64>) -> Result<crate::ReadyEvent, naos_sys::Status> {
+    pub async fn wait(
+        &mut self,
+        _timeout_us: Option<u64>,
+    ) -> Result<crate::ReadyEvent, naos_sys::Status> {
         Err(naos_sys::STATUS_NOT_SUPPORTED)
     }
 
@@ -146,7 +149,10 @@ pub const MAX_BULK_BUFFERS: usize = 64;
 pub const MAX_CONNECTIONS: usize = 64;
 const SESSION_OWNER_TAG: u64 = 1 << 63;
 
-fn resource_range_is_attenuated(original: ResourceDescriptor, candidate: ResourceDescriptor) -> bool {
+fn resource_range_is_attenuated(
+    original: ResourceDescriptor,
+    candidate: ResourceDescriptor,
+) -> bool {
     let memory = candidate.binding == crate::sys::BINDING_MEMORY_OBJECT
         && candidate.scope == naos_idl::memory_object::PROTOCOL_SCOPE;
     if !memory {
@@ -357,7 +363,8 @@ impl LinuxResourceAuthority {
             || request.method_id > protocol.method_count
             || (protocol.max_request_bytes != 0
                 && request.payload.len() as u64 > protocol.max_request_bytes)
-            || (protocol.max_resources != 0 && request.resources.len() as u64 > protocol.max_resources)
+            || (protocol.max_resources != 0
+                && request.resources.len() as u64 > protocol.max_resources)
         {
             return Err(-71);
         }
@@ -454,7 +461,11 @@ impl LinuxResourceAuthority {
         is_endpoint.then_some(record.descriptor)
     }
 
-    pub(crate) fn release_owner_many(&self, owner: u64, resource_ids: &[u64]) -> Vec<ResourceDescriptor> {
+    pub(crate) fn release_owner_many(
+        &self,
+        owner: u64,
+        resource_ids: &[u64],
+    ) -> Vec<ResourceDescriptor> {
         let mut closed = Vec::new();
         for resource_id in resource_ids {
             if let Some(resource) = self.release_owner(owner, *resource_id) {
@@ -554,7 +565,6 @@ impl LinuxResourceAuthority {
         }
         true
     }
-
 }
 
 impl LinuxServiceSession {
@@ -645,7 +655,8 @@ impl LinuxServiceSession {
                 && resource_range_is_attenuated(*existing, resource);
         }
         drop(resources);
-        self.authority.has_owner(resource.resource_id, self.peer_pid)
+        self.authority
+            .has_owner(resource.resource_id, self.peer_pid)
     }
 
     pub(crate) fn import_external_resource(&self, resource: ResourceDescriptor) -> bool {
@@ -737,9 +748,7 @@ impl LinuxServiceSession {
                 .authority
                 .retain_owner(resource.resource_id, self.peer_pid)
             {
-                let _ = self
-                    .authority
-                    .release_owner_many(self.peer_pid, &retained);
+                let _ = self.authority.release_owner_many(self.peer_pid, &retained);
                 return false;
             }
             retained.push(resource.resource_id);
@@ -747,8 +756,15 @@ impl LinuxServiceSession {
         true
     }
 
-    pub(crate) fn finalize_response_resources(&self, resources: &[ResourceDescriptor], delivered: bool) {
-        let ids: Vec<u64> = resources.iter().map(|resource| resource.resource_id).collect();
+    pub(crate) fn finalize_response_resources(
+        &self,
+        resources: &[ResourceDescriptor],
+        delivered: bool,
+    ) {
+        let ids: Vec<u64> = resources
+            .iter()
+            .map(|resource| resource.resource_id)
+            .collect();
         let mut closed = if delivered {
             Vec::new()
         } else {
@@ -853,8 +869,7 @@ pub(crate) fn bind_release(
                 }
             }
         })
-        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))
-        ?;
+        .map_err(|error| io::Error::new(io::ErrorKind::Other, error))?;
     Ok(ReleaseServer {
         path: release_path(path),
         stop,
@@ -903,7 +918,8 @@ fn process_is_alive(pid: u64) -> bool {
         return false;
     };
     let result = unsafe { libc::kill(pid, 0) };
-    result == 0 || (result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
+    result == 0
+        || (result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -947,6 +963,10 @@ impl LinuxServiceDirectory {
         for segment in segments {
             path.push(segment);
         }
+        // A service URI names the service, while the filesystem directory
+        // stores its default endpoint as instance zero. Keep this in sync
+        // with list_prefix(), which discovers concrete instance sockets.
+        path.push("0");
         Ok(LinuxEndpoint::new(path))
     }
 
@@ -1728,7 +1748,10 @@ where
 /// connection, and later requests can validate that they belong to that
 /// connection with no global integer-handle assumption.
 #[cfg(test)]
-pub(crate) async fn serve_with_session<F, Fut>(endpoint: LinuxEndpoint, handler: F) -> io::Result<()>
+pub(crate) async fn serve_with_session<F, Fut>(
+    endpoint: LinuxEndpoint,
+    handler: F,
+) -> io::Result<()>
 where
     F: Fn(RpcRequestOwned, LinuxServiceSession) -> Fut + Clone + Send + Sync + 'static,
     Fut: core::future::Future<Output = RpcResponseOwned> + Send + 'static,
@@ -1772,7 +1795,12 @@ where
             loop {
                 let body = match if first_frame {
                     first_frame = false;
-                    match tokio::time::timeout(Duration::from_secs(2), read_frame_async(&mut stream)).await {
+                    match tokio::time::timeout(
+                        Duration::from_secs(2),
+                        read_frame_async(&mut stream),
+                    )
+                    .await
+                    {
                         Ok(result) => result,
                         Err(_) => Err(TransportError::PeerClosed),
                     }
@@ -1946,7 +1974,11 @@ mod tests {
         first.close();
         assert!(second.validate_resource(resource));
         second.close();
-        assert!(authority.release_owner(process_owner(), resource.resource_id).is_none());
+        assert!(
+            authority
+                .release_owner(process_owner(), resource.resource_id)
+                .is_none()
+        );
         assert!(!authority.validate(resource));
     }
 

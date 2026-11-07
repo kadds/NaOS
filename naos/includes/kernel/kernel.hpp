@@ -24,18 +24,18 @@ struct kernel_memory_map_item
     map_type_t map_type;
 };
 
-/// A boot module that declares itself by its Multiboot cmdline token: the
-/// token equals one of the fixed authority keys (`blockd`, `vfsd`,
-/// `rootfsd`, `init`, or `rootimage`).
-struct named_boot_module
+/// A boot module's physical range and optional fixed authority token. An
+/// empty name is still tracked as boot-owned memory but grants no service
+/// authority.
+struct boot_module
 {
-    char name[16]; ///< Service key from the module cmdline, NUL-terminated
+    char name[16]; ///< Optional service key from the module cmdline
     u64 start;     ///< Module physical address
     u64 size;      ///< Module size in bytes, 0: invalid entry
 } PackStruct;
 
-/// Fixed capacity of the per-boot named-module table.
-constexpr u64 max_named_boot_modules = 12;
+/// Fixed capacity of the per-boot module-range table.
+constexpr u64 max_boot_modules = 12;
 
 /// The args passed by loaders
 ///
@@ -65,8 +65,8 @@ struct kernel_start_args
     u64 rsdp;             ///< Pointer, ACPI RSDP
     u64 efi_system_table; ///< Pointer, uefi system table address
 
-    u64 named_module_count; ///< Number of valid entries in named_modules
-    named_boot_module named_modules[max_named_boot_modules];
+    u64 boot_module_count; ///< Number of valid entries in boot_modules
+    boot_module boot_modules[max_boot_modules];
 } PackStruct;
 
 /// Kernel file struct

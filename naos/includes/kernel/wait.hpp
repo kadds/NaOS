@@ -8,6 +8,17 @@ namespace task
 struct process_t;
 
 struct thread_t;
+
+enum class wait_result : unsigned char
+{
+    /// The wait predicate became true.
+    condition_met,
+    /// The interrupt predicate fired, or the queue removed this waiter first.
+    interrupted,
+    /// The current process is exiting; the caller must clean up, then exit.
+    process_exit,
+};
+
 struct wait_context_t
 {
     thread_t *thd;
@@ -55,7 +66,15 @@ struct wait_queue_t
     ///
     /// \param condition a borrowed predicate; it must remain alive until do_wait returns
     ///
-    /// \return bool false: wait confition check failed, maybe interrupt by signal. true: ok
+    /// Wait and return the reason. All stack-backed queue state is detached
+    /// before this function returns; it never terminates the current thread.
+    wait_result do_wait_result(freelibcxx::function_ref<bool()> condition, const void *key_domain = nullptr,
+                               const void *key_address = nullptr, std::atomic_uint64_t *wake_sequence = nullptr,
+                               bool register_before_check = false,
+                               freelibcxx::function_ref<bool()> interrupted = nullptr);
+
+    /// Convenience entry for callers without wait-specific cleanup. A process
+    /// exit request terminates the thread after the queue state is detached.
     bool do_wait(freelibcxx::function_ref<bool()> condition, const void *key_domain = nullptr,
                  const void *key_address = nullptr, std::atomic_uint64_t *wake_sequence = nullptr,
                  bool register_before_check = false);

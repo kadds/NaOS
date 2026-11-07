@@ -1,7 +1,7 @@
 #pragma once
 
-#include "freelibcxx/vector.hpp"
 #include "freelibcxx/function_ref.hpp"
+#include "freelibcxx/vector.hpp"
 #include "kernel/capability.hpp"
 #include "kernel/ipc/core_lock.hpp"
 #include "kernel/lock.hpp"
@@ -148,7 +148,8 @@ na_status_t send_raw_channel_kernel(task::resource_table_t &resources, na_handle
 na_status_t send_raw_channel_kernel(const khandle &endpoint, const byte *bytes, u64 byte_count);
 na_status_t discard_raw_channel(task::resource_table_t &resources, na_handle_t endpoint);
 na_status_t wait_for_condition(task::wait_queue_t &queue, freelibcxx::function_ref<bool()> condition,
-                               timeclock::microsecond_t deadline);
+                               timeclock::microsecond_t deadline,
+                               freelibcxx::function_ref<void()> exit_cleanup = nullptr);
 na_status_t wait_for_raw_channel(task::resource_table_t &resources, na_handle_t handle, na_signal_t signals,
                                  timeclock::microsecond_t deadline);
 

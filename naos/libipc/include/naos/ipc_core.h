@@ -144,6 +144,7 @@ enum
     NAOS_IPC_OUTCOME_REASON_BROKER_FAILURE = 7,
     NAOS_IPC_OUTCOME_REASON_PROTOCOL_VIOLATION = 8,
     NAOS_IPC_OUTCOME_REASON_UNSUPPORTED = 9,
+    NAOS_IPC_OUTCOME_REASON_HARDWARE_OUTCOME_UNKNOWN = 10,
 };
 
 typedef int (*naos_ipc_invocation_remove_queued_fn)(void *context);
@@ -293,8 +294,8 @@ uint64_t naos_ipc_ring_required_bytes(uint64_t slot_bytes, uint32_t slot_capacit
 /* Formats caller storage.  Must run once, with exclusive access, before the
  * storage is shared; re-running with the same geometry is a no-op and a
  * different geometry on live storage is rejected. */
-naos_ipc_status_t naos_ipc_ring_init(void *storage, uint64_t storage_bytes, uint64_t slot_bytes,
-                                     uint32_t slot_capacity, uint32_t resource_capacity);
+naos_ipc_status_t naos_ipc_ring_init(void *storage, uint64_t storage_bytes, uint64_t slot_bytes, uint32_t slot_capacity,
+                                     uint32_t resource_capacity);
 
 naos_ipc_ring_t *naos_ipc_ring_create(const naos_ipc_ring_config_t *config);
 void naos_ipc_ring_destroy(naos_ipc_ring_t *ring);
